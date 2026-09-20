@@ -13,7 +13,7 @@
 | P0-SK-01 | git init + package.json(name/pi.extensions/peer 0.85<1.0/devDeps pin 0.85.1) | ✅ |
 | P0-SK-02 | extensions/index.ts 空装配(八模块位注释)+ test/contracts/ | ✅ |
 | P0-SK-03 | `bun run check`(scripts/check.mjs 双 tsc 门)/ `bun run test`(scripts/run-tests.mjs 统一入口)/ `bun run contracts`(独立 vitest config) | ✅ |
-| P0-SK-04 | npm 发 0.1.0 `--tag next` | ⏳ 复查后执行 |
+| P0-SK-04 | npm 发 0.1.0 `--tag next` | ⚠️ 被阻:本机 npm 未登录(ENEEDAUTH),记 OPEN-QUESTIONS #1 由用户执行;包体与 publishConfig 就绪 |
 | P0-SK-05 | spike① `/types` subpath 布局(npm pack + jiti + tsc 三验证过,见 test/spikes/types-subpath-spike/RESULT.md);spike② 显式 per-channel patch(5 个 @ts-expect-error 编译期证明,见 test/spikes/per-channel-patch.ts) | ✅ |
 | P0-LB-01 | lib/settings.ts(readJson 从不 throw / writeJsonAtomic tmp+rename) | ✅ 9 测试 |
 | P0-LB-02 | lib/model-id.ts(parseModelId,非法→null 不 throw) | ✅ 15 测试 |
