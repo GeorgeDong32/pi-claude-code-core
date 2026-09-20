@@ -1,0 +1,6 @@
+node_modules/
+*.log
+.DS_Store
+test/spikes/types-subpath-spike/consumer/node_modules/
+test/spikes/types-subpath-spike/consumer/package-lock.json
+test/spikes/types-subpath-spike/consumer/dist/

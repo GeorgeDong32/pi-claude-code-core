@@ -1,0 +1,21 @@
+{
+  "name": "mini-core",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "P0-SK-05 spike ①: minimal package with a /types subpath (types + tiny runtime reader).",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js"
+    },
+    "./types": {
+      "types": "./types/index.d.ts",
+      "import": "./types/index.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "types"
+  ]
+}

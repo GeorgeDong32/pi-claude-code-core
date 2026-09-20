@@ -1,0 +1,10 @@
+# OPEN-QUESTIONS — 需用户决策项
+
+> 实施会话不等待、不代办;每项给出建议与阻塞点。
+
+1. **npm 发版与切换(阻塞 P1 起)**:P0-SK-04 要求发 `0.1.0-next` 预览一次(允许);1.0.0+ 正式发版、`~/.pi/agent/settings.json` packages 切换、旧四包 deprecate 全部留待用户。P1 完成后是否立即发 1.0.0 并切换,请用户定。
+2. **EXA_API_KEY(P4 前置)**:本机 env 无此 key(exa 经 pi-web-access 免 key)。P4-WB-03 接官方 exa server 需要用户提供 key 并写入 `~/.pi/agent/mcp.json` 的 env 段。
+3. **pi-goal 0.1.7 ↔ 0.6.0 行为 diff 结论(P2 开工首项)**:fork 基线取本地 HEAD(0.6.0),npm 上最新 0.1.7 与之的行为差异需在 P2 开工时盘点进 FORK.md——是否需要用户确认取舍,届时看 diff 规模再定。
+4. **License 汇聚(P2 前)**:core 声明 MIT;pi-effort / pi-review 源为 Apache-2.0(用户自己的包,有权再许可)。并入后 core 是否改 Apache-2.0 或保持 MIT + 双声明,建议保持 MIT 并在 README 注明各模块来源许可(P2 时落)。
+5. **CCTUI 1.5.0(P2-CCTUI 节)**:本次派发不改 CCTUI 仓库;core 1.1.0 发版后由用户在 pi-claude-code-tui 实施 P2-CCTUI-01..04。
+6. **pm/cctui dev symlink 发版核查**:每次 pi update 后必查(handoff 转述的既有教训);P0 未动本机安装,无影响。

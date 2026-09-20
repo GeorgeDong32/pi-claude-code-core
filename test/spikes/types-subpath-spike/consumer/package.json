@@ -1,0 +1,1 @@
+{"name":"spike-consumer","private":true,"type":"module","dependencies":{"jiti":"^2.7.0","mini-core":"file:../mini-core-0.0.1.tgz"},"devDependencies":{"typescript":"^7.0.2"}}
