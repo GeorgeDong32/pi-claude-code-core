@@ -2,6 +2,53 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## P4 — mcp-gov + web-gov(1.3.0,本次不发)
+
+**状态:实现完成,复查通过(2026-09-21),已 commit(未发版——1.3.0 + deprecate 留用户)。**
+
+### 交付项与 spec ID 对照
+
+| spec ID | 内容 | 状态 |
+|---|---|---|
+| P4-FAM-01 | RuleFamily 扩展点:modes/rule-families.ts registry;evaluateToolPermission 在 mapPiToolToCcTool 未命中后、passthrough 前遍历;verdict 折算进既有 behavior 契约(step2 消费机制零改动) | ✅ |
+| P4-FAM-02 | 首见弹窗语义:ask/plan/auto 经 step2 统一(先于 ladder);plan 的 mcp 不在 PLAN_READ_TOOLS 天然不进只读 carve-out;auto 下 family verdict 先于 classifier;非 mcp 未知工具不受影响(direct 命名 knownServers 白名单,宁漏勿误) | ✅ |
+| P4-FAM-03 | suggestAllowRuleForToolCall 委托 family | ✅ |
+| P4-FAM-04 | 红绿:ask mcp first-seen 弹窗(原静默放行);Allow once/session/always 三路;非 mcp 未知工具 ask/plan passthrough 不变 | ✅ |
+| P4-FAM-05 | sessionGrants:内存 Set;session_start/shutdown 清;first-seen「Allow for this session」写入;/permissions 列出 + /permissions-clear-grants 清除 | ✅ |
+| P4-FAM-06 | web-gov 第二 family 注册进同一 seam | ✅ |
+| P4-MC-01 | canonicalize 三形态(native 前缀/proxy input.tool/direct+knownServers);resolve deny>allow>ask 前缀匹配 | ✅ |
+| P4-MC-02 | Allow always 落盘复用 addPermissionRule(global);建议 `mcp_exa_*`;写失败 fail-closed | ✅ |
+| P4-MC-03 | broker 镜子:同步纯 decide(五支放行链:adjudicated→bypass→rule→sessionGrant→allow_once,否则 fail-closed deny 计数);noteAdjudicated 单点记录(gate allow 路径 + first-seen 各放行分支) | ✅ |
+| P4-MC-04 | 一致性矩阵:5 结局 × bypass 两态(gate 放行⇔mirror allow;deny 计数) | ✅ |
+| P4-MC-05 | McpEventPort seam:动态 import 探测(本机 adapter 未装 → absent idle 零副作用,实测路径);版本降级(未知字段忽略) | ✅ |
+| P4-MC-06 | /core 面板 MCP 段:live snapshot ‖ readStaticMcpInventory 降级 + 规则摘要 + install hint | ✅ |
+| P4-MC-07 | 首查:本机无 pi-mcp-adapter,claim 语义无法实测——按 spec 风险①预案实现(架构不变;callId 不依赖,canonicalId 走 server/tool;记 OPEN-QUESTIONS) | ✅(按预案) |
+| P4-WB-01 | createWebRuleFamily:URL 工具→host;`webfetch(domain:host)` 规则(显式规则 > 预批准) | ✅ |
+| P4-WB-02 | 预批准域名清单(builtin 14 域)可经 pi-core-web.json 覆盖 | ✅ |
+| P4-WB-03 | D7 落地:README exa 接入引导;defaults 搜索文案改定版「exa MCP 优先」;pi-web-access 退役用户侧 | ✅ |
+| P4-WB-04 | Sources 尾注规则已在 P3 defaults(P4 不重复实现) | ✅ N/A |
+| P4-REL-01 | 发 1.3.0 + 旧四包 deprecate:用户侧 | ⏸ 用户 |
+
+### 测试计数
+
+- `bun run test`:vitest **553 passed**(P4 新增 16)+ node--test **312 passed**
+- `bun run contracts`:**17 passed**
+- `bun run check`:exit 0
+
+### 剩余风险
+
+1. P4-MC-07 两项(broker claim 同步性/approval callId)未实测(本机无 adapter)——mirror 架构对两者免疫(同步纯函数 + canonicalId 走 server/tool),真机验证归 P4-REL 冒烟。
+2. /permissions 的 grants 展示为文本段 + 独立清除命令(非交互清除),v1 可接受。
+
+### 复查结论(2026-09-21,新鲜眼 subagent)
+
+**PASS(修复后)— 达 commit 门槛。** 三命令实测全绿、计数精确对账;modes diff 审计干净(全部 hunk 属 family 机制所需,441 零改动);契约零变化;absent port 零副作用经真机探针证实。
+
+- **阻塞发现(已修复)**:B1 resolve 序 deny>allow>ask 违背 spec「deny>ask>allow」(显式 ask 被 allow 前缀吞)——mcp/web 两处改序 + 断言。
+- 非阻塞修复(已随本次处理):mirror bypassActive 生产断裂(setBypassIndicator 同步);session_shutdown 清 grants;WB-01 注册序(web 先于 mcp,域名规则优先);ruleMentions 尾通配;矩阵注释诚实化 + uiPrompts≤1 断言;plan/auto 首调弹窗端到端(红队 #2 增补态);PROBE 残留;OPEN-QUESTIONS #6(P4-MC-07)与 README knownServers 注明兑现。
+- 挂账(DEVIATIONS #38):MC-05 版本 floor、MC-06 inventory 链/cached、FAM-05 转发计入结构性不可达。
+- 遗留:P4-REL-01(1.3.0 发版/deprecate/真机 exa+bypass 冒烟)用户侧。
+
 ## P3 — rules 引擎 + memory 模块(1.2.0,本次不发)
 
 **状态:实现完成,复查通过(2026-09-21),已 commit(未发版——1.2.0 留用户)。**

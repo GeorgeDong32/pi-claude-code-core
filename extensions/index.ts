@@ -29,6 +29,9 @@ import reviewExtension from "./review/index.ts";
 // P3: new modules
 import { createRulesExtension } from "./rules/index.ts";
 import memoryExtension from "./memory/index.ts";
+// P4: governance modules (rule families + broker mirror + /core panel)
+import mcpGovExtension from "./mcp-gov/index.ts";
+import { createWebRuleFamily } from "./web-gov/index.ts";
 
 type ModuleFactory = (pi: ExtensionAPI) => void | Promise<void>;
 
@@ -44,8 +47,13 @@ const moduleFactories: ModuleFactory[] = [
 	reviewExtension,
 	createRulesExtension(),
 	memoryExtension,
-	// P4: mcpGovExtension,
-	// P4: webGovExtension,
+	function webGov() {
+		// P4-WB: registered BEFORE mcp so domain rules (webfetch(domain:…))
+		// take precedence over mcp-prefix rules for URL-carrying calls
+		// (P4-WB-01); non-URL mcp tools fall through to the mcp family
+		createWebRuleFamily();
+	},
+	mcpGovExtension,
 ];
 
 export default async function coreExtension(pi: ExtensionAPI): Promise<void> {

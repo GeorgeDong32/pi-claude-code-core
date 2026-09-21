@@ -16,6 +16,7 @@ import {
 	permissionRuleValueToString,
 	type PermissionRuleValue,
 } from "./permission-rule-parser.ts"
+import { familyVerdictFor, hasSessionGrant, matchFamily } from "./rule-families.ts"
 
 export type PermissionBehavior = "allow" | "deny" | "ask"
 
@@ -149,6 +150,27 @@ export function evaluateToolPermission(
 ): PermissionVerdict {
 	const ccTool = mapPiToolToCcTool(toolName)
 	if (!ccTool) {
+		// P4-FAM-01: unknown tools go through registered rule families before
+		// passthrough. Verdicts fold into the same behavior contract, so
+		// step-2 consumption (deny/allow/ask) is unchanged machinery.
+		const familyResult = familyVerdictFor(toolName, input, rules)
+		if (familyResult) {
+			if (familyResult.verdict === "deny") {
+				return {
+					behavior: "deny",
+					rule: familyResult.match.family.suggestAllowRule(familyResult.match.canonicalId),
+					source: "global",
+				}
+			}
+			if (familyResult.verdict === "allow" || hasSessionGrant(familyResult.match.canonicalId)) {
+				return { behavior: "allow", rule: familyResult.match.canonicalId, source: "global" }
+			}
+			return {
+				behavior: "ask",
+				rule: familyResult.match.canonicalId,
+				source: "global",
+			}
+		}
 		return { behavior: "passthrough" }
 	}
 
@@ -172,6 +194,9 @@ export function suggestAllowRuleForToolCall(
 	input: Record<string, unknown>,
 	cwd: string,
 ): string {
+	// P4-FAM-03: families suggest their own persistent rules for unknown tools
+	const match = matchFamily(toolName, input)
+	if (match) return match.family.suggestAllowRule(match.canonicalId)
 	const ccTool = mapPiToolToCcTool(toolName)
 	if (ccTool === "Bash") {
 		return suggestBashAllowRule(String(input.command ?? ""))

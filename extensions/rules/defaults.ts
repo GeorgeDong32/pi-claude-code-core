@@ -2,10 +2,9 @@
  * rules/defaults.ts — builtin rule entries shipped with the package
  * (lowest-priority scope; any user rule with the same slug shadows it).
  *
- * The search-channel note is CONDITIONAL wording (red-team #12): until the
- * P4 exa MCP default actually ships, the model is told to prefer
- * mcp_exa_* tools IF they are present, else fall back to pi-web-access.
- * P4-WB-03 rewrites this to the final "exa MCP first" wording with 1.3.0.
+ * P4-WB-03 (1.3.0): the search-channel entry is now the FINAL "exa MCP
+ * first" wording — the conditional 1.2.0 phrasing is retired together with
+ * pi-web-access.
  */
 
 export interface BuiltinRule {
@@ -32,6 +31,6 @@ export const BUILTIN_RULES: BuiltinRule[] = [
 		slug: "search-channel",
 		name: "search-channel",
 		description: "Which search channel to use, conditional on installed tools",
-		content: `Web search: if mcp_exa_* tools are available in this session, use them first (they return cleaner results and are the intended default going forward). Otherwise use the pi-web-access search tool. Do not mix channels within one task without saying so.`,
+		content: `Web search: use the exa MCP tools (mcp_exa_*) — they are the default search channel and return cleaner, citable results. pi-web-access is retired and must not be used. Do not mix search channels within one task without saying so.`,
 	},
 ];

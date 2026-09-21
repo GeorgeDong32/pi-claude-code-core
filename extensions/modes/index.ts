@@ -19,6 +19,7 @@ import {
 import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui"
 import { coreBus } from "../bus.ts"
 import { resolveMemoryPaths } from "../memory/paths.ts"
+import { clearSessionGrants, clearSessionState, grantSession, hasSessionGrant, isBypassActive, listSessionGrants, matchFamily, noteAdjudicated, ruleMentions, setBypassIndicator } from "./rule-families.ts"
 import { getSharedEffortOwner, type OwnerEffortLevel } from "../../lib/effort-owner.ts";
 import { readFileSync } from "node:fs"
 import { homedir } from "node:os";
@@ -756,6 +757,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
 
     applyToolRestrictions();
     updateStatus(ctx);
+    setBypassIndicator(mode === "bypass");
     await applyProfileModelForMode(mode, ctx);
     persistState();
     publishInheritedPermissionMode(mode);
@@ -1074,9 +1076,24 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       if (tool === "edit" || tool === "write") {
         trackOutsideWriteIfNeeded(ctx, tool, String(input.path ?? ""));
       }
+      // P4-MC-03: record the final allow for family-claimed tools so the
+      // broker mirror's allow-chain stays in lockstep with the gate.
+      const familyMatch = matchFamily(tool, input);
+      if (familyMatch) {
+        noteAdjudicated(
+          familyMatch.canonicalId,
+          hasSessionGrant(familyMatch.canonicalId) ? "session-grant" : "rule-allow",
+        );
+      }
       return "allow";
     }
     if (verdict.behavior === "ask") {
+      // P4-FAM-02 first-seen: a family claiming this tool with no explicit
+      // ask rule gets the family dialog (allow once / session / always).
+      const match = matchFamily(tool, input);
+      if (match && !ruleMentions(mergedPermissionRules, match.canonicalId, "ask")) {
+        return firstSeenPrompt(ctx, match.canonicalId, tool, input, match.family.suggestAllowRule(match.canonicalId));
+      }
       return promptWithPermissionOptions(
         ctx,
         tool,
@@ -1086,6 +1103,53 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       );
     }
     return "passthrough";
+  }
+
+  // P4-FAM-02/05: the first-seen dialog for family-claimed tools.
+  async function firstSeenPrompt(
+    ctx: ExtensionContext,
+    canonicalId: string,
+    tool: string,
+    input: Record<string, unknown>,
+    suggestedRule: string,
+  ): Promise<Block> {
+    if (!ctx.hasUI) {
+      // headless/forwarded path: fail closed (unchanged from 2.8.0)
+      return {
+        block: true,
+        reason: `${tool} (${canonicalId}) needs approval: no UI available.`,
+      };
+    }
+    const choice = (await ctx.ui.select(`Allow ${canonicalId}?`, [
+      "Allow once",
+      "Allow for this session",
+      `Allow always (${suggestedRule})`,
+      "Block",
+    ])) ?? "Block";
+    if (choice === "Allow once") {
+      noteAdjudicated(canonicalId, "allow-once");
+      return undefined as unknown as Block; // this call passes; nothing recorded
+    }
+    if (choice === "Allow for this session") {
+      grantSession(canonicalId);
+      noteAdjudicated(canonicalId, "session-grant");
+      return undefined as unknown as Block;
+    }
+    if (choice.startsWith("Allow always")) {
+      const wrote = addPermissionRule({
+        rule: suggestedRule,
+        behavior: "allow",
+        destination: "global",
+        cwd: ctx.cwd,
+      });
+      if (!wrote) {
+        return { block: true, reason: `failed to persist rule ${suggestedRule}` };
+      }
+      noteAdjudicated(canonicalId, "rule-allow");
+      reloadMergedPermissionRules(ctx.cwd);
+      return undefined as unknown as Block;
+    }
+    return { block: true, reason: `${canonicalId} blocked by user` };
   }
 
   // ---- prompts -----------------------------------------------------------
@@ -1112,18 +1176,32 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     handler: async (_args, ctx) => {
       reloadMergedPermissionRules(ctx.cwd);
       const text = formatMergedRulesForDisplay(mergedPermissionRules);
+      // P4-FAM-05: session grants are visible and clearable from here
+      const grants = listSessionGrants();
+      const grantsBlock =
+        grants.length > 0
+          ? `\n\n**Session grants** (this session only)\n\n\`\`\`\n${grants.join("\n")}\n\`\`\`\nClear with: /permissions-clear-grants`
+          : "";
       if (ctx.hasUI) {
         pi.sendMessage(
           {
             customType: "permissions-list",
-            content: `**Permission rules**\n\n\`\`\`\n${text}\n\`\`\``,
+            content: `**Permission rules**\n\n\`\`\`\n${text}\n\`\`\`${grantsBlock}`,
             display: true,
           },
           { triggerTurn: false },
         );
       } else {
-        console.log(text);
+        console.log(text + grantsBlock.replace(/\\n/g, "\n"));
       }
+    },
+  });
+
+  pi.registerCommand("permissions-clear-grants", {
+    description: "Clear all session-scoped family grants (P4-FAM-05)",
+    handler: async (_args, ctx) => {
+      clearSessionGrants();
+      if (ctx.hasUI) ctx.ui.notify("Session grants cleared.", "info");
     },
   });
 
@@ -2433,9 +2511,17 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", onSessionStart);
   pi.on("session_tree", onSessionStart);
+  pi.on("session_start", (_event, ctx: ExtensionContext) => {
+    // P4-FAM-05: session-scoped authorizations reset on (re)load
+    clearSessionState();
+    setBypassIndicator(pi.getFlag("permission-mode") === "bypass");
+    void ctx;
+  });
   pi.on("session_shutdown", () => {
     forwardingPoller?.stop();
     forwardingPoller = undefined;
     forwardingClaimedIds.clear();
+    // P4-FAM-05: session-scoped family state resets on shutdown too
+    clearSessionState();
   });
 }

@@ -122,3 +122,29 @@
 
 32. **yield 静态探测的 agentDir 随 HOME 现解析**
     gate 构造读 process.env.HOME 而非 homedir() 快照——生产等价,测试可注入;DEVIATIONS #26 同族(测试可注入性优先)。
+
+
+---
+
+## P4 偏差(2026-09-21)
+
+33. **direct 命名形态需 knownServers 白名单(P4-MC-01 收紧)**
+    spec 风险②已预警:direct 形态(exa_search)若按纯命名启发式认领,任意 foo_bar 扩展工具会被误 claim(实测:未配白名单时 some_custom_tool 在 ask 模式被弹窗,违反 P4-FAM-02④ 不变面)。修:direct 仅当首段 server id 在 createMcpRuleFamily({knownServers}) 列表内才认领;native mcp__ 前缀与 proxy 形态不受影响。README 的 exa 引导注明。
+
+34. **web family 规则优先于预批准清单**
+    P4-WB-02 未定义显式规则与 builtin 预批准的冲突序;实现取「显式规则 > 预批准」(deny github.com 必须成立)。
+
+35. **broker 镜子的 allow 判定引用 rules 快照**
+    mirror 的 hasAllowRule 在 session_start 时以 loadMergedPermissionRules(ctx.cwd) 构建闭包(与 gate 同源);rules 运行中变更的镜像刷新归 /core 面板展示兜底(v1 不做每事件重载——mirror 只在 adapter 在场时活跃,本机 absent)。
+
+36. **/permissions 的 grants 管理形态**
+    spec「/permissions 面板可见可清」实现为:列表段 + 独立 /permissions-clear-grants 命令(非交互式清除)。v1 简单可审计,交互化留 /core 面板迭代。
+
+
+---
+
+## P4 复查补记(2026-09-21)
+
+37. **P4 复查发现并已修**(阻塞 B1 + 顺手项):①resolve 序 deny>allow>ask 违背 spec「deny>ask>allow」(用户显式 ask 被 allow 前缀吞)——mcp/web 两处改序并补断言;②mirror 的 bypassActive 生产装配硬编码 false(红队 #3 的 bypass 支重演)——modes setMode/session_start 经 setBypassIndicator 同步,mirror 读 isBypassActive;③session_shutdown 不清 grants/spec 明文要求——clearSessionState 双钩子;④WB-01 域名规则应「先于 mcp 前缀规则」——装配序改为 web 先注册(URL 工具 host 特化优先,非 URL mcp 工具回落 mcp family);⑤ruleMentions 不识别尾通配 ask 规则——改前缀匹配;⑥P4-MC-04 矩阵测试头注释失真——诚实化并补 uiPrompts≤1 断言到端到端用例;⑦plan/auto 首调弹窗(红队 #2 增补态)补端到端;⑧PROBE11 残留删除。
+
+38. **v1 未实现/不可达项(挂账)**:①P4-MC-05 的 busVersion floor 撤 claim 与「缺字段按 cached」未实现(adapter absent 下无消费方,重开条件=adapter 真机接入);②P4-MC-06 的静态 inventory 只扫 mcp.json(settings packages 扫描与 mcp.json 配置链未做)、green 判定无 cached 表达;③P4-FAM-05「headless/转发审批计入」结构性不可达——headless 走 fail-closed、subagent 转发路径在 promptWithPermissionOptions(不受 family first-seen 走),family 工具的转发 allow 在现架构无入口;重开条件=first-seen 弹窗接入转发机制。
