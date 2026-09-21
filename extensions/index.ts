@@ -23,6 +23,9 @@ import { initCoreBus } from "./bus.ts";
 // P1: migrated from @georgedong32/permission-modes 2.8.0 / pi-effort 0.1.2
 import permissionModesExtension from "./modes/index.ts";
 import effortExtension from "./effort/index.ts";
+// P2: forked from capyup/pi-goal (@ ec2bcbe) / merged from pi-review 0.8.6
+import goalExtension from "./goal/goal.ts";
+import reviewExtension from "./review/index.ts";
 
 type ModuleFactory = (pi: ExtensionAPI) => void | Promise<void>;
 
@@ -34,8 +37,8 @@ const moduleFactories: ModuleFactory[] = [
 	},
 	permissionModesExtension,
 	effortExtension,
-	// P2: goalExtension,
-	// P2: reviewExtension,
+	goalExtension,
+	reviewExtension,
 	// P3: createRulesExtension(),
 	// P3: memoryExtension,
 	// P4: mcpGovExtension,

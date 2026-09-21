@@ -2,6 +2,54 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## P2 — pi-goal fork + pi-review 整体并入(1.1.0,本次不发)
+
+**状态:实现完成,复查通过(2026-09-21),已 commit(未发版——1.1.0 + CCTUI 1.5.0 留用户)。**
+
+### 交付项与 spec ID 对照
+
+| spec ID | 内容 | 状态 |
+|---|---|---|
+| P2-GO-01 | fork 入树 extensions/goal/(基线 ec2bcbe = npm 0.6.0 内容);FORK.md 完整(基线 hash/npm 0.6.0 比对/差异清单/跟进策略) | ✅ |
+| P2-GO-02 | 75 项随迁全绿断言零改动(计数考证见 DEVIATIONS #20);磁盘布局与 entry 类型不变(CT-08/09 对 core fork 实测绿) | ✅ |
+| P2-GO-03 | 白名单:import 包内化(tests 扁平化)、auditor config→lib/settings、questionnaire→showComponentOverlay(bare 等价)、status 槽/widget 不变 | ✅ |
+| P2-GO-04 | 命令族 14 + 工具族 8 签名不变(diff 审计:除白名单三文件外与 npm 0.6.0 逐字节一致) | ✅ |
+| P2-GO-05 | 共存红绿:test/lib/coexistence.test.ts(双工厂同 pi,context 链式,互不误伤) | ✅ |
+| P2-GO-06 | 上游跟进策略入 FORK.md | ✅ |
+| P2-REV-01 | review 0.8.6 全量迁入 extensions/review/;165 测试随迁零适配全绿;4 命令 + pi_review_report 工具 + renderer 签名不变 | ✅ |
+| P2-REV-02 | peer `pi-subagents >=0.41 <1.0` + peerDependenciesMeta optional | ✅ |
+| P2-REV-03 | 降级路径红绿 3 例(test/lib/review-degradation.test.ts):缺工具拒跑+一次性 install hint;有工具放行 | ✅ |
+| P2-REV-04 | 8 个 agent .md 随包分发;package.json `pi.subagents.agents` 声明;directive.ts 陈旧产物防御保留(源码未动) | ✅ |
+| P2-REV-05 | 磁盘布局不变(CT-09 切 core review 后实测绿) | ✅ |
+| P2-REV-06 | review config 读写迁 lib/settings.ts(165 测试兜底)——PLAN §1.4 三类重复全部收敛 | ✅ |
+| P2-BUS-01 | bus goal 通道(active/paused/summary,updateUI 挂 publish)+ review 通道(running/done+lastRunAt) | ✅ |
+| P2-BUS-02 | 通道红绿(test/lib/bus-channels.test.ts):goal 恢复→active→pause 翻转;review done 经 pi_review_report 真实工具路径;readCoreStatus 类型断言 | ✅ |
+| P2-CCTUI | **用户侧**(本次派发不改 CCTUI 仓库;bus 双写保证现版无感) | ⏸ 用户 |
+| P2-REL | 发 1.1.0 + CCTUI 1.5.0 + settings 切换:用户侧 | ⏸ 用户 |
+
+### 测试计数
+
+- `bun run test`:vitest **504 passed**(441 modes + 31 lib + 26 P1 + 5 P2 新增)+ node--test **312 passed**(effort 72 + goal 75 + review 165)
+- `bun run contracts`:**17 passed**(goal/review 目标已切 core,断言零改动)
+- `bun run check`:exit 0(goal 0.6.0 类型漂移已入树修复,P0 白名单机制自动过期撤除)
+
+### 真机冒烟(P2 可做子集)
+
+`pi -e ./extensions/index.ts --no-session --no-tools`:四模块装配加载无自身错误;goal 工具族(get_goal/create_goal/update_goal)注册并使本机旧包冲突弃用(切换期预期形态)。完整冒烟(P2-REL-02:/review 全轮、goal 建目标→widget、共存一晚)需发版切换后执行,用户侧。
+
+### 剩余风险
+
+1. review `/review` 的 bus running 发布仅在命令 handler 内(prepareRun 后),单测未驱动(需 git/PR 环境);由 P2-REL-02 真机冒烟覆盖。
+2. goal-auditor 的 0.85 modelRuntime 行为(不再继承主会话 registry)——auditor model 均显式解析,真机 /goal 完成审计时观察。
+
+### 复查结论(2026-09-21,新鲜眼 subagent)
+
+**PASS(修复后)— 达 commit 门槛。** 随迁零改动 diff 审计全部通过:goal fork 对照 npm 0.6.0 tarball 仅白名单三文件不同;review 的 tests/agents/reference 与源包零差异,src 差异逐 hunk 判定为申报内改动;契约断言文件零变化。DEVIATIONS #20-#26 裁定合理。
+
+- **阻塞发现(已修复)**:review running 发布因替换锚缩进不匹配静默未插入,与三处自报不符——已补(index.ts prepareRun 成功后),P2-BUS-01 完整。
+- 非阻塞修复(已随本次处理):types/index.d.mts CoreSnapshot.goal 补 paused?: boolean;reader paused 透传显式 false;bus-channels 补 /goal-resume 后 paused:false 断言;DEVIATIONS 补 26b(165 vs 161 考证);.gitignore 补 .pi/;FORK.md 注 docs/README 未随迁。
+- P2-GO-05 的真机同屏冒烟半边、P2-CCTUI、P2-REL:用户侧(P2-REL 窗口)。
+
 ## P1 — modes + effort 并入 + capability bus 首发(1.0.0,本次不发)
 
 **状态:实现完成,复查通过(2026-09-21),已 commit(未发版——1.0.0+ 留用户)。**

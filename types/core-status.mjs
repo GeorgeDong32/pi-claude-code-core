@@ -48,7 +48,7 @@ function readGoalChannel(raw) {
 	if (!isObject(raw)) return { ...DEFAULT_STATUS.goal };
 	return {
 		active: raw.active === true,
-		...(raw.paused === true ? { paused: true } : {}),
+		...(typeof raw.paused === "boolean" ? { paused: raw.paused } : {}),
 		summary: typeof raw.summary === "string" ? raw.summary : null,
 	};
 }

@@ -23,7 +23,12 @@
   "pi": {
     "extensions": [
       "./extensions/index.ts"
-    ]
+    ],
+    "subagents": {
+      "agents": [
+        "./extensions/review/agents"
+      ]
+    }
   },
   "exports": {
     "./types": {
@@ -42,7 +47,8 @@
     "@earendil-works/pi-ai": ">=0.85.0 <1.0.0",
     "@earendil-works/pi-coding-agent": ">=0.85.0 <1.0.0",
     "@earendil-works/pi-tui": ">=0.85.0 <1.0.0",
-    "typebox": "*"
+    "typebox": "*",
+    "pi-subagents": ">=0.41.0 <1.0.0"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "0.85.1",
@@ -53,5 +59,10 @@
     "typebox": "^1.0.58",
     "typescript": "^5.9.0",
     "vitest": "^1.6.0"
+  },
+  "peerDependenciesMeta": {
+    "pi-subagents": {
+      "optional": true
+    }
   }
 }

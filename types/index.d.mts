@@ -21,7 +21,7 @@ export interface CoreSnapshot {
 		workingStats: string | null;
 	};
 	effort: { level: string | null; source: "env" | "session" | "profile" | "model-default" };
-	goal: { active: boolean; summary: string | null };
+	goal: { active: boolean; paused?: boolean; summary: string | null };
 	review: { status: "idle" | "running" | "done"; lastRunAt: number | null };
 	display?: { footer?: readonly string[] };
 }

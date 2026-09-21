@@ -14,8 +14,8 @@ import { join } from "node:path";
 import { writeProjectPermissionsFile } from "../../extensions/modes/permissions-loader.ts";
 import { getPlanFilePath } from "../../extensions/modes/utils.ts";
 import { modelsPath } from "../../extensions/modes/profiles.ts";
-import { GOALS_DIR, ARCHIVED_GOALS_DIR, makeActiveGoalPath } from "../../../pi-goal/extensions/storage/goal-files.ts";
-import { GOAL_LEDGER_FILE } from "../../../pi-goal/extensions/goal-ledger.ts";
+import { GOALS_DIR, ARCHIVED_GOALS_DIR, makeActiveGoalPath } from "../../extensions/goal/storage/goal-files.ts";
+import { GOAL_LEDGER_FILE } from "../../extensions/goal/goal-ledger.ts";
 import { writeFastMode } from "../../extensions/effort/effort.js";
 
 describe("P0-CT §4.5 frozen disk layout", () => {
@@ -71,14 +71,14 @@ describe("P0-CT §4.5 frozen disk layout", () => {
 	});
 
 	it("P0-CT-09 (review): config default path and run dirs are unchanged", async () => {
-		const reviewConfig = await import("../../../pi-review/src/config.ts");
+		const reviewConfig = await import("../../extensions/review/src/config.js");
 		reviewConfig.setConfigPath(undefined); // restore the default
 		expect(reviewConfig.configPath()).toBe(join(homedir(), ".pi", "agent", "pi-review.json"));
 		// run dir convention lives inside prepareRun; the frozen shape is
 		// <cwd>/.pi/pi-review/runs/<runId>. No exported constructor exists, so
 		// pin the source path segment (any layout change rewrites this line).
 		const reviewRunSrc = readFileSync(
-			new URL("../../../pi-review/src/review-run.ts", import.meta.url),
+			new URL("../../extensions/review/src/review-run.ts", import.meta.url),
 			"utf-8",
 		);
 		expect(reviewRunSrc.includes('join(cwd, ".pi", "pi-review", "runs", runId)')).toBe(true);

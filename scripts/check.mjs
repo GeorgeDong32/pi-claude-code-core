@@ -16,10 +16,8 @@
  */
 import { execFileSync } from "node:child_process";
 
-const GOAL_DRIFTS = [
-	"goal-auditor.ts(142,2): error TS2739:",
-	"goal-auditor.ts(206,4): error TS2353:",
-];
+// goal fork drift allowlist removed 2026-09-21: fixed in-tree (P2-GO).
+const GOAL_DRIFTS = [];
 
 function runTsc(args) {
 	try {

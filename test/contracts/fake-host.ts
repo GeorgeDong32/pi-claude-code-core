@@ -100,6 +100,8 @@ export class FakeHost {
 	readonly sentMessages: SentMessage[] = [];
 	readonly userMessages: Array<{ text: string; opts?: unknown }> = [];
 	readonly notifications: string[] = [];
+	/** ToolInfo list returned by getAllTools(); tests may mutate before firing. */
+	readonly toolInfos: Array<{ name: string; sourceInfo?: unknown }> = [];
 	private thinkingLevel = "off";
 
 	/** Fresh command context wired to this host's recording surface. */
@@ -179,7 +181,7 @@ export class FakeHost {
 				host.userMessages.push({ text, opts });
 			},
 			getActiveTools: () => ["read", "edit", "write", "bash", "grep", "find"],
-			getAllTools: () => [],
+			getAllTools: () => [...host.toolInfos],
 			setActiveTools() {},
 			getThinkingLevel: () => host.thinkingLevel,
 			setThinkingLevel(level: unknown) {

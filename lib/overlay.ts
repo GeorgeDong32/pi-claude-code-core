@@ -86,24 +86,29 @@ interface CustomOverlayContext {
 	};
 }
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
 export async function showComponentOverlay<T>(
 	ctx: CustomOverlayContext,
 	options: {
-		component: (
-			tui: unknown,
-			theme: unknown,
-			kb: unknown,
-			done: (value: T) => void,
-		) => Component;
+		/**
+		 * `any` params deliberately: each consumer's component declares its own
+		 * concrete tui/theme types (pi's Theme/TUI generics differ per ctx
+		 * variant), so the shared plumbing stays type-agnostic.
+		 */
+		component: (tui: any, theme: any, kb: any, done: (value: T) => void) => Component;
+		/**
+		 * Geometry passthrough. Omitted = called WITHOUT overlay options,
+		 * exactly like a bare `ctx.ui.custom(factory)` (goal questionnaire);
+		 * provided = `overlay: true` + geometry (effort picker, plan dialog).
+		 */
 		overlayOptions?: OverlayOptions;
 	},
 ): Promise<T> {
 	return ctx.ui.custom<T>(
 		(tui, theme, kb, done) => options.component(tui, theme, kb, done),
-		{
-			overlay: true,
-			overlayOptions: options.overlayOptions ?? defaultGeometry(),
-		},
+		options.overlayOptions
+			? { overlay: true, overlayOptions: options.overlayOptions }
+			: undefined,
 	);
 }
 

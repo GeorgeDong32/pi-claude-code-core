@@ -64,3 +64,32 @@
 
 19. **permissions-loader 迁 lib/settings 时的 malformed 语义修复(P1 复查发现)**
     初版迁移丢了原版两处行为:`readJsonFile` 对损坏文件的 console.warn;`writePermissionsToFile` 对损坏的既有文件「warn + 不写」(初版静默以 {} 覆写=自愈)。复查指出后已恢复两者(readJson onInvalid 检测 + corrupted 短路),行为与 pm 2.8.0 等价。教训:settings 迁移的等价性不只 happy path,malformed 分支也在 441 测试的既有语义内。
+
+
+---
+
+## P2 偏差(2026-09-21)
+
+20. **goal 随迁测试计数 75(spec 记 103;源包基线 66+3 文件加载失败)**
+    源包未安装 node_modules,三个 UI 测试文件(goal-auditor/questionnaire/widget,各 4 test)在源包目录直接 ERR_MODULE_NOT_FOUND;core 内 0.85 依赖齐全后 75/75 全绿(66+9=75,多出的即那 3 个文件的测试)。spec 的 103 为估算误差。随迁断言零改动:tests 与 npm 0.6.0 tarball 的 tests 目录 diff 仅 import 路径扁平化(DEVIATIONS #25)。
+
+21. **goal-auditor 两处 0.85 类型漂移入树修复**
+    P0 期只读源包靠 check.mjs 白名单豁免(goal-auditor.ts:142/206);P2 fork 入树后同文件进 tsc 主门,必须修复:ResourceLoader 补 0.85 新成员(返回 undefined/[]);createAgentSession 删 modelRegistry 选项(0.85 默认 modelRuntime 读同一 agentDir,auditor model 已显式解析)。白名单按自动过期机制撤除。详见 FORK.md。
+
+22. **review 降级 gate 范围:仅 /review**
+    spec P2-REV-03 说「/review 族命令返回明确错误文案」。裁量:/review-config(编辑 json)、/review-agents(列 .md frontmatter)、/review-show(重渲染最近报告)不依赖 subagent 工具,保持可用更符合「其余 core 功能不受影响」的精神;唯一 spawn reviewer 的 /review 被 gate。降级提示:一次性 install-hint warning + 每次明确的「review skipped」error。
+
+23. **P2-BUS-02 覆盖范围**
+    goal 通道经真实恢复路径(磁盘 goal 文件 + session entries)+ /goal-pause 命令翻转;review 通道 done 经 pi_review_report 工具真实路径。running 发布点在 /review 命令 handler 内(prepareRun 后),单测不驱动(需 git/PR 环境),由 P2-REL-02 真机冒烟覆盖。已在 PROGRESS 剩余风险记录。
+
+24. **0.1.7 议题消解(handoff 笔误)**
+    npm 实测 @capyup/pi-goal 无 0.1.7(版本线 0.1.0-0.1.2→…→0.5.0→0.6.0 最新);npm 0.6.0 tarball 与 fork 基线 ec2bcbe 内容一致(白名单三文件除外,逐文件 diff 实测)。spec §8「0.1.7↔0.6.0 diff 盘点」无对象,OPEN-QUESTIONS #3 关闭。
+
+25. **goal tests import 扁平化**
+    源包布局 tests/ 与 extensions/ 平级(import ../extensions/x.ts);core 布局 tests 在 extensions/goal/ 内,统一改为 ../x.ts(P2-GO-03a import 包内化;断言零改动)。
+
+26b. **review 随迁计数 165 vs spec 161(P2 复查补记)**
+    源包基线同跑法实测 165=165(与 effort/goal 同类的 spec 估算误差),随迁断言零改动(diff -rq tests/agents/reference 零差异)。补记以对齐 #8/#20 先例。
+
+26. **降级提示计数语义**
+    session_start 的 headless 探测只 console.log(不置一次性 flag),首个用户可见提示(命令路径)才消耗 degradedNoticeShown——否则 headless 启动会吞掉 UI 会话的一次性 warning。
