@@ -26,6 +26,9 @@ import effortExtension from "./effort/index.ts";
 // P2: forked from capyup/pi-goal (@ ec2bcbe) / merged from pi-review 0.8.6
 import goalExtension from "./goal/goal.ts";
 import reviewExtension from "./review/index.ts";
+// P3: new modules
+import { createRulesExtension } from "./rules/index.ts";
+import memoryExtension from "./memory/index.ts";
 
 type ModuleFactory = (pi: ExtensionAPI) => void | Promise<void>;
 
@@ -39,8 +42,8 @@ const moduleFactories: ModuleFactory[] = [
 	effortExtension,
 	goalExtension,
 	reviewExtension,
-	// P3: createRulesExtension(),
-	// P3: memoryExtension,
+	createRulesExtension(),
+	memoryExtension,
 	// P4: mcpGovExtension,
 	// P4: webGovExtension,
 ];

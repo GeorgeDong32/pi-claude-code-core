@@ -93,3 +93,32 @@
 
 26. **降级提示计数语义**
     session_start 的 headless 探测只 console.log(不置一次性 flag),首个用户可见提示(命令路径)才消耗 degradedNoticeShown——否则 headless 启动会吞掉 UI 会话的一次性 warning。
+
+
+---
+
+## P3 偏差(2026-09-21)
+
+27. **lexical 阈值标定(首查②,真实存量回放)**
+    用本机 CherryDev CC 存量(81 文件)回放:MIN_TOKEN_OVERLAP=2 时目标命中精准(builtin-provider prompt → add-builtin-provider-recipe),无关 prompt 零注入,但一个 symlink prompt 召回 3 个弱相关文件(被 maxFiles=5 钳制)。首日取 2(召回优先);推翻条件(DRIVING-MEMORY (a) 误报高烧预算)触发时升 3。标定脚本为一次性,未入仓。
+
+28. **P3-RU-13 ② parallel steer 未真机冒烟**
+    steer 送达语义按 pi 0.85 docs(「本 turn 工具执行完、下次 LLM 调用前送达」)实现;parallel tool mode 下的实际批次需要带 LLM 的多工具并行会话,本会话无此预算。归 P3-REL-01 真机冒烟清单。①input.path 已实测确认(read.js schema + pm 2.x 同款用法)。
+
+29. **rules/paths.ts 未实现 session 历史挖掘**
+    P3-RU-11 布局注释提到 paths.ts 含「session 历史挖掘」,但行为规范(P3-RU-01..10)无对应条目——按「spec 不给 ID 即不做」省略。paths.ts 仅实现 tool_call 目标路径提取。
+
+30. **modes carve-out 插入两处(ask-ladder + 漏斗)**
+    P3-PM-01 预想单点插入;实测 ask 模式 edit/write 有内联 select 弹窗(index.ts:1919 不经 promptWithPermissionOptions),故 ask-ladder 分支为主插入点,promptWithPermissionOptions 开头为防御性第二点(覆盖 plan-execute/forwarding 等其它弹窗路径)。行为等价、覆盖更全。
+
+31. **memory 模块 cwd 口径统一为 ctx.cwd**
+    实现中 memoryDir(ctx) 以事件 ctx.cwd 为锚(process.cwd() 仅兜底)——与 modes carve-out 同口径,避免双口径漂移(carve-out 测试曾因此红)。context 事件经 ExtensionHandler 两参签名拿 ctx(0.85 types:902 确认)。
+
+32b. **P3 复查补记的未申报偏差(已裁定合理,补台账)**
+    ①globs 匹配为手写 globToRegExp 而非 picomatch(零依赖;`*`/`**`/`?`/`{a,b}` 实测正确,字符类/extglob 不支持——规则文件作者用基础 glob 即可,记录于 render.ts 注释);②>4KB 记忆文件 selectForTurn **整体跳过**而非 spec 测试计划的「截断标记」(静默截断记忆内容有误用风险,跳过+按需 Read 更安全);③hermes 导入未保留 created/last 元数据(§ store 无此字段,启发式转换从简);④fake-host isProjectTrusted false→true(rules wiring 需要 trust 门控放行,契约断言不受影响);⑤wiring 头注释指向不存在的 rules-command.test.ts(已修正)。
+
+31b. **ctx.cwd 口径统一的两处残留(P3 复查发现,已修)**
+    session_start 的可写性探针 statSync(memoryDir()) 未传 ctx、session_recall 工具用 process.cwd()——均已改为 ctx.cwd 优先。另:contextBudget/memory 两条新 bus 通道此前零断言,已补(rules-wiring + memory.test);动态 yield 翻转后快照不更新已修(probePrompt 翻转时补 publish);>4K globs 规则首触永不 steer 且被永久标记的缺陷已修(steer 正文改从 collectRules 原文取,不再依赖 render 内联输出);extraDirs 因 find 单目录静默失效已修(collectRules filter 循环);P3-RU-04「绝不截内容中部」红线(收尾 slice + 尾注超预算)已修(降级循环核算全部字节,含尾注预留);lastInjectedFiles 只写不读已删(去重由「同 turn 文件唯一 + 60KB 累计」承载);rules 渲染测试容忍 +64 收紧为精确 ≤budget。
+
+32. **yield 静态探测的 agentDir 随 HOME 现解析**
+    gate 构造读 process.env.HOME 而非 homedir() 快照——生产等价,测试可注入;DEVIATIONS #26 同族(测试可注入性优先)。

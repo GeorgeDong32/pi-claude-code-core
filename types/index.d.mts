@@ -24,6 +24,8 @@ export interface CoreSnapshot {
 	goal: { active: boolean; paused?: boolean; summary: string | null };
 	review: { status: "idle" | "running" | "done"; lastRunAt: number | null };
 	display?: { footer?: readonly string[] };
+	contextBudget?: { rulesMax: number; memoryIndexMax: number; dynamicSteerMax: number };
+	memory?: { yielded: boolean; dir?: string };
 }
 
 export type CoreCommand =
@@ -47,6 +49,8 @@ export interface CoreStatus {
 	goal: { active: boolean; paused?: boolean; summary: string | null };
 	review: { status: string; lastRunAt: number | null };
 	display?: { footer?: readonly string[] };
+	contextBudget?: { rulesMax: number; memoryIndexMax: number; dynamicSteerMax: number };
+	memory?: { yielded: boolean; dir?: string };
 }
 
 export function readCoreStatus(g?: unknown): CoreStatus;

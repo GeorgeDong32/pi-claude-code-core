@@ -134,7 +134,7 @@ export class FakeHost {
 			model: undefined,
 			modelRegistry: host.piObject().modelRegistry,
 			getContextUsage: () => undefined,
-			isProjectTrusted: () => false,
+			isProjectTrusted: () => true,
 			sessionManager: {
 				getBranch: () => opts.sessionEntries ?? [],
 				getEntries: () => opts.sessionEntries ?? [],

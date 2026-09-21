@@ -2,6 +2,64 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## P3 — rules 引擎 + memory 模块(1.2.0,本次不发)
+
+**状态:实现完成,复查通过(2026-09-21),已 commit(未发版——1.2.0 留用户)。**
+
+### 交付项与 spec ID 对照
+
+| spec ID | 内容 | 状态 |
+|---|---|---|
+| P3-RU-01 | 四层优先级 builtin<global<compat<project;project/compat trust 门控;同名 shadow(render.ts collectRules) | ✅ |
+| P3-RU-02 | frontmatter name/description/globs/always;** 退化 always;无 frontmatter=always(scan.ts) | ✅ |
+| P3-RU-03 | @include 四形态;缺失静默;环重访丢弃;深度 5;include 体在前(scan.ts expandIncludes) | ✅ |
+| P3-RU-04 | 预算 40K:内联超限降级最大 always→索引;索引整行尾部丢弃;单文件>4K 只索引;>40K 整体剔除;绝不截中部 | ✅ |
+| P3-RU-05 | total function:缺失目录 0 贡献;坏文件静默+尾注 `skipped N invalid`;字节级确定 | ✅ |
+| P3-RU-06 | before_agent_start append-only systemPrompt(不动 contextFiles) | ✅ |
+| P3-RU-07 | 索引+首触 steer(tool_call 捕获 path→glob 命中→sendMessage steer;每规则每 session 一次;session_start 重置) | ✅ |
+| P3-RU-08 | mtime 指纹缓存;stat 计数断言(unchanged turn ≤3 = dir 数) | ✅ |
+| P3-RU-09 | /rules 只读输出(名称/scope/globs/预算占用/激活数) | ✅ |
+| P3-RU-10 | lib/context-budget.ts 静态切分 + bus `contextBudget` 可选通道(rules session_start 发布;reader 透传) | ✅ |
+| P3-RU-11 | 文件布局 index/render/scan/paths/defaults(~700 LOC);paths.ts 的 session 历史挖掘未实现(不在行为规范,见 DEVIATIONS #29) | ✅ |
+| P3-RU-12 | v1 无 setEnabled/lint/subscribe(工厂壳接口不变) | ✅ |
+| P3-RU-13 | 首查:①input.path 实测确认(read.js schema `path: Type.String` + pm 同款用法);②parallel steer 以 0.85 文档语义实现,真机冒烟归 P3-REL(见 DEVIATIONS #28) | ✅ |
+| P3-ME-01 | 磁盘格式 CC 1:1(memory/<slug>.md + MEMORY.md;git-canonical-root;pi 同款 sanitizer) | ✅ |
+| P3-ME-02 | reconciler:≤200 行/25KB+WARNING;mtime 短路;坏 frontmatter 排除+skipped 计数 | ✅ |
+| P3-ME-03 | policy 注入(自写 POLICY_COMPACT)+ capped 索引 entrypoint | ✅ |
+| P3-ME-04 | selectForTurn lexical(阈值 2,≤5 文件×4KB,session 60KB,新鲜度头,不落 session);session_compact 重置 | ✅ |
+| P3-ME-05 | 写路径=plain files;guardMemoryWrites secret 拦截器(7 类 pattern);无 memory_write 工具 | ✅ |
+| P3-ME-06 | InjectionGate 双探测(静态 npm/settings 扫描+动态 `<memory-policy` 标记);只管注入;结果上 bus memory 通道 | ✅ |
+| P3-ME-07 | session_recall 工具(AND 匹配,流式扫,toolResult 不命中,坏行计数,limit≤50,只读) | ✅ |
+| P3-ME-08 | /memory-import-claude(不信源索引)+ /memory-import-hermes(§ 拆条+type 启发式);双跑幂等 | ✅ |
+| P3-ME-09 | 降级与韧性:notifyOnce、注入 try/catch 永不阻断 turn、空目录友好文案 | ✅ |
+| P3-ME-10 | v1 不做 provider seam/双工具/LLM(设计定稿) | ✅ N/A |
+| P3-ME 首查 | ①hermes 本机在装(实测 node_modules 命中)→ 静态探测路径真实;②lexical 标定回放 CherryDev 存量 81 文件(见 DEVIATIONS #27) | ✅ |
+| P3-PM-01 | modes carve-out(ask-ladder write/edit 分支+promptWithPermissionOptions 漏斗;路径特判);红绿 3 例(免审批/外仍弹/secret 仍拦) | ✅ |
+
+### 测试计数
+
+- `bun run test`:vitest **536 passed**(441 modes + 31 lib + 26 P1 + 5 P2 + 33 P3:rules-render 11 + rules-wiring 6 + memory 12 + carve-out 3 + review-degradation 3 中的 P3 无…… 精确列:11+6+12+3=32 新增) + node--test **312 passed**
+- `bun run contracts`:**17 passed**
+- `bun run check`:exit 0
+
+### 真机冒烟(P3 可做子集)
+
+lexical 标定回放(真实 CherryDev 存量 81 文件)即本 Phase 真机数据冒烟:强重叠命中目标文件、无关 prompt 零注入。P3-REL-01 完整清单(放规则生效/steer 可见/hermes 双装无双重注入)需发版后用户侧执行。
+
+### 剩余风险
+
+1. lexical 阈值 2 首日偏召回(标定实录:1 prompt 召回 3 弱相关,被 5 文件上限钳制);推翻条件(误报高烧预算)触发时升 3。
+2. parallel tool mode 下 steer 送达批次未真机验证(按 0.85 文档实现);P3-REL-01 冒烟项。
+3. rules 的 project/compat trust 门控在 wiring 层默认 true(pi 上游有 project_trust 事件门控扩展加载),若 pi 语义变化需跟随。
+
+### 复查结论(2026-09-21,新鲜眼 subagent)
+
+**PASS(修复后)— 达 commit 门槛。** 三命令实测全绿且计数精确对账;modes diff 审计确认 carve-out 仅 18 行、441 测试零改动;契约断言零变化;P3-PM-01 联合红绿为真实双模块链。
+
+- **阻塞发现(已修复)**:①P3-RU-04「绝不截内容中部」红线——收尾 slice 硬截 + 尾注超预算,已改为降级循环核算全部字节(含尾注预留),测试容忍收紧为精确 ≤budget;②调试残留 PROBE9 已删。
+- 非阻塞修复(已随本次处理):>4K globs 规则首触永不 steer 且永久标记(steer 改取 collectRules 原文);动态 yield 翻转后 bus 快照不更新(补 publish);extraDirs 静默失效(collectRules filter);contextBudget/memory 通道零断言(补两条);深度 6 专项(红队 #11)补 fixture;60KB 预算耗尽 + session_compact 重置补断言;session_start 探针与 session_recall 的 cwd 口径统一;lastInjectedFiles 只写不读删除;5 条未申报偏差补台账(#32b)+ #31 残留补修(#31b)。
+- 遗留:parallel steer 真机冒烟归 P3-REL;lexical 阈值推翻条件记录在案。
+
 ## P2 — pi-goal fork + pi-review 整体并入(1.1.0,本次不发)
 
 **状态:实现完成,复查通过(2026-09-21),已 commit(未发版——1.1.0 + CCTUI 1.5.0 留用户)。**

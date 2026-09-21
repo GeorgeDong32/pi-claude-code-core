@@ -18,6 +18,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui"
 import { coreBus } from "../bus.ts"
+import { resolveMemoryPaths } from "../memory/paths.ts"
 import { getSharedEffortOwner, type OwnerEffortLevel } from "../../lib/effort-owner.ts";
 import { readFileSync } from "node:fs"
 import { homedir } from "node:os";
@@ -368,6 +369,17 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     };
   }
 
+  // P3-PM-01: memory-dir writes skip the approval dialog (plain-file
+  // memory workflow); the memory module's secret guard still runs after
+  // this gate returns undefined (interception is unaffected).
+  function isMemoryDirWrite(tool: string, ctx: { cwd?: string }, input: Record<string, unknown> | undefined): boolean {
+    if (tool !== "write" && tool !== "edit") return false;
+    const path = typeof input?.path === "string" ? input.path : "";
+    if (!path) return false;
+    const dir = resolveMemoryPaths(ctx.cwd ?? process.cwd()).memoryDir;
+    return path === dir || path.startsWith(`${dir}/`);
+  }
+
   async function promptWithPermissionOptions(
     ctx: ExtensionContext,
     tool: string,
@@ -375,6 +387,9 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     label: string,
     category: string,
   ): Promise<Block> {
+    if (isMemoryDirWrite(tool, ctx, input)) {
+      return undefined as unknown as Block; // P3-PM-01 carve-out: skip dialog
+    }
     if (!ctx.hasUI) {
       const isChild = isSubagentChildProcess();
       const parent = resolveParentSessionId();
@@ -1900,6 +1915,9 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
         return undefined;
       }
       if (tool === "edit" || tool === "write") {
+        // P3-PM-01: memory-dir writes skip the dialog (secret guard in the
+        // memory module still runs after this returns undefined)
+        if (isMemoryDirWrite(tool, ctx, input)) return undefined;
         const pathVal = String(input.path ?? "(unknown)");
         if (!ctx.hasUI) {
           return promptApproval(ctx, tool, `on ${pathVal}`, input);

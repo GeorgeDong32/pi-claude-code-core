@@ -62,6 +62,24 @@ function readReviewChannel(raw) {
 	};
 }
 
+function readContextBudgetChannel(raw) {
+	if (!isObject(raw) || !isObject(raw.contextBudget)) return undefined;
+	var b = raw.contextBudget;
+	var out = {};
+	if (typeof b.rulesMax === "number") out.rulesMax = b.rulesMax;
+	if (typeof b.memoryIndexMax === "number") out.memoryIndexMax = b.memoryIndexMax;
+	if (typeof b.dynamicSteerMax === "number") out.dynamicSteerMax = b.dynamicSteerMax;
+	return Object.keys(out).length === 3 ? out : undefined;
+}
+
+function readMemoryChannel(raw) {
+	if (!isObject(raw) || !isObject(raw.memory)) return undefined;
+	return {
+		yielded: raw.memory.yielded === true,
+		...(typeof raw.memory.dir === "string" ? { dir: raw.memory.dir } : {}),
+	};
+}
+
 function readDisplayChannel(raw) {
 	if (!isObject(raw) || !Array.isArray(raw.footer)) return undefined;
 	return { footer: raw.footer.filter((s) => typeof s === "string") };
@@ -85,6 +103,8 @@ export function readCoreStatus(g) {
 				goal: readGoalChannel(snap.goal),
 				review: readReviewChannel(snap.review),
 				display: readDisplayChannel(snap.display),
+				contextBudget: readContextBudgetChannel(snap),
+				memory: readMemoryChannel(snap),
 			};
 		}
 		// Legacy fallback: pm 2.8.x capability object.

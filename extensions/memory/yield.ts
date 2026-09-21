@@ -1,0 +1,77 @@
+/**
+ * memory/yield.ts — the InjectionGate (P3-ME-06).
+ *
+ * When another memory engine (hermes) is present, this module YIELDS the
+ * injection lane entirely: no policy, no index, no per-turn selection. The
+ * gate only governs INJECTION — tools, commands and importers always run.
+ *
+ * Two probes:
+ *   - static (session_start): scan settings packages + the npm dir for a
+ *     hermes package;
+ *   - dynamic (first before_agent_start): the systemPrompt already carries
+ *     a `<memory-policy` marker (covers unfavorable load order).
+ */
+
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
+export interface YieldState {
+	yielded: boolean;
+	/** Which probe decided (static dir name / "dynamic-prompt"). */
+	detectedBy?: string;
+}
+
+/** Static probe: hermes present among installed packages? */
+export function staticProbe(agentDir: string): boolean {
+	// 1) settings.json packages entries
+	try {
+		const settingsPath = join(agentDir, "settings.json");
+		if (existsSync(settingsPath)) {
+			const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as { packages?: unknown };
+			if (Array.isArray(settings.packages)) {
+				for (const pkg of settings.packages) {
+					if (typeof pkg === "string" && /hermes/i.test(pkg)) return true;
+				}
+			}
+		}
+	} catch {
+		/* unreadable settings → fall through */
+	}
+	// 2) npm install dir scan
+	try {
+		const npmDir = join(agentDir, "npm", "node_modules");
+		if (existsSync(npmDir)) {
+			for (const entry of readdirSync(npmDir)) {
+				if (/hermes/i.test(entry)) return true;
+			}
+		}
+	} catch {
+		/* ignore */
+	}
+	return false;
+}
+
+export class InjectionGate {
+	readonly state: YieldState = { yielded: false };
+
+	constructor(private readonly agentDir: string) {}
+
+	/** session_start: run the static probe. */
+	probeStatic(): YieldState {
+		if (staticProbe(this.agentDir)) {
+			this.state.yielded = true;
+			this.state.detectedBy = "static-scan";
+		}
+		return this.state;
+	}
+
+	/** First before_agent_start: dynamic prompt-marker probe (idempotent). */
+	probePrompt(systemPrompt: string): YieldState {
+		if (this.state.yielded) return this.state;
+		if (systemPrompt.includes("<memory-policy")) {
+			this.state.yielded = true;
+			this.state.detectedBy = "dynamic-prompt";
+		}
+		return this.state;
+	}
+}

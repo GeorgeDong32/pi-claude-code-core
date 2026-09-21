@@ -40,8 +40,16 @@ export interface ReviewPatch {
 export interface DisplayPatch {
 	display?: { footer?: readonly string[] };
 }
+/** P3-RU-10: read-only budget split, published once by the rules module. */
+export interface ContextBudgetPatch {
+	contextBudget?: { rulesMax: number; memoryIndexMax: number; dynamicSteerMax: number };
+}
+/** P3-ME-06: yield state of the injection lane (optional channel). */
+export interface MemoryPatch {
+	memory?: { yielded: boolean; dir?: string };
+}
 
-export type CorePatch = ModesPatch | EffortPatch | GoalPatch | ReviewPatch | DisplayPatch;
+export type CorePatch = ModesPatch | EffortPatch | GoalPatch | ReviewPatch | DisplayPatch | ContextBudgetPatch | MemoryPatch;
 
 type CommandHandler = (cmd: CoreCommand) => CoreCommandResult;
 
