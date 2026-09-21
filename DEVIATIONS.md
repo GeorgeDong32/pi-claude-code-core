@@ -24,3 +24,43 @@
 
 7. **writeForwardedRequest 断言落盘而非函数输出**
    P0-CT-05 spec 说「仅断言路径构造函数输出」;`forwardingSessionDir` 未导出,改断言导出的 `writeForwardedRequest` 实际落盘树(`sessions/permission-modes-forwarding/sessions/<id>/{requests,responses}`)——更强的行为断言,同一契约。
+
+---
+
+## P1 偏差(2026-09-21)
+
+8. **effort 随迁测试计数 72 ≠ spec 的 74**
+   源包同跑法(`tsx --test tests/*.test.ts`)基线实测 72(spec 的 74 为估算误差)。随迁 72=72 等价。
+
+9. **effort integration 测试对 0.85 的 setup 适配(断言零改动)**
+   ① import 命名空间 `@mariozechner→@earendil-works`(P1-EF-01 本职);② `AuthStorage` 与 loader 辅助函数 0.85 起不在包根导出,改 deep path import;③ `AuthStorage.set(provider, cred)` 改 `modify(provider, fn)`(roundtrip 实测等价);④ `ModelRegistry.create(authStorage, modelsPath)` 与 `createAgentSession` 的 `authStorage/modelRegistry` options 已被 0.85 的默认 `modelRuntime`(读 agentDir/auth.json+models.json,同路径)取代,删除显式构造;⑤ effort.test.ts 的 ThinkingLevel 漂移守卫补已知上游别名 "max"。
+
+10. **lib/settings 接口微扩:onInvalid 回调 + write opts.mode**
+    `readJson(path, fallback)` 增第三参 `onInvalid?(reason)`——pm 441 测试钉住了 malformed 配置的 console.warn(profiles.test "returns {} and warns"),需要区分 missing/empty(静默)与 malformed/non-object(warn);`writeJsonAtomic(path, value)` 增 `opts?: {mode?}`——profiles 写 model-profiles.json 带 `0o600`(安全行为,不可丢)。两参签名语义不变。
+
+11. **lib/overlay 增 showComponentOverlay(组件注入);effort picker 组件保持原实现**
+    P1-EF-02「picker 改用 lib/overlay.ts」按字面替换组件会杀死 effort-picker.test.ts 的 23 条断言(盒线渲染/9 行布局/居中标题被钉死),违反零断言改动。实现:picker **组件**原样保留,`ctx.ui.custom` + overlayOptions + 几何参数的**底座管线**收敛为 lib/overlay 的 `showComponentOverlay`(pm plan-approval-dialog 同样需要组件注入,items 型 showOverlay 无法服务)。等价性说明:custom 调用参数与几何逐项相同;非 TUI 的 select 降级仍在 effort 调用方(原样)。
+
+12. **bus planPhase 联合补 "refining"**
+    P1-BUS-01 的 planPhase 三值联合漏了 pm 现状的 `"refining"`(PlanPhase 实为四值)。按红队「以现状钉住」原则补全(types 与 bus 同步)。
+
+13. **types subpath 文件布局细化:.mjs/.d.mts 分名**
+    spike 定稿的 `.js + .d.ts` 在本仓 vitest/vite 下被 TS-importer 重映射抓到 `.d.ts` 当源码解析(实证)。布局改为:runtime `types/core-status.mjs`(无同名声明,vite/tsc 直取)、声明 `types/index.d.mts`(exports "types" 指向;bus.ts 等 type-only import)。消费端经 exports map `./types` 的语义与 spike 验证一致(types→index.d.mts,import→core-status.mjs;jiti/node/tsc 三通路不变)。
+
+14. **EffortOwner 接口微扩(spec 签名全部保留)**
+    增 `envPin()`(返回①值或 null;P1-EF-06 c 的「被 env 钉死」提示需命令侧感知而 spec 的 setExplicit 为 void)、`currentSource()`(bus effort.source 四值需要)、`setExplicit` 返回 `"applied"|"pinned-by-env"`(同一语义的机器可读形式)。OwnerEffortLevel = pi ThinkingLevel 联合(含 "off")——alt+t 必须能表达 "off",spec 文字中的 EffortLevel 按 effort 包 ALL_LEVELS(含 off)理解。
+
+15. **--effort flag 与 alt+t 归入②;/effort reset 新子命令**
+    flag=启动期手动意图(src "command");alt+t=src "shortcut"(红队 #1)。`/effort reset` 为 P1-EF-06 b) 要求的行为,parseEffortCommand/handler 增 `{kind:"reset"}`(USAGE 字符串不动——30 条 effort 单测钉住其文案;reset 不在 USAGE 列举中与 min/max 同为语义别名,可接受)。
+
+16. **modes publishCapability 委托 bus(P1-PM-04 白名单之外的接线)**
+    P1-BUS-03「publishCore 唯一发布口」的必然落点:modes 的 publishCapability 函数体改调 coreBus().publish,4 个调用点零改动;`__pmWorkingStats` 的 legacy 派生移入 bus(仅在 snapshot.modes.workingStats 非空时写,负例行为与 CT-02 钉住一致)。功能语义零变化。
+
+17. **契约 targets 切 core + bus 测试重置钩子**
+    targets.modes/effort 切 core 模块(P1-PM-03/04 验收),redirect setter 同步改用 core 模块实例(必须与被测对象同模块,否则重定向无效)。bus 增 `resetCoreBusForTests()`(生产不调用;否则共享单例的 snapshot 跨契约用例泄漏,CT-02 负例把上用例 stats 带回)。
+
+18. **Cmd 内建 kind 暂不注册**
+    P1-BUS-01 形状列出 setMode/setEffort;v1 仅交付 registry 机制 + unknown 契约(P1-BUS-08),不注册真实处理器(modes setMode 需交互 ctx;owner setEffort 可 P2/P4 随 /core 面板接)。无契约要求内建 kind 可用。
+
+19. **permissions-loader 迁 lib/settings 时的 malformed 语义修复(P1 复查发现)**
+    初版迁移丢了原版两处行为:`readJsonFile` 对损坏文件的 console.warn;`writePermissionsToFile` 对损坏的既有文件「warn + 不写」(初版静默以 {} 覆写=自愈)。复查指出后已恢复两者(readJson onInvalid 检测 + corrupted 短路),行为与 pm 2.8.0 等价。教训:settings 迁移的等价性不只 happy path,malformed 分支也在 441 测试的既有语义内。

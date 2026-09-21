@@ -11,12 +11,12 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { writeProjectPermissionsFile } from "../../../pi-permission-modes/permissions-loader.ts";
-import { getPlanFilePath } from "../../../pi-permission-modes/utils.ts";
-import { modelsPath } from "../../../pi-permission-modes/profiles.ts";
+import { writeProjectPermissionsFile } from "../../extensions/modes/permissions-loader.ts";
+import { getPlanFilePath } from "../../extensions/modes/utils.ts";
+import { modelsPath } from "../../extensions/modes/profiles.ts";
 import { GOALS_DIR, ARCHIVED_GOALS_DIR, makeActiveGoalPath } from "../../../pi-goal/extensions/storage/goal-files.ts";
 import { GOAL_LEDGER_FILE } from "../../../pi-goal/extensions/goal-ledger.ts";
-import { writeFastMode } from "../../../pi-effort/effort.ts";
+import { writeFastMode } from "../../extensions/effort/effort.js";
 
 describe("P0-CT §4.5 frozen disk layout", () => {
 	it("P0-CT-09 (pm): project permissions files live at .pi/projects/<id>/permissions{,.local}.json", () => {
@@ -44,7 +44,7 @@ describe("P0-CT §4.5 frozen disk layout", () => {
 		// rewrites it). profiles.ts snapshots its load-time default into the
 		// modelsPath export, which is immune to the test-time redirect.
 		const configSrc = readFileSync(
-			new URL("../../../pi-permission-modes/config.ts", import.meta.url),
+			new URL("../../extensions/modes/config.ts", import.meta.url),
 			"utf-8",
 		);
 		expect(configSrc).toContain('join(homedir(), ".pi", "agent", "permission-modes.json")');

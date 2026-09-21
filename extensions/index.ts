@@ -19,13 +19,21 @@
  * assembly point starting in P1 (P1-BUS-01).
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { initCoreBus } from "./bus.ts";
+// P1: migrated from @georgedong32/permission-modes 2.8.0 / pi-effort 0.1.2
+import permissionModesExtension from "./modes/index.ts";
+import effortExtension from "./effort/index.ts";
 
 type ModuleFactory = (pi: ExtensionAPI) => void | Promise<void>;
 
 /** Ordered assembly line. Each phase appends its module factory here. */
 const moduleFactories: ModuleFactory[] = [
-	// P1: modesExtension,
-	// P1: effortExtension,
+	// capability bus first (P1-BUS): modules publish through it
+	function busExtension() {
+		initCoreBus();
+	},
+	permissionModesExtension,
+	effortExtension,
 	// P2: goalExtension,
 	// P2: reviewExtension,
 	// P3: createRulesExtension(),

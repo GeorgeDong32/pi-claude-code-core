@@ -2,6 +2,63 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## P1 — modes + effort 并入 + capability bus 首发(1.0.0,本次不发)
+
+**状态:实现完成,复查通过(2026-09-21),已 commit(未发版——1.0.0+ 留用户)。**
+
+### 交付项与 spec ID 对照
+
+| spec ID | 内容 | 状态 |
+|---|---|---|
+| P1-PM-01 | pm 2.8.0 全量迁入 extensions/modes/(import 包内化;改动仅白名单+bus 接线) | ✅ |
+| P1-PM-02 | 441 vitest 随迁零断言改动全绿 | ✅ |
+| P1-PM-03 | 契约套件 modes 目标切 core 模块,CT-01..09 断言零改动持续绿 | ✅ |
+| P1-PM-04 | 白名单:①profiles :effort → EffortOwner.setFromProfile;②alt+t → setExplicit("shortcut")+envPin;③settings→lib/settings.ts(config/profiles/permissions-loader)、plan-approval-dialog 底座→lib/overlay.ts | ✅ |
+| P1-EF-01 | @mariozechner→@earendil-works 全量替换,peer 提至 >=0.85<1.0;API 面 tsc 为准(漂移适配见 DEVIATIONS) | ✅ |
+| P1-EF-02 | effort 迁入;命令/快捷键/flag 保持;picker 底座→lib/overlay.ts;fast-mode 落盘键不变 | ✅ |
+| P1-EF-03 | 72 项随迁全绿(spec 写 74,源包基线实测 72),node--test 保持 | ✅ |
+| P1-EF-04 | status 槽 pi-effort-thinking/pi-effort-fast 不变(契约套件对 core effort 实测) | ✅ |
+| P1-EF-05 | lib/effort-owner.ts 所有权链 ①env>②explicit>③profile>④默认(接口微扩见 DEVIATIONS) | ✅ |
+| P1-EF-06 | 红绿 a)–f) 六条 + changed()/共享单测(test/lib/effort-owner.test.ts,12 用例) | ✅ |
+| P1-EF-07 | source-scan:extensions/{modes,effort} 零直接 setThinkingLevel 调用(红→绿钉住) | ✅ |
+| P1-BUS-01 | __piClaudeCodeCore frozen 纯数据快照 + __piClaudeCodeCoreCmd 写通道(extensions/bus.ts) | ✅ |
+| P1-BUS-02 | ./types subpath:纯 .mjs + .d.mts,total reader readCoreStatus(fallback 新 key→legacy→默认) | ✅ |
+| P1-BUS-03 | publishCore 唯一发布口,显式 per-channel patch,同批次派生写 legacy | ✅ |
+| P1-BUS-04 | version 固定 1、revision 单调、无定时器;presence gate 留在 modes 实现细节 | ✅ |
+| P1-BUS-05 | publish 后新 key + 2 个 core 可写 legacy key 同步一致(bus.test.ts) | ✅ |
+| P1-BUS-06 | frozen/整体替换/revision 单调/未触碰 channel 引用不变 | ✅ |
+| P1-BUS-07 | reader total 矩阵(undefined/{}/v0/v1/v99+garbage)全不 throw(bus-types.test.ts) | ✅ |
+| P1-BUS-08 | Cmd unknown → {ok:false,"unknown-command"} 不 throw;dispose 清 core 自有 key(legacy 残留按 CT-03) | ✅ |
+| P1-BUS-09 | 写侧(bus.test.ts)与读侧(bus-types.test.ts)文件互不 import,撤除互不阻塞 | ✅ |
+| P1-BUS-10 | v1 无订阅字段断言 + v2 onChange 数据字段预案注释(bus.ts/types) | ✅ |
+
+### 测试计数
+
+- `bun run test`:**498 passed**(modes 随迁 441 + lib 31 + effort-owner/bus 新增 26)+ node--test **72 passed**(effort 随迁)
+- `bun run contracts`:**17 passed**(modes/effort 目标已切 core 模块,断言零改动)
+- `bun run check`:main OK + contracts OK(goal 0.6.0 两行已知漂移白名单)
+
+### 真机冒烟(P1 可做子集)
+
+`pi -e ./extensions/index.ts --no-session --no-tools -p hi`:core 装配(bus+modes+effort)加载无自身错误;flag `--effort/--permission-mode/--model-profile` 与工具 `plan_ready` 均注册,与本机旧包并装时 pi 判定旧包冲突并弃用旧包、core 胜出(切换期预期形态;P1-REL-03 完整清单需发版+切 settings,本次不做,见 OPEN-QUESTIONS)。
+
+### 剩余风险
+
+1. bus effort/goal/review 通道的 P2 填充(goal/review 空骨架已发布)。
+2. `setMode`/`setEffort` Cmd kind 的真实处理器未注册(v1 只交付 registry + unknown 契约;待 /core 面板 P4 接 ctx)。
+3. effort 的 integration 测试对 0.85 loader 的三处 setup 适配(见 DEVIATIONS #9),上游再变需跟随。
+
+### 复查结论(2026-09-21,新鲜眼 subagent)
+
+**PASS — 达 commit 门槛。** 21 个实现 spec ID:20 PASS + P1-REL 流程项(与 P0-SK-04 同性质,待发布窗口)。要点:
+
+- 三命令实测全绿且计数精确对账(498 = 441+31+26;effort 72;contracts 17)。
+- 随迁断言零改动经独立 diff 审计:pm 22 个测试文件**逐字节零差异**;effort 3 文件 diff 逐 hunk 判定全部为 DEVIATIONS #9 申报的 setup 适配,断言行零改。
+- 契约测试文件与 P0 commit diff 审计:断言文件实质零改动(disk-layout/env-forwarding 仅 import 随被测对象切换,属 P1-PM-03 本身)。
+- DEVIATIONS #8-#18 全部裁定为合理裁量。
+- 修复的复查发现:permissions-loader malformed 语义恢复(#19);两处测试注释失真修正。
+- 遗留:P1-REL-01..04 待发布窗口执行(发 1.0.0、切 settings、完整冒烟、symlink 核查)。
+
 ## P0 — 脚手架 + 契约冻结(0.1.0)
 
 **状态:实现完成,复查通过(2026-09-21),已 commit + 发 0.1.0-next。**

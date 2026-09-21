@@ -66,6 +66,47 @@ export async function showOverlay(
 	return item ? item.value : null;
 }
 
+/**
+ * Shared overlay plumbing for a CUSTOM component (P0-LB-03; consumers:
+ * effort-picker P1, pm plan-approval-dialog P1-PM-04③, goal dialog P2).
+ *
+ * Thin wrapper over `ctx.ui.custom` that centralizes the `overlay:true` +
+ * geometry passthrough pattern. The component keeps full ownership of its
+ * rendering and key handling; the caller owns the fallback behavior outside
+ * TUI contexts. Throws through like `ctx.ui.custom` does (no silent
+ * degradation for components that cannot be expressed as a select list).
+ */
+/** Minimal UI surface showComponentOverlay needs (both ctx variants have it). */
+interface CustomOverlayContext {
+	ui: {
+		custom: <T>(
+			factory: (tui: unknown, theme: unknown, kb: unknown, done: (v: T) => void) => Component,
+			options?: { overlay?: boolean; overlayOptions?: OverlayOptions },
+		) => Promise<T>;
+	};
+}
+
+export async function showComponentOverlay<T>(
+	ctx: CustomOverlayContext,
+	options: {
+		component: (
+			tui: unknown,
+			theme: unknown,
+			kb: unknown,
+			done: (value: T) => void,
+		) => Component;
+		overlayOptions?: OverlayOptions;
+	},
+): Promise<T> {
+	return ctx.ui.custom<T>(
+		(tui, theme, kb, done) => options.component(tui, theme, kb, done),
+		{
+			overlay: true,
+			overlayOptions: options.overlayOptions ?? defaultGeometry(),
+		},
+	);
+}
+
 function defaultGeometry(): OverlayOptions {
 	return {
 		anchor: "center",

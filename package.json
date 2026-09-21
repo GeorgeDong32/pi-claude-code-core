@@ -25,6 +25,12 @@
       "./extensions/index.ts"
     ]
   },
+  "exports": {
+    "./types": {
+      "types": "./types/index.d.mts",
+      "import": "./types/core-status.mjs"
+    }
+  },
   "files": [
     "extensions",
     "lib",

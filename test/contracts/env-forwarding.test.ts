@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
-import { writeForwardedRequest } from "../../../pi-permission-modes/permission-forwarding.ts";
+import { writeForwardedRequest } from "../../extensions/modes/permission-forwarding.ts";
 import { clearCoreGlobals, restoreCoreGlobals, snapshotCoreGlobals, snapshotEnv, restoreEnv } from "./fake-host.ts";
 import { setupModes } from "./helpers.ts";
 import type { SetupResult } from "./helpers.ts";
