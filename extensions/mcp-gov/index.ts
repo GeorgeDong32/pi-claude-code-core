@@ -8,13 +8,20 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { loadMergedPermissionRules } from "../modes/permissions-loader.ts";
+import { ruleMatchesId, ruleValueText } from "../../lib/rule-text.js";
 import { getAdjudication, hasSessionGrant, isBypassActive } from "../modes/rule-families.ts";
 import { createBrokerMirror, probeMcpAdapterPort, type McpEventPort } from "./broker.ts";
 import { createMcpRuleFamily } from "./family.ts";
 import { renderMcpPanel } from "./panel.ts";
 
 export default function mcpGovExtension(pi: ExtensionAPI): void {
-	createMcpRuleFamily();
+	// direct tool naming (exa_search) only claims when the server id is on
+	// this list — configure via env, e.g. PI_CORE_MCP_DIRECT_SERVERS=exa,github
+	const knownServers = (process.env.PI_CORE_MCP_DIRECT_SERVERS ?? "")
+		.split(",")
+		.map((s) => s.trim())
+		.filter(Boolean);
+	createMcpRuleFamily({ knownServers });
 
 	let mirror = createBrokerMirror({ present: false } as McpEventPort, {
 		getAdjudication: () => undefined,
@@ -62,18 +69,10 @@ export default function mcpGovExtension(pi: ExtensionAPI): void {
 	});
 }
 
-function ruleValueText(rule: { ruleValue: unknown }): string {
-	return typeof rule.ruleValue === "string"
-		? rule.ruleValue
-		: String((rule.ruleValue as { value?: unknown })?.value ?? "");
-}
-
 function resolveHasAllow(rules: ReturnType<typeof loadMergedPermissionRules>, canonicalId: string): boolean {
-	return rules.some((r) => {
-		if (r.behavior !== "allow") return false;
-		const text = ruleValueText(r);
-		return text === canonicalId || (text.endsWith("*") && canonicalId.startsWith(text.slice(0, -1)));
-	});
+	return rules.some(
+		(r) => r.behavior === "allow" && ruleMatchesId(ruleValueText(r), canonicalId),
+	);
 }
 
 function getAdjudicationFor(id: string): { outcome: string } | undefined {

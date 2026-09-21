@@ -27,7 +27,7 @@ handoff 2026-09-20 称「npm 最新 0.1.7、本地领先」。**实测(registry.
 
 ## 行为冻结面(实测钉住)
 
-- 命令族 14 个(`goal` `goal-status` `goal-list` `goal-focus` `goal-settings` `goals` `sisyphus` `goals-set` `sisyphus-set` `goal-abort` `goal-pause` `goal-resume` + questionnaire/draft 工具族)签名不变(P2-GO-04)。
+- 命令族 14 个(`goal` `goal-status` `goal-list` `goal-focus` `goal-settings` `goals` `sisyphus` `goals-set` `sisyphus-set` `goal-abort` `goal-pause` `goal-resume` `goal-tweak` `goal-clear`)签名不变(P2-GO-04)。
 - 磁盘布局 `.pi/goals/active_goal_*.md`、`.pi/goals/archived/`、`.pi/goals/goal_events.jsonl` 不变(P0-CT-09 对 core fork 实测绿)。
 - entry 类型 `pi-goal-state/-focus/-event/-audit-event` 不变(P0-CT-08)。
 - 75 项随迁测试全绿(源包因缺 node_modules 仅能跑 66,core 内 0.85 依赖齐全后 75/75——多出的 9 项来自源包跑不了的 3 个 UI 测试文件,非新增)。

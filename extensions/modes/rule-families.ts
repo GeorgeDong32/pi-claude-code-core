@@ -14,6 +14,7 @@
  * forwarded approvals land here too (via noteAdjudicated).
  */
 
+import { ruleMatchesId, ruleValueText } from "../../lib/rule-text.js";
 import type { PermissionBehavior, PermissionRule } from "./permissions.ts";
 
 export type FamilyVerdict = "deny" | "allow" | "ask";
@@ -23,7 +24,7 @@ export interface RuleFamily {
 	id: string;
 	/** CanonicalId for this tool call, or null when the family does not claim it. */
 	match(toolName: string, input: Record<string, unknown>): string | null;
-	/** Rule-file verdict for the canonicalId (deny > allow > ask order kept here). */
+	/** Rule-file verdict for the canonicalId (deny > ask > allow order kept here). */
 	resolve(canonicalId: string, rules: PermissionRule[]): FamilyVerdict;
 	/** Suggested persistent rule ("Allow always"), e.g. `mcp_exa_*`. */
 	suggestAllowRule(canonicalId: string): string;
@@ -59,7 +60,7 @@ export function matchFamily(toolName: string, input: Record<string, unknown>): F
 
 /**
  * Family verdict for a tool call: null when no family claims it. The deny >
- * allow > ask order follows the pm engine's existing behavior sweep.
+ * ask > allow order follows the pm engine's existing behavior sweep.
  */
 export function familyVerdictFor(
 	toolName: string,
@@ -75,15 +76,12 @@ export function familyVerdictFor(
 export function ruleMentions(rules: PermissionRule[], canonicalId: string, behavior: PermissionBehavior): PermissionRule | undefined {
 	return rules.find((r) => {
 		if (r.behavior !== behavior) return false;
-		const text = permissionRuleText(r);
-		return text === canonicalId || (text.endsWith("*") && canonicalId.startsWith(text.slice(0, -1)));
+		return ruleMatchesId(permissionRuleText(r), canonicalId);
 	});
 }
 
 function permissionRuleText(rule: PermissionRule): string {
-	return typeof rule.ruleValue === "string"
-		? rule.ruleValue
-		: String((rule.ruleValue as { value?: unknown })?.value ?? "");
+	return ruleValueText(rule);
 }
 
 // ---- bypass indicator (P4-MC-03 mirror's 2nd allow branch) ----------------

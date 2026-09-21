@@ -33,6 +33,8 @@ import type { PermissionRule } from "../../extensions/modes/permissions.ts";
 import { createWebRuleFamily, extractHost, loadPreapprovedDomains, BUILTIN_PREAPPROVED } from "../../extensions/web-gov/index.ts";
 import { createBrokerMirror } from "../../extensions/mcp-gov/broker.ts";
 import { renderMcpPanel } from "../../extensions/mcp-gov/panel.ts";
+import { setConfigPath } from "../../extensions/modes/config.ts";
+import { setModelsPath } from "../../extensions/modes/profiles.ts";
 
 let globalsSnapshot: Record<string, unknown>;
 
@@ -113,6 +115,11 @@ describe("P4-FAM-04 gate end-to-end (real modes gate)", () => {
 		host.flags["permission-mode"] = mode;
 		const project = mkdtempSync(join(tmpdir(), "p4-gate-"));
 		host.flags._project = project;
+		// isolate from the real ~/.pi/agent config (the gate reads merged
+		// rules from it; leftover local rules would flip first-seen cases)
+		setConfigPath(join(project, "permission-modes.json"));
+		writeFileSync(join(project, "permission-modes.json"), JSON.stringify({}));
+		setModelsPath(join(project, "model-profiles.json"));
 		const ctx = host.makeCtx({ cwd: project, ui: true });
 		return { host, ctx, project };
 	}
@@ -173,6 +180,48 @@ describe("P4-FAM-04 gate end-to-end (real modes gate)", () => {
 			expect(result).toMatchObject({ block: true });
 			expect(selectCalls).toBe(1);
 		}
+	});
+
+	it("review #11: explicit ask rule + one-shot Allow records the adjudication (mirror must not fail-closed)", async () => {
+		createMcpRuleFamily();
+		const host = new FakeHost();
+		targets.modes.factory(host.asPi());
+		const project = mkdtempSync(join(tmpdir(), "p4-askrule-"));
+		host.flags["permission-mode"] = "ask";
+		const ctx = host.makeCtx({ cwd: project, ui: true });
+		// explicit ASK rule for the canonical id (not a first-seen case)
+		const { addPermissionRule } = await import("../../extensions/modes/permissions-loader.js");
+		const { setConfigPath } = await import("../../extensions/modes/config.ts");
+		const cfg = join(project, "permission-modes.json");
+		setConfigPath(cfg);
+		writeFileSync(cfg, JSON.stringify({}));
+		addPermissionRule({ rule: "mcp_exa_search", behavior: "ask", destination: "global", cwd: project });
+		await host.fire("session_start", {}, ctx);
+
+		// the ask-rule path goes through promptWithPermissionOptions →
+		// "Allow" → applyApprovalDecision("allow") — the funnel must record
+		let selectCalls = 0;
+		(ctx.ui as { select: unknown }).select = async () => {
+			selectCalls++;
+			return "Allow";
+		};
+		const result = await host.fire("tool_call", { toolName: "mcp__exa__search", input: { query: "x" } }, ctx);
+		expect(result).toBeUndefined(); // gate allowed
+		expect(selectCalls).toBe(1);
+
+		const { getAdjudication } = await import("../../extensions/modes/rule-families.ts");
+		expect(getAdjudication("mcp_exa_search")?.outcome).toBe("allow-once");
+
+		// mirror consistency (P4-MC-04②): gate allowed ⇒ mirror allows
+		const { createBrokerMirror } = await import("../../extensions/mcp-gov/broker.ts");
+		const { hasSessionGrant: hasGrant, getAdjudication: getAdj } = await import("../../extensions/modes/rule-families.ts");
+		const mirror = createBrokerMirror({ present: false }, {
+			getAdjudication: (id) => getAdj(id),
+			bypassActive: () => false,
+			hasAllowRule: () => false,
+			hasSessionGrant: (id) => hasGrant(id),
+		});
+		expect(mirror.decide("mcp_exa_search")).toBe("allow_once");
 	});
 
 	it("non-mcp unknown tools keep 2.8.0 behavior in ask/plan (passthrough)", async () => {

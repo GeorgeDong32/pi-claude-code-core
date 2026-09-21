@@ -729,8 +729,10 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	}
 
 	function updateUI(ctx: ExtensionContext): void {
-		if (!ctx.hasUI) return;
+		// bus publish is unconditional (review #10): headless sessions reach
+		// process-external readers the same way the review channel does
 		publishGoalChannel();
+		if (!ctx.hasUI) return;
 		const totalOpen = openGoals().length;
 		if (!state.goal && totalOpen === 0) {
 			clearGoalWidget(ctx);

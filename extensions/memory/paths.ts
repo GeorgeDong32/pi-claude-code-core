@@ -26,9 +26,7 @@ export function gitCanonicalRoot(cwd: string): string | null {
 		}).trim();
 		if (!out) return null;
 		const resolved = out === ".git" ? cwd : (out.match(/^(.*)\/\.git$/) ?? [])[1];
-		if (resolved && existsSync(resolved)) return resolved;
-		// bare-ish or unusual output — treat the printed dir's parent as root
-		return resolved ?? null;
+		return resolved && existsSync(resolved) ? resolved : null;
 	} catch {
 		return null;
 	}

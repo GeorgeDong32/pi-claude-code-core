@@ -7,7 +7,7 @@
  */
 
 /** Extract plausible filesystem target paths from a tool_call input. */
-export function extractToolPaths(toolName: string, input: unknown): string[] {
+export function extractToolPaths(input: unknown): string[] {
 	if (!input || typeof input !== "object") return [];
 	const record = input as Record<string, unknown>;
 	const out: string[] = [];
@@ -16,6 +16,5 @@ export function extractToolPaths(toolName: string, input: unknown): string[] {
 		out.push(candidate);
 	}
 	// bash heredoc-style writes are out of scope for activation (no path arg)
-	void toolName;
 	return out;
 }

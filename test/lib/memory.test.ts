@@ -273,6 +273,32 @@ describe("P3-ME-07 session_recall", () => {
 	});
 });
 
+describe("P3-ME-09 chmod-verified writability", () => {
+	it("a 555 memory dir flips to policy-only (accessSync probe, review #17)", async () => {
+		const { chmodSync, mkdirSync: mk, writeFileSync: wf } = await import("node:fs");
+		const dir = memoryDir();
+		mk(dir, { recursive: true });
+		wf(join(dir, "a.md"), "---\nname: alpha\ndescription: d\nmetadata:\n  type: project\n---\n\nbody");
+		const host = setup();
+		const ctx = host.makeCtx({ cwd: project, ui: true });
+		// make the dir read-only BEFORE the first session_start probe
+		chmodSync(dir, 0o555);
+		try {
+			await host.fire("session_start", {}, ctx);
+			const r = (await (host.handlers.get("before_agent_start")![0] as (e: unknown, c: unknown) => Promise<{ systemPrompt?: string }>)(
+				{ systemPrompt: "BASE" },
+				ctx,
+			))!;
+			// policy-only: no index rows (they derive from the unwritable dir)
+			expect(r.systemPrompt).toContain("<memory-policy>");
+			expect(r.systemPrompt).not.toContain("[alpha](a.md)");
+			expect(host.notifications.some((n) => n.includes("policy-only"))).toBe(true);
+		} finally {
+			chmodSync(dir, 0o755);
+		}
+	});
+});
+
 describe("P3-ME-08 importers", () => {
 	it("claude import copies + rebuilds the index (never trusts source MEMORY.md); idempotent", () => {
 		const source = mkdtempSync(join(tmpdir(), "cc-mem-"));

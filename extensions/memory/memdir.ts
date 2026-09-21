@@ -88,10 +88,14 @@ export function buildIndexBody(entries: MemoryEntry[]): string {
 		.join("\n");
 }
 
-/** Reconcile MEMORY.md. mtime short-circuit: any newer .md forces a rescan. */
-export function reconcileMemoryIndex(memoryDir: string): ReconcileResult {
-	const { entries, skipped } = scanMemoryDir(memoryDir);
+/** Reconcile MEMORY.md. mtime short-circuit BEFORE any content read
+ * (review #18): stat the index and the .md files first; only when the
+ * index is stale (or the previous scan had skips) do we read contents. */
+let lastSkipCount = 0;
+let lastEntries: MemoryEntry[] | null = null;
 
+export function reconcileMemoryIndex(memoryDir: string): ReconcileResult {
+	// cheap pass: names + mtimes only
 	let indexMtime = -1;
 	try {
 		indexMtime = statSync(join(memoryDir, "MEMORY.md")).mtimeMs;
@@ -99,21 +103,32 @@ export function reconcileMemoryIndex(memoryDir: string): ReconcileResult {
 		/* missing index → rewrite */
 	}
 	let newestMd = -1;
-	for (const e of entries) {
-		try {
-			newestMd = Math.max(newestMd, statSync(join(memoryDir, e.file)).mtimeMs);
-		} catch {
-			/* ignore */
+	let mdCount = 0;
+	try {
+		for (const f of readdirSync(memoryDir)) {
+			if (!f.endsWith(".md") || f === "MEMORY.md") continue;
+			mdCount++;
+			try {
+				newestMd = Math.max(newestMd, statSync(join(memoryDir, f)).mtimeMs);
+			} catch {
+				/* ignore */
+			}
 		}
+	} catch {
+		return { entries: [], skipped: 0, rewrote: false };
 	}
-	if (indexMtime >= 0 && newestMd <= indexMtime && skipped === 0) {
-		return { entries, skipped, rewrote: false };
+	if (indexMtime >= 0 && newestMd <= indexMtime && lastSkipCount === 0 && lastEntries !== null) {
+		// hot path: zero file-content reads — reuse the cached entry list
+		return { entries: lastEntries, skipped: 0, rewrote: false };
 	}
 
+	const { entries, skipped } = scanMemoryDir(memoryDir);
+	lastSkipCount = skipped;
+	lastEntries = entries;
+
+	// byte-cap: drop tail rows until it fits, then append WARNING
 	let body = buildIndexBody(entries);
 	if (entries.length > INDEX_MAX_LINES || Buffer.byteLength(body, "utf-8") > INDEX_MAX_BYTES) {
-		body = buildIndexBody(entries);
-		// byte-cap: drop tail rows until it fits, then append WARNING
 		while (Buffer.byteLength(body, "utf-8") > INDEX_MAX_BYTES && body.includes("\n")) {
 			body = body.slice(0, body.lastIndexOf("\n"));
 		}

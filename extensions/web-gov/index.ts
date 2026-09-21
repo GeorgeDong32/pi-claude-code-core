@@ -4,7 +4,7 @@
  *
  * Claims search/fetch tools that carry a URL-ish input (exa
  * search/crawl/fetch, webfetch…), maps them to the HOST, and evaluates
- * `webfetch(domain:host)` rules (deny > allow > ask). A builtin
+ * `webfetch(domain:host)` rules (deny > ask > allow). A builtin
  * pre-approved domain list (P4-WB-02, CC preapproved pattern) renders
  * allow without any rule; the list is overridable via
  * ~/.pi/agent/pi-core-web.json.
@@ -13,6 +13,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { ruleValueText } from "../../lib/rule-text.js";
 import type { PermissionRule } from "../modes/permissions.ts";
 import { registerRuleFamily, type RuleFamily } from "../modes/rule-families.ts";
 
@@ -67,9 +68,10 @@ export function createWebRuleFamily(home = homedir()): RuleFamily {
 		id: "web",
 		match(toolName, input) {
 			if (!URL_TOOL_HINT.test(toolName)) return null;
-			// registered AFTER the mcp family: native-mcp shapes are claimed by
-			// mcp first; URL-carrying direct tools (webfetch, web_search, …)
-			// specialize here by host
+			// registered BEFORE the mcp family (extensions/index.ts): a
+			// URL-carrying call is governed by its HOST here, taking
+			// precedence over mcp-prefix rules (P4-WB-01); URL-less calls
+			// return null and fall through to the mcp family
 			return extractHost(input ?? {});
 		},
 		resolve(host, rules) {
@@ -80,11 +82,7 @@ export function createWebRuleFamily(home = homedir()): RuleFamily {
 			for (const behavior of ["deny", "ask", "allow"] as const) {
 				for (const rule of rules) {
 					if (rule.behavior !== behavior) continue;
-					const text =
-						typeof rule.ruleValue === "string"
-							? rule.ruleValue
-							: String((rule.ruleValue as { value?: unknown })?.value ?? "");
-					const m = /^webfetch\(domain:(.+)\)$/.exec(text);
+					const m = /^webfetch\(domain:(.+)\)$/.exec(ruleValueText(rule));
 					if (m && m[1].toLowerCase() === host) return behavior;
 				}
 			}

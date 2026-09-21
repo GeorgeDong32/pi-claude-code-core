@@ -12,6 +12,8 @@ export interface GuardVerdict {
 	reason?: string;
 }
 
+import { isInsideDir } from "../../lib/rule-text.js";
+
 /** Patterns strong enough to block on; deliberate over-blocking is fine. */
 const SECRET_PATTERNS: Array<[RegExp, string]> = [
 	[/\b(?:sk|pk)[-_:][A-Za-z0-9]{20,}\b/, "API key literal"],
@@ -31,7 +33,10 @@ export function guardMemoryWrites(
 ): GuardVerdict {
 	if (toolName !== "write" && toolName !== "edit") return { block: false };
 	const path = typeof input.path === "string" ? input.path : "";
-	if (!path || !path.startsWith(memoryDir)) return { block: false };
+	// separator-aware boundary check shared with the modes carve-out
+	// (review Standards #6: the bare startsWith here mis-flagged sibling
+	// dirs like `memory-x`)
+	if (!path || !isInsideDir(path, memoryDir)) return { block: false };
 
 	const contents: string[] = [];
 	const content = input.content ?? input.new_string;

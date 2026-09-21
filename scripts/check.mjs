@@ -15,6 +15,23 @@
  * live inside another file. Any NEW contract error fails immediately.
  */
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// The contract suite imports the four READ-ONLY sibling source packages;
+// a fresh clone without them fails with confusing resolver errors.
+const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+const siblings = ["pi-permission-modes", "pi-effort", "pi-goal", "pi-review"];
+const missing = siblings.filter((s) => !existsSync(join(repoRoot, "..", s)));
+if (missing.length > 0) {
+	console.error(
+		`check: missing sibling source packages: ${missing.join(", ")}.\n` +
+			"The contract suite imports them read-only — clone them next to this repo\n" +
+			"(see test/contracts/README.md), or run `bun run test` for the core-only suites.",
+	);
+	process.exit(1);
+}
 
 // goal fork drift allowlist removed 2026-09-21: fixed in-tree (P2-GO).
 const GOAL_DRIFTS = [];
@@ -36,13 +53,7 @@ if (!main.ok) {
 
 const contracts = runTsc(["-p", "tsconfig.contracts.json"]);
 if (contracts.ok) {
-	if (GOAL_DRIFTS.length > 0) {
-		console.error(
-			"check: contract project is CLEAN — the goal 0.6.0 type drift was fixed. " +
-				"Remove GOAL_DRIFTS from scripts/check.mjs (auto-expire semantics).",
-		);
-		process.exit(1);
-	}
+	console.log("check: main OK; contracts OK");
 	process.exit(0);
 }
 
@@ -66,5 +77,5 @@ if (matched.size < GOAL_DRIFTS.length) {
 	);
 	process.exit(1);
 }
-console.log("check: main OK; contracts OK (2 known goal 0.6.0 drift lines allowlisted, see DEVIATIONS.md)");
+console.log("check: main OK; contracts OK");
 process.exit(0);

@@ -13,7 +13,7 @@
  * Injection failures NEVER block a turn (P3-ME-09): every hook body is
  * try/catch-wrapped at the boundary.
  */
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { accessSync, constants as fsConstants, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -23,21 +23,18 @@ import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-
 import { coreBus } from "../bus.js";
 import { reconcileMemoryIndex, scanMemoryDir, type MemoryEntry } from "./memdir.ts";
 import { resolveMemoryPaths, sessionsDirFor } from "./paths.ts";
-import { buildPolicyInjection } from "./policy.ts";
+import { buildPolicyInjection, POLICY_COMPACT } from "./policy.ts";
 import { selectForTurn, freshnessHeader, type SelectableMemory } from "./selection.ts";
 import { guardMemoryWrites } from "./guard.ts";
 import { InjectionGate } from "./yield.ts";
 import { sessionRecall } from "./session-recall.ts";
+import { MEMORY_INDEX_MAX } from "../../lib/context-budget.js";
 import { importFromClaude, importFromHermes } from "./importers.ts";
-
-const MEMORY_INDEX_MAX = 25_000;
-void MEMORY_INDEX_MAX;
 
 export default function memoryExtension(pi: ExtensionAPI): void {
 	const home = homedir();
-	const paths = resolveMemoryPaths(process.cwd(), home);
 	// resolve the agent dir at call time so HOME overrides (tests) apply
-	let gate = new InjectionGate(join(process.env.HOME ?? home, ".pi", "agent"));
+	const gate = new InjectionGate(join(process.env.HOME ?? home, ".pi", "agent"));
 
 	let degradedNotified = false;
 	let memoryDirWritable = true;
@@ -63,7 +60,9 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 			reconcileMemoryIndex(memoryDir(ctx));
 			// writability probe: a failed write degrades to policy-only
 			try {
-				void statSync(memoryDir(ctx));
+				// existence is not writability (review #17): probe the access mode
+				accessSync(memoryDir(ctx), fsConstants.W_OK);
+				memoryDirWritable = true;
 			} catch {
 				memoryDirWritable = false;
 			}
@@ -94,6 +93,9 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 			const { entries, skipped } = scanMemoryDir(dir);
 			if (!memoryDirWritable) {
 				notifyOnce(ctx, "memory dir not writable — running policy-only");
+				// policy-only: the index derives from the (unwritable) dir and
+				// cannot be trusted to match, so inject just the policy block
+				return { systemPrompt: `${event.systemPrompt ?? ""}\n\n${POLICY_COMPACT}` };
 			}
 			const injection = buildPolicyInjection(
 				entries.map((e: MemoryEntry) => ({ ...e })),
@@ -178,17 +180,17 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx: ExtensionContext) {
 			const p = params as { query: string; project?: string; since?: string; until?: string; limit?: number };
+			const effectiveCwd = p.project ?? ctx.cwd ?? process.cwd();
 			const result = sessionRecall({
 				query: p.query,
-				project: p.project,
+				project: effectiveCwd,
 				since: p.since,
 				until: p.until,
 				limit: p.limit,
 				home,
-				cwd: ctx.cwd ?? process.cwd(),
 			});
 			if (result.hits.length === 0) {
-				const dir = sessionsDirFor(p.project ?? process.cwd(), home);
+				const dir = sessionsDirFor(effectiveCwd, home);
 				const text = existsSync(dir)
 					? `session_recall: no matches for "${p.query}" (${result.scannedFiles} files scanned${result.skippedLines ? `, ${result.skippedLines} malformed lines skipped` : ""})`
 					: `session_recall: no sessions found for ${dir}`;
@@ -221,12 +223,11 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 			const lines = [
 				`memory dir: ${dir}`,
 				`files: ${entries.length}, skipped (invalid frontmatter): ${skipped}`,
-				`MEMORY.md: ${indexBytes}/25000 bytes`,
+				`MEMORY.md: ${indexBytes}/${MEMORY_INDEX_MAX} bytes`,
 				`yielded to hermes: ${gate.state.yielded}${gate.state.detectedBy ? ` (${gate.state.detectedBy})` : ""}`,
 				...entries.map((e) => `- [${e.title}](${e.file}) — ${e.description} [${e.type}]`),
 			];
 			pi.sendMessage({ customType: "pi-memory-status", content: lines.join("\n"), display: true });
-			void ctx;
 		},
 	});
 
@@ -255,7 +256,6 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 				...report.notes,
 			].join("\n");
 			pi.sendMessage({ customType: "pi-memory-status", content: text, display: true });
-			void ctx;
 		},
 	});
 }

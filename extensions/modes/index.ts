@@ -18,6 +18,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui"
 import { coreBus } from "../bus.ts"
+import { isInsideDir } from "../../lib/rule-text.js"
 import { resolveMemoryPaths } from "../memory/paths.ts"
 import { clearSessionGrants, clearSessionState, grantSession, hasSessionGrant, isBypassActive, listSessionGrants, matchFamily, noteAdjudicated, ruleMentions, setBypassIndicator } from "./rule-families.ts"
 import { getSharedEffortOwner, type OwnerEffortLevel } from "../../lib/effort-owner.ts";
@@ -293,6 +294,21 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
    * - trackWrite:false on the parent responder (tracking is the child's job)
    * - complianceOnBlock:false in ask mode (no classifier compliance there)
    */
+  /**
+   * Single record point for family-tool allow outcomes (P4-MC-03): every
+   * gate allow path funnels through applyApprovalDecision or the step-2
+   * allow branch, both of which call this — the broker mirror's cache view
+   * can never miss a gate-approved call.
+   */
+  function noteFamilyAdjudication(
+    tool: string,
+    input: Record<string, unknown>,
+    outcome: "allow-once" | "rule-allow" | "session-grant",
+  ): void {
+    const match = matchFamily(tool, input);
+    if (match) noteAdjudicated(match.canonicalId, outcome);
+  }
+
   async function applyApprovalDecision(
     ctx: ExtensionContext,
     tool: string,
@@ -319,6 +335,10 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
 
     if (decision === "allow") {
       trackOutsideWrite();
+      // P4-MC-03: one-shot "Allow" on a family tool (incl. the explicit
+      // ask-rule path through promptWithPermissionOptions) must reach the
+      // broker mirror's cache — gate allow ⇒ mirror allow
+      noteFamilyAdjudication(tool, input, "allow-once");
       return undefined;
     }
     if (
@@ -337,6 +357,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
           })
         ) {
           reloadMergedPermissionRules(ctx.cwd);
+          noteFamilyAdjudication(tool, input, "rule-allow");
           if (decision === "allow_always_local") {
             warnIfLocalPermissionsNotGitignored(ruleCwd, (msg) =>
               ctx.ui.notify(msg, "warning"),
@@ -377,8 +398,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     if (tool !== "write" && tool !== "edit") return false;
     const path = typeof input?.path === "string" ? input.path : "";
     if (!path) return false;
-    const dir = resolveMemoryPaths(ctx.cwd ?? process.cwd()).memoryDir;
-    return path === dir || path.startsWith(`${dir}/`);
+    return isInsideDir(path, resolveMemoryPaths(ctx.cwd ?? process.cwd()).memoryDir);
   }
 
   async function promptWithPermissionOptions(
@@ -1030,7 +1050,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     coreBus().publish({
       modes: {
         mode: (patch.mode ?? prev.mode) as "ask" | "plan" | "auto" | "bypass" | "",
-        planPhase: (patch as { planPhase?: PlanPhase }).planPhase ?? prev.planPhase,
+        planPhase: (patch as { planPhase?: PlanPhase }).planPhase ?? prev.planPhase ?? planPhase,
         workingStats:
           patch.workingStats !== undefined ? patch.workingStats : prev.workingStats,
       },
@@ -1078,13 +1098,13 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       }
       // P4-MC-03: record the final allow for family-claimed tools so the
       // broker mirror's allow-chain stays in lockstep with the gate.
-      const familyMatch = matchFamily(tool, input);
-      if (familyMatch) {
-        noteAdjudicated(
-          familyMatch.canonicalId,
-          hasSessionGrant(familyMatch.canonicalId) ? "session-grant" : "rule-allow",
-        );
-      }
+      noteFamilyAdjudication(
+        tool,
+        input,
+        hasSessionGrant(matchFamily(tool, input)?.canonicalId ?? "")
+          ? "session-grant"
+          : "rule-allow",
+      );
       return "allow";
     }
     if (verdict.behavior === "ask") {

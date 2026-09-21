@@ -6,11 +6,12 @@
  * `input.tool` → `mcp_exa_search`. Non-MCP names return null — the family
  * never claims beyond its boundary.
  *
- * resolve order: deny > allow > ask (the pm engine's order, applied to
+ * resolve order: deny > ask > allow (the pm engine's order, applied to
  * rule strings over the canonical id with `mcp_<server>_*` prefixes
  * matching first, then the bare `mcp_*`).
  */
 
+import { ruleMatchesId, ruleValueText } from "../../lib/rule-text.js";
 import type { PermissionRule } from "../modes/permissions.ts";
 import { registerRuleFamily, type RuleFamily } from "../modes/rule-families.ts";
 
@@ -45,10 +46,7 @@ export function canonicalizeMcpTool(
 }
 
 function ruleMatchesCanonicalId(ruleText: string, canonicalId: string): boolean {
-	if (ruleText === canonicalId) return true;
-	// trailing wildcard: mcp_exa_*
-	if (ruleText.endsWith("*") && canonicalId.startsWith(ruleText.slice(0, -1))) return true;
-	return false;
+	return ruleMatchesId(ruleText, canonicalId);
 }
 
 export function resolveMcpVerdict(canonicalId: string, rules: PermissionRule[]): "deny" | "allow" | "ask" {
@@ -57,11 +55,7 @@ export function resolveMcpVerdict(canonicalId: string, rules: PermissionRule[]):
 	for (const behavior of ["deny", "ask", "allow"] as const) {
 		for (const rule of rules) {
 			if (rule.behavior !== behavior) continue;
-			const text =
-				typeof rule.ruleValue === "string"
-					? rule.ruleValue
-					: String((rule.ruleValue as { value?: unknown })?.value ?? "");
-			if (ruleMatchesCanonicalId(text, canonicalId)) return behavior;
+			if (ruleMatchesCanonicalId(ruleValueText(rule), canonicalId)) return behavior;
 		}
 	}
 	return "ask";

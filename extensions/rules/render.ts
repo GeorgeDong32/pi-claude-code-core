@@ -62,16 +62,13 @@ export interface RenderedRule {
 }
 
 /** Resolve an @include target against the including file's location. */
-export function resolveIncludeTarget(ref: IncludeRef, includingPath: string, home: string, cwd: string): string {
+export function resolveIncludeTarget(ref: IncludeRef, includingPath: string, home: string): string {
 	const target = ref.target;
 	if (ref.kind === "home") return join(home, target.slice(2));
-	if (ref.kind === "absolute") return join("/", target);
+	if (ref.kind === "absolute") return target.startsWith("/") ? target : `/${target}`;
 	// relative: resolve against the directory of the including file
 	const baseDir = includingPath.slice(0, Math.max(includingPath.lastIndexOf("/"), 0));
-	if (ref.kind === "relative-file") return join(baseDir, target.slice(2));
-	return join(baseDir, target);
-	// `cwd` reserved for future path-anchored forms
-	void cwd;
+	return join(baseDir, target.slice(ref.kind === "relative-file" ? 2 : 0));
 }
 
 function join(a: string, b: string): string {
@@ -86,7 +83,6 @@ export function expandIncludes(
 	includingPath: string,
 	fs: RuleFs,
 	home: string,
-	cwd: string,
 	visited: Set<string>,
 	depth: number,
 ): string {
@@ -96,7 +92,7 @@ export function expandIncludes(
 	const includedBodies: string[] = [];
 	let out = content;
 	for (const ref of refs) {
-		const target = resolveIncludeTarget(ref, includingPath, home, cwd);
+		const target = resolveIncludeTarget(ref, includingPath, home);
 		if (visited.has(target)) continue; // cycle → drop at revisit point
 		let included: string;
 		try {
@@ -109,7 +105,7 @@ export function expandIncludes(
 		const parsed = parseFrontmatter(included);
 		const body = parsed.invalid ? included : parsed.body;
 		includedBodies.push(
-			expandIncludes(body, target, fs, home, cwd, innerVisited, depth + 1).trim(),
+			expandIncludes(body, target, fs, home, innerVisited, depth + 1).trim(),
 		);
 		out = out.replace(ref.raw, ""); // token removed; body hoisted above
 	}
@@ -157,7 +153,7 @@ export function collectRules(input: RenderRulesInput): { rules: RenderedRule[]; 
 			const globs = rawGlobs?.filter((g) => g !== "**");
 			const effectiveGlobs = globs && globs.length > 0 ? globs : undefined;
 			const always = effectiveGlobs === undefined && (fm.always ?? true);
-			const expanded = expandIncludes(parsed.body, path, fs, home, input.cwd, new Set([path]), 0);
+			const expanded = expandIncludes(parsed.body, path, fs, home, new Set([path]), 0);
 			byName.set(slug, {
 				scope: dir,
 				path,
@@ -247,7 +243,13 @@ export function renderRules(input: RenderRulesInput): RenderResult {
 	const { rules, invalidCount } = collectRules(input);
 	const touched = input.touchedPaths ?? [];
 
-	const inlineBlocks: string[] = [];
+	interface InlineBlock {
+		text: string;
+		name: string;
+		/** Touched-globs fold-in (spec P3-RU-04: these degrade first). */
+		conditional: boolean;
+	}
+	const inlineBlocks: InlineBlock[] = [];
 	const indexRows: string[] = [];
 	const activated: string[] = [];
 
@@ -258,7 +260,11 @@ export function renderRules(input: RenderRulesInput): RenderResult {
 		if (touchedHit) activated.push(rule.name);
 		const size = rule.content.length + rule.name.length + 16;
 		if (inline && size <= inlineThreshold) {
-			inlineBlocks.push(`### ${rule.name}\n\n${rule.content.trim()}\n`);
+			inlineBlocks.push({
+				text: `### ${rule.name}\n\n${rule.content.trim()}\n`,
+				name: rule.name,
+				conditional: touchedHit,
+			});
 		} else {
 			const desc = rule.description ? ` — ${rule.description}` : "";
 			const g = rule.globs ? ` (globs: ${rule.globs.join(", ")})` : "";
@@ -266,20 +272,38 @@ export function renderRules(input: RenderRulesInput): RenderResult {
 		}
 	}
 
-	// budget degradation: degrade largest inline blocks to index rows first,
-	// then drop index rows whole from the tail — never mid-content.
-	const inlineLen = () => inlineBlocks.reduce((n, b) => n + b.length, 0);
-	const indexLen = () => indexRows.reduce((n, r) => n + r.length + 1, 0);
-	while (inlineLen() + indexLen() + HEADER.length + NOTE_RESERVE > budget) {
-		if (inlineBlocks.length > 0) {
-			// degrade the largest inline block to an index row
+	const INDEX_SECTION_HEADER = "## Rule details (read on demand)\n\n";
+	const inlineLen = () => inlineBlocks.reduce((n, b) => n + b.text.length, 0);
+	const indexLen = () =>
+		(indexRows.length > 0 ? INDEX_SECTION_HEADER.length + 2 : 0) +
+		indexRows.reduce((n, r) => n + r.length + 1, 0);
+	// Every emitted byte is accounted for: header + block connectors + the
+	// index section (with its own header) + the trailing skip note. When the
+	// budget binds, conditional fold-ins degrade to index rows FIRST
+	// (P3-RU-04: 条件规则先降为索引行), then the largest always blocks, then
+	// index rows drop whole from the tail — never mid-content.
+	const overBudget = () =>
+		inlineLen() +
+			indexLen() +
+			HEADER.length +
+			NOTE_RESERVE +
+			2 * (inlineBlocks.length > 0 ? 1 : 0) +
+			// block/connectors: (N-1) "\n" between inline blocks + (R-1) between rows
+			Math.max(0, inlineBlocks.length - 1) +
+			Math.max(0, indexRows.length - 1) >
+		budget;
+	while (overBudget()) {
+		const conditionalIdx = inlineBlocks.findIndex((b) => b.conditional);
+		if (conditionalIdx !== -1) {
+			const block = inlineBlocks.splice(conditionalIdx, 1)[0];
+			indexRows.unshift(`- ${block.name} — content trimmed for budget; read the rules directory on demand`);
+		} else if (inlineBlocks.length > 0) {
 			let biggest = 0;
 			for (let i = 1; i < inlineBlocks.length; i++) {
-				if (inlineBlocks[i].length > inlineBlocks[biggest].length) biggest = i;
+				if (inlineBlocks[i].text.length > inlineBlocks[biggest].text.length) biggest = i;
 			}
 			const block = inlineBlocks.splice(biggest, 1)[0];
-			const name = /^### (.+)$/m.exec(block)?.[1] ?? "rule";
-			indexRows.unshift(`- ${name} — content trimmed for budget; read the rules directory on demand`);
+			indexRows.unshift(`- ${block.name} — content trimmed for budget; read the rules directory on demand`);
 		} else if (indexRows.length > 0) {
 			indexRows.pop();
 		} else break;
@@ -287,14 +311,13 @@ export function renderRules(input: RenderRulesInput): RenderResult {
 
 	const parts: string[] = [HEADER];
 	if (inlineBlocks.length > 0) {
-		parts.push(inlineBlocks.join("\n"));
+		parts.push(inlineBlocks.map((b) => b.text).join("\n"));
 	}
 	if (indexRows.length > 0) {
-		parts.push("## Rule details (read on demand)\n\n" + indexRows.join("\n"));
+		parts.push(INDEX_SECTION_HEADER + indexRows.join("\n"));
 	}
-	// no hard slice here: the degradation loop above accounts for every byte
-	// (header + blocks + the trailing skip note), so mid-content truncation
-	// never happens (P3-RU-04 red line)
+	// no hard slice: the loop above accounts for every emitted byte, so
+	// mid-content truncation never happens (P3-RU-04 red line)
 	const output = `${parts.join("\n\n")}\n<!-- rules: skipped ${invalidCount} invalid -->\n`;
 	return { output, activated };
 }

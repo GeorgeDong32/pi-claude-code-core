@@ -86,7 +86,6 @@ interface CustomOverlayContext {
 	};
 }
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
 export async function showComponentOverlay<T>(
 	ctx: CustomOverlayContext,
 	options: {

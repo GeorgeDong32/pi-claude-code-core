@@ -1,7 +1,7 @@
 /**
  * pi-claude-code-core capability bus — published types + total reader (P1-BUS-02).
  *
- * Hand-maintained .d.ts twin of types/index.js (published as pure JS + these
+ * Hand-maintained declaration twin of types/core-status.mjs (published as pure JS + these
  * declarations via the `./types` subpath export). Shape compatibility with
  * extensions/bus.ts is guarded by test/lib/bus-types.test.ts.
  */

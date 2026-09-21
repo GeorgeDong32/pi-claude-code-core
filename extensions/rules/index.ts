@@ -12,8 +12,10 @@
  *     content — P3-RU-06). Emits contextBudget on the bus once (P3-RU-10).
  *   - tool_call: capture edit/write/read target paths; a first hit on a
  *     globs rule steers the full rule text once per session (P3-RU-07).
- *   - Cheapness promise (P3-RU-08): a directory-mtime fingerprint gates
- *     rescans — unchanged dirs cost one stat per dir per turn.
+ *   - Cheapness promise (P3-RU-08, adjusted — DEVIATIONS #42): a
+ *     file-level fingerprint (mtimeMs+size per rule file) gates rescans —
+ *     an unchanged turn costs one readdir + N stats per dir and ZERO file
+ *     content reads.
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -21,10 +23,15 @@ import { statSync, readFileSync, readdirSync } from "node:fs";
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { CONTEXT_BUDGET } from "../../lib/context-budget.js";
+import { CONTEXT_BUDGET, DYNAMIC_STEER_MAX } from "../../lib/context-budget.js";
 import { coreBus } from "../bus.js";
 import { BUILTIN_RULES } from "./defaults.ts";
-import { collectRules, renderRules, setRulesHome, type RuleDir, type RuleFs } from "./render.ts";
+import { collectRules, globToRegExp, renderRules, setRulesHome, type RenderedRule, type RuleDir, type RuleFs } from "./render.ts";
+
+/** In-memory glob hit for the cached-rules activation hot path. */
+function globMatches(path: string, glob: string): boolean {
+	return globToRegExp(glob).test(path);
+}
 import { extractToolPaths } from "./paths.ts";
 
 export interface RulesExtensionOptions {
@@ -77,18 +84,39 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 			},
 		};
 
-		// mtime fingerprint cache (P3-RU-08)
+		// mtime fingerprint cache (P3-RU-08): output AND the collected rules
+		// (so tool_call activation never re-scans — review #16a)
 		let fingerprint: string | null = null;
 		let cachedOutput: string | null = null;
+		let cachedRules: RenderedRule[] | null = null;
 		const activatedNames = new Set<string>();
 		let budgetPublished = false;
 
 		function fingerprintOf(dirs: RuleDir[]): string {
+			// file-level fingerprint: a bare directory mtime misses in-place
+			// content edits on most filesystems (review #16b), so every rule
+			// file contributes its (mtimeMs, size). The cost is one readdir +
+			// N stats per dir per turn — still zero file-content reads while
+			// the fingerprint holds (P3-RU-08 便宜性, adjusted: see
+			// DEVIATIONS #39).
 			return dirs
 				.map((d) => {
 					if (d.scope === "builtin") return "builtin:static";
 					try {
-						return `${d.path}:${statSync(d.path).mtimeMs}`;
+						const files = readdirSync(d.path)
+							.filter((f) => f.endsWith(".md"))
+							.sort();
+						const sig = files
+							.map((f) => {
+								try {
+									const st = statSync(join(d.path, f));
+									return `${f}:${st.mtimeMs}:${st.size}`;
+								} catch {
+									return `${f}:gone`;
+								}
+							})
+							.join(",");
+						return `${d.path}[${sig}]`;
 					} catch {
 						return `${d.path}:missing`;
 					}
@@ -106,8 +134,10 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 			const fp = fingerprintOf(dirs);
 			if (fp !== fingerprint || cachedOutput === null) {
 				fingerprint = fp;
-				activatedNames.clear();
-				cachedOutput = renderRules({
+				// NOTE: activatedNames intentionally survives fingerprint
+				// changes — "once per session" (P3-RU-07) must not reset
+				// because a rule file was edited mid-session (review #16c)
+				const rendered = renderRules({
 					dirs,
 					cwd,
 					projectTrusted: trusted(ctx),
@@ -115,7 +145,15 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 					budgetChars: options?.budgetChars,
 					inlineThresholdChars: options?.inlineThresholdChars,
 					fs: realFs,
-				}).output;
+				});
+				cachedOutput = rendered.output;
+				cachedRules = collectRules({
+					dirs,
+					cwd,
+					projectTrusted: trusted(ctx),
+					touchedPaths: [],
+					fs: realFs,
+				}).rules;
 			}
 			return cachedOutput;
 		}
@@ -124,6 +162,7 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 			activatedNames.clear();
 			fingerprint = null;
 			cachedOutput = null;
+			cachedRules = null;
 			if (!budgetPublished) {
 				budgetPublished = true;
 				coreBus().publish({ contextBudget: { ...CONTEXT_BUDGET } });
@@ -138,10 +177,39 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 		pi.on("tool_call", async (event, ctx: ExtensionContext) => {
 			const name = typeof event.toolName === "string" ? event.toolName : "";
 			if (!/^(read|edit|write)$/.test(name)) return undefined;
-			const paths = extractToolPaths(name, event.input);
+			const paths = extractToolPaths(event.input);
 			if (paths.length === 0) return undefined;
 
 			const dirs = dirsOf(ctx.cwd);
+			if (cachedRules !== null) {
+				// hot path: activation from the cached collected rules — pure
+				// in-memory glob matching, ZERO scans or content reads
+				// (review #16a). Falls back to a full render below when the
+				// cache is cold (first tool_call before any agent start).
+				const fresh: string[] = [];
+				for (const rule of cachedRules) {
+					if (rule.globs === undefined) continue;
+					if (activatedNames.has(rule.name)) continue;
+					if (paths.some((p) => rule.globs!.some((g) => globMatches(p, g)))) {
+						fresh.push(rule.name);
+					}
+				}
+				if (fresh.length === 0) return undefined;
+				for (const ruleName of fresh) {
+					activatedNames.add(ruleName);
+					const rule = cachedRules.find((r) => r.name === ruleName)!;
+					const full = `### ${rule.name}\n\n${rule.content}`;
+					const content =
+						full.length <= DYNAMIC_STEER_MAX
+							? full
+							: `${rule.name}: rule text exceeds the per-turn steer budget (${DYNAMIC_STEER_MAX} chars). Read ${rule.path} on demand.`;
+					pi.sendMessage(
+						{ customType: "pi-rules-activate", content, display: true },
+						{ deliverAs: "steer" },
+					);
+				}
+				return undefined;
+			}
 			const { activated } = renderRules({
 				dirs,
 				cwd: ctx.cwd,
@@ -152,17 +220,23 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 				fs: realFs,
 			});
 			if (activated.length === 0) return undefined;
-			// steer the FULL rule text straight from the collected rules —
-			// oversized (>4K) rules never inline in the render, so the render
-			// output cannot be the payload source (P3-RU-07)
-			const { rules } = collectRules({ dirs, cwd: ctx.cwd, projectTrusted: trusted(ctx), touchedPaths: [], fs: realFs });
+			// steer from the CACHED collected rules — a matching tool call
+			// costs zero extra scans (review #16a). Oversized rules steer an
+			// index-style pointer instead of the full text, clamped to
+			// DYNAMIC_STEER_MAX (P3-RU-10; review #15).
+			const rules = cachedRules ?? collectRules({ dirs, cwd: ctx.cwd, projectTrusted: trusted(ctx), touchedPaths: [], fs: realFs }).rules;
 			for (const ruleName of activated) {
 				if (activatedNames.has(ruleName)) continue; // once per session (P3-RU-07)
 				const rule = rules.find((r) => r.name === ruleName);
 				if (!rule) continue;
 				activatedNames.add(ruleName);
+				const full = `### ${rule.name}\n\n${rule.content}`;
+				const content =
+					full.length <= DYNAMIC_STEER_MAX
+						? full
+						: `${rule.name}: rule text exceeds the per-turn steer budget (${DYNAMIC_STEER_MAX} chars). Read ${rule.path} on demand.`;
 				pi.sendMessage(
-					{ customType: "pi-rules-activate", content: `### ${rule.name}\n\n${rule.content}`, display: true },
+					{ customType: "pi-rules-activate", content, display: true },
 					{ deliverAs: "steer" },
 				);
 			}

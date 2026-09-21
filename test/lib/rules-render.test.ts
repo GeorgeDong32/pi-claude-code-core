@@ -191,6 +191,47 @@ describe("P3-RU-05 total function", () => {
 	});
 });
 
+describe("P3-RU-04/05 random property test (review #19)", () => {
+	it("seeded random rule sets: output ≤ budget and byte-deterministic", () => {
+		// deterministic PRNG (mulberry32)
+		let seed = 0x9e3779b9;
+		const rand = () => {
+			seed |= 0;
+			seed = (seed + 0x6d2b79f5) | 0;
+			let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+			t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+			return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+		};
+		for (let trial = 0; trial < 10; trial++) {
+			const files: Record<string, string> = {};
+			const n = 3 + Math.floor(rand() * 10);
+			for (let i = 0; i < n; i++) {
+				const size = Math.floor(rand() * 6_000);
+				const conditional = rand() < 0.4;
+				const fm = conditional
+					? `---\nname: r${i}\nglobs:\n  - "src/**/*${i}.ts"\n---\n`
+					: `---\nname: r${i}\n---\n`;
+				files[`/home/rules/r${i}.md`] = `${fm}${"x".repeat(size)}`;
+			}
+			const budget = 2_000 + Math.floor(rand() * 20_000);
+			const input = baseInput(files, { budgetChars: budget });
+			const one = renderRules(input);
+			const two = renderRules(input);
+			expect(one.output.length).toBeLessThanOrEqual(budget); // exact budget, note included
+			expect(one.output).toBe(two.output); // byte-deterministic
+			// red line: any inlined body appears whole (no mid-content cut)
+			for (const [path, content] of Object.entries(files)) {
+				const body = content.split("---\n").pop()!.trim();
+				if (body && one.output.includes(path)) {
+					// indexed form references the path — body must NOT be there half-cut
+					const idx = one.output.indexOf(body.slice(0, 50));
+					if (idx !== -1) expect(one.output.slice(idx, idx + body.length)).toContain(body.slice(-20));
+				}
+			}
+		}
+	});
+});
+
 describe("P3-RU-07 touched paths fold matching rules inline", () => {
 	it("a globs rule hit by touchedPaths renders inline instead of as an index row", () => {
 		const files = { "/home/rules/ts.md": "---\nname: ts-rule\nglobs:\n  - \"src/**/*.ts\"\n---\nts conventions" };

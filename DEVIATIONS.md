@@ -71,7 +71,8 @@
 ## P2 偏差(2026-09-21)
 
 20. **goal 随迁测试计数 75(spec 记 103;源包基线 66+3 文件加载失败)**
-    源包未安装 node_modules,三个 UI 测试文件(goal-auditor/questionnaire/widget,各 4 test)在源包目录直接 ERR_MODULE_NOT_FOUND;core 内 0.85 依赖齐全后 75/75 全绿(66+9=75,多出的即那 3 个文件的测试)。spec 的 103 为估算误差。随迁断言零改动:tests 与 npm 0.6.0 tarball 的 tests 目录 diff 仅 import 路径扁平化(DEVIATIONS #25)。
+    源包未安装 node_modules,三个 UI 测试文件(goal-auditor/questionnaire/widget,各 4 test)在源包目录直接 ERR_MODULE_NOT_FOUND;core 内 0.85 依赖齐全后 75/75 全绿(66+9=75,多出的即那 3 个文件的测试)。spec 的 103 为估算误差。随迁断言零改动:14 个测试文件对照**本地 ec2bcbe 检出**(非 npm tarball——其 package.json files 不含 tests/,REVIEW-2026-09-22 #8 指正)仅 import 路径扁平化(#25)。
+    *(2026-09-22 修复批注:#8 引证失实已修正;#9 FORK.md 命令族枚举补全;#10 goal bus 发布移出 hasUI 门控与 review 通道对称。)*
 
 21. **goal-auditor 两处 0.85 类型漂移入树修复**
     P0 期只读源包靠 check.mjs 白名单豁免(goal-auditor.ts:142/206);P2 fork 入树后同文件进 tsc 主门,必须修复:ResourceLoader 补 0.85 新成员(返回 undefined/[]);createAgentSession 删 modelRegistry 选项(0.85 默认 modelRuntime 读同一 agentDir,auditor model 已显式解析)。白名单按自动过期机制撤除。详见 FORK.md。
@@ -148,3 +149,21 @@
 37. **P4 复查发现并已修**(阻塞 B1 + 顺手项):①resolve 序 deny>allow>ask 违背 spec「deny>ask>allow」(用户显式 ask 被 allow 前缀吞)——mcp/web 两处改序并补断言;②mirror 的 bypassActive 生产装配硬编码 false(红队 #3 的 bypass 支重演)——modes setMode/session_start 经 setBypassIndicator 同步,mirror 读 isBypassActive;③session_shutdown 不清 grants/spec 明文要求——clearSessionState 双钩子;④WB-01 域名规则应「先于 mcp 前缀规则」——装配序改为 web 先注册(URL 工具 host 特化优先,非 URL mcp 工具回落 mcp family);⑤ruleMentions 不识别尾通配 ask 规则——改前缀匹配;⑥P4-MC-04 矩阵测试头注释失真——诚实化并补 uiPrompts≤1 断言到端到端用例;⑦plan/auto 首调弹窗(红队 #2 增补态)补端到端;⑧PROBE11 残留删除。
 
 38. **v1 未实现/不可达项(挂账)**:①P4-MC-05 的 busVersion floor 撤 claim 与「缺字段按 cached」未实现(adapter absent 下无消费方,重开条件=adapter 真机接入);②P4-MC-06 的静态 inventory 只扫 mcp.json(settings packages 扫描与 mcp.json 配置链未做)、green 判定无 cached 表达;③P4-FAM-05「headless/转发审批计入」结构性不可达——headless 走 fail-closed、subagent 转发路径在 promptWithPermissionOptions(不受 family first-seen 走),family 工具的转发 allow 在现架构无入口;重开条件=first-seen 弹窗接入转发机制。
+
+
+---
+
+## REVIEW-2026-09-22 修复批注(2026-09-22)
+
+39. **#11 放行链缺口修复**:一次性 Allow 的记录点收敛到 `applyApprovalDecision`(交互 select、headless 转发 resp "allow"、promptWithPermissionOptions 三路必经);`allow_always_*` 落盘后记 rule-allow。#38③ 的「转发 allow 无入口」表述作废——显式 ask 规则的 promptWithPermissionOptions 即入口;一致性矩阵缺口闭合,新增 review #11 端到端用例(gate 放行 → adjudication 在 → mirror allow_once)。
+40. **#13/#14 预算核算与降级次序**:降级循环计入段头(`## Rule details`)+ 连接符 + 条件内联块的 connector 位,预算为精确断言(≤budget);降级次序改为「条件 fold-in 先降 → 最大 always 次之 → 索引行尾部整行丢」,对齐 spec「条件规则先降为索引行」。
+41. **#15 steer 钳制落地**:首触 steer 正文超 `DYNAMIC_STEER_MAX`(8K)时改发「按需 Read」指针行,不截全文(渲染红线对 steer 同样成立)。
+42. **#16 便宜性修正**:指纹升级为文件级(mtimeMs+size,内容编辑可见;成本改为每 dir 一次 readdir + N 次 stat——spec「每 dir 一次 stat」表述在内容可见性需求下不可两全,取正确性,本条即偏差申报);tool_call 复用指纹缓存(collectRules 结果随指纹缓存,匹配工具调用零额外扫描);activatedNames 不再随指纹清空(每 session 一次语义保住)。
+43. **#17 可写探测**:statSync 存在性 → `accessSync(dir, W_OK)`;不可写时真降级为 policy-only(不注索引),通知与行为一致;chmod 测试可行(本机非 root),已补。
+44. **#18 reconciler 短路前置**:热路径(mtime 未变且上次无 skip)零文件内容读,entries 走缓存。
+45. **共享实现进 lib(Standards #4/#6)**:新增 `lib/rule-text.ts`(ruleValueText / ruleMatchesId / isInsideDir),替换 4 份 ruleValue 提取、2 份尾通配匹配、guard 的裸 startsWith;25K 常量统一 import `MEMORY_INDEX_MAX`。**修实一个真 bug**:ruleValue 为 parser 对象时旧提取 `String(.value)` 失明(持久规则对 first-seen 判定/ruleMentions 不可见)。
+46. **注释/死代码批清(Standards #1/#2/#3/#8/#9 + Spec #20)**:resolve 序 stale 注释 ×4、check.mjs 成功消息、types 注释指向旧文件名、memory/index 死常量与 paths 绑定、memdir 无变异重算、importers 无效三元、paths.ts 恒等替换、render/rules-paths 投机参数与 `@/abs` 双斜杠、session_recall 空文案 cwd 口径、overlay 死 disable 指令、effort-owner d) 用例实化、planPhase 生产者补齐、fresh-clone 守护。**(复查二轮修正:本条初版虚报两项——web-gov 注册序注释与 memory `void ctx` ×2 当时未实际修改,复查抓出后已补修;check.mjs 不可达分支保留,成功路径恢复输出。)**
+47b. **修复批复查二轮(2026-09-22):四处自报失实修正**
+    复查 subagent 亲证以下四项初版自报「已修」实际不存在(python 批量替换静默失败的再现,同 P4 running 事件):①#10 goal bus 移出 hasUI 门控(goal.ts 零改动);②contextBudget/memory 通道断言(文件中无);③web-gov 注册序注释;④memory `void ctx` ×2。**全部已补修**(publishGoalChannel 移至 hasUI early-return 之前,两通道对称;两条 readCoreStatus 断言入 rules-wiring/memory 测试;注释反转;void ctx 删除/参数收敛)。同批顺手:#13 块间连接符欠账补入核算((N−1)+(R−1) 个 `\n`);#16a 激活检测热路径改 cachedRules 内存 glob 匹配(真零扫描,冷路径保留全量回退);mirror allow_always 写失败改 fail-closed(与 firstSeen 一致);check.mjs 成功路径恢复输出;memory temp-write fallback 幽灵注释与 rules 头注释过时表述修正。**教训重申:python replace 静默失败是本仓事故主源——凡是「已修」自报必须以复查或实测背书。**
+
+47. **择优认定(不修,挂账)**:①#5 writeJsonAtomic 使 model-profiles.json 每次写入均 0600(pm 仅创建时)——安全正向,保留;②#4 config.ts malformed 首读后 mtime 缓存内不再 re-warn——诊断降级可接受;③Standards #8 的 `as never`(context 注入对象 vs AgentMessage)——类型面成本高于收益,留;④#12 direct 形态生产装配 knownServers 恒空——配置 seam(`PI_CORE_MCP_DIRECT_SERVERS` env)已在 mcp-gov/index 接入,README 注明。

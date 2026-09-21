@@ -166,6 +166,20 @@ describe("P3-RU-08 cheapness (mtime fingerprint)", () => {
 	});
 });
 
+describe("P3-RU-10 contextBudget on the bus", () => {
+	it("session_start publishes the split; readCoreStatus exposes it (review #19)", async () => {
+		const host = setup();
+		const ctx = host.makeCtx({ cwd: project, ui: true });
+		await host.fire("session_start", {}, ctx);
+		const snap = (globalThis as Record<string, unknown>).__piClaudeCodeCore as {
+			contextBudget?: { rulesMax: number; memoryIndexMax: number; dynamicSteerMax: number };
+		};
+		expect(snap.contextBudget).toEqual({ rulesMax: 40000, memoryIndexMax: 25000, dynamicSteerMax: 8000 });
+		const { readCoreStatus } = await import("../../types/core-status.mjs");
+		expect(readCoreStatus(globalThis).contextBudget?.rulesMax).toBe(40000);
+	});
+});
+
 describe("P3-RU-09 /rules read-only output", () => {
 	it("reports counts, scope, activation and budget usage", async () => {
 		writeRule(".pi/rules/one.md", "---\nname: one\n---\nbody one");

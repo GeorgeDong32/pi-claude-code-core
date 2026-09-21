@@ -36,9 +36,9 @@ export function importFromClaude(projectMemoryDir: string, targetDir: string): I
 			report.skipped++;
 			continue;
 		}
-		const valid = parseMemoryFrontmatter(content) !== null;
-		const targetName = valid ? file : file; // name preserved; validity marked in index rebuild
-		const target = join(targetDir, targetName);
+		// validity is re-derived by the reconciler at index rebuild — the
+		// file is copied as-is either way
+		const target = join(targetDir, file);
 		if (existsSync(target)) {
 			// idempotent: same file present → skip
 			if (readFileSync(target, "utf-8") === content) {

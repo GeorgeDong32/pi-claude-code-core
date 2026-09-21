@@ -2,6 +2,36 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## REVIEW-2026-09-22 修复批(codebase-design 规划)
+
+**状态:处置完毕,复查通过(2026-09-22,一轮有条件 PASS + 补修),已 commit。**
+
+### 修复分组(deep-module 视角:散点知识收敛进汇聚点)
+
+| 组 | review 发现 | 处置 |
+|---|---|---|
+| A 放行链 | #11(Minor 最重)+ #38③ | 一次性 Allow 记录点收敛到 `applyApprovalDecision`(交互/转发/规则 ask 三路必经的汇聚点),`allow_always_*` 落盘后记 rule-allow;step-2 allow 分支复用同一 helper;新增端到端用例(显式 ask 规则 → Allow → adjudication 在 → mirror allow_once) |
+| B rules | #13 #14 #15 #16a/b/c | 降级循环核算全部输出字节(段头/连接符/尾注预留),预算改精确断言;降级次序「条件 fold-in 先降」对齐 spec;首触 steer 超 DYNAMIC_STEER_MAX 改按需 Read 指针(不截全文);指纹升级文件级(mtimeMs+size,内容编辑可见);tool_call 复用指纹缓存(collectRules 结果随缓存,零额外扫描);activatedNames 不随指纹清空 |
+| C memory | #17 #18 | 可写探测 accessSync(W_OK);不可写真降级 policy-only(不注索引);chmod 555 测试落地;reconciler 热路径零内容读(entries 走缓存) |
+| D lib 收敛 | Standards #4/#6 + 真实 bug | 新增 `lib/rule-text.ts`(ruleValueText/ruleMatchesId/isInsideDir),替换 4 份提取、2 份尾通配、guard 裸 startsWith;25K 常量统一 MEMORY_INDEX_MAX。**修实真 bug**:parser 对象 ruleValue 经 `String(.value)` 提取失明(持久规则对 first-seen/ruleMentions 不可见) |
+| E 清扫 | Standards #1/#2/#3/#8/#9 + Spec #3/#6/#7/#20 | resolve 序 stale 注释 ×4、check.mjs 消息(成功路径保留输出)、types 注释旧文件名、memory/memdir/importers/paths/render 死代码与投机参数、`@/abs` 双斜杠、overlay 死 disable、planPhase 生产者补齐、fresh-clone 守护(check.mjs)、effort-owner d) 用例实化、session_recall 空文案口径(web-gov 注册序注释与 void ctx ×2 属复查二轮补修,见 #47b) |
+| F 台账 | #1 #8 #9 #10 #12 #19 | #20 引证改本地 ec2bcbe;FORK.md 命令族 14 枚举补全;goal bus 发布移出 hasUI 门控(与 review 通道对称;**复查二轮补修——初版虚报**)、direct 形态配置 seam(`PI_CORE_MCP_DIRECT_SERVERS`)+ README 注明;contextBudget/memory 通道 readCoreStatus 断言(**复查二轮补修——初版虚报**);随机性质测试(seeded PRNG ×10:≤budget + 字节确定);rules↔pm/goal 共存测试(append-only 不碰既有标记);chmod 测试 |
+
+**择优认定(不修,已挂 DEVIATIONS #47)**:#5 写入即 0600(安全正向)、#4 malformed mtime 缓存内不 re-warn(诊断降级)、Standards #8 的 context `as never`(类型面成本)、#12 的 env 配置 seam(已接)。
+
+### 测试计数
+
+- vitest **557**(554 + review #11 端到端 + plan/auto 首调 + chmod + 随机性质 + 共存 + B1 ask-vs-allow 断言)+ node--test **312** + 契约 **17**
+- `bun run check` exit 0(含 fresh-clone sibling 守护)
+
+### 复查结论(2026-09-22,新鲜眼 subagent,一轮)
+
+**有条件 PASS → 补修后达门槛。** 复查亲证:28 条中 21 条真实修复(A 组全、C 组全、D 组主体含真 bug 修复成立、E 组 7/9、F 组部分);两个 PARTIAL(#13 块间连接符欠账、#16a 双扫→单扫)均 Minor 且无红线击穿;三命令全绿、契约与 441 随迁零改动。
+
+- **复查抓出四处自报失实**(python replace 静默失败再现):#10 goal bus 门控、通道断言、web-gov 注释、void ctx ×2——**全部已补修**,台账以 #47b 修正并记录教训(「已修」自报必须实测背书)。
+- 顺手补修:#13 连接符核算、#16a 激活热路径真零扫描(cachedRules 内存匹配)、mirror allow_always 写失败 fail-closed、check.mjs 成功输出、两处幽灵注释。
+- 挂账:allow_always 写失败深化(P4-MC-02)、MC-05 floor、MC-06 inventory 链(已在 #38)。
+
 ## P4 — mcp-gov + web-gov(1.3.0,本次不发)
 
 **状态:实现完成,复查通过(2026-09-21),已 commit(未发版——1.3.0 + deprecate 留用户)。**
@@ -126,7 +156,7 @@ lexical 标定回放(真实 CherryDev 存量 81 文件)即本 Phase 真机数据
 | P2-REV-03 | 降级路径红绿 3 例(test/lib/review-degradation.test.ts):缺工具拒跑+一次性 install hint;有工具放行 | ✅ |
 | P2-REV-04 | 8 个 agent .md 随包分发;package.json `pi.subagents.agents` 声明;directive.ts 陈旧产物防御保留(源码未动) | ✅ |
 | P2-REV-05 | 磁盘布局不变(CT-09 切 core review 后实测绿) | ✅ |
-| P2-REV-06 | review config 读写迁 lib/settings.ts(165 测试兜底)——PLAN §1.4 三类重复全部收敛 | ✅ |
+| P2-REV-06 | review config 读写迁 lib/settings.ts(165 测试兜底)——PLAN §1.4 三类重复中 settings/model-id/picker 收敛(effort 的 fast-mode 落盘按 P0-LB-04 白名单保留自有实现,非收敛对象) | ✅ |
 | P2-BUS-01 | bus goal 通道(active/paused/summary,updateUI 挂 publish)+ review 通道(running/done+lastRunAt) | ✅ |
 | P2-BUS-02 | 通道红绿(test/lib/bus-channels.test.ts):goal 恢复→active→pause 翻转;review done 经 pi_review_report 真实工具路径;readCoreStatus 类型断言 | ✅ |
 | P2-CCTUI | **用户侧**(本次派发不改 CCTUI 仓库;bus 双写保证现版无感) | ⏸ 用户 |

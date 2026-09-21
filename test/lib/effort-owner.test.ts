@@ -109,11 +109,16 @@ describe("P1-EF-06 ownership chain behavior", () => {
 	it("d) profile without :effort never touches thinking level", () => {
 		const pi = fakePi("medium");
 		const owner = newEffortOwner(pi as never);
-		// modes calls setFromProfile only when the profile HAS an effort —
-		// the owner must likewise not invent writes when none arrive.
+		// modes' guard skips setFromProfile entirely when the profile has no
+		// `:effort` — the owner-side contract being that a profile switch
+		// WITHOUT a profile write leaves the level and its source untouched.
 		expect(pi.calls).toEqual([]);
 		expect(owner.effective()).toBe("medium");
 		expect(owner.currentSource()).toBe("model-default");
+		// contrast: WITH a profile write the level moves — this is the switch
+		// the guard suppresses when the profile lacks `:effort`
+		owner.setFromProfile("low", "with-effort");
+		expect(pi.calls).toEqual(["low"]);
 	});
 
 	it("e) fresh session with no ②/③ leaves the model default untouched", () => {
