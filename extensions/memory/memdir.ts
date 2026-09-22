@@ -80,6 +80,72 @@ export function scanMemoryDir(memoryDir: string): { entries: MemoryEntry[]; skip
 export const INDEX_MAX_LINES = 200;
 export const INDEX_MAX_BYTES = 25_000;
 
+/** A memory file with its content — what per-turn injection consumes. */
+export interface MemoryFile {
+	entry: MemoryEntry;
+	body: string;
+	mtimeMs: number;
+}
+
+const bodyCache = new Map<string, { fingerprint: string; files: MemoryFile[]; skipped: number }>();
+
+/** name:mtimeMs:size for every .md — any edit, add, delete, rename shows. */
+function dirFingerprint(memoryDir: string, names: string[]): string {
+	const parts: string[] = [];
+	for (const f of names) {
+		try {
+			const st = statSync(join(memoryDir, f));
+			parts.push(`${f}:${st.mtimeMs}:${st.size}`);
+		} catch {
+			parts.push(`${f}:-`);
+		}
+	}
+	return parts.join("|");
+}
+
+/**
+ * scanMemoryDir WITH bodies, fingerprint-cached per dir: one stat pass on
+ * the hot path (every turn), full content re-read only when something
+ * actually changed. This is what the injection hooks use — the old wiring
+ * read every file's content three times per turn.
+ */
+export function scanMemoryDirCached(memoryDir: string): { files: MemoryFile[]; skipped: number } {
+	let names: string[];
+	try {
+		names = readdirSync(memoryDir).filter((f) => f.endsWith(".md") && f !== "MEMORY.md").sort();
+	} catch {
+		return { files: [], skipped: 0 };
+	}
+	const fingerprint = dirFingerprint(memoryDir, names);
+	const cached = bodyCache.get(memoryDir);
+	if (cached && cached.fingerprint === fingerprint) {
+		return { files: cached.files, skipped: cached.skipped };
+	}
+	const files: MemoryFile[] = [];
+	let skipped = 0;
+	for (const file of names) {
+		try {
+			const path = join(memoryDir, file);
+			const st = statSync(path);
+			const content = readFileSync(path, "utf-8");
+			const fm = parseMemoryFrontmatter(content);
+			if (!fm) {
+				skipped++;
+				continue;
+			}
+			files.push({
+				entry: { file, title: fm.title, description: fm.description, type: fm.type },
+				body: content,
+				mtimeMs: st.mtimeMs,
+			});
+		} catch {
+			skipped++;
+		}
+	}
+	bodyCache.set(memoryDir, { fingerprint, files, skipped });
+	return { files, skipped };
+}
+
 /** Build the MEMORY.md body from entries (single-line rows). */
 export function buildIndexBody(entries: MemoryEntry[]): string {
 	return entries
@@ -90,9 +156,16 @@ export function buildIndexBody(entries: MemoryEntry[]): string {
 
 /** Reconcile MEMORY.md. mtime short-circuit BEFORE any content read
  * (review #18): stat the index and the .md files first; only when the
- * index is stale (or the previous scan had skips) do we read contents. */
-let lastSkipCount = 0;
-let lastEntries: MemoryEntry[] | null = null;
+ * index is stale (or the previous scan had skips) do we read contents.
+ * The cache is keyed by memoryDir and validated against the file-name
+ * list, so deletions/renames (which don't bump any mtime) still
+ * invalidate it — no permanently dead index rows. */
+interface DirCache {
+	skip: number;
+	entries: MemoryEntry[] | null;
+	namesKey: string;
+}
+const dirCache = new Map<string, DirCache>();
 
 export function reconcileMemoryIndex(memoryDir: string): ReconcileResult {
 	// cheap pass: names + mtimes only
@@ -103,11 +176,11 @@ export function reconcileMemoryIndex(memoryDir: string): ReconcileResult {
 		/* missing index → rewrite */
 	}
 	let newestMd = -1;
-	let mdCount = 0;
+	const names: string[] = [];
 	try {
 		for (const f of readdirSync(memoryDir)) {
 			if (!f.endsWith(".md") || f === "MEMORY.md") continue;
-			mdCount++;
+			names.push(f);
 			try {
 				newestMd = Math.max(newestMd, statSync(join(memoryDir, f)).mtimeMs);
 			} catch {
@@ -117,14 +190,18 @@ export function reconcileMemoryIndex(memoryDir: string): ReconcileResult {
 	} catch {
 		return { entries: [], skipped: 0, rewrote: false };
 	}
-	if (indexMtime >= 0 && newestMd <= indexMtime && lastSkipCount === 0 && lastEntries !== null) {
+	const namesKey = names.sort().join("\n");
+	const cached = dirCache.get(memoryDir);
+	if (
+		indexMtime >= 0 && newestMd <= indexMtime &&
+		cached && cached.skip === 0 && cached.entries !== null && cached.namesKey === namesKey
+	) {
 		// hot path: zero file-content reads — reuse the cached entry list
-		return { entries: lastEntries, skipped: 0, rewrote: false };
+		return { entries: cached.entries, skipped: 0, rewrote: false };
 	}
 
 	const { entries, skipped } = scanMemoryDir(memoryDir);
-	lastSkipCount = skipped;
-	lastEntries = entries;
+	dirCache.set(memoryDir, { skip: skipped, entries, namesKey });
 
 	// byte-cap: drop tail rows until it fits, then append WARNING
 	let body = buildIndexBody(entries);

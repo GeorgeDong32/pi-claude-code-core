@@ -16,6 +16,7 @@
 
 import { existsSync, mkdirSync } from "node:fs"
 import { readJson, writeJsonAtomic } from "../../lib/settings.ts"
+import { parseModelId as parseModelIdShared } from "../../lib/model-id.ts"
 import { homedir } from "node:os"
 import { join } from "node:path"
 
@@ -79,26 +80,21 @@ export const modelsPath: string = _modelsPath
  * Returns `{ provider, model, thinkingLevel }` or `null` if the input has no
  * slash (no provider), or is empty.
  *
+ * Thin field-name adapter over the shared parser (P0-LB-02: one
+ * implementation; pm calls the fields model/thinkingLevel, lib calls them
+ * modelId/effort).
+ *
  * A trailing `:` (e.g. `"opencode/big-pickle:"`) is treated as "no thinking
  * suffix" — `thinkingLevel` is omitted in the returned object.
  */
 export function parseModelId(
 	raw: string,
 ): { provider: string; model: string; thinkingLevel?: string } | null {
-	if (!raw) return null
-	const colonIdx = raw.indexOf(":")
-	const providerAndModel =
-		colonIdx === -1 ? raw : raw.slice(0, colonIdx)
-	const thinkingLevel =
-		colonIdx === -1 ? undefined : raw.slice(colonIdx + 1) || undefined
-	const slashIdx = providerAndModel.indexOf("/")
-	if (slashIdx <= 0) return null
-	const provider = providerAndModel.slice(0, slashIdx)
-	const model = providerAndModel.slice(slashIdx + 1)
-	if (!provider || !model) return null
-	return thinkingLevel === undefined
-		? { provider, model }
-		: { provider, model, thinkingLevel }
+	const parsed = parseModelIdShared(raw)
+	if (!parsed) return null
+	return parsed.effort === undefined
+		? { provider: parsed.provider, model: parsed.modelId }
+		: { provider: parsed.provider, model: parsed.modelId, thinkingLevel: parsed.effort }
 }
 
 /** Internal: read+parse the config file. Returns {} on any failure. */
@@ -194,24 +190,24 @@ export function resolveModelForMode(
 	return undefined
 }
 
-/** Default thinking level when a profile mode has no explicit effort / `:suffix`. */
-export const DEFAULT_PROFILE_EFFORT = "medium"
-
 /**
  * Resolve the effort / thinking level for a mode from the active profile.
  *
  * Priority:
  *   1. Explicit `ModeConfig.effort` on the resolved mode entry
  *   2. `:suffix` on the model string (e.g. `"provider/model:high"`)
- *   3. {@link DEFAULT_PROFILE_EFFORT} (`"medium"`)
  *
- * Falls back through the `default` profile the same way as
- * {@link resolveModelForMode}.
+ * Returns `undefined` when the profile maps a model but expresses NO effort
+ * for the mode — per the ownership chain (PLAN §3.3 / P1-EF-06 d) a mode
+ * switch must then leave the thinking level completely alone (pm 2.8.0
+ * silently coerced to "medium"; that equivalence was consciously broken,
+ * see DEVIATIONS). Falls back through the `default` profile the same way
+ * as {@link resolveModelForMode}.
  */
 export function resolveEffortForMode(
 	config: ModelProfilesConfig,
 	mode: "ask" | "plan" | "auto" | "bypass",
-): string {
+): string | undefined {
 	const profileName = config.active || "default"
 	const profile = config[profileName] as ModelProfile | undefined
 	const fromActive = effortFromProfileEntry(profile?.[mode])
@@ -222,7 +218,7 @@ export function resolveEffortForMode(
 		const fromDefault = effortFromProfileEntry(def?.[mode])
 		if (fromDefault) return fromDefault
 	}
-	return DEFAULT_PROFILE_EFFORT
+	return undefined
 }
 
 function effortFromProfileEntry(

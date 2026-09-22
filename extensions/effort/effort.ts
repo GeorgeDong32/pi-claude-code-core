@@ -1,14 +1,14 @@
-import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import type { Model, ThinkingLevel } from "@earendil-works/pi-ai";
+import { readJson, writeJsonAtomic } from "../../lib/settings.js";
 
 /**
- * All levels the extension knows about, including "off" (Pi's internal state).
+ * All levels the extension knows about, including "off" (Pi's internal state)
+ * and "max" (a native ThinkingLevel tier some models expose — without it
+ * here, getAvailableThinkingLevels would filter the tier away).
  * The slash-command surface intentionally exposes only model reasoning options.
  */
-export const ALL_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+export const ALL_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export const ALL_LEVELS_WITHOUT_XHIGH = ["off", "minimal", "low", "medium", "high"] as const;
 
 /** Levels shown to users in usage and tab completion. */
@@ -190,40 +190,21 @@ export function cycleLevel(current: string, model: EffortModel | null | undefine
 
 // ─── Settings persistence ───────────────────────────────────────────
 
+// Thin adapters over lib/settings (P0-LB-01/P0-LB-04: the per-package JSON
+// primitives are converged; the fast-mode read-modify-write stays here).
+// A corrupted settings.json must throw so writeFastMode cannot silently
+// overwrite it (same guard as pm's permissions-loader, DEVIATIONS #19).
+
 export function readSettingsObject(settingsPath: string): Record<string, unknown> {
-  try {
-    const raw = readFileSync(settingsPath, "utf-8").trim();
-    if (raw.length === 0) return {};
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
+  return readJson<Record<string, unknown>>(settingsPath, {}, (reason) => {
+    if (reason === "malformed" || reason === "non-object") {
+      throw new Error("settings.json is not a JSON object");
     }
-    throw new Error("settings.json is not a JSON object");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return {};
-    }
-    throw error;
-  }
+  });
 }
 
 function writeSettingsObject(settingsPath: string, settings: Record<string, unknown>): void {
-  const content = `${JSON.stringify(settings, null, 2)}\n`;
-  const dir = dirname(settingsPath);
-  mkdirSync(dir, { recursive: true });
-  const tmpPath = join(dir, `.settings.json.tmp.${process.pid}.${randomUUID()}`);
-
-  try {
-    writeFileSync(tmpPath, content, "utf-8");
-    renameSync(tmpPath, settingsPath);
-  } catch (error) {
-    try {
-      unlinkSync(tmpPath);
-    } catch {
-      // Best effort: the original write failure is more useful to callers.
-    }
-    throw error;
-  }
+  writeJsonAtomic(settingsPath, settings);
 }
 
 function readPiEffortSettings(settings: Record<string, unknown>): Record<string, unknown> {

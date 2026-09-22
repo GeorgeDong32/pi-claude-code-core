@@ -129,7 +129,7 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 			return ctx?.isProjectTrusted ? ctx.isProjectTrusted() === true : true;
 		}
 
-		function renderFor(cwd: string, touchedPaths: string[], ctx: CtxLike | undefined): string {
+		function renderFor(cwd: string, ctx: CtxLike | undefined): string {
 			const dirs = dirsOf(cwd);
 			const fp = fingerprintOf(dirs);
 			if (fp !== fingerprint || cachedOutput === null) {
@@ -141,7 +141,7 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 					dirs,
 					cwd,
 					projectTrusted: trusted(ctx),
-					touchedPaths,
+					touchedPaths: [],
 					budgetChars: options?.budgetChars,
 					inlineThresholdChars: options?.inlineThresholdChars,
 					fs: realFs,
@@ -158,6 +158,22 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 			return cachedOutput;
 		}
 
+		/** Steer the full rule text once per session (P3-RU-07); oversized
+		 * rules steer a pointer instead — the render red line (never cut
+		 * mid-content) applies to steers too (review #15). */
+		function steerRule(rule: RenderedRule): void {
+			activatedNames.add(rule.name);
+			const full = `### ${rule.name}\n\n${rule.content}`;
+			const content =
+				full.length <= DYNAMIC_STEER_MAX
+					? full
+					: `${rule.name}: rule text exceeds the per-turn steer budget (${DYNAMIC_STEER_MAX} chars). Read ${rule.path} on demand.`;
+			pi.sendMessage(
+				{ customType: "pi-rules-activate", content, display: true },
+				{ deliverAs: "steer" },
+			);
+		}
+
 		pi.on("session_start", () => {
 			activatedNames.clear();
 			fingerprint = null;
@@ -170,7 +186,7 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 		});
 
 		pi.on("before_agent_start", (event, ctx: ExtensionContext) => {
-			const block = renderFor(ctx.cwd, [], ctx);
+			const block = renderFor(ctx.cwd, ctx);
 			return { systemPrompt: `${event.systemPrompt ?? ""}\n\n${block}` };
 		});
 
@@ -196,17 +212,8 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 				}
 				if (fresh.length === 0) return undefined;
 				for (const ruleName of fresh) {
-					activatedNames.add(ruleName);
 					const rule = cachedRules.find((r) => r.name === ruleName)!;
-					const full = `### ${rule.name}\n\n${rule.content}`;
-					const content =
-						full.length <= DYNAMIC_STEER_MAX
-							? full
-							: `${rule.name}: rule text exceeds the per-turn steer budget (${DYNAMIC_STEER_MAX} chars). Read ${rule.path} on demand.`;
-					pi.sendMessage(
-						{ customType: "pi-rules-activate", content, display: true },
-						{ deliverAs: "steer" },
-					);
+					steerRule(rule);
 				}
 				return undefined;
 			}
@@ -221,24 +228,13 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 			});
 			if (activated.length === 0) return undefined;
 			// steer from the CACHED collected rules — a matching tool call
-			// costs zero extra scans (review #16a). Oversized rules steer an
-			// index-style pointer instead of the full text, clamped to
-			// DYNAMIC_STEER_MAX (P3-RU-10; review #15).
-			const rules = cachedRules ?? collectRules({ dirs, cwd: ctx.cwd, projectTrusted: trusted(ctx), touchedPaths: [], fs: realFs }).rules;
+			// costs zero extra scans (review #16a).
+			const rules = collectRules({ dirs, cwd: ctx.cwd, projectTrusted: trusted(ctx), touchedPaths: [], fs: realFs }).rules;
 			for (const ruleName of activated) {
 				if (activatedNames.has(ruleName)) continue; // once per session (P3-RU-07)
 				const rule = rules.find((r) => r.name === ruleName);
 				if (!rule) continue;
-				activatedNames.add(ruleName);
-				const full = `### ${rule.name}\n\n${rule.content}`;
-				const content =
-					full.length <= DYNAMIC_STEER_MAX
-						? full
-						: `${rule.name}: rule text exceeds the per-turn steer budget (${DYNAMIC_STEER_MAX} chars). Read ${rule.path} on demand.`;
-				pi.sendMessage(
-					{ customType: "pi-rules-activate", content, display: true },
-					{ deliverAs: "steer" },
-				);
+				steerRule(rule);
 			}
 			return undefined; // activation never blocks a tool call
 		});

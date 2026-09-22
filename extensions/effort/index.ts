@@ -116,8 +116,13 @@ export default function effortExtension(pi: ExtensionAPI): void {
     if (lastCtx) syncEffortUi(lastCtx);
   });
 
-  function syncEffortUi(ctx: ExtensionContext, current: string = pi.getThinkingLevel()): string {
-    updateEffortUi(ctx, current, refreshFastMode());
+  function syncEffortUi(ctx: ExtensionContext, current: string = pi.getThinkingLevel(), appliesNow?: boolean): string {
+    // C6: honor the caller's appliesNow; default to the idle probe so a
+    // changed() callback during a run no longer refreshes the working
+    // message as if it applied immediately. Fake hosts without isIdle
+    // (contract tests) fall back to the old true behavior.
+    const applies = appliesNow ?? (typeof ctx.isIdle === "function" ? ctx.isIdle() : true);
+    updateEffortUi(ctx, current, refreshFastMode(), applies);
     coreBus().publish({
       effort: { level: current, source: owner.currentSource() },
     });
@@ -211,7 +216,15 @@ export default function effortExtension(pi: ExtensionAPI): void {
       }
 
       // --effort flag = manual intent at startup (② via "command")
-      owner.setExplicit(toThinkingLevel(resolved), "command");
+      const outcome = owner.setExplicit(toThinkingLevel(resolved), "command");
+      if (outcome === "pinned-by-env") {
+        // P1-EF-06 c) parity with the command/picker paths: being silently
+        // swallowed under an env pin is the one UX gap they don't have
+        ctx.ui.notify(
+          `Effort is pinned by PI_CORE_EFFORT=${owner.envPin()}; --effort ${flagValue} was not applied`,
+          "warning"
+        );
+      }
       syncEffortUi(ctx);
     }
   });
@@ -365,7 +378,10 @@ export default function effortExtension(pi: ExtensionAPI): void {
         case "reset":
           owner.resetExplicit();
           ctx.ui.notify(
-            `Effort reset (now ${owner.currentSource()}: ${pi.getThinkingLevel()})`,
+            // no env/profile applies afterwards: the pi level stays at its
+            // last value until the next profile/model event — say that
+            // instead of naming a source that isn't actively driving it
+            `Effort reset (control returns to profile/model default; currently ${pi.getThinkingLevel()})`,
             "info"
           );
           syncEffortUi(ctx);

@@ -30,7 +30,7 @@ export const BUILTIN_RULES: BuiltinRule[] = [
 	{
 		slug: "search-channel",
 		name: "search-channel",
-		description: "Which search channel to use, conditional on installed tools",
+		description: "Use exa MCP (mcp_exa_*) as the default search channel; pi-web-access is retired",
 		content: `Web search: use the exa MCP tools (mcp_exa_*) — they are the default search channel and return cleaner, citable results. pi-web-access is retired and must not be used. Do not mix search channels within one task without saying so.`,
 	},
 ];

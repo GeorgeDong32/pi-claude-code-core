@@ -11,7 +11,7 @@
  * This replaces the old "main agent obtains the diff itself" pattern that
  * silently failed on cross-repo PRs.
  */
-import { existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -565,4 +565,3 @@ function prLabel(prRef: string): string {
 export { setRunCmd, resetRunCmd, setTargetWorkspaceCmd, resetTargetWorkspaceCmd };
 
 void DEFAULT_CONFIG;
-void writeFileSync;

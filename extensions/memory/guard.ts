@@ -22,7 +22,7 @@ const SECRET_PATTERNS: Array<[RegExp, string]> = [
 	[/\bgh[pousr]_[A-Za-z0-9]{30,}\b/, "GitHub token"],
 	[/-----BEGIN [A-Z ]*PRIVATE KEY-----/, "private key block"],
 	[/\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\./, "JWT"],
-	[/(?:api[_-]?key|secret|token|password)\s*[:=]\s*["']?[A-Za-z0-9/_+-]{16,}["']/i, "key=value secret"],
+	[/(?:api[_-]?key|secret|token|password)\s*[:=]\s*["']?[A-Za-z0-9/_+=-]{16,}["']?/i, "key=value secret"],
 ];
 
 /** Inspect a write/edit targeting the memory dir; block on secret shapes. */

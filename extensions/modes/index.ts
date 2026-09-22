@@ -20,7 +20,7 @@ import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui"
 import { coreBus } from "../bus.ts"
 import { isInsideDir } from "../../lib/rule-text.js"
 import { resolveMemoryPaths } from "../memory/paths.ts"
-import { clearSessionGrants, clearSessionState, grantSession, hasSessionGrant, isBypassActive, listSessionGrants, matchFamily, noteAdjudicated, ruleMentions, setBypassIndicator } from "./rule-families.ts"
+import { clearSessionGrants, clearSessionState, grantSession, hasSessionGrant, isBypassActive, listSessionGrants, matchFamily, noteAdjudicated, familyRuleMentions, setBypassIndicator } from "./rule-families.ts"
 import { getSharedEffortOwner, type OwnerEffortLevel } from "../../lib/effort-owner.ts";
 import { readFileSync } from "node:fs"
 import { homedir } from "node:os";
@@ -851,6 +851,8 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       return;
     }
 
+    // undefined = the profile maps a model but expresses no effort → the
+    // mode switch must leave the thinking level alone (PLAN §3.3, P1-EF-06 d)
     const effort = resolveEffortForMode(modelProfileConfig, mode);
     if (!effort) return;
     if (!PROFILE_EFFORT_LEVELS.has(effort)) {
@@ -1111,7 +1113,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       // P4-FAM-02 first-seen: a family claiming this tool with no explicit
       // ask rule gets the family dialog (allow once / session / always).
       const match = matchFamily(tool, input);
-      if (match && !ruleMentions(mergedPermissionRules, match.canonicalId, "ask")) {
+      if (match && !familyRuleMentions(mergedPermissionRules, match.family, match.canonicalId, "ask")) {
         return firstSeenPrompt(ctx, match.canonicalId, tool, input, match.family.suggestAllowRule(match.canonicalId));
       }
       return promptWithPermissionOptions(

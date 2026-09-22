@@ -13,11 +13,24 @@ import { join } from "node:path";
 
 /** Sanitize a path exactly like pi's sessions directory naming. */
 export function sanitizePath(p: string): string {
-	return p.replace(/[/\\]/g, "-").replace(/^-/, "-");
+	return p.replace(/[/\\]/g, "-");
 }
 
-/** git rev-parse --git-common-directory; null outside a work tree. */
+/** git rev-parse --git-common-directory; null outside a work tree.
+ * Result is memoized per cwd — the canonical root of a working directory
+ * effectively never changes mid-process, and the sync subprocess ran on
+ * every memoryDir() call (several times per turn) before this cache. */
+const gitRootCache = new Map<string, string | null>();
+
 export function gitCanonicalRoot(cwd: string): string | null {
+	const cached = gitRootCache.get(cwd);
+	if (cached !== undefined) return cached;
+	const root = gitCanonicalRootUncached(cwd);
+	gitRootCache.set(cwd, root);
+	return root;
+}
+
+function gitCanonicalRootUncached(cwd: string): string | null {
 	try {
 		const out = execSync("git rev-parse --git-common-directory", {
 			cwd,

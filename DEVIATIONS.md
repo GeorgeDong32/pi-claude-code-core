@@ -167,3 +167,34 @@
     复查 subagent 亲证以下四项初版自报「已修」实际不存在(python 批量替换静默失败的再现,同 P4 running 事件):①#10 goal bus 移出 hasUI 门控(goal.ts 零改动);②contextBudget/memory 通道断言(文件中无);③web-gov 注册序注释;④memory `void ctx` ×2。**全部已补修**(publishGoalChannel 移至 hasUI early-return 之前,两通道对称;两条 readCoreStatus 断言入 rules-wiring/memory 测试;注释反转;void ctx 删除/参数收敛)。同批顺手:#13 块间连接符欠账补入核算((N−1)+(R−1) 个 `\n`);#16a 激活检测热路径改 cachedRules 内存 glob 匹配(真零扫描,冷路径保留全量回退);mirror allow_always 写失败改 fail-closed(与 firstSeen 一致);check.mjs 成功路径恢复输出;memory temp-write fallback 幽灵注释与 rules 头注释过时表述修正。**教训重申:python replace 静默失败是本仓事故主源——凡是「已修」自报必须以复查或实测背书。**
 
 47. **择优认定(不修,挂账)**:①#5 writeJsonAtomic 使 model-profiles.json 每次写入均 0600(pm 仅创建时)——安全正向,保留;②#4 config.ts malformed 首读后 mtime 缓存内不再 re-warn——诊断降级可接受;③Standards #8 的 `as never`(context 注入对象 vs AgentMessage)——类型面成本高于收益,留;④#12 direct 形态生产装配 knownServers 恒空——配置 seam(`PI_CORE_MCP_DIRECT_SERVERS` env)已在 mcp-gov/index 接入,README 注明。
+
+---
+
+## 二轮深审修复批(2026-09-22,REVIEW-II)
+
+> 来源:code-review skill 双轴全量深审(Spec 4 应修 + Standards 11 应修 + 实质性建议项)。台账自本批起 #48 连号;两项历史自报失实随批闭案(#47b② memory 通道断言本轮 S4 补真;#46 paths 恒等替换已删)。
+
+48. **S1 effort 兜底翻转(pm 等价性主动让位 §3.3)**:`resolveEffortForMode` 无显式 effort(ModeConfig.effort 或 `:suffix`)时返回 `undefined`(原兜底 `"medium"`,DEFAULT_PROFILE_EFFORT 删除);modes 消费点 `if (!effort) return` 从死代码变为真守卫——profile 无 :effort 切 mode 完全不动 thinking level。两个 pm 随迁用例红绿翻转(index.test「defaults to medium」→「leaves alone」,断言 off)。P1-EF-06 d) 的 modes 侧守卫自此真实存在。
+49. **readJson onInvalid 语义收紧**:onInvalid 回调 throw 现在原样传播(一次、真实 reason),不再被外层 catch 吞成二次 "malformed" 上报;文件头与函数 doc 更新。effort 的 `readSettingsObject` 改用 throwing-onInvalid 复现「corrupted settings.json 不可被 writeFastMode 静默覆写」守卫(与 pm permissions-loader #19 同型)。
+50. **settings/model-id 收敛补完(P0-LB-01/04「P2 收尾全收敛」兑现)**:effort.ts 的 readSettingsObject/writeSettingsObject 与 permission-forwarding 的 atomicWriteJson 迁 lib/settings(0o600 经 opts.mode;forwarding 的 readJsonFile 保留——「任意类型 parse-or-null」控制流语义,非 settings 原语重复);profiles.ts 自有 parseModelId 改为 lib/model-id 薄适配(字段名映射,签名/测试不变)。**PLAN §1.4「×2 份 provider/model 解析」表述失实记录**:review 的 resolveModel 实为 "inherit" 哨兵解析,从来不是第二份 parser;真收敛对象只有 profiles 这份。
+51. **C1 CJK bigram 分词(新能力)**:tokenize 对 CJK 连续段切 bigram(ASCII 词不变)——此前整句中文并入单 token,换措辞即失配,中文 lexical 注入实际不可用(二轮深审最重发现);中文单字停用词删除(bigram 下单字 token 不再产生)。MIN_TOKEN_OVERLAP=2 对 bigram 语义不变;#27 的英文标定结论不受影响(英文路径零改动)。
+52. **C7 字节口径统一**:selection(selectForTurn 预算对比/会话累计)、policy(indexEntrypoint 封顶)、memory/index(60KB 计入标题+新鲜度头+整块,`slice(0,4096)` 死代码删除)全部 Buffer.byteLength——CJK 体量原低估至 1/3。
+53. **A4 memdir 缓存键控+失效**:reconcile 缓存从模块级单例改为 per-memoryDir Map,键含文件名清单(namesKey)——删除/改名(不 bump 任何 mtime)也失效,索引死行不再永久滞留;同进程多项目互不污染。
+54. **A5 注入热路径**:新增 `scanMemoryDirCached`(name:mtimeMs:size 指纹缓存,含 body);before_agent_start 与 context 两个 hook 共用——原每 turn 3 遍全文读(两处 scanMemoryDir + context 逐文件 readFileSync)降为指纹未变时 1 次 readdir+N stat、零内容读;`gitCanonicalRoot` 按 cwd 进程内 memo(原每次 memoryDir() 都 execSync git)。git root 变更需重启进程才可见(可接受,worktree 场景 root 不变)。
+55. **S3 web family 认领限定 mcp 形态**:match() 先过 `canonicalizeMcpTool`(native/proxy/direct+knownServers)门再做 URL 提取;knownServers 解析抽为 `directKnownServersFromEnv()`(mcp/web 两 family 同口径);proxy 形态的 effectiveName(input.tool)同样过 URL_TOOL_HINT。非 mcp 工具带 url 参数恢复 passthrough(P4-FAM-02④)。p4 用例翻转(webfetch 字面名不再被认领)。
+56. **S5 特异度分层(P4-MC-01 前缀优先级)**:resolveMcpVerdict 改为「精确名 > `mcp_<server>_*` > `mcp_*`」三层特异度优先,同层内 deny>ask>allow——`deny mcp_*` + `allow mcp_exa_search` 现判 allow(原被宽泛 deny 吞)。
+57. **S6+C5 family 规则形态内化**:RuleFamily 接口新增 `matchesRule(rule, canonicalId)`(mcp=ruleMatchesId;web=webfetch(domain:) 形态);`ruleMentions` 升级为 `familyRuleMentions`(带 family)。效果:web 显式 ask 规则可被识别→走 promptWithPermissionOptions 全弹窗(allow_always_local 可达,S6);family deny verdict 展示真实 deny 规则文本+真实 source(原为 allow 建议串+硬编码 "global",C5)。
+58. **C3/C4/A3 broker 三连**:canonicalIdForEvent 复用 canonicalizeMcpTool(adapter 事件带 native `mcp__` 前缀不再拼出 `mcp_mcp__exa__search` 导致 adjudication 全 miss 误拒);mirror `start()` 防重入(先退订再订阅)+mcp-gov wiring 在 session_start 先 `mirror.stop()` 再重建、session_shutdown 补清理(订阅泄漏/双重 deny 计数);/core 面板 ruleSummary 换 ruleValueText(对象型 ruleValue 不再显示空串,#45 漏点再现的堵口)。
+59. **memory 其余修复包**:C2 secret regex 修正(收尾引号可选+值类含 `=`,base64 padding/无引号 token 不再漏拦);C8 readLines UTF-8 chunk 边界 withhold(多字节字符不再产生替换符;position 只推进已解码字节,截断尾防死循环);C10 context 注入自选文本不再可能成为下一轮 recall prompt(过滤 customType user 块);C11 双导入器「本地编辑优先」(内容分歧 skip+note,不再静默覆写);C9 extractHost 移除 query 键(搜索词不是 fetch 目标)+预批准子域名匹配(`host === d || host.endsWith("." + d)`,非前缀伪造);S11 defaults search-channel description 与定版 content 同步。
+60. **effort/rules 小项包**:S7 `--effort` flag env pin 下补 notify(返回值检查,与命令/picker 路径对齐);A7 ALL_LEVELS 加 `"max"`(pi-ai 原生 max 档此前被 isEffortLevel 过滤掉,模型最高档不可用);C6 syncEffortUi 的 appliesNow 默认改 `ctx.isIdle()` 口径(changed 回调不再以「立即生效」刷 working message 与 "(applies next prompt)" 自相矛盾);C13b /effort reset 通知不再谎报 currentSource(「control returns to profile/model default; currently X」);A8 steer 发送提取 `steerRule()` helper(两段逐字重复消除);A9 renderFor 死参数删除+globalHome 默认 `process.env.HOME ?? ""`(漏调 setRulesHome 时 @~/ 不再解析到空);C13a render 降级循环加「降级后更大则不降」守卫(小块不净增体量,极端情形走索引尾丢);review-run `void writeFileSync` 死代码与 import 清理;memory/paths sanitizePath 恒等替换删除(#46 闭案)。
+61. **择优认定(不修,挂账)**:①A6 rule-families.ts 四职责(family registry/bypass 指示/sessionGrants/adjudication)拆分——结构重构风险大于收益,重开条件=P5 或下次 family 接入需求;②C12 yield 动态探测标记押注 pi systemPrompt 非累积语义——真机验证后定;③review-run 空 diff 守卫晚于 prepareWorkspace(白付一次 clone,TTL 兜底);④C6 的「run 中 changed 回调」无独立单测(fake host 的 isIdle 序列成本高),由 53 条 effort node--test 与真机冒烟覆盖。
+
+## 对抗审计批(2026-09-22 二轮,红队 3 subagent)
+
+62. **对抗审计修复(4 实锤 + 2 顺手)**:真实性轴全绿(#48-#61 逐条属实、15 测试无空转、计数吻合——未发生第三次自报失实);回归轴抓出 4 项修复残留并全部修毕:
+①**C8b**:utf8SafeEnd 回扫上限 3→4——4 字节 emoji 序列恰在 chunk 尾时 lead byte 被孤立解码(红队实测产生替换符),修复后增补平面字符边界完整(emoji 边界用例);
+②**C11b**:importFromHermes 存在性检查从 scanMemoryDir().entries(仅 valid)改为 existsSync——frontmatter 损坏的本地文件此前仍被静默覆写(invalid 用例);
+③**C13ab**:降级循环 break 出口改为「整块丢弃最小 inline 块」——全部块小于索引行且无索引行时原样输出超预算,违反 #40「精确 ≤budget」不变量(30×40 字符 + budget 300 用例);
+④**C1b**:中文高频虚词 bigram(我们/一个/这个…20 条)入 STOPWORDS 且 bigram 分支补停用词过滤(原只在 ASCII 分支过滤)——红队实测「我们需要整理一个计划」凭两个虚词 bigram 误命中无关记忆;信息密度低于英文词的固有松散由 #27 升 3 通道继续跟踪。
+顺手:broker probe 前 stop 旧 mirror(throw 时不再遗留订阅);globalHome 惰性初始化(静态初始化会在测试 HOME 覆盖前捕获)。
+**挂账(红队疑点,择优认定)**:broker direct 双拼 `mcp_exa_exa_search`(fail-closed 方向安全,adapter 真机接入时观测);Tab 补全 max 在模型原生含 max 时重复展示;effort 三处裸调 ctx.isIdle 与 syncEffortUi 防御风格不一(真实运行时 isIdle 恒在,extensions/types.d.ts:232);ALL_LEVELS_WITHOUT_XHIGH 无消费者(dead export);C2 人类句子误拦(`password: "my-password-is-long-enough"`)——over-blocking 声明内。测试 vitest **574**(+4)+ node--test 312 + 契约 17 全绿。

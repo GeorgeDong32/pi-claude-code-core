@@ -16,12 +16,11 @@ import {
 	readdirSync,
 	statSync,
 	readFileSync,
-	renameSync,
 	unlinkSync,
-	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { writeJsonAtomic } from "../../lib/settings.ts";
 
 export const PERMISSION_FORWARDING_POLL_INTERVAL_MS = 250;
 export const PERMISSION_FORWARDING_TIMEOUT_MS = 600_000;
@@ -111,13 +110,9 @@ function ensureDir(dir: string): void {
 	}
 }
 
+// converged on lib/settings writeJsonAtomic (P0-LB-01); 0o600 preserved
 function atomicWriteJson(filePath: string, data: unknown): void {
-	const tmp = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
-	writeFileSync(tmp, JSON.stringify(data, null, 2), {
-		encoding: "utf8",
-		mode: 0o600,
-	});
-	renameSync(tmp, filePath);
+	writeJsonAtomic(filePath, data, { mode: 0o600 });
 }
 
 function readJsonFile<T>(filePath: string): T | null {

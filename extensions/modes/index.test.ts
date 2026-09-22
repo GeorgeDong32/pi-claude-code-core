@@ -1207,10 +1207,12 @@ describe("permission-modes extension: model profiles", () => {
 		})
 		expect(pi.setModelCalls.length).toBeGreaterThan(0)
 		expect(pi.setModelCalls[0].model).toBe(fakeModel)
-		expect(pi.getThinkingLevel()).toBe("medium")
+		// profile maps a model but no effort → thinking level stays alone
+		// (PLAN §3.3 ownership chain; pm 2.8.0 coerced "medium")
+		expect(pi.getThinkingLevel()).toBe("off")
 	})
 
-	it("applyProfileModelForMode defaults effort to medium when unset", async () => {
+	it("applyProfileModelForMode leaves the thinking level alone when no effort is set", async () => {
 		setupProfile({
 			active: "main",
 			main: { ask: "prov1/askModel" },
@@ -1220,7 +1222,7 @@ describe("permission-modes extension: model profiles", () => {
 		await pi.simulateSessionStart("/home/user/project/src", undefined, {
 			find: () => ({ id: "askModel" }),
 		})
-		expect(pi.getThinkingLevel()).toBe("medium")
+		expect(pi.getThinkingLevel()).toBe("off")
 	})
 
 	it("applyProfileModelForMode warns (not crashes) when model is not in registry", async () => {

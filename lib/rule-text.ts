@@ -4,23 +4,40 @@
  * match two — one deep point instead).
  *
  * Callers: modes/rule-families, mcp-gov/family, mcp-gov/index, web-gov.
+ *
+ * Self-contained on purpose: lib must not depend back on extensions/ (the
+ * value shape mirrors modes' PermissionRuleValue structurally).
  */
-
-import { permissionRuleValueToString } from "../extensions/modes/permission-rule-parser.ts";
 
 interface RuleLike {
 	ruleValue: unknown;
+}
+
+interface RuleValueShape {
+	toolName: string;
+	ruleContent?: string;
 }
 
 /** Serialize a rule's value to its canonical rule-file text. */
 export function ruleValueText(rule: RuleLike): string {
 	const value = rule.ruleValue;
 	if (typeof value === "string") return value;
-	try {
-		return permissionRuleValueToString(value as never);
-	} catch {
-		return String(value);
+	if (value && typeof value === "object") {
+		const { toolName, ruleContent } = value as RuleValueShape;
+		if (typeof toolName === "string") {
+			if (!ruleContent) return toolName;
+			return `${toolName}(${escapeRuleContent(ruleContent)})`;
+		}
 	}
+	return String(value);
+}
+
+/** Escape `\`, `(`, `)` — same grammar as modes' permission-rule-parser. */
+function escapeRuleContent(content: string): string {
+	return content
+		.replace(/\\/g, "\\\\")
+		.replace(/\(/g, "\\(")
+		.replace(/\)/g, "\\)");
 }
 
 /** Exact match or trailing-wildcard prefix match (`mcp_exa_*`). */

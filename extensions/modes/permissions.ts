@@ -16,7 +16,8 @@ import {
 	permissionRuleValueToString,
 	type PermissionRuleValue,
 } from "./permission-rule-parser.ts"
-import { familyVerdictFor, hasSessionGrant, matchFamily } from "./rule-families.ts"
+import { familyRuleMentions, familyVerdictFor, hasSessionGrant, matchFamily } from "./rule-families.ts"
+import { ruleValueText } from "../../lib/rule-text.ts"
 
 export type PermissionBehavior = "allow" | "deny" | "ask"
 
@@ -155,19 +156,23 @@ export function evaluateToolPermission(
 		// step-2 consumption (deny/allow/ask) is unchanged machinery.
 		const familyResult = familyVerdictFor(toolName, input, rules)
 		if (familyResult) {
+			const { family, canonicalId } = familyResult.match;
 			if (familyResult.verdict === "deny") {
+				// show the real deny rule (text + source) when one exists —
+				// never the allow suggestion
+				const matched = familyRuleMentions(rules, family, canonicalId, "deny");
 				return {
 					behavior: "deny",
-					rule: familyResult.match.family.suggestAllowRule(familyResult.match.canonicalId),
-					source: "global",
+					rule: matched ? ruleValueText(matched) : canonicalId,
+					source: matched ? matched.source : "global",
 				}
 			}
-			if (familyResult.verdict === "allow" || hasSessionGrant(familyResult.match.canonicalId)) {
-				return { behavior: "allow", rule: familyResult.match.canonicalId, source: "global" }
+			if (familyResult.verdict === "allow" || hasSessionGrant(canonicalId)) {
+				return { behavior: "allow", rule: canonicalId, source: "global" }
 			}
 			return {
 				behavior: "ask",
-				rule: familyResult.match.canonicalId,
+				rule: canonicalId,
 				source: "global",
 			}
 		}

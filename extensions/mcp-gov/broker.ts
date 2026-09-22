@@ -14,6 +14,8 @@
  * machine state); tests inject a MockMcpBus.
  */
 
+import { canonicalizeMcpTool, directKnownServersFromEnv } from "./family.ts";
+
 export interface McpApprovalEvent {
 	/** adapter-side id (best effort — see P4-MC-07) */
 	callId?: string;
@@ -50,9 +52,21 @@ export interface BrokerMirror {
 	denyCount(): number;
 }
 
+/**
+ * Canonical id for an adapter approval event. Reuses canonicalizeMcpTool so
+ * a tool name that already carries the native `mcp__server__tool` prefix is
+ * canonicalized instead of naively re-prefixed (`mcp_mcp__exa__search`
+ * would miss every adjudication and rule → fail-closed against a call the
+ * gate already allowed).
+ */
 export function canonicalIdForEvent(event: McpApprovalEvent): string {
-	if (event.tool && event.server) return `mcp_${event.server}_${event.tool}`;
-	if (event.tool) return `mcp_${event.tool}`;
+	const known = new Set(directKnownServersFromEnv().map((s) => s.toLowerCase()));
+	if (event.tool) {
+		const selfCanonical = canonicalizeMcpTool(event.tool, {}, known);
+		if (selfCanonical) return selfCanonical;
+		if (event.server) return `mcp_${event.server}_${event.tool}`;
+		return `mcp_${event.tool}`;
+	}
 	return "mcp_unknown";
 }
 
@@ -79,6 +93,8 @@ export function createBrokerMirror(port: McpEventPort, deps: MirrorDeps): Broker
 	return {
 		start() {
 			if (!port.present || !port.onApprovalRequest) return; // absent adapter → idle
+			// defensive: a second start never stacks subscriptions
+			unsubscribe?.();
 			unsubscribe = port.onApprovalRequest((event) => decide(canonicalIdForEvent(event)));
 		},
 		stop() {

@@ -130,11 +130,13 @@ describe("resolveModelForMode", () => {
 // ---- resolveEffortForMode ---------------------------------------------
 
 describe("resolveEffortForMode", () => {
-	it("defaults to medium when no effort is configured", () => {
-		expect(resolveEffortForMode({}, "ask")).toBe("medium")
+	// PLAN §3.3 / P1-EF-06 d): no explicit effort → undefined, meaning the
+	// mode switch leaves the thinking level alone (pm 2.8.0 coerced "medium")
+	it("returns undefined when no effort is configured", () => {
+		expect(resolveEffortForMode({}, "ask")).toBeUndefined()
 		expect(
 			resolveEffortForMode({ active: "p", p: { ask: "a/b" } }, "ask"),
-		).toBe("medium")
+		).toBeUndefined()
 	})
 
 	it("reads ModeConfig.effort", () => {

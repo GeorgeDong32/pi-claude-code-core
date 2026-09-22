@@ -37,15 +37,35 @@ const STOPWORDS = new Set([
 	"the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "with", "is",
 	"are", "be", "this", "that", "it", "as", "at", "by", "from", "was", "were",
 	"how", "what", "when", "which", "who", "why", "do", "does", "did", "can",
-	"not", "but", "use", "using", "into", "about", "我", "的", "了", "是", "在",
+	"not", "but", "use", "using", "into", "about",
+	// high-frequency function-word bigrams: two of these alone must NOT
+	// satisfy MIN_TOKEN_OVERLAP (红队实测:「我们需要整理一个计划」误命中无关记忆)
+	"我们", "一个", "这个", "那个", "他们", "她们", "什么", "怎么", "没有", "就是",
+	"还是", "如果", "但是", "可以", "已经", "现在", "时候", "地方", "问题", "一下",
 ]);
 
+/**
+ * Tokenize for lexical recall. ASCII runs become words (as before); CJK runs
+ * become BIGRAMS — a whole run as one token never matches differently-phrased
+ * Chinese (the reason CJK recall was dead), and unigrams carry no signal.
+ * Single-CJK-char tokens (the old dead stopwords) are simply never produced.
+ */
 export function tokenize(text: string): Set<string> {
 	const out = new Set<string>();
-	for (const raw of text.toLowerCase().split(/[^a-z0-9\x80-\xff\u4e00-\u9fa5]+/)) {
-		const token = raw.trim();
-		if (token.length < 2 || STOPWORDS.has(token)) continue;
-		out.add(token);
+	for (const segment of text.toLowerCase().split(/[^\u4e00-\u9fa5a-z0-9\x80-\xff]+/)) {
+		const cjkRuns = segment.match(/[\u4e00-\u9fa5]+/g) ?? [];
+		for (const run of cjkRuns) {
+			for (let i = 0; i + 1 < run.length; i++) {
+				const bigram = run.slice(i, i + 2);
+				if (STOPWORDS.has(bigram)) continue;
+				out.add(bigram);
+			}
+		}
+		for (const raw of segment.replace(/[\u4e00-\u9fa5]+/g, " ").split(/[^a-z0-9\x80-\xff]+/)) {
+			const token = raw.trim();
+			if (token.length < 2 || STOPWORDS.has(token)) continue;
+			out.add(token);
+		}
 	}
 	return out;
 }
@@ -87,12 +107,18 @@ export function selectForTurn(
 	const files: SelectableMemory[] = [];
 	for (const { mem } of scored) {
 		if (files.length >= budget.maxFiles) break;
-		if (mem.body.length > budget.perFileBytes) continue; // oversized: skip, never truncate silently
-		if (mem.body.length > remaining) break;
+		const bytes = byteLength(mem.body);
+		if (bytes > budget.perFileBytes) continue; // oversized: skip, never truncate silently
+		if (bytes > remaining) break;
 		files.push(mem);
-		remaining -= mem.body.length;
+		remaining -= bytes;
 	}
 	return { files, remainingSessionBytes: remaining };
+}
+
+/** Budgets are byte-denominated everywhere (CJK .length undercounts ~3×). */
+export function byteLength(text: string): number {
+	return Buffer.byteLength(text, "utf8");
 }
 
 /** Freshness header: memories older than a day get a verify hint. */

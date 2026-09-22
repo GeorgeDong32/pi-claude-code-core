@@ -5,9 +5,10 @@
  * (pm config.ts / pi-effort effort.ts / pi-review config.ts / goal state).
  * Semantics merged from those implementations:
  *
- *   - read: never throws. Missing file, empty file, malformed JSON, or a
- *     non-object value yields the caller-supplied fallback (pm's
- *     loadModelProfiles behavior; effort's callers caught and defaulted).
+ *   - read: returns the fallback for missing/empty/malformed/non-object
+ *     input instead of throwing (pm's loadModelProfiles behavior; effort's
+ *     callers caught and defaulted). A throwing `onInvalid` callback is the
+ *     one exception — it propagates (see readJson doc).
  *   - write: atomic tmp+rename in the same directory, so a failed write can
  *     never corrupt the previous file. Concurrent writers resolve by
  *     last-rename-wins (same as the previous per-package copies).
@@ -25,45 +26,43 @@ import { randomUUID } from "node:crypto";
 
 /**
  * Read a JSON file. Returns `fallback` when the file is missing, empty,
- * unparsable, or not a JSON object. Never throws.
+ * unparsable, or not a JSON object.
  *
  * `onInvalid` reports WHY the fallback was used, for callers that surfaced a
  * diagnostic in the pre-lib implementation (pm warns on malformed config).
+ * A callback that throws propagates out as-is (once, with the real reason) —
+ * it is not swallowed into a second "malformed" report; callers may use a
+ * throwing callback as a guard (e.g. refuse to overwrite a corrupt file).
  */
 export function readJson<T extends object>(
 	path: string,
 	fallback: T,
 	onInvalid?: (reason: "missing" | "empty" | "malformed" | "non-object") => void,
 ): T {
+	let raw: string;
 	try {
-		let raw: string;
-		try {
-			raw = readFileSync(path, "utf-8");
-		} catch {
-			onInvalid?.("missing");
-			return fallback;
-		}
-		raw = raw.trim();
-		if (raw.length === 0) {
-			onInvalid?.("empty");
-			return fallback;
-		}
-		let parsed: unknown;
-		try {
-			parsed = JSON.parse(raw);
-		} catch {
-			onInvalid?.("malformed");
-			return fallback;
-		}
-		if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-			return parsed as T;
-		}
-		onInvalid?.("non-object");
+		raw = readFileSync(path, "utf-8");
+	} catch {
+		onInvalid?.("missing");
 		return fallback;
+	}
+	raw = raw.trim();
+	if (raw.length === 0) {
+		onInvalid?.("empty");
+		return fallback;
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
 	} catch {
 		onInvalid?.("malformed");
 		return fallback;
 	}
+	if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+		return parsed as T;
+	}
+	onInvalid?.("non-object");
+	return fallback;
 }
 
 /**

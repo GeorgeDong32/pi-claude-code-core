@@ -13,7 +13,7 @@
  * Injection failures NEVER block a turn (P3-ME-09): every hook body is
  * try/catch-wrapped at the boundary.
  */
-import { accessSync, constants as fsConstants, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, constants as fsConstants, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -21,10 +21,10 @@ import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { coreBus } from "../bus.js";
-import { reconcileMemoryIndex, scanMemoryDir, type MemoryEntry } from "./memdir.ts";
+import { reconcileMemoryIndex, scanMemoryDir, scanMemoryDirCached } from "./memdir.ts";
 import { resolveMemoryPaths, sessionsDirFor } from "./paths.ts";
 import { buildPolicyInjection, POLICY_COMPACT } from "./policy.ts";
-import { selectForTurn, freshnessHeader, type SelectableMemory } from "./selection.ts";
+import { selectForTurn, freshnessHeader, byteLength, type SelectableMemory } from "./selection.ts";
 import { guardMemoryWrites } from "./guard.ts";
 import { InjectionGate } from "./yield.ts";
 import { sessionRecall } from "./session-recall.ts";
@@ -90,7 +90,7 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 			}
 			if (gate.state.yielded) return undefined; // hermes owns injection
 			const dir = memoryDir(ctx);
-			const { entries, skipped } = scanMemoryDir(dir);
+			const { files, skipped } = scanMemoryDirCached(dir);
 			if (!memoryDirWritable) {
 				notifyOnce(ctx, "memory dir not writable — running policy-only");
 				// policy-only: the index derives from the (unwritable) dir and
@@ -98,7 +98,7 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 				return { systemPrompt: `${event.systemPrompt ?? ""}\n\n${POLICY_COMPACT}` };
 			}
 			const injection = buildPolicyInjection(
-				entries.map((e: MemoryEntry) => ({ ...e })),
+				files.map((f) => ({ ...f.entry })),
 			) + (skipped > 0 ? `\n<!-- memory: ${skipped} file(s) skipped (invalid frontmatter) -->` : "");
 			return { systemPrompt: `${event.systemPrompt ?? ""}\n\n${injection}` };
 		} catch {
@@ -111,33 +111,31 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 			if (gate.state.yielded) return undefined;
 			const dir = memoryDir(ctx);
 			const messages = event.messages ?? [];
-			const lastUser = [...messages].reverse().find((m: { role?: string }) => m.role === "user");
+			// skip injected custom blocks (pi-memory-recall, pi-rules-activate…):
+			// otherwise our own selection could become the next recall prompt
+			const lastUser = [...messages].reverse().find(
+				(m: { role?: string; customType?: string }) => m.role === "user" && !m.customType,
+			);
 			const prompt = extractUserText(lastUser);
 			if (!prompt) return undefined;
 
-			const memories: SelectableMemory[] = scanMemoryDir(dir)
-				.entries.map((entry) => {
-					let body = "";
-					let mtimeMs = 0;
-					try {
-						const path = join(dir, entry.file);
-						body = readFileSync(path, "utf-8");
-						mtimeMs = statSync(path).mtimeMs;
-					} catch {
-						return null;
-					}
-					return { ...entry, body, mtimeMs };
-				})
-				.filter((m): m is SelectableMemory => m !== null);
+			const memories: SelectableMemory[] = scanMemoryDirCached(dir).files.map((f) => ({
+				...f.entry,
+				body: f.body,
+				mtimeMs: f.mtimeMs,
+			}));
 
 			const { files } = selectForTurn(prompt, memories, sessionBytesUsed);
 			if (files.length === 0) return undefined;
 
 			const blocks: string[] = ["<memory-recall>"];
 			for (const file of files) {
-				sessionBytesUsed += file.body.length;
 				const header = freshnessHeader(file.mtimeMs);
-				blocks.push(`## ${file.title} (memory/${file.file})${header ? `\n${header}` : ""}\n\n${file.body.slice(0, 4096)}`);
+				// charge the session budget for the whole rendered block
+				// (title + freshness header + body), in bytes, not just body chars
+				const block = `## ${file.title} (memory/${file.file})${header ? `\n${header}` : ""}\n\n${file.body}`;
+				sessionBytesUsed += byteLength(block);
+				blocks.push(block);
 			}
 			blocks.push("</memory-recall>");
 			const injection = {
@@ -216,7 +214,7 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 			const { entries, skipped } = scanMemoryDir(dir);
 			let indexBytes = 0;
 			try {
-				indexBytes = readFileSync(join(dir, "MEMORY.md"), "utf-8").length;
+				indexBytes = byteLength(readFileSync(join(dir, "MEMORY.md"), "utf-8"));
 			} catch {
 				/* no index */
 			}

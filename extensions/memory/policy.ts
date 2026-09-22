@@ -42,9 +42,10 @@ export function indexEntrypoint(entries: Array<{ title: string; description: str
 	let size = 0;
 	for (const e of entries) {
 		const row = `- [${e.title}](${e.file}) — ${e.description}`;
-		if (size + row.length > MEMORY_INDEX_MAX) break;
+		const rowBytes = Buffer.byteLength(row, "utf8");
+		if (size + rowBytes > MEMORY_INDEX_MAX) break;
 		rows.push(row);
-		size += row.length + 1;
+		size += rowBytes + 1;
 	}
 	if (rows.length === 0) return "Memory index: (empty)";
 	return `# Memory index\n\n${rows.join("\n")}`;

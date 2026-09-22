@@ -16,6 +16,9 @@ import { join } from "node:path";
 import { ruleValueText } from "../../lib/rule-text.js";
 import type { PermissionRule } from "../modes/permissions.ts";
 import { registerRuleFamily, type RuleFamily } from "../modes/rule-families.ts";
+// canonicalizeMcpTool is the single authority on "is this an MCP-shaped
+// tool" (native/proxy/direct+knownServers) — reuse, don't reimplement
+import { canonicalizeMcpTool, directKnownServersFromEnv } from "../mcp-gov/family.ts";
 
 /** CC-style preapproved documentation/reference domains (P4-WB-02). */
 export const BUILTIN_PREAPPROVED = [
@@ -50,9 +53,18 @@ export function loadPreapprovedDomains(home = homedir()): string[] {
 	return BUILTIN_PREAPPROVED;
 }
 
-/** Extract a hostname from URL-ish tool input. */
+/** Exact host or any subdomain of it (`docs.github.com` ⊆ `github.com`). */
+export function isPreapproved(domains: string[], host: string): boolean {
+	return domains.some((d) => host === d || host.endsWith(`.${d}`));
+}
+
+/**
+ * Extract a hostname from URL-ish tool input. Only actual URL fields — a
+ * free-text `query` is a search term, not a fetch target, and must not
+ * drift a search call into host governance.
+ */
 export function extractHost(input: Record<string, unknown>): string | null {
-	for (const key of ["url", "query", "href", "link"]) {
+	for (const key of ["url", "href", "link"]) {
 		const value = input[key];
 		if (typeof value !== "string") continue;
 		const match = /^(?:https?:\/\/)?([a-z0-9.-]+\.[a-z]{2,})/i.exec(value.trim());
@@ -64,10 +76,18 @@ export function extractHost(input: Record<string, unknown>): string | null {
 const URL_TOOL_HINT = /search|crawl|fetch|browse|webfetch|web/i;
 
 export function createWebRuleFamily(home = homedir()): RuleFamily {
+	const knownServers = new Set(directKnownServersFromEnv().map((s) => s.toLowerCase()));
 	const family: RuleFamily = {
 		id: "web",
 		match(toolName, input) {
-			if (!URL_TOOL_HINT.test(toolName)) return null;
+			// proxy shape: the real tool name sits in input.tool
+			const proxyTarget = typeof input?.tool === "string" ? input.tool : "";
+			const effectiveName = toolName === "mcp" && proxyTarget ? proxyTarget : toolName;
+			if (!URL_TOOL_HINT.test(effectiveName)) return null;
+			// P4-WB-01 + FAM-02④: only MCP-shaped tools are governed. A
+			// non-mcp extension tool that merely has a url-ish param must
+			// stay a passthrough, not become a first-seen prompt.
+			if (canonicalizeMcpTool(toolName, input ?? {}, knownServers) === null) return null;
 			// registered BEFORE the mcp family (extensions/index.ts): a
 			// URL-carrying call is governed by its HOST here, taking
 			// precedence over mcp-prefix rules (P4-WB-01); URL-less calls
@@ -86,12 +106,17 @@ export function createWebRuleFamily(home = homedir()): RuleFamily {
 					if (m && m[1].toLowerCase() === host) return behavior;
 				}
 			}
-			// preapproved → allow without any rule (P4-WB-02)
-			if (loadPreapprovedDomains(home).includes(host)) return "allow";
+			// preapproved → allow without any rule (P4-WB-02). Subdomains of a
+			// preapproved root (docs.github.com for github.com) count too.
+			if (isPreapproved(loadPreapprovedDomains(home), host)) return "allow";
 			return "ask";
 		},
 		suggestAllowRule(host) {
 			return `webfetch(domain:${host})`;
+		},
+		matchesRule(rule, canonicalId) {
+			const m = /^webfetch\(domain:(.+)\)$/.exec(ruleValueText(rule));
+			return m !== null && m[1].toLowerCase() === canonicalId;
 		},
 	};
 	registerRuleFamily(family);

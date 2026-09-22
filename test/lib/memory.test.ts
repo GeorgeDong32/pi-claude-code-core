@@ -13,8 +13,9 @@ import { FakeHost, clearCoreGlobals, snapshotCoreGlobals } from "../contracts/fa
 import { resetCoreBusForTests } from "../../extensions/bus.ts";
 import memoryExtension from "../../extensions/memory/index.ts";
 import { scanMemoryDir, reconcileMemoryIndex } from "../../extensions/memory/memdir.ts";
-import { sessionRecall } from "../../extensions/memory/session-recall.ts";
+import { sessionRecall, readLines, READ_CHUNK } from "../../extensions/memory/session-recall.ts";
 import { selectForTurn, tokenize } from "../../extensions/memory/selection.ts";
+import { guardMemoryWrites } from "../../extensions/memory/guard.ts";
 import { importFromClaude, importFromHermes } from "../../extensions/memory/importers.ts";
 import { resolveMemoryPaths } from "../../extensions/memory/paths.ts";
 
@@ -353,5 +354,156 @@ describe("P3-ME-09 resilience", () => {
 		}, ctx);
 
 		expect(result === undefined || typeof result === "object").toBe(true);
+	});
+});
+
+describe("review-2026-09-22-II fixes", () => {
+	it("C1: CJK prompts tokenize into bigrams and recall Chinese memories", () => {
+		const tokens = tokenize("修复登录页面的样式");
+		expect(tokens.has("修复")).toBe(true);
+		expect(tokens.has("登录")).toBe(true);
+		// a differently-phrased Chinese memory still overlaps
+		const hit = selectForTurn("修复登录页面的样式", [
+			{
+				file: "a.md", title: "login-fix", description: "登录页面修复流程", type: "project",
+				body: "修复登录页面时先看 auth 模块的测试", mtimeMs: Date.now(),
+			},
+		], 0);
+		expect(hit.files.map((f) => f.title)).toContain("login-fix");
+		// unrelated Chinese prompt does not recall it
+		const miss = selectForTurn("帮我写一份周报", [
+			{
+				file: "a.md", title: "login-fix", description: "登录页面修复流程", type: "project",
+				body: "修复登录页面时先看 auth 模块的测试", mtimeMs: Date.now(),
+			},
+		], 0);
+		expect(miss.files).toHaveLength(0);
+	});
+
+	it("C7: budgets count bytes, not UTF-16 units (CJK body of 1400 chars = 4200 bytes > 4KB)", () => {
+		const body = "测".repeat(1400); // 1400 chars, 4200 bytes
+		const result = selectForTurn("test overlap token", [
+			{ file: "a.md", title: "test overlap token", description: "", type: "project", body, mtimeMs: Date.now() },
+		], 0);
+		expect(result.files).toHaveLength(0); // oversized by BYTES — skipped
+	});
+
+	it("A4: reconciler cache is keyed per dir and invalidated by deletion", () => {
+		const dirA = join(home, "proj-a-mem");
+		const dirB = join(home, "proj-b-mem");
+		mkdirSync(dirA, { recursive: true });
+		mkdirSync(dirB, { recursive: true });
+		writeFileSync(join(dirA, "a.md"), "---\nname: alpha\ndescription: a\nmetadata:\n  type: project\n---\n\nalpha body");
+		writeFileSync(join(dirB, "b.md"), "---\nname: beta\ndescription: b\nmetadata:\n  type: project\n---\n\nbeta body");
+		const first = reconcileMemoryIndex(dirA);
+		expect(first.entries.map((e) => e.title)).toEqual(["alpha"]);
+		// same-process second dir must NOT receive A's cached entries
+		const second = reconcileMemoryIndex(dirB);
+		expect(second.entries.map((e) => e.title)).toEqual(["beta"]);
+		// deleting a file (no mtime bump anywhere) must drop the dead row
+		rmSync(join(dirA, "a.md"));
+		const third = reconcileMemoryIndex(dirA);
+		expect(third.entries.map((e) => e.title)).toEqual([]);
+	});
+
+	it("C2: guard blocks unquoted and base64-padded key=value secrets", () => {
+		const dir = memoryDir();
+		mkdirSync(dir, { recursive: true });
+		const unquoted = guardMemoryWrites("write", {
+			path: join(dir, "m1.md"),
+			content: "token = abcdefghijklmnopqrst",
+		}, dir);
+		expect(unquoted.block).toBe(true);
+		const padded = guardMemoryWrites("write", {
+			path: join(dir, "m2.md"),
+			content: 'api_key: "cGFzc3dvcmQxMjM0NQ=="',
+		}, dir);
+		expect(padded.block).toBe(true);
+	});
+
+	it("C8: readLines never splits a multibyte char at the chunk boundary", () => {
+		const file = join(home, "big-boundary.jsonl");
+		// fill so the 256KiB boundary falls INSIDE the 测 character (3 bytes)
+		const prefix = "x".repeat(READ_CHUNK - 2);
+		const line = `{"text":"${prefix}测 tail"}`;
+		writeFileSync(file, line + "\n");
+		const out = [...readLines(file)];
+		expect(out).toHaveLength(1);
+		expect(out[0].line).toContain("测 tail");
+		expect(out[0].line.includes("\uFFFD")).toBe(false);
+	});
+
+	it("C11: re-import keeps locally edited files (never clobbers)", () => {
+		const source = join(home, "claude-src");
+		mkdirSync(source, { recursive: true });
+		writeFileSync(join(source, "note.md"), "---\nname: note\ndescription: d\n---\n\noriginal");
+		const dir = memoryDir();
+		mkdirSync(dir, { recursive: true }); // importers assume the target dir exists
+		const first = importFromClaude(source, dir);
+		expect(first.copied).toBe(1);
+		// local edit after import
+		writeFileSync(join(dir, "note.md"), "---\nname: note\ndescription: d\n---\n\nlocally edited");
+		const second = importFromClaude(source, dir);
+		expect(second.copied).toBe(0);
+		expect(second.notes.join(" ")).toContain("kept local");
+		expect(readFileSync(join(dir, "note.md"), "utf-8")).toContain("locally edited");
+	});
+
+	it("S4: memory channel is visible via readCoreStatus after yield flips", async () => {
+		const host = setup();
+		const ctx = host.makeCtx({ cwd: project, ui: true });
+		await host.fire("session_start", {}, ctx);
+		const { readCoreStatus } = await import("../../types/core-status.mjs");
+		let snap = readCoreStatus(globalThis);
+		expect(snap.memory?.yielded).toBe(false);
+		// dynamic probe: a hermes <memory-policy marker in the system prompt flips the gate
+		const beforeAgent = host.handlers.get("before_agent_start")?.[0] as (e: unknown, c: unknown) => Promise<unknown>;
+		await beforeAgent({ systemPrompt: "<memory-policy>\nhermes is here\n</memory-policy>" }, ctx);
+		snap = readCoreStatus(globalThis);
+		expect(snap.memory?.yielded).toBe(true);
+		expect(snap.memory?.dir).toBe(memoryDir());
+	});
+});
+
+describe("adversarial-audit fixes (2026-09-22)", () => {
+	it("C8b: 4-byte emoji at the chunk boundary decodes intact", () => {
+		const file = join(home, "emoji-boundary.jsonl");
+		// fill so the 256KiB boundary falls exactly at the START of a
+		// 4-byte emoji sequence (F0 9F 98 80) — the audit case that broke
+		const prefix = "x".repeat(READ_CHUNK - 4);
+		const line = `{"text":"${prefix}😀 tail"}`;
+		writeFileSync(file, line + "\n");
+		const out = [...readLines(file)];
+		expect(out).toHaveLength(1);
+		expect(out[0].line).toContain("😀 tail");
+		expect(out[0].line.includes("\uFFFD")).toBe(false);
+	});
+
+	it("C11b: hermes re-import never clobbers a corrupted local file", () => {
+		const store = join(home, "hermes-store.md");
+		writeFileSync(store, "§ Deploy flow\nkeep this local text\n");
+		const dir = memoryDir();
+		mkdirSync(dir, { recursive: true });
+		expect(importFromHermes(store, dir).copied).toBe(1);
+		// corrupt the local copy's frontmatter (invisible to scanMemoryDir)
+		writeFileSync(join(dir, "hermes-deploy-flow.md"), "not valid frontmatter at all");
+		const second = importFromHermes(store, dir);
+		expect(second.copied).toBe(0);
+		expect(readFileSync(join(dir, "hermes-deploy-flow.md"), "utf-8")).toBe("not valid frontmatter at all");
+	});
+
+	it("C1b: function-word bigrams alone do not satisfy the overlap threshold", () => {
+		const tokens = tokenize("我们需要整理一个计划");
+		// the two bigrams that fired the audit's false-positive case are
+		// stopwords now; the query must not recall an unrelated memory
+		expect(tokens.has("我们")).toBe(false);
+		expect(tokens.has("一个")).toBe(false);
+		const miss = selectForTurn("我们需要整理一个计划", [
+			{
+				file: "a.md", title: "team-news", description: "我们团队的一个新项目", type: "project",
+				body: "我们团队的一个新项目开始了", mtimeMs: Date.now(),
+			},
+		], 0);
+		expect(miss.files).toHaveLength(0);
 	});
 });

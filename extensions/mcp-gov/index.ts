@@ -11,17 +11,13 @@ import { loadMergedPermissionRules } from "../modes/permissions-loader.ts";
 import { ruleMatchesId, ruleValueText } from "../../lib/rule-text.js";
 import { getAdjudication, hasSessionGrant, isBypassActive } from "../modes/rule-families.ts";
 import { createBrokerMirror, probeMcpAdapterPort, type McpEventPort } from "./broker.ts";
-import { createMcpRuleFamily } from "./family.ts";
+import { createMcpRuleFamily, directKnownServersFromEnv } from "./family.ts";
 import { renderMcpPanel } from "./panel.ts";
 
 export default function mcpGovExtension(pi: ExtensionAPI): void {
 	// direct tool naming (exa_search) only claims when the server id is on
 	// this list — configure via env, e.g. PI_CORE_MCP_DIRECT_SERVERS=exa,github
-	const knownServers = (process.env.PI_CORE_MCP_DIRECT_SERVERS ?? "")
-		.split(",")
-		.map((s) => s.trim())
-		.filter(Boolean);
-	createMcpRuleFamily({ knownServers });
+	createMcpRuleFamily({ knownServers: directKnownServersFromEnv() });
 
 	let mirror = createBrokerMirror({ present: false } as McpEventPort, {
 		getAdjudication: () => undefined,
@@ -31,8 +27,14 @@ export default function mcpGovExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_start", async (_event, ctx: ExtensionContext) => {
+		// stop the previous session's mirror FIRST (even before the probe —
+		// a throwing probe must not leave the old subscription alive)
+		mirror.stop();
 		try {
 			const port = await probeMcpAdapterPort();
+			// overwriting the reference without stop() leaks its subscription
+			// (duplicate handlers → double deny counting) on multi-session
+			// processes
 			mirror = createBrokerMirror(port, {
 				// live rule view over the same merged rules the gate used
 				hasAllowRule: (canonicalId) =>
@@ -47,6 +49,10 @@ export default function mcpGovExtension(pi: ExtensionAPI): void {
 		}
 	});
 
+	pi.on("session_shutdown", async () => {
+		mirror.stop();
+	});
+
 	pi.registerCommand("core", {
 		description: "Core status panel: MCP governance section",
 		handler: async (_args, ctx) => {
@@ -56,7 +62,7 @@ export default function mcpGovExtension(pi: ExtensionAPI): void {
 			const ruleSummary = (["allow", "deny", "ask"] as const).map((behavior) => {
 				const rows = rules
 					.filter((r) => r.behavior === behavior)
-					.map((r) => (typeof r.ruleValue === "string" ? r.ruleValue : ""));
+					.map((r) => ruleValueText(r));
 				return rows.length > 0 ? `${behavior}: ${rows.join(", ")}` : `${behavior}: (none)`;
 			});
 			const section = renderMcpPanel({ port, ruleSummary, denyCount: mirror.denyCount() });

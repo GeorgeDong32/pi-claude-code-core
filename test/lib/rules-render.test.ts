@@ -253,3 +253,24 @@ describe("P3-RU-02 glob matching helper", () => {
 		expect(globToRegExp("src/*.ts").test("/proj/src/a/b.ts")).toBe(false);
 	});
 });
+
+describe("adversarial-audit fix: tiny blocks under a small budget", () => {
+	it("C13ab: all-too-small blocks still respect the budget (drop whole, never exceed)", () => {
+		const files = new Map<string, string>();
+		for (let i = 0; i < 30; i++) {
+			files.set(`/rules/r${i}.md`, `---\nname: r${i}\n---\n${"y".repeat(40)}`);
+		}
+		const fs = {
+			listMarkdownFiles: (dir: string) => [...files.keys()].filter((f) => f.startsWith(dir)).map((f) => f.slice(dir.length + 1)).sort(),
+			readFile: (path: string) => files.get(path) ?? "",
+		};
+		const { output } = renderRules({
+			dirs: [{ scope: "global", path: "/rules" }],
+			cwd: "/w",
+			projectTrusted: true,
+			budgetChars: 300,
+			fs,
+		});
+		expect(output.length).toBeLessThanOrEqual(300);
+	});
+});

@@ -2,6 +2,25 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## 二轮深审修复批(2026-09-22,REVIEW-II)
+
+**状态:实现完成 + 对抗审计通过(红队 3 subagent:真实性轴全绿,回归轴 4 残留已修),三命令全绿,已待 commit。**
+
+来源:code-review skill 双轴全量深审(4 并行子代理 + 关键发现亲验)。处置面:Spec 轴 4 应修全修 + Standards 轴 11 应修全修 + 实质性建议项;台账 #48-#61 连号(DEVIATIONS)。分组:
+
+| 组 | 内容 |
+|---|---|
+| Spec 语义 | S1 effort 兜底翻转(§3.3 兑现,resolveEffortForMode 无显式→undefined,modes 守卫成真,2 用例红绿翻转);S2 settings/model-id 收敛补完(P0-LB-04「P2 收尾全收敛」兑现;PLAN §1.4「×2 份」表述失实记录);S4 memory 通道 readCoreStatus 断言补真(#47b② 闭案);S5 特异度分层(精确>server 前缀>裸 mcp_*);S6/C5 RuleFamily.matchesRule+familyRuleMentions(web ask 走全弹窗、deny 展示真实规则+source);S3 web 认领限定 mcp 形态;S7 flag pin 提示;S11 defaults 文案 |
+| memory 核心 | C1 CJK bigram 分词(中文 lexical 注入从不可用变可用,最重发现);C7 字节口径统一(byteLength 全面);A4 缓存键控+namesKey 失效;A5 scanMemoryDirCached 指纹缓存+git root memo(每 turn 3 遍全文读→零内容读) |
+| memory 其余 | C2 secret regex(无引号/base64 padding);C8 readLines UTF-8 边界 withhold;C10 customType 过滤;C11 导入不覆写本地编辑;C9 query 移除+子域名预批准;C13b reset 文案 |
+| mcp/web-gov | C3 broker 复用 canonicalize(native 前缀不再误拼);C4 mirror 防重入+shutdown 清理;A3 面板 ruleValueText;A7 ALL_LEVELS 加 max;C6 appliesNow 口径(fake-host 防御) |
+| lib/rules 小项 | rule-text 去反向依赖(structural 内联);readJson onInvalid throw 传播;A8 steerRule 提取;A9 死参数+globalHome env 默认;C13a 降级净增守卫;review-run/paths 死代码清理(#46 闭案) |
+
+- **测试**:vitest **574**(558 + 深审新增 12 + 对抗审计新增 4)+ node--test **312**(72+75+165,断言零改动)+ 契约 **17**;`bun run check` exit 0。
+- **对抗审计批(#62)**:红队抓出 4 项修复残留并修毕——C8b(4 字节 emoji 边界,回扫上限 3→4)、C11b(hermes invalid 本地文件覆写,existsSync 化)、C13ab(小预算 break 出口超预算,整块丢弃最小块)、C1b(虚词 bigram 停用词 + bigram 分支补过滤);顺手:broker probe 前 stop、globalHome 惰性。挂账疑点 5 项记录于 #62。
+- **用例翻转(行为变更,均 spec 背书)**:profiles「defaults to medium」→「returns undefined」;index.test 两处 applyProfileModelForMode 断言 medium→off;p4 webfetch 认领→null、extractHost query→null。
+- **挂账(#61)**:rule-families 四职责拆分、yield 标记 systemPrompt 语义真机验证、空 diff 守卫顺序、C6 无独立单测。
+
 ## REVIEW-2026-09-22 修复批(codebase-design 规划)
 
 **状态:处置完毕,复查通过(2026-09-22,一轮有条件 PASS + 补修),已 commit。**

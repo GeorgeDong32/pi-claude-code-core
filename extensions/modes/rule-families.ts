@@ -14,7 +14,6 @@
  * forwarded approvals land here too (via noteAdjudicated).
  */
 
-import { ruleMatchesId, ruleValueText } from "../../lib/rule-text.js";
 import type { PermissionBehavior, PermissionRule } from "./permissions.ts";
 
 export type FamilyVerdict = "deny" | "allow" | "ask";
@@ -28,6 +27,12 @@ export interface RuleFamily {
 	resolve(canonicalId: string, rules: PermissionRule[]): FamilyVerdict;
 	/** Suggested persistent rule ("Allow always"), e.g. `mcp_exa_*`. */
 	suggestAllowRule(canonicalId: string): string;
+	/**
+	 * Does this rule text govern the canonicalId? Families know their own
+	 * rule grammar (`mcp_exa_*` prefixes vs `webfetch(domain:host)`) — the
+	 * generic exact/trailing-* match in lib/rule-text only covers mcp.
+	 */
+	matchesRule(rule: PermissionRule, canonicalId: string): boolean;
 }
 
 const families: RuleFamily[] = [];
@@ -72,16 +77,19 @@ export function familyVerdictFor(
 	return { match, verdict: match.family.resolve(match.canonicalId, rules) };
 }
 
-/** Does any rule string reference this canonicalId (exact or trailing-*)? */
-export function ruleMentions(rules: PermissionRule[], canonicalId: string, behavior: PermissionBehavior): PermissionRule | undefined {
-	return rules.find((r) => {
-		if (r.behavior !== behavior) return false;
-		return ruleMatchesId(permissionRuleText(r), canonicalId);
-	});
-}
-
-function permissionRuleText(rule: PermissionRule): string {
-	return ruleValueText(rule);
+/**
+ * First rule of `behavior` whose text governs the canonicalId, per the
+ * family's own rule grammar — used for honest deny display and to route
+ * explicit ask rules to the full permission dialog instead of the
+ * first-seen prompt.
+ */
+export function familyRuleMentions(
+	rules: PermissionRule[],
+	family: RuleFamily,
+	canonicalId: string,
+	behavior: PermissionBehavior,
+): PermissionRule | undefined {
+	return rules.find((r) => r.behavior === behavior && family.matchesRule(r, canonicalId));
 }
 
 // ---- bypass indicator (P4-MC-03 mirror's 2nd allow branch) ----------------

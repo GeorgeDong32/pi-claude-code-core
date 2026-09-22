@@ -6,7 +6,7 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { parseMemoryFrontmatter, scanMemoryDir, reconcileMemoryIndex } from "./memdir.js";
+import { reconcileMemoryIndex } from "./memdir.js";
 
 export interface ImportReport {
 	copied: number;
@@ -40,11 +40,13 @@ export function importFromClaude(projectMemoryDir: string, targetDir: string): I
 		// file is copied as-is either way
 		const target = join(targetDir, file);
 		if (existsSync(target)) {
-			// idempotent: same file present → skip
-			if (readFileSync(target, "utf-8") === content) {
-				report.skipped++;
-				continue;
+			// idempotent for identical content; local edits win — a re-import
+			// must never silently clobber what the user changed since
+			if (readFileSync(target, "utf-8") !== content) {
+				report.notes.push(`${file}: kept local (differs from source; delete to re-import)`);
 			}
+			report.skipped++;
+			continue;
 		}
 		writeFileSync(target, content, "utf-8");
 		report.copied++;
@@ -66,7 +68,6 @@ export function importFromHermes(hermesFile: string, targetDir: string): ImportR
 	}
 	const raw = readFileSync(hermesFile, "utf-8");
 	const sections = raw.split(/^§ /m).map((s) => s.trim()).filter(Boolean);
-	const existing = new Set(scanMemoryDir(targetDir).entries.map((e: { file: string }) => e.file));
 
 	for (const section of sections) {
 		const lines = section.split("\n");
@@ -84,14 +85,19 @@ export function importFromHermes(hermesFile: string, targetDir: string): ImportR
 				: "reference";
 		const fileName = `hermes-${title}.md`;
 		const frontmatter = `---\nname: ${title}\ndescription: ${lines[0].replace(/^#+\s*/, "").trim().slice(0, 80)}\nmetadata:\n  type: ${type}\n---\n\n${body}\n`;
-		if (existing.has(fileName)) {
-			const current = readFileSync(join(targetDir, fileName), "utf-8");
-			if (current === frontmatter) {
-				report.skipped++;
-				continue;
+		const target = join(targetDir, fileName);
+		// filesystem-level existence: a locally corrupted file (invalid
+		// frontmatter → invisible to scanMemoryDir) must still never be
+		// silently clobbered by a re-import
+		if (existsSync(target)) {
+			// identical → idempotent skip; diverged → local edits win
+			if (readFileSync(target, "utf-8") !== frontmatter) {
+				report.notes.push(`${fileName}: kept local (differs from source; delete to re-import)`);
 			}
+			report.skipped++;
+			continue;
 		}
-		writeFileSync(join(targetDir, fileName), frontmatter, "utf-8");
+		writeFileSync(target, frontmatter, "utf-8");
 		report.copied++;
 	}
 	reconcileMemoryIndex(targetDir);

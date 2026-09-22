@@ -30,8 +30,9 @@ import {
 	type RuleFamily,
 } from "../../extensions/modes/rule-families.ts";
 import type { PermissionRule } from "../../extensions/modes/permissions.ts";
-import { createWebRuleFamily, extractHost, loadPreapprovedDomains, BUILTIN_PREAPPROVED } from "../../extensions/web-gov/index.ts";
-import { createBrokerMirror } from "../../extensions/mcp-gov/broker.ts";
+import { evaluateToolPermission } from "../../extensions/modes/permissions.ts";
+import { createWebRuleFamily, extractHost, loadPreapprovedDomains, isPreapproved, BUILTIN_PREAPPROVED } from "../../extensions/web-gov/index.ts";
+import { createBrokerMirror, canonicalIdForEvent } from "../../extensions/mcp-gov/broker.ts";
 import { renderMcpPanel } from "../../extensions/mcp-gov/panel.ts";
 import { setConfigPath } from "../../extensions/modes/config.ts";
 import { setModelsPath } from "../../extensions/modes/profiles.ts";
@@ -78,15 +79,19 @@ describe("P4-MC-01 canonicalize + resolve", () => {
 });
 
 describe("P4-WB web family", () => {
-	it("extracts hosts and claims URL-carrying search/fetch tools", () => {
+	it("extracts hosts from URL fields only; a query is a search term, not a URL", () => {
 		expect(extractHost({ url: "https://github.com/a/b" })).toBe("github.com");
-		expect(extractHost({ query: "example.com/docs" })).toBe("example.com");
+		// free-text query must NOT become host governance (review C9)
+		expect(extractHost({ query: "example.com/docs" })).toBeNull();
 		expect(extractHost({ url: 42 })).toBeNull();
 	});
 
 	it("preapproved domains allow without rules; rules override; suggest form", () => {
 		const family: RuleFamily = createWebRuleFamily("/nonexistent-home");
-		expect(family.match("webfetch", { url: "https://developer.mozilla.org/" })).toBe("developer.mozilla.org");
+		expect(family.match("mcp_exa_crawl", { url: "https://developer.mozilla.org/" })).toBe("developer.mozilla.org");
+		// S3: a non-mcp tool that merely has a url param stays unclaimed
+		// (P4-FAM-02④ passthrough invariant)
+		expect(family.match("webfetch", { url: "https://developer.mozilla.org/" })).toBeNull();
 		expect(family.resolve("developer.mozilla.org", [])).toBe("allow");
 		expect(family.resolve("evil.example", [])).toBe("ask");
 		expect(family.resolve("evil.example", [rule("deny", "webfetch(domain:evil.example)")])).toBe("deny");
@@ -339,5 +344,95 @@ describe("P4-FAM-05 session grants lifecycle + visibility", () => {
 
 		await host.commands.get("permissions-clear-grants")?.("", ctx);
 		expect(hasSessionGrant("mcp_exa_search")).toBe(false);
+	});
+});
+
+describe("review-2026-09-22-II fixes", () => {
+	it("S5: rule specificity — exact name beats broader prefixes across behaviors", () => {
+		// exact allow beats bare mcp_* deny
+		expect(
+			resolveMcpVerdict("mcp_exa_search", [
+				rule("deny", "mcp_*"),
+				rule("allow", "mcp_exa_search"),
+			]),
+		).toBe("allow");
+		// server-prefix deny beats bare mcp_* allow
+		expect(
+			resolveMcpVerdict("mcp_exa_search", [
+				rule("allow", "mcp_*"),
+				rule("deny", "mcp_exa_*"),
+			]),
+		).toBe("deny");
+		// same tier keeps deny > ask > allow (P4 B1)
+		expect(
+			resolveMcpVerdict("mcp_exa_search", [
+				rule("allow", "mcp_exa_*"),
+				rule("ask", "mcp_exa_*"),
+			]),
+		).toBe("ask");
+	});
+
+	it("C3: canonicalIdForEvent reuses canonicalize (native-prefixed tool names)", () => {
+		expect(canonicalIdForEvent({ server: "exa", tool: "mcp__exa__search" })).toBe("mcp_exa_search");
+		expect(canonicalIdForEvent({ server: "exa", tool: "search" })).toBe("mcp_exa_search");
+		expect(canonicalIdForEvent({ tool: "mcp_exa_search" })).toBe("mcp_exa_search");
+		expect(canonicalIdForEvent({})).toBe("mcp_unknown");
+	});
+
+	it("C4: mirror.stop() releases the subscription — no accumulation across sessions", () => {
+		let subscriptions = 0;
+		let decider: ((e: { server?: string; tool?: string }) => "allow_once" | "deny") | undefined;
+		const port = {
+			present: true,
+			onApprovalRequest(handler: (e: { server?: string; tool?: string }) => "allow_once" | "deny") {
+				subscriptions++;
+				decider = handler;
+				return () => {
+					subscriptions--;
+				};
+			},
+		};
+		const mirror = createBrokerMirror(port, {
+			getAdjudication: () => undefined,
+			bypassActive: () => false,
+			hasAllowRule: () => false,
+			hasSessionGrant: () => false,
+		});
+		mirror.start();
+		mirror.start(); // double start replaces nothing — still one subscription
+		expect(subscriptions).toBe(1);
+		mirror.stop();
+		expect(subscriptions).toBe(0);
+		mirror.stop(); // idempotent
+		expect(subscriptions).toBe(0);
+		mirror.start();
+		expect(subscriptions).toBe(1);
+		expect(decider).toBeTypeOf("function");
+	});
+
+	it("C9: preapproved domains cover subdomains, not prefix lookalikes", () => {
+		expect(isPreapproved(["github.com"], "docs.github.com")).toBe(true);
+		expect(isPreapproved(["github.com"], "github.com")).toBe(true);
+		expect(isPreapproved(["github.com"], "github.com.evil.example")).toBe(false);
+		expect(isPreapproved(["github.com"], "notgithub.com")).toBe(false);
+	});
+});
+
+describe("review fix C5: family deny shows the real rule", () => {
+	it("deny verdict carries the matched deny rule text and source, not the allow suggestion", () => {
+		clearRuleFamilies();
+		createMcpRuleFamily();
+		const verdict = evaluateToolPermission(
+			"mcp_exa_search",
+			{},
+			"/tmp",
+			[{ behavior: "deny", ruleValue: "mcp_exa_*", source: "project" } as never],
+		);
+		expect(verdict.behavior).toBe("deny");
+		if (verdict.behavior === "deny") {
+			expect(verdict.rule).toBe("mcp_exa_*"); // the deny rule, not a suggested allow
+			expect(verdict.source).toBe("project");
+		}
+		clearRuleFamilies();
 	});
 });

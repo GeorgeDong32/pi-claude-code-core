@@ -49,16 +49,48 @@ function ruleMatchesCanonicalId(ruleText: string, canonicalId: string): boolean 
 	return ruleMatchesId(ruleText, canonicalId);
 }
 
+/**
+ * Direct-naming server allowlist from env (DEVIATIONS #47④):
+ * `PI_CORE_MCP_DIRECT_SERVERS=exa,github`. Shared by the mcp and web
+ * families so both claim direct-shaped tools with the same boundary.
+ */
+export function directKnownServersFromEnv(): string[] {
+	return (process.env.PI_CORE_MCP_DIRECT_SERVERS ?? "")
+		.split(",")
+		.map((s) => s.trim())
+		.filter(Boolean);
+}
+
+/**
+ * How specifically a rule text governs the canonicalId (P4-MC-01):
+ * 3 = exact name, 2 = `mcp_<server>_*` prefix, 1 = bare `mcp_*`,
+ * 0 = no match. A more specific rule beats a broader one across
+ * behaviors (deny `mcp_*` + allow `mcp_exa_search` → allow).
+ */
+function matchTier(ruleText: string, canonicalId: string): number {
+	if (ruleText === canonicalId) return 3;
+	if (ruleText.endsWith("*") && canonicalId.startsWith(ruleText.slice(0, -1))) {
+		return ruleText.slice(0, -1).length > "mcp_".length ? 2 : 1;
+	}
+	return 0;
+}
+
+const BEHAVIOR_ORDER = { deny: 0, ask: 1, allow: 2 } as const;
+
 export function resolveMcpVerdict(canonicalId: string, rules: PermissionRule[]): "deny" | "allow" | "ask" {
-	// deny > ask > allow — the pm engine's existing sweep order (spec P4-MC-01);
-	// an explicit ask must not be silently swallowed by a broader allow prefix
-	for (const behavior of ["deny", "ask", "allow"] as const) {
-		for (const rule of rules) {
-			if (rule.behavior !== behavior) continue;
-			if (ruleMatchesCanonicalId(ruleValueText(rule), canonicalId)) return behavior;
+	// specificity first (exact > server-prefix > bare mcp_*), then
+	// deny > ask > allow within a tier (spec P4-MC-01; an explicit ask must
+	// not be silently swallowed by a broader allow prefix)
+	let best: { tier: number; behavior: "deny" | "ask" | "allow" } | null = null;
+	for (const rule of rules) {
+		if (rule.behavior !== "deny" && rule.behavior !== "ask" && rule.behavior !== "allow") continue;
+		const tier = matchTier(ruleValueText(rule), canonicalId);
+		if (tier === 0) continue;
+		if (!best || tier > best.tier || (tier === best.tier && BEHAVIOR_ORDER[rule.behavior] < BEHAVIOR_ORDER[best.behavior])) {
+			best = { tier, behavior: rule.behavior };
 		}
 	}
-	return "ask";
+	return best?.behavior ?? "ask";
 }
 
 /** Create and register the family. Returns it for tests. */
@@ -76,6 +108,9 @@ export function createMcpRuleFamily(options?: { knownServers?: string[] }): Rule
 			// mcp_exa_search → mcp_exa_* (server-wide allow; P4-MC-02)
 			const m = /^mcp_([A-Za-z0-9_-]+)_/.exec(canonicalId);
 			return m ? `mcp_${m[1]}_*` : canonicalId;
+		},
+		matchesRule(rule, canonicalId) {
+			return ruleMatchesCanonicalId(ruleValueText(rule), canonicalId);
 		},
 	};
 	registerRuleFamily(family);

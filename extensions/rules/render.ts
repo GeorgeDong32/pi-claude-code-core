@@ -172,10 +172,14 @@ export function collectRules(input: RenderRulesInput): { rules: RenderedRule[]; 
 function homeDir(): string {
 	// deterministic per process; tests substitute via HOME-independent fakes
 	// where needed by passing absolute paths
+	if (globalHome === null) globalHome = process.env.HOME ?? "";
 	return globalHome;
 }
 
-let globalHome = "";
+// `@~/` resolution home. Initialized LAZILY (first use) from the environment
+// — a static initializer would capture HOME before test overrides land; the
+// wiring's explicit setRulesHome(homedir()) still wins when called.
+let globalHome: string | null = null;
 
 /** Set the home dir used to resolve `@~/` includes (wiring calls once). */
 export function setRulesHome(home: string): void {
@@ -281,7 +285,12 @@ export function renderRules(input: RenderRulesInput): RenderResult {
 	// index section (with its own header) + the trailing skip note. When the
 	// budget binds, conditional fold-ins degrade to index rows FIRST
 	// (P3-RU-04: 条件规则先降为索引行), then the largest always blocks, then
-	// index rows drop whole from the tail — never mid-content.
+	// index rows drop whole from the tail — never mid-content. A block that
+	// is SMALLER than its degrade row is never degraded (that would grow the
+	// output); the tail-drop path handles that end of the spectrum.
+	const degradeRow = (name: string) =>
+		`- ${name} — content trimmed for budget; read the rules directory on demand`;
+	const worthDegrading = (b: InlineBlock) => b.text.length > degradeRow(b.name).length + 1;
 	const overBudget = () =>
 		inlineLen() +
 			indexLen() +
@@ -293,20 +302,34 @@ export function renderRules(input: RenderRulesInput): RenderResult {
 			Math.max(0, indexRows.length - 1) >
 		budget;
 	while (overBudget()) {
-		const conditionalIdx = inlineBlocks.findIndex((b) => b.conditional);
+		const conditionalIdx = inlineBlocks.findIndex((b) => b.conditional && worthDegrading(b));
 		if (conditionalIdx !== -1) {
 			const block = inlineBlocks.splice(conditionalIdx, 1)[0];
-			indexRows.unshift(`- ${block.name} — content trimmed for budget; read the rules directory on demand`);
-		} else if (inlineBlocks.length > 0) {
-			let biggest = 0;
-			for (let i = 1; i < inlineBlocks.length; i++) {
-				if (inlineBlocks[i].text.length > inlineBlocks[biggest].text.length) biggest = i;
+			indexRows.unshift(degradeRow(block.name));
+		} else {
+			let biggest = -1;
+			for (let i = 0; i < inlineBlocks.length; i++) {
+				const b = inlineBlocks[i];
+				if (b.conditional || !worthDegrading(b)) continue;
+				if (biggest === -1 || b.text.length > inlineBlocks[biggest].text.length) biggest = i;
 			}
-			const block = inlineBlocks.splice(biggest, 1)[0];
-			indexRows.unshift(`- ${block.name} — content trimmed for budget; read the rules directory on demand`);
-		} else if (indexRows.length > 0) {
-			indexRows.pop();
-		} else break;
+			if (biggest !== -1) {
+				const block = inlineBlocks.splice(biggest, 1)[0];
+				indexRows.unshift(degradeRow(block.name));
+			} else if (inlineBlocks.length > 0) {
+				// every remaining block is smaller than its degrade row —
+				// degrading would GROW the output. The budget guard still
+				// outranks inline preference: drop the smallest block whole
+				// (never truncate mid-content) with no index replacement.
+				let smallest = 0;
+				for (let i = 1; i < inlineBlocks.length; i++) {
+					if (inlineBlocks[i].text.length < inlineBlocks[smallest].text.length) smallest = i;
+				}
+				inlineBlocks.splice(smallest, 1);
+			} else if (indexRows.length > 0) {
+				indexRows.pop();
+			} else break;
+		}
 	}
 
 	const parts: string[] = [HEADER];

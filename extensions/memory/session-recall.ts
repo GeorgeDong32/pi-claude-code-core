@@ -37,7 +37,25 @@ export interface RecallResult {
 	skippedLines: number;
 }
 
-const READ_CHUNK = 256 * 1024;
+export const READ_CHUNK = 256 * 1024;
+
+/** Withhold a trailing incomplete UTF-8 sequence so a chunk boundary can
+ * never split a multi-byte char into replacement characters. The scan may
+ * look back 4 bytes: a 4-byte sequence (emoji) whose lead sits exactly at
+ * bytes-4 must be seen whole or withheld whole — capping at 3 stranded it. */
+function utf8SafeEnd(buf: Buffer, bytes: number): number {
+	let back = 0;
+	while (back < 4 && back < bytes) {
+		const b = buf[bytes - 1 - back];
+		if (b < 0x80) break; // ascii: everything before it is complete
+		if (b >= 0xc0) {
+			back++; // lead byte: its sequence does not fit in this chunk
+			break;
+		}
+		back++; // continuation byte
+	}
+	return bytes - back;
+}
 
 /** Stream a file line by line without loading it whole. */
 export function* readLines(path: string): Generator<{ line: string; number: number }> {
@@ -57,8 +75,18 @@ export function* readLines(path: string): Generator<{ line: string; number: numb
 			const toRead = Math.min(READ_CHUNK, size - position);
 			const bytes = readSync(fd, chunk, 0, toRead, position);
 			if (bytes <= 0) break;
-			position += bytes;
-			buffer += chunk.toString("utf-8", 0, bytes);
+			const valid = utf8SafeEnd(chunk, bytes);
+			if (valid > 0) {
+				buffer += chunk.toString("utf-8", 0, valid);
+				// advance only past the decoded bytes — the withheld tail is
+				// re-read at the head of the next round and completes there
+				position += valid;
+			} else {
+				// truncated sequence shorter than itself (malformed file
+				// tail): decode as replacement chars and move on
+				buffer += chunk.toString("utf-8", 0, bytes);
+				position += bytes;
+			}
 			let idx: number;
 			while ((idx = buffer.indexOf("\n")) !== -1) {
 				const line = buffer.slice(0, idx);
