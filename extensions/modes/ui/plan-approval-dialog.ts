@@ -2,7 +2,7 @@ import {
   type ExtensionContext,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
-import { showComponentOverlay } from "../../lib/overlay.js";
+import { showComponentOverlay } from "../../../lib/overlay.js";
 import {
   getKeybindings,
   Key,

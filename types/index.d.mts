@@ -25,6 +25,8 @@ export interface CoreSnapshot {
 	effort: { level: string | null; source: "env" | "session" | "profile" | "model-default" };
 	goal: { active: boolean; paused?: boolean; summary: string | null };
 	review: { status: "idle" | "running" | "done"; lastRunAt: number | null };
+	/** DC3: bounded notification tail queue (monotonic ids, newest last, cap 20). */
+	notifications?: ReadonlyArray<{ id: number; level: "info" | "warning" | "error"; msg: string }>;
 	display?: { footer?: readonly string[] };
 	contextBudget?: { rulesMax: number; memoryIndexMax: number; dynamicSteerMax: number };
 	memory?: { yielded: boolean; dir?: string };
@@ -51,6 +53,8 @@ export interface CoreStatus {
 	effort: { level: string | null; source: string };
 	goal: { active: boolean; paused?: boolean; summary: string | null };
 	review: { status: string; lastRunAt: number | null };
+	/** DC3: bounded notification tail queue (monotonic ids, newest last, cap 20). */
+	notifications?: ReadonlyArray<{ id: number; level: "info" | "warning" | "error"; msg: string }>;
 	display?: { footer?: readonly string[] };
 	contextBudget?: { rulesMax: number; memoryIndexMax: number; dynamicSteerMax: number };
 	memory?: { yielded: boolean; dir?: string };

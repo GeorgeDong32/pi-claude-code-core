@@ -17,6 +17,11 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui"
+import { MODE_META, modeMetaData } from "./ui/meta.ts";
+import { clearModesStatus, installModesFooter, shortenPath } from "./ui/footer.ts";
+import { clearPlanWidget, updatePlanWidget as updatePlanWidgetUi } from "./ui/plan-widget.ts";
+import { confirmChoice } from "./ui/confirm.ts";
+import { notify as uiNotify } from "../ui/notify.ts";
 import { coreBus } from "../bus.ts"
 import { isInsideDir } from "../../lib/rule-text.js"
 import { resolveMemoryPaths } from "../memory/paths.ts"
@@ -118,7 +123,7 @@ import {
 } from "./utils.ts";
 import {
   runPlanApprovalDialog,
-} from "./plan-approval-dialog.ts";
+} from "./ui/plan-approval-dialog.ts";
 import {
   createForwardingPoller,
   defaultAgentDir,
@@ -163,22 +168,6 @@ const PROFILE_EFFORT_LEVELS = new Set([
 
 const MODE_CYCLE: Mode[] = ["ask", "plan", "auto", "bypass"];
 
-const MODE_META: Record<Mode, { icon: string; label: string; role: string }> = {
-  ask: { icon: "●", label: "Ask", role: "muted" },
-  plan: { icon: "⏸", label: "Plan", role: "accent" },
-  auto: { icon: "▶", label: "Auto", role: "warning" },
-  bypass: { icon: "⚡", label: "Bypass", role: "error" },
-};
-
-/** DC1: fresh copy for the bus snapshot — deepFreeze must not capture the module constant. */
-function modeMetaData(): Record<Mode, { icon: string; label: string; role: string }> {
-  return {
-    ask: { ...MODE_META.ask! },
-    plan: { ...MODE_META.plan! },
-    auto: { ...MODE_META.auto! },
-    bypass: { ...MODE_META.bypass! },
-  };
-}
 
 // Tools available in plan mode (edit/write only for plan.md via tool_call gate).
 const PLAN_TOOLS = ["read", "bash", "grep", "find", "ls", "edit", "write", "plan_ready"];
@@ -370,10 +359,10 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
           noteFamilyAdjudication(tool, input, "rule-allow");
           if (decision === "allow_always_local") {
             warnIfLocalPermissionsNotGitignored(ruleCwd, (msg) =>
-              ctx.ui.notify(msg, "warning"),
+              uiNotify(ctx, msg, "warning"),
             );
           }
-          ctx.ui.notify(
+          uiNotify(ctx, 
             decision === "allow_always_local"
               ? `Added allow rule (project local): ${rule}`
               : `Added allow rule (global): ${rule}`,
@@ -473,7 +462,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       }
       return applyApprovalDecision(ctx, tool, input, "allow");
     }
-    const choice = await ctx.ui.select(`Allow ${tool}? ${label}`, [
+    const choice = await confirmChoice(ctx, `Allow ${tool}? ${label}`, [
       "Allow",
       "Allow always (this project)",
       "Allow always (global)",
@@ -667,7 +656,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       backupContent,
     });
     if (ctx.hasUI) {
-      ctx.ui.notify(
+      uiNotify(ctx, 
         `📝 tracked outside-cwd ${tool}: ${shortenPath(resolvedPath)}`,
         "info",
       );
@@ -783,10 +772,10 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     }
 
     planTodos = [];
-    if (ctx.hasUI) ctx.ui.setWidget("plan-todos", undefined);
+    if (ctx.hasUI) clearPlanWidget(ctx);
 
     applyToolRestrictions();
-    updateStatus(ctx);
+    clearModesStatus(ctx);
     setBypassIndicator(mode === "bypass");
     await applyProfileModelForMode(mode, ctx);
     persistState();
@@ -797,7 +786,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
   function cycleMode(ctx: ExtensionContext): void {
     const idx = MODE_CYCLE.indexOf(currentMode);
     void setMode(MODE_CYCLE[(idx + 1) % MODE_CYCLE.length], ctx);
-    if (ctx.hasUI) ctx.ui.notify(`Mode: ${MODE_META[currentMode].label}`);
+    if (ctx.hasUI) uiNotify(ctx, `Mode: ${MODE_META[currentMode].label}`);
   }
 
   // ---- model profile logic ----------------------------------------------
@@ -840,7 +829,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     const parsed = parseModelId(modelId);
     if (!parsed) {
       if (ctx.hasUI)
-        ctx.ui.notify(
+        uiNotify(ctx, 
           `Invalid model ID "${modelId}" in profile "${activeProfile}"`,
           "warning",
         );
@@ -850,14 +839,14 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     const model = ctx.modelRegistry.find(parsed.provider, parsed.model);
     if (!model) {
       if (ctx.hasUI)
-        ctx.ui.notify(`Model "${modelId}" not found in registry`, "warning");
+        uiNotify(ctx, `Model "${modelId}" not found in registry`, "warning");
       return;
     }
 
     const success = await pi.setModel(model);
     if (!success) {
       if (ctx.hasUI)
-        ctx.ui.notify(`No API key available for "${modelId}"`, "warning");
+        uiNotify(ctx, `No API key available for "${modelId}"`, "warning");
       return;
     }
 
@@ -867,7 +856,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     if (!effort) return;
     if (!PROFILE_EFFORT_LEVELS.has(effort)) {
       if (ctx.hasUI)
-        ctx.ui.notify(
+        uiNotify(ctx, 
           `Unknown effort "${effort}" in profile "${activeProfile}" (expected: ${[...PROFILE_EFFORT_LEVELS].join(", ")})`,
           "warning",
         );
@@ -887,135 +876,18 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
   ): Promise<void> {
     const config = loadModelProfiles();
     if (!profileExists(config, name)) {
-      if (ctx.hasUI) ctx.ui.notify(`Unknown profile "${name}"`, "error");
+      if (ctx.hasUI) uiNotify(ctx, `Unknown profile "${name}"`, "error");
       return;
     }
     activeProfile = name;
     modelProfileConfig = config;
     await applyProfileModelForMode(currentMode, ctx);
-    updateStatus(ctx);
+    clearModesStatus(ctx);
     persistState();
-    if (ctx.hasUI) ctx.ui.notify(`Profile "${name}" activated`, "info");
+    if (ctx.hasUI) uiNotify(ctx, `Profile "${name}" activated`, "info");
   }
 
   // ---- UI: status, footer, plan widget, working stats --------------------
-  function updateStatus(ctx: ExtensionContext): void {
-    if (!ctx.hasUI) return;
-    ctx.ui.setStatus("modes", undefined);
-  }
-
-  function shortenPath(p: string): string {
-    const home = homedir();
-    return p && p.startsWith(home) ? `~${p.slice(home.length)}` : p;
-  }
-
-  function installFooter(ctx: ExtensionContext): void {
-    if (!ctx.hasUI) return;
-    // Integration: when the CC-TUI replica extension is active it owns the
-    // footer slot (mode/hints row + statusline); installing ours would evict
-    // it — same handshake as refreshWorkingMessage below. Load order decides
-    // the last setFooter writer, so without this yield the winner flips with
-    // package order (observed: core loading after cctui evicted its footer).
-    const g = globalThis as Record<string, unknown>;
-    const ccTuiActive = (g.__piCcTui as { active?: boolean } | undefined)?.active === true || g.__ccTuiActive === true;
-    if (ccTuiActive) return;
-    ctx.ui.setFooter((_tui: any, theme: any) => ({
-      render(width: number): string[] {
-        const m = MODE_META[currentMode];
-        const cwd = shortenPath(ctx.cwd);
-        const cwdText = gitBranch ? `${cwd} (${gitBranch})` : cwd;
-
-        const ctxUsage = ctx.getContextUsage?.();
-        let ctxStr = "";
-        if (ctxUsage && ctxUsage.tokens != null && ctxUsage.percent != null) {
-          const fmtK = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : `${Math.round(n / 1000)}k`;
-          ctxStr = `${fmtK(ctxUsage.tokens)}/${fmtK(ctxUsage.contextWindow)} ${ctxUsage.percent.toFixed(1)}%`;
-        }
-
-        const md = ctx.model;
-        let modelStr = "";
-        if (md) {
-          modelStr = md.name ? String(md.name) : String(md.id ?? "");
-          const thinking = pi.getThinkingLevel();
-          if (thinking) modelStr += ` • ${thinking}`;
-        }
-        if (activeProfile) {
-          modelStr = `profile:${activeProfile} · ${modelStr}`;
-        }
-
-        const cwdW = visibleWidth(cwdText);
-        const ctxW = visibleWidth(ctxStr);
-        const modelW = visibleWidth(modelStr);
-        const modeText = `${m.icon} ${m.label} (shift+tab)`;
-        const modeW = visibleWidth(modeText);
-
-        // Wide: line1 = cwd(L) + context(centered) + model(R), line2 = mode
-        if (cwdW + ctxW + modelW + 4 <= width) {
-          const leftGap = Math.max(2, Math.floor((width - ctxW) / 2) - cwdW);
-          const rightGap = width - cwdW - leftGap - ctxW - modelW;
-          if (rightGap >= 12) {
-            const line1 =
-              theme.fg("muted", cwdText) +
-              " ".repeat(leftGap) +
-              theme.fg("dim", ctxStr) +
-              " ".repeat(rightGap) +
-              theme.fg("dim", modelStr);
-            const line2 = theme.fg(m.role, modeText);
-            return [line1, line2];
-          }
-        }
-
-        // Narrow: line1 = cwd(L) + context(R), line2 = mode(L) + model(R)
-        // Pre-truncate plain text to guarantee fit
-        let cwdDisp = cwdText;
-        let cwdDispW = cwdW;
-        let ctxDisp = ctxStr;
-        let ctxDispW = ctxW;
-        if (cwdW + ctxW + 1 > width) {
-          // cwd too long, truncate it
-          cwdDisp = truncateToWidth(cwdText, Math.max(4, width - ctxW - 1));
-          cwdDispW = visibleWidth(cwdDisp);
-        }
-        const gap1 = Math.max(1, width - cwdDispW - ctxDispW);
-        const line1 =
-          theme.fg("muted", cwdDisp) +
-          " ".repeat(gap1) +
-          theme.fg("dim", ctxDisp);
-
-        let modeDisp = modeText;
-        let modeDispW = modeW;
-        let modelDisp = modelStr;
-        let modelDispW = modelW;
-        if (modeW + modelW + 1 > width) {
-          modelDisp = truncateToWidth(modelStr, Math.max(4, width - modeW - 1));
-          modelDispW = visibleWidth(modelDisp);
-        }
-        const gap2 = Math.max(1, width - modeDispW - modelDispW);
-        const line2 =
-          theme.fg(m.role, modeDisp) +
-          " ".repeat(gap2) +
-          theme.fg("dim", modelDisp);
-
-        return [line1, line2];
-      },
-      invalidate() {},
-    }));
-  }
-
-  function updatePlanWidget(ctx: ExtensionContext): void {
-    if (!ctx.hasUI) return;
-    if (!planTodos.length) {
-      ctx.ui.setWidget("plan-todos", undefined);
-      return;
-    }
-    const lines = planTodos.map((t) =>
-      t.completed
-        ? ctx.ui.theme.fg("success", "☑ ") +
-          ctx.ui.theme.fg("muted", ctx.ui.theme.strikethrough(t.text))
-        : `${ctx.ui.theme.fg("muted", "☐ ")}${t.text}`,
-    );
-    ctx.ui.setWidget("plan-todos", lines);
-  }
 
   // Streaming chunks arrive while the branch is frozen (pi appends entries
   // on message_end), so per-chunk work is O(new entries), not O(session
@@ -1163,7 +1035,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
         reason: `${tool} (${canonicalId}) needs approval: no UI available.`,
       };
     }
-    const choice = (await ctx.ui.select(`Allow ${canonicalId}?`, [
+    const choice = (await confirmChoice(ctx, `Allow ${canonicalId}?`, [
       "Allow once",
       "Allow for this session",
       `Allow always (${suggestedRule})`,
@@ -1244,7 +1116,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     description: "Clear all session-scoped family grants (P4-FAM-05)",
     handler: async (_args, ctx) => {
       clearSessionGrants();
-      if (ctx.hasUI) ctx.ui.notify("Session grants cleared.", "info");
+      if (ctx.hasUI) uiNotify(ctx, "Session grants cleared.", "info");
     },
   });
 
@@ -1277,7 +1149,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       "Execute the current plan immediately (switches to auto mode with step tracking)",
     handler: async (_args, ctx) => {
       if (currentMode !== "plan" && !planExecuting) {
-        ctx.ui.notify("Not in plan mode. Use /plan first.", "warning");
+        uiNotify(ctx, "Not in plan mode. Use /plan first.", "warning");
         return;
       }
       const planContent = readPlanFile(ctx.cwd);
@@ -1285,7 +1157,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
         planContent ? extractTodoItems(planContent) : [],
       );
       if (!extracted.length) {
-        ctx.ui.notify("No plan steps found in plan.md. Write a plan first.", "warning");
+        uiNotify(ctx, "No plan steps found in plan.md. Write a plan first.", "warning");
         return;
       }
       planExecuting = true;
@@ -1293,8 +1165,8 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       planTodos = extracted;
       currentMode = "auto";
       applyToolRestrictions();
-      updateStatus(ctx);
-      updatePlanWidget(ctx);
+      clearModesStatus(ctx);
+      updatePlanWidgetUi(ctx, planTodos);
       persistState();
       await applyProfileModelForMode("auto", ctx);
       const steps = planTodos.map((t) => `${t.step}. ${t.text}`).join("\n");
@@ -1383,7 +1255,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
 
       planTodos = extracted;
       persistState();
-      updatePlanWidget(ctx);
+      updatePlanWidgetUi(ctx, planTodos);
 
       const summary = params.summary?.trim() || undefined;
       const stepsPreview = extracted.map((t) => `${t.step}. ${t.text}`).join("\n");
@@ -1411,7 +1283,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
         planPhase = "executing";
         currentMode = "auto";
         applyToolRestrictions();
-        updateStatus(ctx);
+        clearModesStatus(ctx);
         persistState();
         await applyProfileModelForMode("auto", ctx);
         const steps = planTodos.map((t) => `${t.step}. ${t.text}`).join("\n");
@@ -1466,7 +1338,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
         const names = listProfiles(config);
         if (!names.length) {
           if (ctx.hasUI)
-            ctx.ui.notify(
+            uiNotify(ctx, 
               "No profiles found in ~/.pi/agent/model-profiles.json",
               "warning",
             );
@@ -1484,7 +1356,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
         const names = listProfiles(config);
         if (!names.length) {
           if (ctx.hasUI)
-            ctx.ui.notify(
+            uiNotify(ctx, 
               "No profiles found in ~/.pi/agent/model-profiles.json",
               "info",
             );
@@ -1550,7 +1422,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     handler: async (_args, ctx) => {
       const snaps = listTrackedOutsideWrites(ctx.cwd);
       if (!snaps.length) {
-        if (ctx.hasUI) ctx.ui.notify("No tracked outside-cwd writes", "info");
+        if (ctx.hasUI) uiNotify(ctx, "No tracked outside-cwd writes", "info");
         return;
       }
       const lines = snaps.map((s) => formatSnapshotForDisplay(s, isExternallyModified(s, snaps)));
@@ -1575,7 +1447,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       if (arg === "--list" || arg === "list") {
         const snaps = listTrackedOutsideWrites(ctx.cwd);
         if (!snaps.length) {
-          if (ctx.hasUI) ctx.ui.notify("No tracked outside-cwd writes", "info");
+          if (ctx.hasUI) uiNotify(ctx, "No tracked outside-cwd writes", "info");
           return;
         }
         const lines = snaps.map((s) => formatSnapshotForDisplay(s, isExternallyModified(s, snaps)));
@@ -1593,7 +1465,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       const allSnaps = listTrackedOutsideWrites(ctx.cwd);
       if (!allSnaps.length) {
         if (ctx.hasUI)
-          ctx.ui.notify("No tracked outside-cwd writes to undo", "info");
+          uiNotify(ctx, "No tracked outside-cwd writes to undo", "info");
         return;
       }
 
@@ -1619,7 +1491,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
             warned > 0
               ? ` (${warned} file(s) externally modified \u2014 restored anyway)`
               : "";
-          ctx.ui.notify(
+          uiNotify(ctx, 
             `Restored ${restored}, deleted ${deleted} tracked write(s)${warnMsg}`,
             "info",
           );
@@ -1630,7 +1502,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       // No args: interactive selector (newest first)
       if (!ctx.hasUI) {
         if (ctx.hasUI)
-          ctx.ui.notify(
+          uiNotify(ctx, 
             "No UI available; pass 'all' or '--list' as argument",
             "warning",
           );
@@ -1656,7 +1528,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       const warnSuffix = wasExternal
         ? " (\u26a0 file was externally modified \u2014 restored from snapshot anyway)"
         : "";
-      ctx.ui.notify(`${action} ${picked.originalPath}${warnSuffix}`, "info");
+      uiNotify(ctx, `${action} ${picked.originalPath}${warnSuffix}`, "info");
     },
   });
 
@@ -1686,7 +1558,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     const pin = owner.envPin();
     if (pin !== null) {
       if (ctx.hasUI)
-        ctx.ui.notify(
+        uiNotify(ctx, 
           `Thinking level pinned by PI_CORE_EFFORT=${pin}; /effort reset needs the env cleared`,
           "warning",
         );
@@ -1700,12 +1572,12 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       owner.setExplicit(next, "shortcut");
       const applied = pi.getThinkingLevel();
       if (applied !== cur) {
-        if (ctx.hasUI) ctx.ui.notify(`Thinking: ${applied}`, "info");
+        if (ctx.hasUI) uiNotify(ctx, `Thinking: ${applied}`, "info");
         return;
       }
     }
     if (ctx.hasUI)
-      ctx.ui.notify(
+      uiNotify(ctx, 
         `Thinking: ${pi.getThinkingLevel()} (model supports no other levels)`,
         "info",
       );
@@ -1727,7 +1599,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     const names = listProfiles(config);
     if (!names.length) {
       if (ctx.hasUI)
-        ctx.ui.notify(
+        uiNotify(ctx, 
           "No profiles found in ~/.pi/agent/model-profiles.json",
           "warning",
         );
@@ -2045,7 +1917,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
         }
         // The bypass switch stays ask-mode-only (CC-aligned, adjudicated
         // 2026-09-12); side effects route through the shared executor.
-        const choice = await ctx.ui.select(`Allow ${tool} on ${pathVal}?`, [
+        const choice = await confirmChoice(ctx, `Allow ${tool} on ${pathVal}?`, [
           "Allow",
           "Allow always (this project)",
           "Allow always (global)",
@@ -2232,7 +2104,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     const text = getText(msg);
 
     if (planExecuting && planTodos.length) {
-      if (markCompletedSteps(text, planTodos) > 0) updatePlanWidget(ctx);
+      if (markCompletedSteps(text, planTodos) > 0) updatePlanWidgetUi(ctx, planTodos);
       persistState();
     }
   });
@@ -2253,7 +2125,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
             },
             { triggerTurn: false },
           );
-          ctx.ui.setWidget("plan-todos", undefined);
+          clearPlanWidget(ctx);
         }
         planExecuting = false;
         planTodos = [];
@@ -2320,8 +2192,8 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       planPhase = "executing";
       currentMode = "auto";
       applyToolRestrictions();
-      updateStatus(ctx);
-      updatePlanWidget(ctx);
+      clearModesStatus(ctx);
+      updatePlanWidgetUi(ctx, planTodos);
       persistState();
       await applyProfileModelForMode("auto", ctx);
       const steps = planTodos.map((t) => `${t.step}. ${t.text}`).join("\n");
@@ -2376,7 +2248,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
         activeProfile = profileFlag;
         modelProfileConfig = config;
       } else if (ctx.hasUI) {
-        ctx.ui.notify(
+        uiNotify(ctx, 
           `Unknown profile "${profileFlag}". Available: ${listProfiles(config).join(", ") || "(none)"}`,
           "warning",
         );
@@ -2452,12 +2324,12 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     }
 
     applyToolRestrictions();
-    if (planExecuting && planTodos.length) updatePlanWidget(ctx);
+    if (planExecuting && planTodos.length) updatePlanWidgetUi(ctx, planTodos);
     if (currentMode === "ask") needsAskReminder = true;
     if (currentMode === "bypass") needsBypassSecurityReminder = true;
     if (ctx.hasUI) {
-      installFooter(ctx);
-      updateStatus(ctx);
+      installModesFooter(ctx, () => ({ mode: currentMode, gitBranch, activeProfile, thinkingLevel: pi.getThinkingLevel() }));
+      clearModesStatus(ctx);
     }
 
     // If a profile was activated (via flag or persisted state), apply its

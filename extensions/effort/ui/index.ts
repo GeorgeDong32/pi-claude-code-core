@@ -14,6 +14,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { EffortModel } from "../effort.js";
 import { createEffortPickerComponent, type EffortPickerResult } from "../effort-picker.js";
 import { showComponentOverlay, type CustomOverlayContext } from "../../../lib/overlay.js";
+import { publishNotification, type NotificationLevel } from "../../ui/notify.js";
 
 /**
  * Minimum context shape the wrapper touches (duck-typed so unit tests can
@@ -94,6 +95,9 @@ export function createEffortUi(): EffortUi {
 			}
 		},
 		notify(ctx, message, level) {
+			// DC3: dual write — tail queue for future adapters + direct
+			// forward until DC5 wires the adapters (screen behaviour unchanged).
+			publishNotification(level, message);
 			ctx.ui.notify(message, level);
 		},
 		async pickEffort(ctx, levels, currentLevel) {

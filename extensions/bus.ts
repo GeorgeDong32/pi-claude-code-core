@@ -44,12 +44,16 @@ export interface DisplayPatch {
 export interface ContextBudgetPatch {
 	contextBudget?: { rulesMax: number; memoryIndexMax: number; dynamicSteerMax: number };
 }
+/** DC3: notification tail queue (bounded, monotonic ids) — append via ui/notify. */
+export interface NotificationsPatch {
+	notifications: CoreSnapshot["notifications"];
+}
 /** P3-ME-06: yield state of the injection lane (optional channel). */
 export interface MemoryPatch {
 	memory?: { yielded: boolean; dir?: string };
 }
 
-export type CorePatch = ModesPatch | EffortPatch | GoalPatch | ReviewPatch | DisplayPatch | ContextBudgetPatch | MemoryPatch;
+export type CorePatch = ModesPatch | EffortPatch | GoalPatch | ReviewPatch | DisplayPatch | ContextBudgetPatch | MemoryPatch | NotificationsPatch;
 
 type CommandHandler = (cmd: CoreCommand) => CoreCommandResult;
 
