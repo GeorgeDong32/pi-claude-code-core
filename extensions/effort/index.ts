@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
   SEMANTIC_ALIASES,
@@ -19,10 +19,9 @@ import {
   toThinkingLevel,
   writeFastMode,
 } from "./effort.js";
-import { createEffortPickerComponent, type EffortPickerResult } from "./effort-picker.js";
 import { getSharedEffortOwner, type ExplicitSource } from "../../lib/effort-owner.js";
-import { showComponentOverlay } from "../../lib/overlay.js";
 import { coreBus } from "../bus.js";
+import { createEffortUi, type EffortUi } from "./ui/index.js";
 
 function modelName(model: EffortModel | null | undefined): string {
   return model?.id ?? "current model";
@@ -36,46 +35,26 @@ function isFastModelId(modelId: string): boolean {
   return modelId.startsWith("gpt-5");
 }
 
-function isFastModeApplicable(model: EffortModel | null | undefined): boolean {
-  return typeof model?.id === "string" && isFastModelId(model.id);
-}
-
-function requestEffortRender(ctx: ExtensionContext): void {
-  // Clear older pi-effort aggregate status lines. Dedicated powerline custom
-  // items read pi-effort-thinking / pi-effort-fast instead.
-  ctx.ui.setStatus("effort", undefined);
-}
-
-function updateEffortUi(ctx: ExtensionContext, current: string, fastMode: boolean, updateWorkingMessage = true): void {
-  requestEffortRender(ctx);
-  ctx.ui.setStatus("pi-effort-thinking", `think:${current}`);
-  ctx.ui.setStatus("pi-effort-fast", fastMode && isFastModeApplicable(ctx.model) ? "fast" : undefined);
-  if (updateWorkingMessage) {
-    ctx.ui.setWorkingMessage(current === "off" ? undefined : `Working (${current} effort)...`);
-  }
-}
-
 function applySessionLevel(
   pi: ExtensionAPI,
   ctx: ExtensionCommandContext,
   level: EffortLevel,
   fastMode: boolean,
   src: ExplicitSource,
-  owner: ReturnType<typeof getSharedEffortOwner>
+  owner: ReturnType<typeof getSharedEffortOwner>,
+  ui: EffortUi
 ): void {
   // ① env pin refuses explicit writes (P1-EF-06 c)
   const pin = owner.envPin();
   if (pin !== null) {
-    ctx.ui.notify(
-      `Effort is pinned by PI_CORE_EFFORT=${pin}; ${level} was not applied`,
-      "warning"
-    );
+    ui.notify(ctx, `Effort is pinned by PI_CORE_EFFORT=${pin}; ${level} was not applied`, "warning");
     return;
   }
 
   const available = getAvailableThinkingLevels(ctx.model);
   if (!available.includes(level)) {
-    ctx.ui.notify(
+    ui.notify(
+      ctx,
       `Model ${modelName(ctx.model)} does not support ${level}. Available: ${formatAvailableLevels(ctx.model)}`,
       "error"
     );
@@ -86,9 +65,9 @@ function applySessionLevel(
   owner.setExplicit(toThinkingLevel(level), src);
   const after = pi.getThinkingLevel();
   const appliesNow = ctx.isIdle();
-  updateEffortUi(ctx, after, fastMode, appliesNow);
+  ui.sync(ctx, after, fastMode, appliesNow);
   const suffix = appliesNow ? "" : " (applies next prompt)";
-  ctx.ui.notify(before === after ? `Effort already ${after}` : `Effort changed: ${before} -> ${after}${suffix}`, "info");
+  ui.notify(ctx, before === after ? `Effort already ${after}` : `Effort changed: ${before} -> ${after}${suffix}`, "info");
 }
 
 export default function effortExtension(pi: ExtensionAPI): void {
@@ -96,6 +75,9 @@ export default function effortExtension(pi: ExtensionAPI): void {
   // thinking-level ownership chain (P1-EF-05): every write below arbitrates
   // through this owner; modes' profile application shares the same instance.
   const owner = getSharedEffortOwner(pi);
+  // DC2: single presentation wrapper — business code below never touches
+  // ctx.ui directly (fakeable via EffortCtxLike).
+  const ui = createEffortUi();
 
   // ─── Closure: track current model for tab completion ─────────────
   let currentModel: EffortModel | null = null;
@@ -122,7 +104,7 @@ export default function effortExtension(pi: ExtensionAPI): void {
     // message as if it applied immediately. Fake hosts without isIdle
     // (contract tests) fall back to the old true behavior.
     const applies = appliesNow ?? (typeof ctx.isIdle === "function" ? ctx.isIdle() : true);
-    updateEffortUi(ctx, current, refreshFastMode(), applies);
+    ui.sync(ctx, current, refreshFastMode(), applies);
     coreBus().publish({
       effort: { level: current, source: owner.currentSource() },
     });
@@ -162,21 +144,21 @@ export default function effortExtension(pi: ExtensionAPI): void {
     handler: (ctx) => {
       const pin = owner.envPin();
       if (pin !== null) {
-        ctx.ui.notify(`Effort is pinned by PI_CORE_EFFORT=${pin}`, "warning");
+        ui.notify(ctx, `Effort is pinned by PI_CORE_EFFORT=${pin}`, "warning");
         return;
       }
       const current = pi.getThinkingLevel();
       const next = cycleLevel(current, ctx.model);
       if (!next) {
-        ctx.ui.notify("Thinking not available for this model", "warning");
+        ui.notify(ctx, "Thinking not available for this model", "warning");
         return;
       }
       owner.setExplicit(toThinkingLevel(next), "shortcut");
       const after = pi.getThinkingLevel();
       const appliesNow = ctx.isIdle();
-      updateEffortUi(ctx, after, refreshFastMode(), appliesNow);
+      ui.sync(ctx, after, refreshFastMode(), appliesNow);
       const suffix = appliesNow ? "" : " (applies next prompt)";
-      ctx.ui.notify(`Effort: ${current} -> ${after}${suffix}`, "info");
+      ui.notify(ctx, `Effort: ${current} -> ${after}${suffix}`, "info");
     },
   });
 
@@ -196,19 +178,19 @@ export default function effortExtension(pi: ExtensionAPI): void {
       const requested = flagValue.trim();
       const isKnownRequest = USER_LEVELS.includes(requested as any) || isEffortAlias(requested);
       if (!isKnownRequest) {
-        ctx.ui.notify(`--effort ${flagValue}: unknown effort level`, "warning");
+        ui.notify(ctx, `--effort ${flagValue}: unknown effort level`, "warning");
         return;
       }
 
       const resolved = resolveEffortLevel(requested as EffortLevel | "min" | "max", ctx.model);
       if (!resolved) {
-        ctx.ui.notify(`--effort ${flagValue}: thinking not available for ${modelName(ctx.model)}`, "warning");
+        ui.notify(ctx, `--effort ${flagValue}: thinking not available for ${modelName(ctx.model)}`, "warning");
         return;
       }
 
       const available = getAvailableThinkingLevels(ctx.model);
       if (!available.includes(resolved)) {
-        ctx.ui.notify(
+        ui.notify(ctx, 
           `--effort ${flagValue}: not supported by ${modelName(ctx.model)}. Available: ${formatAvailableLevels(ctx.model)}`,
           "warning"
         );
@@ -220,7 +202,7 @@ export default function effortExtension(pi: ExtensionAPI): void {
       if (outcome === "pinned-by-env") {
         // P1-EF-06 c) parity with the command/picker paths: being silently
         // swallowed under an env pin is the one UX gap they don't have
-        ctx.ui.notify(
+        ui.notify(ctx, 
           `Effort is pinned by PI_CORE_EFFORT=${owner.envPin()}; --effort ${flagValue} was not applied`,
           "warning"
         );
@@ -260,18 +242,17 @@ export default function effortExtension(pi: ExtensionAPI): void {
     try {
       writeFastMode(settingsPath, enabled);
     } catch (error) {
-      ctx.ui.notify(`Failed to update fast mode: ${error instanceof Error ? error.message : String(error)}`, "error");
+      ui.notify(ctx, `Failed to update fast mode: ${error instanceof Error ? error.message : String(error)}`, "error");
       return;
     }
     fastMode = enabled;
     syncEffortUi(ctx);
-    ctx.ui.notify(`Fast mode ${fastMode ? "enabled" : "disabled"}.`, "info");
+    ui.notify(ctx, `Fast mode ${fastMode ? "enabled" : "disabled"}.`, "info");
   }
 
   // ─── Picker overlay for bare /effort ──────────────────────────────
-  // Shows the interactive effort selector and applies the user's choice via
-  // the same applySessionLevel path used by /effort <level>. Falls back to
-  // ctx.ui.select when the runtime is not in TUI mode (RPC/print).
+  // Business half stays here (level curation + seeding + apply); the
+  // presentation half (overlay vs select fallback) lives in effort/ui.
   async function showEffortPicker(ctx: ExtensionCommandContext): Promise<void> {
     // Picker surfaces a curated subset: low/medium/high plus xhigh when the
     // model supports it. "minimal" stays available via /effort minimal for
@@ -279,15 +260,7 @@ export default function effortExtension(pi: ExtensionAPI): void {
     const allLevels = getUserFacingLevels(ctx.model);
     const levels = allLevels.filter((l) => l !== "minimal");
     if (levels.length === 0) {
-      ctx.ui.notify(`Thinking not available for ${modelName(ctx.model)}`, "error");
-      return;
-    }
-
-    if (!ctx.hasUI) {
-      const picked = await ctx.ui.select("Effort", levels);
-      if (picked && (levels as string[]).includes(picked)) {
-        applySessionLevel(pi, ctx, picked as EffortLevel, refreshFastMode(), "picker", owner);
-      }
+      ui.notify(ctx, `Thinking not available for ${modelName(ctx.model)}`, "error");
       return;
     }
 
@@ -304,33 +277,11 @@ export default function effortExtension(pi: ExtensionAPI): void {
       return current;
     })();
 
-    // Shared overlay plumbing (P0-LB-03 / P1-EF-02): same custom call and
-    // geometry as before; the picker component is unchanged.
-    const result = await showComponentOverlay<EffortPickerResult>(ctx, {
-      component: (_tui, theme, _kb, done) =>
-        createEffortPickerComponent({
-          levels,
-          currentLevel: seededCurrent,
-          theme: theme as Theme | undefined,
-          done,
-        }),
-      overlayOptions: {
-        // Pi's main region can be as narrow as ~50 columns when a side
-        // panel (extensions, model list, etc.) is open. Using a fixed
-        // minWidth that exceeds the typical side-panel width ensures the
-        // overlay extends beyond the side panel rather than getting
-        // squeezed into the main region.
-        width: 78,
-        minWidth: 72,
-        maxHeight: "40%",
-        anchor: "center",
-      },
-    });
-
-    if (result.action === "confirm" && result.level) {
-      applySessionLevel(pi, ctx, result.level as EffortLevel, refreshFastMode(), "picker", owner);
+    const result = await ui.pickEffort(ctx, levels, seededCurrent);
+    if (result && result.level) {
+      applySessionLevel(pi, ctx, result.level as EffortLevel, refreshFastMode(), "picker", owner, ui);
     } else {
-      ctx.ui.notify("Cancelled", "info");
+      ui.notify(ctx, "Cancelled", "info");
     }
   }
 
@@ -370,14 +321,14 @@ export default function effortExtension(pi: ExtensionAPI): void {
         command = parseEffortCommand(args);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        ctx.ui.notify(message, "error");
+        ui.notify(ctx, message, "error");
         return;
       }
 
       switch (command.kind) {
         case "reset":
           owner.resetExplicit();
-          ctx.ui.notify(
+          ui.notify(ctx, 
             // no env/profile applies afterwards: the pi level stays at its
             // last value until the next profile/model event — say that
             // instead of naming a source that isn't actively driving it
@@ -388,26 +339,26 @@ export default function effortExtension(pi: ExtensionAPI): void {
           return;
 
         case "set-session":
-          applySessionLevel(pi, ctx, command.level, refreshFastMode(), "command", owner);
+          applySessionLevel(pi, ctx, command.level, refreshFastMode(), "command", owner, ui);
           return;
 
         case "set-min": {
           const resolved = resolveMinLevel(ctx.model);
           if (!resolved) {
-            ctx.ui.notify(`Thinking not available for ${modelName(ctx.model)}`, "error");
+            ui.notify(ctx, `Thinking not available for ${modelName(ctx.model)}`, "error");
             return;
           }
-          applySessionLevel(pi, ctx, resolved, refreshFastMode(), "command", owner);
+          applySessionLevel(pi, ctx, resolved, refreshFastMode(), "command", owner, ui);
           return;
         }
 
         case "set-max": {
           const resolved = resolveMaxLevel(ctx.model);
           if (!resolved) {
-            ctx.ui.notify(`Thinking not available for ${modelName(ctx.model)}`, "error");
+            ui.notify(ctx, `Thinking not available for ${modelName(ctx.model)}`, "error");
             return;
           }
-          applySessionLevel(pi, ctx, resolved, refreshFastMode(), "command", owner);
+          applySessionLevel(pi, ctx, resolved, refreshFastMode(), "command", owner, ui);
           return;
         }
       }
@@ -437,7 +388,7 @@ export default function effortExtension(pi: ExtensionAPI): void {
         command = parseFastCommand(args);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        ctx.ui.notify(message, "error");
+        ui.notify(ctx, message, "error");
         return;
       }
 

@@ -77,7 +77,7 @@ export async function showOverlay(
  * degradation for components that cannot be expressed as a select list).
  */
 /** Minimal UI surface showComponentOverlay needs (both ctx variants have it). */
-interface CustomOverlayContext {
+export interface CustomOverlayContext {
 	ui: {
 		custom: <T>(
 			factory: (tui: unknown, theme: unknown, kb: unknown, done: (v: T) => void) => Component,
