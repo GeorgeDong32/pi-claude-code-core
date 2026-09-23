@@ -101,6 +101,9 @@ export function createCoreBus(): CoreBus {
 			active: true,
 			mode: snapshot.modes.mode,
 			workingStats: snapshot.modes.workingStats,
+			// DC1: presentation material (icon/label/role) rides the projection
+			// so consumers stay single-sourced until they read the snapshot itself.
+			meta: snapshot.modes.meta,
 		};
 		// Written only once stats exist — mirrors pm 2.8.0 behavior pinned by
 		// P0-CT-02 (without CCTUI presence the key must stay unset).

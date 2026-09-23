@@ -19,6 +19,8 @@ export interface CoreSnapshot {
 		mode: "ask" | "plan" | "auto" | "bypass" | "";
 		planPhase?: "exploring" | "refining" | "reviewing" | "executing";
 		workingStats: string | null;
+		/** DC1: presentation material single-sourced from MODE_META (icon/label/role per mode). */
+		meta?: Readonly<Record<string, { icon: string; label: string; role: string }>>;
 	};
 	effort: { level: string | null; source: "env" | "session" | "profile" | "model-default" };
 	goal: { active: boolean; paused?: boolean; summary: string | null };
@@ -44,6 +46,7 @@ export interface CoreStatus {
 		mode: string;
 		planPhase?: string;
 		workingStats: string | null;
+		meta?: Readonly<Record<string, { icon: string; label: string; role: string }>>;
 	};
 	effort: { level: string | null; source: string };
 	goal: { active: boolean; paused?: boolean; summary: string | null };

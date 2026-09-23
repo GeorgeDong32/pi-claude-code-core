@@ -41,6 +41,13 @@ describe("P0-CT §4.1 globalThis capability channel", () => {
 		// workingStats exists and is string|null (null until message_update computes stats).
 		expect(cap.workingStats === null || typeof cap.workingStats === "string").toBe(true);
 		expect(cap.workingStats).toBeNull();
+		// DC1: mode presentation material (icon/label/role per mode) rides the
+		// projection — single source for downstream UIs.
+		const meta = cap.meta as Record<string, { icon: string; label: string; role: string }> | undefined;
+		expect(meta).toBeDefined();
+		expect(meta!["ask"]!.icon).toBe("●");
+		expect(meta!["bypass"]!.label).toBe("Bypass");
+		expect(Object.isFrozen(meta)).toBe(true);
 	});
 
 	it("P0-CT-02: with CCTUI present, pm suppresses its own working line and publishes stats to both legacy keys", async () => {

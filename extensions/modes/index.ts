@@ -170,6 +170,16 @@ const MODE_META: Record<Mode, { icon: string; label: string; role: string }> = {
   bypass: { icon: "⚡", label: "Bypass", role: "error" },
 };
 
+/** DC1: fresh copy for the bus snapshot — deepFreeze must not capture the module constant. */
+function modeMetaData(): Record<Mode, { icon: string; label: string; role: string }> {
+  return {
+    ask: { ...MODE_META.ask! },
+    plan: { ...MODE_META.plan! },
+    auto: { ...MODE_META.auto! },
+    bypass: { ...MODE_META.bypass! },
+  };
+}
+
 // Tools available in plan mode (edit/write only for plan.md via tool_call gate).
 const PLAN_TOOLS = ["read", "bash", "grep", "find", "ls", "edit", "write", "plan_ready"];
 const PLAN_READ_TOOLS = new Set(["read", "grep", "find", "ls"]);
@@ -1063,6 +1073,9 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
         planPhase: (patch as { planPhase?: PlanPhase }).planPhase ?? prev.planPhase ?? planPhase,
         workingStats:
           patch.workingStats !== undefined ? patch.workingStats : prev.workingStats,
+        // DC1: mode presentation material rides the snapshot (single source;
+        // stable reference after first publish).
+        meta: prev.meta ?? modeMetaData(),
       },
     });
   }
