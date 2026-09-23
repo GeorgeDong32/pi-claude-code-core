@@ -312,3 +312,28 @@ lexical 标定回放(真实 CherryDev 存量 81 文件)即本 Phase 真机数据
 - DEVIATIONS 7 条全部认定为合理工程裁量,无违反 spec 硬要求。
 - 修复的复查发现(2 项,均非阻塞):contracts README 补 PLAN §3.2 第 6 条豁免登记;DEVIATIONS #6 表述修正(fake-host 由 contracts project 而非主 project 的 tsc 覆盖)。
 - 遗留提示(不阻塞):package.json `files` 的 `types/` 目录为 P1-BUS-02 预布,当前不存在(npm pack 无害)。
+
+---
+
+## Core/UI 解耦批（DC1–DC5b，2026-09-23）
+
+spec rev2（红队处置版）全 Phase 落地，见 `../CORE-UI-DECOUPLE-PLAN.md` §11 偏离记录。十三次 commit（core 9 + cctui 4）：
+
+- **DC1** `03053be` / cctui `818e168`：MODE_META 呈现素材过 bus 快照 + legacy 投影，cctui 删本地表只留 paint。
+- **DC2** `6c1bf17`：`effort/ui/`（status 槽/loader/picker）+ UiAdapter interface 冻结（`ui/base.ts`）。
+- **DC3** `ede4a07`：`modes/ui/` 四件（meta/footer/plan-widget/confirm + dialog git mv）+ `ui/notify.ts` 尾队列（cap 20、单调 id、无 ACK）+ modes 26 notify。
+- **DC4a** `3a1ef29`：goal 36 notify 接队列 + `goal.widget` 快照字段。
+- **DC4b** `89c04ed` / `d1d425d`：goal 状态机 5 例行为测试（FakeHost + 磁盘 fixture，经 bus 频道断言——goal.ts 主文件首次有测试）+ widget 投影完备化 + 呈现接线半边物理搬移 `goal/ui.ts`（闭包状态参数化为 6 getter，状态机测试零改动全过=搬移安全网）。
+- **DC5** `e3558f6` / cctui `fc8a963`：bus v2 `onChange` DATA field（订阅点即数据）+ publish always-full + `__pmWorkingStats` 写入侧存活键门控（P0-CT-02 negative 在新语义下保持）+ `ui/fallback.ts` 持有 working-message 写权（§4.3 丙案：写入点让路、轮询自愈）+ cctui `readPmStatus` 切快照本体。
+- **DC5b** `6db4ae2` + `fde5305` / cctui `1f8a5ee`：fallback adapter 经 onChange 消费尾队列（首个 v2 真实消费者）；cctui 声明 `notificationsConsumer` 能力并自消费（attach 快进 + 帧路径幂等重试）；core 直写收敛为旧 cctui 兜底 leg——新/旧/无 cctui 三组合每条消息恰好显示一次。
+
+### 测试计数（终态）
+
+- vitest **591** + node --test **324**（79+80+165）+ contracts **17**；cctui **72**；tsc 双仓零错；每批 TUI 冒烟通过。
+- 新测试面：尾队列合同 6 + fallback adapter 8 + goal 状态机 5 + cctui 消费者 3 + bus v2 契约更新（14）。
+
+### 剩余（版本门控，非实施项）
+
+1. notify 直写 leg 的删除：旧 cctui 装机清零时。
+2. `deriveLegacy` 撤除：cctui ≥1.5.0 且装机率到位（contracts/README.md 准则）。
+3. 命令区交互类触点（select/editor）按 spec §3 呈现/交互分治有意留在逻辑侧。
