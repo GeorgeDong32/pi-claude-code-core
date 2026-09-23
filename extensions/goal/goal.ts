@@ -1,5 +1,6 @@
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
+import { notify as uiNotify } from "../ui/notify.ts";
 import { coreBus } from "../bus.ts";
 import { matchesKey, Text, visibleWidth } from "@earendil-works/pi-tui";
 import {
@@ -716,30 +717,40 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		goalWidgetComponent = null;
 	}
 
-	function publishGoalChannel(): void {
+	function publishGoalChannel(widget?: { focus: "focused" | "unfocused" | "none"; statusLine: string }): void {
 		// P2-BUS-01: goal channel on the capability bus (frozen snapshot).
+		// DC4: widget presentation state (focus + status-line text) rides the
+		// snapshot so headless consumers can render it; the deep component
+		// state (steps) moves with the DC4b physical split.
 		const goal = state.goal;
 		coreBus().publish({
 			goal: {
 				active: !!goal,
 				...(goal ? { paused: goal.status === "paused" } : {}),
 				summary: goal ? displayObjectiveTitle(goal.objective) : null,
+				...(widget ? { widget } : {}),
 			},
 		});
 	}
 
 	function updateUI(ctx: ExtensionContext): void {
-		// bus publish is unconditional (review #10): headless sessions reach
-		// process-external readers the same way the review channel does
-		publishGoalChannel();
-		if (!ctx.hasUI) return;
+		// bus publish is unconditional per branch (review #10 + DC4): every
+		// path below publishes exactly once, now carrying widget state, so
+		// headless sessions reach process-external readers the same way.
+		if (!ctx.hasUI) {
+			// headless: still publish the channel (widget-less, goal facts only)
+			publishGoalChannel();
+			return;
+		}
 		const totalOpen = openGoals().length;
 		if (!state.goal && totalOpen === 0) {
+			publishGoalChannel({ focus: "none", statusLine: "" });
 			clearGoalWidget(ctx);
 			stopStatusRefresh();
 			return;
 		}
 		if (!state.goal) {
+			publishGoalChannel({ focus: "unfocused", statusLine: `goal: unfocused [${totalOpen} open] - /goal-focus` });
 			ctx.ui.setStatus("goal", `goal: unfocused [${totalOpen} open] - /goal-focus`);
 			if (!widgetRegistered) {
 				ctx.ui.setWidget(
@@ -765,6 +776,10 @@ export default function goalExtension(pi: ExtensionAPI): void {
 
 		const displayGoal = goalForDisplay() ?? state.goal;
 		const otherCount = otherOpenGoalCount(goalsById, focusedGoalId);
+		publishGoalChannel({
+			focus: "focused",
+			statusLine: `${footerStatus(displayGoal)}${otherCount > 0 ? ` (+${otherCount} open)` : ""}`,
+		});
 		ctx.ui.setStatus("goal", `${footerStatus(displayGoal)}${otherCount > 0 ? ` (+${otherCount} open)` : ""}`);
 
 		if (!widgetRegistered) {
@@ -894,7 +909,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		state.goal = { ...state.goal, autoContinue: false, pauseReason: undefined, pauseSuggestedAction: undefined };
 		stopActiveGoal("paused", "user", ctx);
 		resetGetGoalNudgeState(pausedGoalId);
-		ctx.ui.notify("Goal paused.", "info");
+		uiNotify(ctx, "Goal paused.", "info");
 	}
 
 	function syncTerminalInputPause(ctx: ExtensionContext): void {
@@ -974,7 +989,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		resetGetGoalNudgeState(state.goal?.id);
 		// A goal was committed — clear pending confirmation intent if any.
 		confirmationIntent = null;
-		ctx.ui.notify(buildGoalRunningNotification(config), "info");
+		uiNotify(ctx, buildGoalRunningNotification(config), "info");
 		if (startNow && state.goal?.autoContinue) queueContinuation(ctx, true);
 		// Append ledger event for durable history
 		const created = state.goal;
@@ -1003,14 +1018,14 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				const selected = await chooseOpenGoal(ctx, "Tweak which open goal?");
 				if (!selected) return;
 			} else {
-				ctx.ui.notify("No goal is set. Use /goals or /sisyphus to discuss, or /goals-set / /sisyphus-set to start immediately.", "warning");
+				uiNotify(ctx, "No goal is set. Use /goals or /sisyphus to discuss, or /goals-set / /sisyphus-set to start immediately.", "warning");
 				return;
 			}
 		}
 		const currentGoal = state.goal;
 		if (!currentGoal) return;
 		if (currentGoal.status === "complete") {
-			ctx.ui.notify("Goal is complete. Use /goals to discuss a new one or /goals-set to start immediately.", "warning");
+			uiNotify(ctx, "Goal is complete. Use /goals to discuss a new one or /goals-set to start immediately.", "warning");
 			return;
 		}
 		syncGoalPromptFromDisk(ctx);
@@ -1023,7 +1038,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		// Activate the tweak edit-gate so apply_goal_tweak is callable.
 		tweakDraftingFor = focused.id;
 		syncGoalTools();
-		ctx.ui.notify(
+		uiNotify(ctx, 
 			`${label} started${trimmed ? `: ${truncateText(trimmed, 60)}` : ""}. The agent will interview you and then call apply_goal_tweak.`,
 			"info",
 		);
@@ -1047,7 +1062,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		} catch (err) {
 			tweakDraftingFor = null;
 			syncGoalTools();
-			ctx.ui.notify(`Could not start goal tweak: ${(err as Error).message}`, "error");
+			uiNotify(ctx, `Could not start goal tweak: ${(err as Error).message}`, "error");
 		}
 	}
 
@@ -1059,7 +1074,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		const hint = focus === "sisyphus"
 			? "The agent will research or grill the ordered plan as needed, then propose a draft for you to Confirm. No skipping, no rushing."
 			: "The agent will clarify, research, or grill assumptions as needed, then propose a draft for you to Confirm.";
-		ctx.ui.notify(
+		uiNotify(ctx, 
 			`${label} started${trimmed ? `: ${truncateText(trimmed, 60)}` : ""}. ${hint}`,
 			"info",
 		);
@@ -1073,7 +1088,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		try {
 			pi.sendUserMessage(goalDraftingPrompt(trimmed, focus), { deliverAs: ctx.isIdle() ? "followUp" : "steer" });
 		} catch (err) {
-			ctx.ui.notify(`Could not start ${label.toLowerCase()}: ${(err as Error).message}`, "error");
+			uiNotify(ctx, `Could not start ${label.toLowerCase()}: ${(err as Error).message}`, "error");
 		}
 	}
 
@@ -1089,7 +1104,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			return state.goal;
 		}
 		if (!ctx.hasUI) {
-			ctx.ui.notify(buildUnfocusedOpenGoalsSummary(open.length), "warning");
+			uiNotify(ctx, buildUnfocusedOpenGoalsSummary(open.length), "warning");
 			return null;
 		}
 		const labels = open.map((item) => goalSelectorLabel(item, focusedGoalId));
@@ -1097,7 +1112,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		const selected = await ctx.ui.select(title, labels);
 		const selectedId = selected ? byLabel.get(selected) : undefined;
 		if (!selectedId) {
-			ctx.ui.notify("Goal focus unchanged.", "info");
+			uiNotify(ctx, "Goal focus unchanged.", "info");
 			return null;
 		}
 		setFocusedGoalId(selectedId, ctx, "selected");
@@ -1107,7 +1122,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	async function focusGoalCommand(ctx: ExtensionContext): Promise<void> {
 		const open = openGoals();
 		if (open.length === 0) {
-			ctx.ui.notify("No open goals. Use /goals or /sisyphus to discuss, or /goals-set / /sisyphus-set to start immediately.", "warning");
+			uiNotify(ctx, "No open goals. Use /goals or /sisyphus to discuss, or /goals-set / /sisyphus-set to start immediately.", "warning");
 			return;
 		}
 		if (open.length === 1) {
@@ -1115,11 +1130,11 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			if (!only) return;
 			setFocusedGoalId(only.id, ctx, "selected");
 			armFocusedContinuation(ctx);
-			ctx.ui.notify(`Focused goal: ${oneLineSummary(only)}`, "info");
+			uiNotify(ctx, `Focused goal: ${oneLineSummary(only)}`, "info");
 			return;
 		}
 		if (!ctx.hasUI) {
-			ctx.ui.notify(buildGoalListText(goalsById, focusedGoalId), "info");
+			uiNotify(ctx, buildGoalListText(goalsById, focusedGoalId), "info");
 			return;
 		}
 		const labels = open.map((item) => goalSelectorLabel(item, focusedGoalId));
@@ -1127,12 +1142,12 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		const selected = await ctx.ui.select("Focus open goal", labels);
 		const selectedId = selected ? byLabel.get(selected) : undefined;
 		if (!selectedId) {
-			ctx.ui.notify("Goal focus unchanged.", "info");
+			uiNotify(ctx, "Goal focus unchanged.", "info");
 			return;
 		}
 		setFocusedGoalId(selectedId, ctx, "selected");
 		armFocusedContinuation(ctx);
-		ctx.ui.notify(`Focused goal: ${oneLineSummary(state.goal)}`, "info");
+		uiNotify(ctx, `Focused goal: ${oneLineSummary(state.goal)}`, "info");
 	}
 
 	async function handleGoalCommandTopic(rawTopic: string, ctx: ExtensionContext, focus: DraftingFocus, opts: { replace: boolean }): Promise<void> {
@@ -1150,7 +1165,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		const objective = rawObjective.trim();
 		if (!objective) {
 			const command = focus === "sisyphus" ? "/sisyphus-set" : "/goals-set";
-			ctx.ui.notify(`No objective provided. Use ${command} <objective>.`, "warning");
+			uiNotify(ctx, `No objective provided. Use ${command} <objective>.`, "warning");
 			return;
 		}
 		clearContinuationState();
@@ -1167,7 +1182,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		const otherCount = otherOpenGoalCount(goalsById, focusedGoalId);
 		const extra = view && otherCount > 0 ? `\nOther open goals: ${otherCount} (run /goal-list or /goal-focus)` : "";
 		const text = view ? `${detailedSummary(view)}${extra}` : openGoals().length > 0 ? buildUnfocusedOpenGoalsSummary(openGoals().length) : detailedSummary(null);
-		ctx.ui.notify(text, "info");
+		uiNotify(ctx, text, "info");
 		updateUI(ctx);
 	}
 
@@ -1178,18 +1193,18 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				const selected = await chooseOpenGoal(ctx, "Pause which open goal?");
 				if (!selected) return;
 			} else {
-				ctx.ui.notify("No goal is set.", "warning");
+				uiNotify(ctx, "No goal is set.", "warning");
 				return;
 			}
 		}
 		const currentGoal = state.goal;
 		if (!currentGoal) return;
 		if (currentGoal.status === "complete") {
-			ctx.ui.notify("Goal is complete.", "warning");
+			uiNotify(ctx, "Goal is complete.", "warning");
 			return;
 		}
 		if (currentGoal.status === "paused") {
-			ctx.ui.notify("Goal is already paused. Use /goal-resume to continue.", "info");
+			uiNotify(ctx, "Goal is already paused. Use /goal-resume to continue.", "info");
 			return;
 		}
 		pauseActiveGoal(ctx);
@@ -1202,14 +1217,14 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			if (!selected) return;
 			if (selected.status === "active") {
 				armFocusedContinuation(ctx);
-				ctx.ui.notify(`Goal focused: ${oneLineSummary(selected)}`, "info");
+				uiNotify(ctx, `Goal focused: ${oneLineSummary(selected)}`, "info");
 				return;
 			}
 		}
 		const resumeGate = validateResumeGoal(state.goal);
 		if (!resumeGate.ok) {
 			const level = resumeGate.message.includes("already running") ? "info" : "warning";
-			ctx.ui.notify(resumeGate.message, level);
+			uiNotify(ctx, resumeGate.message, level);
 			return;
 		}
 		if (!state.goal) throw new Error("Goal disappeared during resume validation.");
@@ -1226,7 +1241,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		);
 		beginAccounting();
 		resetGetGoalNudgeState(state.goal.id);
-		ctx.ui.notify("Goal resumed.", "info");
+		uiNotify(ctx, "Goal resumed.", "info");
 		queueContinuation(ctx, true);
 		// Append ledger event for resumption
 		try {
@@ -1255,7 +1270,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 
 	async function handleGoalAuditorSettings(ctx: ExtensionContext): Promise<void> {
 		if (!ctx.hasUI) {
-			ctx.ui.notify(`Goal auditor settings file: ${goalAuditorConfigPath(ctx.cwd)}`, "info");
+			uiNotify(ctx, `Goal auditor settings file: ${goalAuditorConfigPath(ctx.cwd)}`, "info");
 			return;
 		}
 		const fieldLabels = ["provider", "model", "thinking_level"] as const;
@@ -1281,7 +1296,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				delete next[key];
 			} else if (key === "thinkingLevel") {
 				if (!["off", "minimal", "low", "medium", "high", "xhigh"].includes(trimmed)) {
-					ctx.ui.notify("thinking_level must be one of: off, minimal, low, medium, high, xhigh", "warning");
+					uiNotify(ctx, "thinking_level must be one of: off, minimal, low, medium, high, xhigh", "warning");
 					continue;
 				}
 				next.thinkingLevel = trimmed as GoalAuditorConfig["thinkingLevel"];
@@ -1289,13 +1304,13 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				next[key] = trimmed;
 			}
 			saveGoalAuditorFileConfig(ctx.cwd, next);
-			ctx.ui.notify(`Goal auditor settings saved:\n${auditorSettingsLines(loadGoalAuditorFileConfig(ctx.cwd)).join("\n")}`, "info");
+			uiNotify(ctx, `Goal auditor settings saved:\n${auditorSettingsLines(loadGoalAuditorFileConfig(ctx.cwd)).join("\n")}`, "info");
 		}
 	}
 
 	async function handleGoalSettings(ctx: ExtensionContext): Promise<void> {
 		if (!ctx.hasUI) {
-			ctx.ui.notify(`Goal settings require UI. Auditor config file: ${goalAuditorConfigPath(ctx.cwd)}`, "warning");
+			uiNotify(ctx, `Goal settings require UI. Auditor config file: ${goalAuditorConfigPath(ctx.cwd)}`, "warning");
 			return;
 		}
 		const selected = await ctx.ui.select("Goal settings", ["auditor"]);
@@ -1308,7 +1323,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			tweakDraftingFor = null;
 			syncGoalTools();
 			updateUI(ctx);
-			ctx.ui.notify(clearGoalCommandMessage({ archived: false, wasDrafting: true }), "info");
+			uiNotify(ctx, clearGoalCommandMessage({ archived: false, wasDrafting: true }), "info");
 			return;
 		}
 		reconcileFocusedGoalFromDisk(ctx);
@@ -1326,7 +1341,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		confirmationIntent = null;
 		syncGoalTools();
 		const msg = clearGoalCommandMessage({ archived: didArchive, wasDrafting });
-		ctx.ui.notify(msg, didArchive || wasDrafting ? "info" : "warning");
+		uiNotify(ctx, msg, didArchive || wasDrafting ? "info" : "warning");
 	}
 
 	async function handleGoalAbort(ctx: ExtensionContext): Promise<void> {
@@ -1335,7 +1350,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			tweakDraftingFor = null;
 			syncGoalTools();
 			updateUI(ctx);
-			ctx.ui.notify(abortGoalCommandMessage({ archived: false, wasDrafting: true }), "info");
+			uiNotify(ctx, abortGoalCommandMessage({ archived: false, wasDrafting: true }), "info");
 			return;
 		}
 		reconcileFocusedGoalFromDisk(ctx);
@@ -1351,7 +1366,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		confirmationIntent = null;
 		syncGoalTools();
 		const msg = abortGoalCommandMessage({ archived: didArchive, wasDrafting });
-		ctx.ui.notify(msg, didArchive || wasDrafting ? "info" : "warning");
+		uiNotify(ctx, msg, didArchive || wasDrafting ? "info" : "warning");
 	}
 
 	pi.registerMessageRenderer<GoalEventDetails>(GOAL_EVENT_ENTRY, renderGoalEvent);
@@ -1373,7 +1388,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		description: "List all open pi goals and show which one this session is focused on.",
 		handler: async (_rawArgs, ctx) => {
 			reconcileFocusedGoalFromDisk(ctx);
-			ctx.ui.notify(buildGoalListText(goalsById, focusedGoalId), "info");
+			uiNotify(ctx, buildGoalListText(goalsById, focusedGoalId), "info");
 			updateUI(ctx);
 		},
 	});
@@ -1610,7 +1625,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 					decision = await showProposalDialog(ctx, draftSummary, activeIntent.focus);
 				} catch (err) {
 					const message = proposalDialogFailureMessage(err);
-					ctx.ui.notify(message, "error");
+					uiNotify(ctx, message, "error");
 					return {
 						content: [{ type: "text", text: message }],
 						details: goalDetails(state.goal),
@@ -1862,7 +1877,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			turnStoppedFor = state.goal.id;
 
 			const suggestionLine = suggested ? `\nSuggested: ${truncateText(suggested, 160)}` : "";
-			ctx.ui.notify(
+			uiNotify(ctx, 
 				`Goal paused by agent.\nReason: ${truncateText(reason, 200)}${suggestionLine}\n\nUse /goal-resume to continue, /goal-tweak to revise, or /goal-clear to abandon.`,
 				"warning",
 			);
@@ -1922,7 +1937,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			turnStoppedFor = abortedGoalId;
 
 			const archiveLine = archived?.archivedPath ? `\nArchive: ${archived.archivedPath}` : "";
-			ctx.ui.notify(
+			uiNotify(ctx, 
 				`Goal aborted by agent.\nReason: ${truncateText(reason, 200)}${archiveLine}`,
 				"warning",
 			);
@@ -2058,7 +2073,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			turnStoppedFor = state.goal.id;
 			syncGoalTools();
 			updateUI(ctx);
-			ctx.ui.notify(`Goal tweaked: ${truncateText(changeSummary, 160)}`, "info");
+			uiNotify(ctx, `Goal tweaked: ${truncateText(changeSummary, 160)}`, "info");
 			// Append ledger event for tweak
 			try {
 				appendGoalEvent(ctx, {
