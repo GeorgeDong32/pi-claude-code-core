@@ -5,6 +5,7 @@ import {
 	displayObjectiveTitle,
 	footerStatus,
 	formatDuration,
+	formatDurationWords,
 	formatTokenValue,
 	isQuestionLikeToolName,
 	statusLabel,
@@ -58,4 +59,15 @@ test("isQuestionLikeToolName allows dialogue tools but not workhorse tools", () 
 	for (const name of ["bash", "read", "grep", "write", "edit", "step_complete", "pause_goal"]) {
 		assert.equal(isQuestionLikeToolName(name), false, name);
 	}
+});
+
+test("formatDurationWords renders spoken-style durations at every scale", () => {
+	assert.equal(formatDurationWords(0), "less than a minute");
+	assert.equal(formatDurationWords(59), "less than a minute");
+	assert.equal(formatDurationWords(60), "1 minute");
+	assert.equal(formatDurationWords(125), "2 minutes");
+	assert.equal(formatDurationWords(3600), "1 hour");
+	assert.equal(formatDurationWords(3725), "1 hour 2 minutes");
+	assert.equal(formatDurationWords(86400), "1 day");
+	assert.equal(formatDurationWords(97200), "1 day 3 hours");
 });

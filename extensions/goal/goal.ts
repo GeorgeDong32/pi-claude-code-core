@@ -6,6 +6,7 @@ import { Text, visibleWidth } from "@earendil-works/pi-tui";
 import {
 	footerStatus,
 	formatDuration,
+	formatDurationWords,
 	formatTokenValue,
 	statusLabel,
 	truncateText,
@@ -261,9 +262,9 @@ export function renderGoalEvent(message: { details?: GoalEventDetails }, options
 		// the user's own words (the full prompt still goes to the model).
 		if (details.kind === "drafting" && details.objective) {
 			const noun = details.focus === "sisyphus" ? "Sisyphus" : "Goal";
-			return new Text(theme.fg("customMessageLabel", `\uf4de ${noun} `) + theme.fg("customMessageText", truncateText(details.objective, 72)), 0, 0);
+			return new Text(theme.fg("customMessageLabel", `\uf4de ${noun} ${truncateText(details.objective, 72)}`), 0, 0);
 		}
-		return new Text(theme.fg("customMessageLabel", "Goal ") + theme.fg("customMessageText", label), 0, 0);
+		return new Text(theme.fg("customMessageLabel", `Goal ${label}`), 0, 0);
 	}
 	const lines = [`Status: ${details.status === "active" ? "running" : details.status ?? "unknown"}`];
 	if (details.objective) lines.push(`Objective: ${details.objective}`);
@@ -282,7 +283,8 @@ export function renderGoalAuditEvent(message: { content?: unknown; details?: Goa
 	const details = message.details;
 	const phase = details?.phase ?? "started";
 	if (!options.expanded) {
-		// Compact, tool-call-like line; ctrl+o expands to the full report.
+		// Compact, tool-call-like line in a single theme color; ctrl+o
+		// expands to the full two-tone report.
 		if (phase === "approved") {
 			const at = typeof details?.achievedAt === "number" ? details.achievedAt : undefined;
 			const seconds = typeof details?.activeSeconds === "number" ? details.activeSeconds : undefined;
@@ -290,16 +292,15 @@ export function renderGoalAuditEvent(message: { content?: unknown; details?: Goa
 			if (at !== undefined && seconds !== undefined && tokens !== undefined) {
 				const hhmm = new Date(at).toTimeString().slice(0, 5);
 				return new Text(
-					theme.fg("customMessageLabel", `\uf4de goal achieved at ${hhmm}, `) +
-						theme.fg("customMessageText", `used ${formatDuration(seconds)}, ${formatTokenValue(tokens).split(" ")[0]} tokens`),
+					theme.fg("customMessageLabel", `\uf4de Goal achieved at ${hhmm}, used ${formatDurationWords(seconds)}, ${formatTokenValue(tokens).split(" ")[0]} tokens`),
 					0,
 					0,
 				);
 			}
-			return new Text(theme.fg("customMessageLabel", "Goal Audit ") + theme.fg("customMessageText", "approved"), 0, 0);
+			return new Text(theme.fg("customMessageLabel", "Goal Audit approved"), 0, 0);
 		}
 		const summary = phase === "rejected" ? "rejected — expand (ctrl+o) for the report" : "start ...";
-		return new Text(theme.fg("customMessageLabel", "Goal Audit ") + theme.fg("customMessageText", summary), 0, 0);
+		return new Text(theme.fg("customMessageLabel", `Goal Audit ${summary}`), 0, 0);
 	}
 	const label = phase === "approved" ? "approved" : phase === "rejected" ? "rejected" : "started";
 	const content = typeof message.content === "string" ? message.content : `Goal audit ${label}.`;
@@ -2246,6 +2247,10 @@ export default function goalExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_start", async (event, ctx) => {
 		loadState(ctx);
+		// Widget order fix: remount on every session start so the goal block
+		// registers ahead of cc-status's microtask re-registration (goal
+		// above the spinner row) and survives session-invalidated TUI maps.
+		if (ctx.hasUI) goalUi.remountWidget(ctx);
 		goalUi.syncTerminalInputPause(ctx);
 		if (event.reason === "resume" && !state.goal && openGoals().length > 1 && ctx.hasUI) {
 			await focusGoalCommand(ctx);

@@ -60,6 +60,19 @@ export function formatDuration(seconds: number): string {
 	return `${secs}s`;
 }
 
+/** Spoken-style duration for summary lines: "1 hour 2 minutes". */
+export function formatDurationWords(seconds: number): string {
+	const total = Math.max(0, Math.floor(seconds));
+	const days = Math.floor(total / 86400);
+	const hours = Math.floor((total % 86400) / 3600);
+	const minutes = Math.floor((total % 3600) / 60);
+	const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? "" : "s"}`;
+	if (days > 0) return hours > 0 ? `${plural(days, "day")} ${plural(hours, "hour")}` : plural(days, "day");
+	if (hours > 0) return minutes > 0 ? `${plural(hours, "hour")} ${plural(minutes, "minute")}` : plural(hours, "hour");
+	if (minutes > 0) return plural(minutes, "minute");
+	return "less than a minute";
+}
+
 export function statusLabel(goal: Pick<GoalDisplayRecordLike, "sisyphus" | "status" | "autoContinue" | "stopReason">): string {
 	const prefix = goal.sisyphus ? "sisyphus " : "";
 	if (goal.status === "active" && goal.autoContinue) return `${prefix}running`;

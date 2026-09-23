@@ -69,7 +69,7 @@ test("collapsed approved renders the goal-achieved summary with final usage", ()
 		{ expanded: false },
 		theme,
 	);
-	assert.equal(textOf(out), "\uf4de goal achieved at 14:32, used 1h02m05s, 45K tokens");
+	assert.equal(textOf(out), "\uf4de Goal achieved at 14:32, used 1 hour 2 minutes, 45K tokens");
 });
 
 test("collapsed approved without stats falls back to the plain label", () => {

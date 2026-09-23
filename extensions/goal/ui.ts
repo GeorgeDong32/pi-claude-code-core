@@ -36,6 +36,14 @@ export interface GoalUiDeps {
 export interface GoalUi {
 	/** Idempotent aboveEditor widget mount; re-renders when already mounted. */
 	registerWidget(ctx: ExtensionContext): void;
+	/**
+	 * Unconditional re-mount (session_start). Above-editor widgets render in
+	 * registration order, so remounting on every session start both restores
+	 * the widget after a session invalidate wiped the TUI map and lands it
+	 * before cc-status's microtask re-registration — keeping the goal block
+	 * above the spinner row, which stays closest to the editor.
+	 */
+	remountWidget(ctx: ExtensionContext): void;
 	/** Live-tick the mounted widget (duration/tokens). */
 	updateWidget(): void;
 	/** Tear the widget + status slot down. */
@@ -64,35 +72,50 @@ export function createGoalUi(deps: GoalUiDeps): GoalUi {
 		statusRefreshCtx = null;
 	}
 
+	function mountWidget(ctx: ExtensionContext): void {
+		ctx.ui.setWidget(
+			GOAL_WIDGET_KEY,
+			(tui, theme) => {
+				goalWidgetComponent = new GoalWidgetComponent({
+					tui,
+					theme,
+					getGoal: () => deps.getDisplayGoal(),
+					getOpenGoalCount: () => deps.getOpenGoalCount(),
+				});
+				return goalWidgetComponent;
+			},
+			{ placement: "aboveEditor" },
+		);
+		widgetRegistered = true;
+	}
+
 	return {
 		registerWidget(ctx) {
+			// Resident mount: with no goal the component renders zero lines,
+			// so residency costs nothing visually; updateUI keeps this
+			// idempotent path.
 			if (!widgetRegistered) {
-				ctx.ui.setWidget(
-					GOAL_WIDGET_KEY,
-					(tui, theme) => {
-						goalWidgetComponent = new GoalWidgetComponent({
-							tui,
-							theme,
-							getGoal: () => deps.getDisplayGoal(),
-							getOpenGoalCount: () => deps.getOpenGoalCount(),
-						});
-						return goalWidgetComponent;
-					},
-					{ placement: "aboveEditor" },
-				);
-				widgetRegistered = true;
+				mountWidget(ctx);
 			} else {
 				goalWidgetComponent?.update();
 			}
+		},
+		remountWidget(ctx) {
+			// Unconditional (session_start): same-key setWidget re-inserts at
+			// the TUI map tail — this both restores the widget after a
+			// session invalidate wiped the map and lands it before cc-status's
+			// microtask re-registration, keeping the goal block above the
+			// spinner row.
+			mountWidget(ctx);
 		},
 		updateWidget() {
 			goalWidgetComponent?.update();
 		},
 		clear(ctx) {
+			// Status slot only — the widget stays resident (renders empty
+			// without a goal) so its registration order is never lost.
 			ctx.ui.setStatus(GOAL_WIDGET_KEY, undefined);
-			ctx.ui.setWidget(GOAL_WIDGET_KEY, undefined);
-			widgetRegistered = false;
-			goalWidgetComponent = null;
+			goalWidgetComponent?.update();
 		},
 		syncStatusRefresh(ctx) {
 			if (!ctx.hasUI || !deps.isGoalActive()) {
