@@ -200,6 +200,57 @@ test("message_end keeps drafting custom messages visible but hides checkpoints",
 	}
 });
 
+test("ui: /goal <topic> routes to the drafting discussion (Codex-style entry)", async () => {
+	const f = setup({ ui: true });
+	try {
+		await f.host.fire("session_start", { reason: "new" }, f.ctx);
+		f.host.sentMessages.length = 0;
+		f.host.userMessages.length = 0;
+		await f.host.commands.get("goal")!("codex style entry topic", f.ctx);
+		assert.equal(f.host.userMessages.length, 0);
+		const sent = f.host.sentMessages.at(-1);
+		assert.equal(sent?.message.customType, "pi-goal-event");
+		assert.equal(sent?.message.display, true);
+		const details = asRecord(sent?.message.details);
+		assert.equal(details?.kind, "drafting");
+		assert.equal(details?.objective, "codex style entry topic");
+		const text = typeof sent?.message.content === "string" ? sent.message.content : "";
+		assert.match(text, /\[GOAL CONFIRMATION focus=goal\]/);
+	} finally {
+		f.cleanup();
+	}
+});
+
+test("ui: bare /goal stays a read-only status command (no injection)", async () => {
+	const f = setup({ ui: true });
+	try {
+		await f.host.fire("session_start", { reason: "new" }, f.ctx);
+		f.host.sentMessages.length = 0;
+		f.host.userMessages.length = 0;
+		await f.host.commands.get("goal")!("", f.ctx);
+		assert.equal(f.host.sentMessages.length, 0);
+		assert.equal(f.host.userMessages.length, 0);
+	} finally {
+		f.cleanup();
+	}
+});
+
+test("ui: /goal pause pauses the focused goal via reserved word", async () => {
+	const f = setup({ ui: true });
+	try {
+		diskGoal(f, "=== Goal ===\nObjective: reserved word smoke");
+		await f.host.fire("session_start", { reason: "new" }, f.ctx);
+		await f.goalList();
+		assert.equal(coreBus().snapshot().goal.active, true);
+		f.host.sentMessages.length = 0;
+		await f.host.commands.get("goal")!("pause", f.ctx);
+		assert.equal(coreBus().snapshot().goal.paused, true);
+		assert.equal(f.host.sentMessages.length, 0); // management, not drafting
+	} finally {
+		f.cleanup();
+	}
+});
+
 function asRecord(value: unknown): Record<string, unknown> | null {
 	return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
 }

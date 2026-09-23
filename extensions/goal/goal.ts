@@ -257,7 +257,7 @@ export function renderGoalEvent(message: { details?: GoalEventDetails }, options
 		// the user's own words (the full prompt still goes to the model).
 		if (details.kind === "drafting" && details.objective) {
 			const noun = details.focus === "sisyphus" ? "Sisyphus" : "Goal";
-			return new Text(theme.fg("customMessageLabel", `⟳ ${noun} `) + theme.fg("customMessageText", truncateText(details.objective, 72)), 0, 0);
+			return new Text(theme.fg("customMessageLabel", `\uf4de ${noun} `) + theme.fg("customMessageText", truncateText(details.objective, 72)), 0, 0);
 		}
 		return new Text(theme.fg("customMessageLabel", "Goal ") + theme.fg("customMessageText", label), 0, 0);
 	}
@@ -1345,9 +1345,31 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			await showGoalStatus(ctx);
 		},
 	};
+	// /goal — Codex-style single entry: bare = status, reserved words manage,
+	// any other text starts the drafting discussion (same as /goals).
 	pi.registerCommand("goal", {
-		description: "Show focused goal status. Discuss with /goals or /sisyphus; direct-start with /goals-set or /sisyphus-set; manage with /goal-list, /goal-focus, /goal-settings, /goal-tweak, /goal-clear, /goal-abort, /goal-pause, /goal-resume.",
-		handler: statusCommand.handler,
+		description: "Discuss a new goal: /goal <topic> (same as /goals). Bare /goal shows focused goal status; /goal pause|resume|clear manage it. Direct-start with /goals-set; more via /goal-list, /goal-focus, /goal-settings, /goal-tweak, /goal-abort.",
+		handler: async (rawArgs, ctx) => {
+			const trimmed = rawArgs.trim();
+			const keyword = trimmed.toLowerCase();
+			if (!trimmed) {
+				await showGoalStatus(ctx);
+				return;
+			}
+			if (keyword === "pause") {
+				await handleGoalPause(ctx);
+				return;
+			}
+			if (keyword === "resume") {
+				await handleGoalResume(ctx);
+				return;
+			}
+			if (keyword === "clear") {
+				await handleGoalClear(ctx);
+				return;
+			}
+			await handleGoalCommandTopic(trimmed, ctx, "goal", { replace: false });
+		},
 	});
 	pi.registerCommand("goal-status", statusCommand);
 	pi.registerCommand("goal-list", {

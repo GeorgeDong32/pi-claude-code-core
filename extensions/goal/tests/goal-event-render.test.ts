@@ -1,6 +1,6 @@
 /**
  * Pins the collapsed rendering of pi-goal-event entries: drafting injections
- * collapse to the user's own words ("⟳ Goal <topic>"), while checkpoint and
+ * collapse to the user's own words (nerd-font beacon + "Goal <topic>"), while checkpoint and
  * topic-less drafting keep their bare labels. The full prompt stays in the
  * message content — only display is affected.
  */
@@ -23,12 +23,12 @@ function details(overrides: Partial<GoalEventDetails>): { details: GoalEventDeta
 
 test("collapsed drafting with topic renders the user's words, not the protocol", () => {
 	const out = renderGoalEvent(details({ objective: "ship the retry decoder" }), { expanded: false }, theme);
-	assert.equal(textOf(out), "⟳ Goal ship the retry decoder");
+	assert.equal(textOf(out), "\uf4de Goal ship the retry decoder");
 });
 
 test("collapsed sisyphus drafting uses the Sisyphus noun", () => {
 	const out = renderGoalEvent(details({ objective: "ordered rollout", focus: "sisyphus" }), { expanded: false }, theme);
-	assert.equal(textOf(out), "⟳ Sisyphus ordered rollout");
+	assert.equal(textOf(out), "\uf4de Sisyphus ordered rollout");
 });
 
 test("collapsed drafting without a topic keeps the bare label", () => {
