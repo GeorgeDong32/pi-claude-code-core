@@ -2,7 +2,7 @@ import { StringEnum, Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { notify as uiNotify } from "../ui/notify.ts";
 import { coreBus } from "../bus.ts";
-import { matchesKey, Text, visibleWidth } from "@earendil-works/pi-tui";
+import { Text, visibleWidth } from "@earendil-works/pi-tui";
 import {
 	footerStatus,
 	formatDuration,
@@ -96,7 +96,7 @@ import {
 	untrustedObjectiveBlock,
 } from "./prompts/goal-prompts.ts";
 import { buildGoalRunningNotification } from "./widgets/goal-notifications.ts";
-import { GoalWidgetComponent } from "./widgets/goal-widget.ts";
+import { createGoalUi } from "./ui.ts";
 
 import {
 	abortGoalCommandMessage,
@@ -119,7 +119,6 @@ const GOAL_EVENT_ENTRY = "pi-goal-event";
 const GOAL_AUDIT_ENTRY = "pi-goal-audit-event";
 const COMPLETE_STATUS = "complete";
 const CONTINUATION_IDLE_RETRY_MS = 50;
-const STATUS_REFRESH_MS = 1000;
 /**
  * Tools that count as "real work" toward the active goal. If a non-tool-use
  * turn ends without any of these having been called, we DO NOT queue the next
@@ -363,13 +362,20 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			focusedGoalId = null;
 		},
 	};
+	// DC4b part-3: the presentation half lives in ./ui.ts — closed-over
+	// business state enters as getters, so the state machine stays fakeable.
+	const goalUi = createGoalUi({
+		getDisplayGoal: () => goalForDisplay() ?? state.goal,
+		getOpenGoalCount: () => openGoals().length,
+		getOtherOpenGoalCount: () => otherOpenGoalCount(goalsById, focusedGoalId),
+		isGoalActive: () => state.goal?.status === "active",
+		shouldPauseOnEscape: () => state.goal?.status === "active" && !!state.goal.autoContinue,
+		pauseActiveGoal,
+	});
 	let continuationQueuedFor: string | null = null;
 	let continuationScheduledFor: string | null = null;
 	let continuationTimer: ReturnType<typeof setTimeout> | null = null;
 	let runningGoalId: string | null = null;
-	let terminalInputUnsubscribe: (() => void) | null = null;
-	let statusRefreshTimer: ReturnType<typeof setInterval> | null = null;
-	let statusRefreshCtx: ExtensionContext | null = null;
 
 
 	// Per-turn flags reset in turn_start (#4, C9 fix).
@@ -443,37 +449,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			}
 			pi.setActiveTools(Array.from(active));
 		} catch {}
-	}
-
-	function stopStatusRefresh(): void {
-		if (statusRefreshTimer) {
-			clearInterval(statusRefreshTimer);
-			statusRefreshTimer = null;
-		}
-		statusRefreshCtx = null;
-	}
-
-	function syncStatusRefresh(ctx: ExtensionContext): void {
-		if (!ctx.hasUI || state.goal?.status !== "active") {
-			stopStatusRefresh();
-			return;
-		}
-		statusRefreshCtx = ctx;
-		if (statusRefreshTimer) return;
-		statusRefreshTimer = setInterval(() => {
-			if (!statusRefreshCtx || state.goal?.status !== "active") {
-				stopStatusRefresh();
-				return;
-			}
-			const displayGoal = goalForDisplay();
-			if (displayGoal) {
-				const otherCount = otherOpenGoalCount(goalsById, focusedGoalId);
-				statusRefreshCtx.ui.setStatus("goal", `${footerStatus(displayGoal)}${otherCount > 0 ? ` (+${otherCount} open)` : ""}`);
-			}
-			// Live-tick the above-editor widget so duration/tokens update.
-			goalWidgetComponent?.update();
-		}, STATUS_REFRESH_MS);
-		statusRefreshTimer.unref?.();
 	}
 
 	function clearContinuationTimer(): void {
@@ -706,17 +681,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	 *   ├─ Blocker: cannot find the tests directory
 	 *   └─ Suggested: ask the user for the test location
 	 */
-	const GOAL_WIDGET_KEY = "goal";
-	let widgetRegistered = false;
-	let goalWidgetComponent: GoalWidgetComponent | null = null;
-
-	function clearGoalWidget(ctx: ExtensionContext): void {
-		ctx.ui.setStatus("goal", undefined);
-		ctx.ui.setWidget(GOAL_WIDGET_KEY, undefined);
-		widgetRegistered = false;
-		goalWidgetComponent = null;
-	}
-
 	// DC4b: serializable projection of the fields renderGoalWidgetLines
 	// consumes — carrying it on the snapshot makes the widget rebuildable
 	// by any consumer without closure getters.
@@ -769,32 +733,15 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		const totalOpen = openGoals().length;
 		if (!state.goal && totalOpen === 0) {
 			publishGoalChannel({ focus: "none", statusLine: "" });
-			clearGoalWidget(ctx);
-			stopStatusRefresh();
+			goalUi.clear(ctx);
+			goalUi.stopStatusRefresh();
 			return;
 		}
 		if (!state.goal) {
 			publishGoalChannel({ focus: "unfocused", statusLine: `goal: unfocused [${totalOpen} open] - /goal-focus`, openGoalCount: totalOpen });
 			ctx.ui.setStatus("goal", `goal: unfocused [${totalOpen} open] - /goal-focus`);
-			if (!widgetRegistered) {
-				ctx.ui.setWidget(
-					GOAL_WIDGET_KEY,
-					(tui, theme) => {
-						goalWidgetComponent = new GoalWidgetComponent({
-							tui,
-							theme,
-							getGoal: () => goalForDisplay() ?? state.goal,
-							getOpenGoalCount: () => openGoals().length,
-						});
-						return goalWidgetComponent;
-					},
-					{ placement: "aboveEditor" },
-				);
-				widgetRegistered = true;
-			} else {
-				goalWidgetComponent?.update();
-			}
-			stopStatusRefresh();
+			goalUi.registerWidget(ctx);
+			goalUi.stopStatusRefresh();
 			return;
 		}
 
@@ -807,30 +754,12 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			openGoalCount: totalOpen,
 		});
 		ctx.ui.setStatus("goal", `${footerStatus(displayGoal)}${otherCount > 0 ? ` (+${otherCount} open)` : ""}`);
-
-		if (!widgetRegistered) {
-			ctx.ui.setWidget(
-				GOAL_WIDGET_KEY,
-				(tui, theme) => {
-					goalWidgetComponent = new GoalWidgetComponent({
-						tui,
-						theme,
-						getGoal: () => goalForDisplay() ?? state.goal,
-						getOpenGoalCount: () => openGoals().length,
-					});
-					return goalWidgetComponent;
-				},
-				{ placement: "aboveEditor" },
-			);
-			widgetRegistered = true;
-		} else {
-			goalWidgetComponent?.update();
-		}
+		goalUi.registerWidget(ctx);
 
 		if (state.goal.status === "complete") {
-			stopStatusRefresh();
+			goalUi.stopStatusRefresh();
 		} else {
-			syncStatusRefresh(ctx);
+			goalUi.syncStatusRefresh(ctx);
 		}
 	}
 
@@ -936,17 +865,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		stopActiveGoal("paused", "user", ctx);
 		resetGetGoalNudgeState(pausedGoalId);
 		uiNotify(ctx, "Goal paused.", "info");
-	}
-
-	function syncTerminalInputPause(ctx: ExtensionContext): void {
-		if (!ctx.hasUI) return;
-		terminalInputUnsubscribe?.();
-		terminalInputUnsubscribe = ctx.ui.onTerminalInput((data) => {
-			if (matchesKey(data, "escape") && state.goal?.status === "active" && state.goal.autoContinue) {
-				pauseActiveGoal(ctx);
-			}
-			return undefined;
-		});
 	}
 
 	function sendQueuedContinuation(ctx: ExtensionContext, goalId: string): void {
@@ -2247,7 +2165,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_start", async (event, ctx) => {
 		loadState(ctx);
-		syncTerminalInputPause(ctx);
+		goalUi.syncTerminalInputPause(ctx);
 		if (event.reason === "resume" && !state.goal && openGoals().length > 1 && ctx.hasUI) {
 			await focusGoalCommand(ctx);
 		}
@@ -2281,7 +2199,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_tree", async (_event, ctx) => {
 		loadState(ctx);
-		syncTerminalInputPause(ctx);
+		goalUi.syncTerminalInputPause(ctx);
 		beginAccounting();
 		queueContinuation(ctx, true);
 	});
@@ -2423,9 +2341,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	pi.on("session_shutdown", async (_event, ctx) => {
 		accountProgress(ctx);
 		clearContinuationTimer();
-		stopStatusRefresh();
-		terminalInputUnsubscribe?.();
-		terminalInputUnsubscribe = null;
+		goalUi.dispose();
 		if (state.goal) persist(ctx);
 	});
 }
