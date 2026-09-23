@@ -1,15 +1,14 @@
 /**
- * Notification tail queue (DECOUPLE-PLAN §4.1, landed at DC3).
+ * Notification tail queue (DECOUPLE-PLAN §4.1, landed at DC3; DC5b: the
+ * no-cctui path now flows through the fallback adapter's onChange
+ * consumer — the direct forward below is the LAST cctui-facing leg and
+ * stays until cctui ships its own tail-queue consumer (version-gated).
  *
- * Transient user-facing notices flow as a bounded tail queue inside the bus
- * snapshot: monotonic ids, newest last, cap 20 (old items are pushed out,
- * never consumed/deleted). Adapters diff by lastSeenId; render is naturally
- * idempotent. No ACK, no clear command — the frozen "no functions" snapshot
- * invariant is untouched.
- *
- * Until DC5 wires adapters, notify() ALSO forwards to ctx.ui.notify (dual
- * write) so on-screen behaviour is unchanged; the direct forward is removed
- * when adapters own rendering.
+ * Transient user-facing notices flow as a bounded tail queue inside the
+ * bus snapshot: monotonic ids, newest last, cap 20 (old items are pushed
+ * out, never consumed/deleted). Adapters diff by lastSeenId; render is
+ * naturally idempotent. No ACK, no clear command — the frozen "no
+ * functions" snapshot invariant is untouched.
  */
 import { coreBus, type CoreBus } from "../bus.js";
 
@@ -23,6 +22,12 @@ export interface NotificationItem {
 
 const CAP = 20;
 
+/** Is a CC-TUI replica live (presence key)? Presentation-layer probe. */
+function ccTuiLive(): boolean {
+	const g = globalThis as Record<string, unknown>;
+	return (g.__piCcTui as { active?: boolean } | undefined)?.active === true || g.__ccTuiActive === true;
+}
+
 /** Append to the tail queue (pure data publish; single-threaded atomicity). */
 export function publishNotification(
 	level: NotificationLevel,
@@ -35,12 +40,17 @@ export function publishNotification(
 	bus.publish({ notifications: next.slice(-CAP) });
 }
 
-/** Presenter-facing notify: tail queue + direct ctx.ui forward (until DC5). */
+/**
+ * Presenter-facing notify. With a live cctui (no tail-queue consumer yet)
+ * the direct forward keeps older cctui builds working; without one the
+ * fallback adapter consumes the queue — so the message shows exactly once
+ * on every path.
+ */
 export function notify(
 	ctx: { hasUI?: boolean; ui?: { notify(message: string, level: NotificationLevel): void } },
 	msg: string,
 	level: NotificationLevel = "info",
 ): void {
 	publishNotification(level, msg);
-	if (ctx?.hasUI && ctx.ui?.notify) ctx.ui.notify(msg, level);
+	if (ccTuiLive() && ctx?.hasUI && ctx.ui?.notify) ctx.ui.notify(msg, level);
 }

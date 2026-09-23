@@ -23,6 +23,7 @@ import {
 } from "@earendil-works/pi-coding-agent"
 
 import permissionModesExtension from "./index.ts"
+import { coreBus } from "../../extensions/bus.ts";
 import { setConfigPath } from "./config.ts"
 import { writeProjectPermissionsFile } from "./permissions-loader.ts"
 import { setModelsPath } from "./profiles.ts"
@@ -361,6 +362,11 @@ function makeCtx(
 }
 
 // ---- tests --------------------------------------------------------------
+
+
+/** DC5b: notifications surface either via the direct leg or the bus tail queue. */
+const notified = (direct: string[], fragment: string): boolean =>
+	[...direct, ...(coreBus().snapshot().notifications ?? []).map((n) => n.msg)].some((m) => m.includes(fragment));
 
 describe("permission-modes extension: tool_call gate", () => {
 	let pi: FakePi
@@ -1751,7 +1757,7 @@ describe("bypass mode: outside-cwd write tracking", () => {
 			ui: { notify: (m: string) => notifications.push(m), select: async () => "Block" },
 		})
 		await pi.simulateToolCall("write", { path: outsideFile }, ctx)
-		expect(notifications.some((n) => n.includes("tracked"))).toBe(true)
+		expect(notified(notifications, "tracked")).toBe(true)
 	})
 
 	it("does NOT prompt on outside-cwd write even with strict UI", async () => {
@@ -1869,7 +1875,7 @@ describe("/outside-writes and /undo-outside-writes commands", () => {
 			cwd,
 			ui: { notify: (m: string) => notifications.push(m), select: async () => "Block" },
 		}))
-		expect(notifications.some((n) => n.includes("No tracked"))).toBe(true)
+		expect(notified(notifications, "No tracked")).toBe(true)
 	})
 
 	it("/undo-outside-writes deletes file when backupContent was null", async () => {
@@ -2481,9 +2487,7 @@ describe("approval flow parity: outside-write tracking (plan B2)", () => {
 		)
 		expect(result).toBeUndefined()
 		expect(listTrackedOutsideWrites(realProjectRoot)).toHaveLength(1)
-		expect(
-			notifications.some((m) => m.includes("Added allow rule (project local)")),
-		).toBe(true)
+		expect(notified(notifications, "Added allow rule (project local)")).toBe(true)
 	})
 
 	it("ask mode 'Allow all (enable bypass)' tracks this write before switching modes", async () => {

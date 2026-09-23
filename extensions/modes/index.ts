@@ -2329,6 +2329,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       fallbackAdapter = createFallbackAdapter({
         hasUI: ctx.hasUI,
         setWorkingMessage: (m) => ctx.ui.setWorkingMessage(m),
+        notify: (m, l) => ctx.ui.notify(m, l),
         theme: ctx.ui.theme,
       });
       fallbackAdapter.startup();

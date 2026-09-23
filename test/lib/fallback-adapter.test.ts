@@ -1,17 +1,21 @@
 /** DC5 §4.3 option C: fallback adapter — yield-to-cctui at the write point. */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { createFallbackAdapter, type FallbackHost } from "../../extensions/ui/fallback.ts";
-import { resetCoreBusForTests } from "../../extensions/bus.ts";
+import { coreBus, resetCoreBusForTests } from "../../extensions/bus.ts";
+import { publishNotification } from "../../extensions/ui/notify.ts";
 
-function fakeHost(): { host: FallbackHost; calls: (string | undefined)[] } {
+function fakeHost(): { host: FallbackHost; calls: (string | undefined)[]; notes: [string, string][] } {
 	const calls: (string | undefined)[] = [];
+	const notes: [string, string][] = [];
 	return {
 		host: {
 			hasUI: true,
 			setWorkingMessage: (m) => calls.push(m),
+			notify: (m, l) => notes.push([m, l]),
 			theme: { fg: (_r, s) => `<dim>${s}</dim>` },
 		},
 		calls,
+		notes,
 	};
 }
 
@@ -72,9 +76,43 @@ describe("fallback adapter (DC5)", () => {
 		const adapter = createFallbackAdapter({
 			hasUI: false,
 			setWorkingMessage: (m) => calls.push(m),
+			notify: () => {},
 			theme: { fg: (_r, s) => s },
 		});
 		adapter.onSnapshot(snap("↑1"));
 		expect(calls).toEqual([]);
+	});
+});
+
+describe("fallback adapter notifications (DC5b)", () => {
+	it("startup subscribes via onChange: publishes surface without a manual onSnapshot", () => {
+		const { host, notes } = fakeHost();
+		const adapter = createFallbackAdapter(host);
+		adapter.startup();
+		publishNotification("info", "queue-rendered");
+		expect(notes).toEqual([["queue-rendered", "info"]]);
+		adapter.shutdown();
+	});
+
+	it("a live cctui advances the cursor without replaying history later", () => {
+		const { host, notes } = fakeHost();
+		const adapter = createFallbackAdapter(host);
+		adapter.startup();
+		g.__piCcTui = { active: true };
+		publishNotification("info", "for-cctui"); // direct-forwarded by notify(), not here
+		expect(notes).toEqual([]);
+		delete g.__piCcTui;
+		publishNotification("info", "back-to-fallback");
+		expect(notes).toEqual([["back-to-fallback", "info"]]);
+		adapter.shutdown();
+	});
+
+	it("publish() keeps the frozen invariant with the consumer attached", () => {
+		const { host } = fakeHost();
+		const adapter = createFallbackAdapter(host);
+		adapter.startup();
+		publishNotification("error", "still-frozen");
+		expect(Object.isFrozen(coreBus().snapshot().notifications)).toBe(true);
+		adapter.shutdown();
 	});
 });

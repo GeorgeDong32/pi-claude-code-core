@@ -37,14 +37,23 @@ describe("notification tail queue (DC3)", () => {
 		expect(() => (q as unknown as { push(x: unknown): void }).push({ id: 99, level: "info", msg: "x" })).toThrow();
 	});
 
-	it("notify() dual-writes: queue + direct forward while hasUI", () => {
+	it("notify() forwards directly only while a cctui is live (legacy cctui leg)", () => {
 		const seen: [string, string][] = [];
-		notify({ hasUI: true, ui: { notify: (m, l) => seen.push([m, l]) } }, "hello", "info");
-		expect(coreBus().snapshot().notifications!.map((n) => n.msg)).toEqual(["hello"]);
-		expect(seen).toEqual([["hello", "info"]]);
+		const ctxLike = { hasUI: true, ui: { notify: (m: string, l: string) => seen.push([m, l]) } };
+		(globalThis as Record<string, unknown>).__piCcTui = { active: true };
+		try {
+			notify(ctxLike, "hello", "info");
+			expect(seen).toEqual([["hello", "info"]]);
+		} finally {
+			delete (globalThis as Record<string, unknown>).__piCcTui;
+		}
+		// No cctui: the fallback adapter owns the display; no direct write.
+		notify(ctxLike, "quiet", "warning");
+		expect(coreBus().snapshot().notifications!.map((n) => n.msg)).toEqual(["hello", "quiet"]);
+		expect(seen).toHaveLength(1);
 	});
 
-	it("notify() skips the direct forward without hasUI (print path)", () => {
+	it("notify() never writes directly on the print path", () => {
 		const seen: [string, string][] = [];
 		notify({ hasUI: false, ui: { notify: (m, l) => seen.push([m, l]) } }, "quiet", "warning");
 		expect(coreBus().snapshot().notifications!.map((n) => n.level)).toEqual(["warning"]);
