@@ -60,3 +60,26 @@ describe("notification tail queue (DC3)", () => {
 		expect(seen).toHaveLength(0);
 	});
 });
+
+describe("notification forward negotiation (DC5b cctui half)", () => {
+	it("a cctui declaring notificationsConsumer suppresses the direct forward", () => {
+		const seen: [string, string][] = [];
+		const ctxLike = { hasUI: true, ui: { notify: (m: string, l: string) => seen.push([m, l]) } };
+		(globalThis as Record<string, unknown>).__piCcTui = { active: true, notificationsConsumer: true };
+		try {
+			notify(ctxLike, "queue-only", "info");
+			expect(coreBus().snapshot().notifications!.map((n) => n.msg)).toContain("queue-only");
+			expect(seen).toHaveLength(0); // its own consumer diffs the queue
+		} finally {
+			delete (globalThis as Record<string, unknown>).__piCcTui;
+		}
+		// Same live key WITHOUT the declaration (older cctui): forward stays.
+		(globalThis as Record<string, unknown>).__piCcTui = { active: true };
+		try {
+			notify(ctxLike, "legacy-leg", "info");
+			expect(seen).toEqual([["legacy-leg", "info"]]);
+		} finally {
+			delete (globalThis as Record<string, unknown>).__piCcTui;
+		}
+	});
+});

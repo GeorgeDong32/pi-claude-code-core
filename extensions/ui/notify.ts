@@ -28,6 +28,14 @@ function ccTuiLive(): boolean {
 	return (g.__piCcTui as { active?: boolean } | undefined)?.active === true || g.__ccTuiActive === true;
 }
 
+/** Is a CC-TUI replica live, and does its build consume the queue itself? */
+function ccTuiNotificationsConsumer(): boolean {
+	const g = globalThis as Record<string, unknown>;
+	return (
+		(g.__piCcTui as { notificationsConsumer?: boolean } | undefined)?.notificationsConsumer === true
+	);
+}
+
 /** Append to the tail queue (pure data publish; single-threaded atomicity). */
 export function publishNotification(
 	level: NotificationLevel,
@@ -41,10 +49,12 @@ export function publishNotification(
 }
 
 /**
- * Presenter-facing notify. With a live cctui (no tail-queue consumer yet)
- * the direct forward keeps older cctui builds working; without one the
- * fallback adapter consumes the queue — so the message shows exactly once
- * on every path.
+ * Presenter-facing notify. The direct ctx.ui.notify forward serves exactly
+ * the cctui builds that cannot consume the queue themselves (no
+ * notificationsConsumer capability declared) — version negotiation keeps
+ * old installs notified. New cctui builds diff the queue via the snapshot;
+ * without any cctui the fallback adapter owns display. Every path shows
+ * the message exactly once.
  */
 export function notify(
 	ctx: { hasUI?: boolean; ui?: { notify(message: string, level: NotificationLevel): void } },
@@ -52,5 +62,7 @@ export function notify(
 	level: NotificationLevel = "info",
 ): void {
 	publishNotification(level, msg);
-	if (ccTuiLive() && ctx?.hasUI && ctx.ui?.notify) ctx.ui.notify(msg, level);
+	if (ccTuiLive() && !ccTuiNotificationsConsumer() && ctx?.hasUI && ctx.ui?.notify) {
+		ctx.ui.notify(msg, level);
+	}
 }
