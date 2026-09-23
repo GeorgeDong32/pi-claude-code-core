@@ -259,11 +259,14 @@ export function renderGoalEvent(message: { details?: GoalEventDetails }, options
 				: "checkpoint";
 	if (!options.expanded) {
 		// Drafting with a topic: collapse the injected confirmation protocol to
-		// the user's own words (the full prompt still goes to the model).
+		// the user's own words (the full prompt still goes to the model). Only
+		// the beacon + noun carry the theme label color — the user's text
+		// stays in the normal message color.
 		if (details.kind === "drafting" && details.objective) {
 			const noun = details.focus === "sisyphus" ? "Sisyphus" : "Goal";
-			return new Text(theme.fg("customMessageLabel", `\uf4de ${noun} ${truncateText(details.objective, 72)}`), 0, 0);
+			return new Text(theme.fg("customMessageLabel", `\uf4de ${noun} `) + theme.fg("customMessageText", truncateText(details.objective, 72)), 0, 0);
 		}
+		// Other goal-authored rows are fully theme-colored.
 		return new Text(theme.fg("customMessageLabel", `Goal ${label}`), 0, 0);
 	}
 	const lines = [`Status: ${details.status === "active" ? "running" : details.status ?? "unknown"}`];
