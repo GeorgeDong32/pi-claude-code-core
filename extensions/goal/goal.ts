@@ -240,10 +240,14 @@ function normalizeGoalEventDetails(value: unknown): GoalEventDetails {
 	};
 }
 
-interface GoalAuditEventDetails {
+export interface GoalAuditEventDetails {
 	phase: "started" | "approved" | "rejected";
 	goalId: string;
 	auditor?: string;
+	/** Approved-only completion stats backing the compact summary line. */
+	achievedAt?: number;
+	activeSeconds?: number;
+	tokensUsed?: number;
 }
 
 export function renderGoalEvent(message: { details?: GoalEventDetails }, options: { expanded: boolean }, theme: Theme): Text {
@@ -274,8 +278,29 @@ export function renderGoalEvent(message: { details?: GoalEventDetails }, options
 	);
 }
 
-function renderGoalAuditEvent(message: { content?: unknown; details?: GoalAuditEventDetails }, _options: { expanded: boolean }, theme: Theme): Text {
-	const phase = message.details?.phase ?? "started";
+export function renderGoalAuditEvent(message: { content?: unknown; details?: GoalAuditEventDetails }, options: { expanded: boolean }, theme: Theme): Text {
+	const details = message.details;
+	const phase = details?.phase ?? "started";
+	if (!options.expanded) {
+		// Compact, tool-call-like line; ctrl+o expands to the full report.
+		if (phase === "approved") {
+			const at = typeof details?.achievedAt === "number" ? details.achievedAt : undefined;
+			const seconds = typeof details?.activeSeconds === "number" ? details.activeSeconds : undefined;
+			const tokens = typeof details?.tokensUsed === "number" ? details.tokensUsed : undefined;
+			if (at !== undefined && seconds !== undefined && tokens !== undefined) {
+				const hhmm = new Date(at).toTimeString().slice(0, 5);
+				return new Text(
+					theme.fg("customMessageLabel", `\uf4de goal achieved at ${hhmm}, `) +
+						theme.fg("customMessageText", `used ${formatDuration(seconds)}, ${formatTokenValue(tokens).split(" ")[0]} tokens`),
+					0,
+					0,
+				);
+			}
+			return new Text(theme.fg("customMessageLabel", "Goal Audit ") + theme.fg("customMessageText", "approved"), 0, 0);
+		}
+		const summary = phase === "rejected" ? "rejected — expand (ctrl+o) for the report" : "start ...";
+		return new Text(theme.fg("customMessageLabel", "Goal Audit ") + theme.fg("customMessageText", summary), 0, 0);
+	}
 	const label = phase === "approved" ? "approved" : phase === "rejected" ? "rejected" : "started";
 	const content = typeof message.content === "string" ? message.content : `Goal audit ${label}.`;
 	return new Text(
@@ -1770,14 +1795,23 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				"",
 				auditor.output || "Auditor approved completion.",
 			].filter((line): line is string => line !== undefined).join("\n");
+			// Account for any remaining elapsed time first so the compact
+			// "goal achieved" line carries the final usage numbers.
+			accountProgress(ctx);
+			const finalUsage = state.goal ? { ...state.goal.usage } : null;
 			pi.sendMessage<GoalAuditEventDetails>({
 				customType: GOAL_AUDIT_ENTRY,
 				content: approvalText,
 				display: true,
-				details: { phase: "approved", goalId: auditTarget.id, auditor: auditor.model },
+				details: {
+					phase: "approved",
+					goalId: auditTarget.id,
+					auditor: auditor.model,
+					...(finalUsage
+						? { achievedAt: Date.now(), activeSeconds: finalUsage.activeSeconds, tokensUsed: finalUsage.tokensUsed }
+						: {}),
+				},
 			});
-			// Account for any remaining elapsed time before stopping.
-			accountProgress(ctx);
 			state.goal = auditTarget;
 			stopActiveGoal("complete", "agent", ctx);
 			const completedGoal = state.goal;

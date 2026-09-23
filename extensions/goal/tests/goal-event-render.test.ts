@@ -48,3 +48,39 @@ test("expanded drafting still exposes the objective and ids", () => {
 	assert.match(text, /Objective: ship it/);
 	assert.match(text, /Goal id: g7/);
 });
+
+// --- pi-goal-audit-event compact rendering ---
+
+import { renderGoalAuditEvent } from "../goal.ts";
+import type { GoalAuditEventDetails } from "../goal.ts";
+
+function auditDetails(overrides: Partial<GoalAuditEventDetails>): { content?: unknown; details: GoalAuditEventDetails } {
+	return { details: { phase: "started", goalId: "g1", ...overrides } };
+}
+
+test("collapsed audit start shows the tool-call-like line", () => {
+	const out = renderGoalAuditEvent(auditDetails({}), { expanded: false }, theme);
+	assert.equal(textOf(out), "Goal Audit start ...");
+});
+
+test("collapsed approved renders the goal-achieved summary with final usage", () => {
+	const out = renderGoalAuditEvent(
+		auditDetails({ phase: "approved", achievedAt: new Date("2026-09-24T14:32:00").getTime(), activeSeconds: 3725, tokensUsed: 45200 }),
+		{ expanded: false },
+		theme,
+	);
+	assert.equal(textOf(out), "\uf4de goal achieved at 14:32, used 1h02m05s, 45K tokens");
+});
+
+test("collapsed approved without stats falls back to the plain label", () => {
+	const out = renderGoalAuditEvent(auditDetails({ phase: "approved" }), { expanded: false }, theme);
+	assert.equal(textOf(out), "Goal Audit approved");
+});
+
+test("collapsed rejected points at the report; expanded keeps full content", () => {
+	const collapsed = renderGoalAuditEvent(auditDetails({ phase: "rejected" }), { expanded: false }, theme);
+	assert.equal(textOf(collapsed), "Goal Audit rejected — expand (ctrl+o) for the report");
+	const expanded = renderGoalAuditEvent({ ...auditDetails({ phase: "rejected" }), content: "report body" }, { expanded: true }, theme);
+	assert.match(textOf(expanded), /Goal audit rejected/);
+	assert.match(textOf(expanded), /report body/);
+});
