@@ -137,6 +137,7 @@ interface FakeCtxOptions {
 		custom?: (factory: unknown, options?: unknown) => Promise<unknown>
 		notify?: (msg: string) => void
 		editor?: (label: string, val: string) => Promise<string | undefined>
+		setFooter?: (footer: unknown) => void
 	}
 }
 
@@ -342,7 +343,7 @@ function makeCtx(
 			editor: ui.editor ?? (async () => undefined),
 			setStatus: () => {},
 			setWidget: () => {},
-			setFooter: () => {},
+			setFooter: ui.setFooter ?? (() => {}),
 			setWorkingIndicator: () => {},
 			setWorkingMessage: () => {},
 			theme: {
@@ -2550,5 +2551,58 @@ describe("permission-modes capability channel (plan B7)", () => {
 		await pi.simulateSessionStart("/home/user/project")
 		const cap = (globalThis as Record<string, unknown>).__piPermissionModes as { mode: string }
 		expect(cap.mode).toBe("auto")
+	})
+})
+
+describe("footer slot ownership vs CC-TUI (2026-09-22)", () => {
+	let pi: FakePi
+	let configTmp: string
+	let footerCalls: unknown[]
+
+	const boot = async () => {
+		permissionModesExtension(makeFakePiForExtension(pi))
+		await pi.simulateSessionStart("/home/user/project", {
+			setFooter: () => {
+				footerCalls.push(undefined)
+			},
+		})
+	}
+
+	beforeEach(async () => {
+		pi = createFakePi()
+		footerCalls = []
+		configTmp = mkdtempSync(join(tmpdir(), "pm-idx-ff-"))
+		setConfigPath(join(configTmp, "permission-modes.json"))
+		writeFileSync(
+			join(configTmp, "permission-modes.json"),
+			JSON.stringify({ classifier: { enabled: false } }),
+		)
+		delete (globalThis as Record<string, unknown>).__piPermissionModes
+		delete (globalThis as Record<string, unknown>).__piCcTui
+		delete (globalThis as Record<string, unknown>).__ccTuiActive
+	})
+
+	afterEach(() => {
+		rmSync(configTmp, { recursive: true, force: true })
+		delete (globalThis as Record<string, unknown>).__piPermissionModes
+		delete (globalThis as Record<string, unknown>).__piCcTui
+		delete (globalThis as Record<string, unknown>).__ccTuiActive
+	})
+
+	it("installs its footer when no CC-TUI replica is active", async () => {
+		await boot()
+		expect(footerCalls.length).toBeGreaterThan(0)
+	})
+
+	it("yields the footer slot when CC-TUI is active (order-independent)", async () => {
+		; (globalThis as Record<string, unknown>).__piCcTui = { active: true }
+		await boot()
+		expect(footerCalls.length).toBe(0)
+	})
+
+	it("legacy __ccTuiActive flag also yields", async () => {
+		; (globalThis as Record<string, unknown>).__ccTuiActive = true
+		await boot()
+		expect(footerCalls.length).toBe(0)
 	})
 })

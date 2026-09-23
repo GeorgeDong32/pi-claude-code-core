@@ -901,6 +901,14 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
 
   function installFooter(ctx: ExtensionContext): void {
     if (!ctx.hasUI) return;
+    // Integration: when the CC-TUI replica extension is active it owns the
+    // footer slot (mode/hints row + statusline); installing ours would evict
+    // it — same handshake as refreshWorkingMessage below. Load order decides
+    // the last setFooter writer, so without this yield the winner flips with
+    // package order (observed: core loading after cctui evicted its footer).
+    const g = globalThis as Record<string, unknown>;
+    const ccTuiActive = (g.__piCcTui as { active?: boolean } | undefined)?.active === true || g.__ccTuiActive === true;
+    if (ccTuiActive) return;
     ctx.ui.setFooter((_tui: any, theme: any) => ({
       render(width: number): string[] {
         const m = MODE_META[currentMode];
