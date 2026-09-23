@@ -717,11 +717,35 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		goalWidgetComponent = null;
 	}
 
-	function publishGoalChannel(widget?: { focus: "focused" | "unfocused" | "none"; statusLine: string }): void {
+	// DC4b: serializable projection of the fields renderGoalWidgetLines
+	// consumes — carrying it on the snapshot makes the widget rebuildable
+	// by any consumer without closure getters.
+	function widgetGoalProjection(goal: NonNullable<ReturnType<typeof goalForDisplay>>): {
+		objective: string; status: string; sisyphus: boolean;
+		stopReason?: string; pauseReason?: string; pauseSuggestedAction?: string;
+		activePath?: string; archivedPath?: string; tokensUsed: number; activeSeconds: number;
+	} {
+		return {
+			objective: goal.objective,
+			status: goal.status,
+			sisyphus: goal.sisyphus,
+			...(goal.stopReason !== undefined ? { stopReason: goal.stopReason } : {}),
+			...(goal.pauseReason !== undefined ? { pauseReason: goal.pauseReason } : {}),
+			...(goal.pauseSuggestedAction !== undefined ? { pauseSuggestedAction: goal.pauseSuggestedAction } : {}),
+			...(goal.activePath !== undefined ? { activePath: goal.activePath } : {}),
+			...(goal.archivedPath !== undefined ? { archivedPath: goal.archivedPath } : {}),
+			tokensUsed: goal.usage.tokensUsed,
+			activeSeconds: goal.usage.activeSeconds,
+		};
+	}
+
+	function publishGoalChannel(
+		widget?: { focus: "focused" | "unfocused" | "none"; statusLine: string; goal?: ReturnType<typeof widgetGoalProjection>; openGoalCount?: number },
+	): void {
 		// P2-BUS-01: goal channel on the capability bus (frozen snapshot).
-		// DC4: widget presentation state (focus + status-line text) rides the
-		// snapshot so headless consumers can render it; the deep component
-		// state (steps) moves with the DC4b physical split.
+		// DC4/DC4b: the widget field is presentation-complete — focus,
+		// status-line text, a serializable goal projection, and the open
+		// count, enough to rebuild renderGoalWidgetLines anywhere.
 		const goal = state.goal;
 		coreBus().publish({
 			goal: {
@@ -750,7 +774,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			return;
 		}
 		if (!state.goal) {
-			publishGoalChannel({ focus: "unfocused", statusLine: `goal: unfocused [${totalOpen} open] - /goal-focus` });
+			publishGoalChannel({ focus: "unfocused", statusLine: `goal: unfocused [${totalOpen} open] - /goal-focus`, openGoalCount: totalOpen });
 			ctx.ui.setStatus("goal", `goal: unfocused [${totalOpen} open] - /goal-focus`);
 			if (!widgetRegistered) {
 				ctx.ui.setWidget(
@@ -779,6 +803,8 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		publishGoalChannel({
 			focus: "focused",
 			statusLine: `${footerStatus(displayGoal)}${otherCount > 0 ? ` (+${otherCount} open)` : ""}`,
+			goal: widgetGoalProjection(displayGoal),
+			openGoalCount: totalOpen,
 		});
 		ctx.ui.setStatus("goal", `${footerStatus(displayGoal)}${otherCount > 0 ? ` (+${otherCount} open)` : ""}`);
 

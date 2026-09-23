@@ -25,7 +25,7 @@ export interface CoreSnapshot {
 		meta?: Readonly<Record<string, { icon: string; label: string; role: string }>>;
 	};
 	effort: { level: string | null; source: "env" | "session" | "profile" | "model-default" };
-	goal: { active: boolean; paused?: boolean; summary: string | null; widget?: { focus: "focused" | "unfocused" | "none"; statusLine: string } };
+	goal: { active: boolean; paused?: boolean; summary: string | null; widget?: { focus: "focused" | "unfocused" | "none"; statusLine: string; goal?: { objective: string; status: string; sisyphus: boolean; stopReason?: string; pauseReason?: string; pauseSuggestedAction?: string; activePath?: string; archivedPath?: string; tokensUsed: number; activeSeconds: number }; openGoalCount?: number } };
 	review: { status: "idle" | "running" | "done"; lastRunAt: number | null };
 	/** DC3: bounded notification tail queue (monotonic ids, newest last, cap 20). */
 	notifications?: ReadonlyArray<{ id: number; level: "info" | "warning" | "error"; msg: string }>;
@@ -55,7 +55,7 @@ export interface CoreStatus {
 		meta?: Readonly<Record<string, { icon: string; label: string; role: string }>>;
 	};
 	effort: { level: string | null; source: string };
-	goal: { active: boolean; paused?: boolean; summary: string | null; widget?: { focus: "focused" | "unfocused" | "none"; statusLine: string } };
+	goal: { active: boolean; paused?: boolean; summary: string | null; widget?: { focus: "focused" | "unfocused" | "none"; statusLine: string; goal?: { objective: string; status: string; sisyphus: boolean; stopReason?: string; pauseReason?: string; pauseSuggestedAction?: string; activePath?: string; archivedPath?: string; tokensUsed: number; activeSeconds: number }; openGoalCount?: number } };
 	review: { status: string; lastRunAt: number | null };
 	/** DC3: bounded notification tail queue (monotonic ids, newest last, cap 20). */
 	notifications?: ReadonlyArray<{ id: number; level: "info" | "warning" | "error"; msg: string }>;
