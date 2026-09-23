@@ -22,6 +22,7 @@ import { clearModesStatus, installModesFooter, shortenPath } from "./ui/footer.t
 import { clearPlanWidget, updatePlanWidget as updatePlanWidgetUi } from "./ui/plan-widget.ts";
 import { confirmChoice } from "./ui/confirm.ts";
 import { notify as uiNotify } from "../ui/notify.ts";
+import { createFallbackAdapter } from "../ui/fallback.ts";
 import { coreBus } from "../bus.ts"
 import { isInsideDir } from "../../lib/rule-text.js"
 import { resolveMemoryPaths } from "../memory/paths.ts"
@@ -190,6 +191,9 @@ export interface PmCapability {
 
 export default function permissionModesExtension(pi: ExtensionAPI): void {
   // ---- state -------------------------------------------------------------
+  // DC5: the fallback UI adapter — the only writer of pi's working-message
+  // slot from this module, yielding to a live CC-TUI (see ui/fallback.ts).
+  let fallbackAdapter = createFallbackAdapter({ hasUI: false, setWorkingMessage: () => {}, theme: { fg: (_r, s) => s } });
   let currentMode: Mode = "ask";
   let planExecuting = false;
   let planPhase: PlanPhase = "exploring";
@@ -926,10 +930,6 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     return parts;
   }
 
-  function renderWorkingMessage(ctx: ExtensionContext): string {
-    return `Working… (${workingStatsParts(ctx).join(" · ")})`;
-  }
-
   // ---- Capability channel to pi-claude-code-tui (plan B7) ------------------
   // One typed, versioned namespace replaces the untyped globals; the legacy
   // __pmWorkingStats key stays published for one compatibility cycle (older
@@ -954,20 +954,13 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
 
   function refreshWorkingMessage(ctx: ExtensionContext): void {
     if (!ctx.hasUI) return;
-    // Integration: when the CC-TUI extension is active, its status row owns
-    // the working line — publish the stats there instead of occupying pi's
-    // working-message slot (which would render a duplicate second line).
-    const g = globalThis as Record<string, unknown>;
-    const ccTuiActive = (g.__piCcTui as { active?: boolean } | undefined)?.active === true || g.__ccTuiActive === true;
-    if (ccTuiActive) {
-      const stats = workingStatsParts(ctx).join(" · ");
-      publishCapability({ workingStats: stats });
-      // Legacy __pmWorkingStats key is derived from the snapshot by the bus.
-      return;
-    }
-    ctx.ui.setWorkingMessage(
-      ctx.ui.theme.fg("dim", renderWorkingMessage(ctx)),
-    );
+    // DC5 flip: logic always publishes (snapshot is always-full); the
+    // working-message slot write belongs to the fallback adapter, which
+    // yields to a live CC-TUI at its own write point. With cctui active
+    // its status row owns the working line — publishing alone is correct.
+    const stats = workingStatsParts(ctx).join(" · ");
+    publishCapability({ workingStats: stats });
+    fallbackAdapter.onSnapshot(coreBus().snapshot());
   }
 
   async function applyConfiguredPermissionRules(
@@ -2330,6 +2323,15 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     if (ctx.hasUI) {
       installModesFooter(ctx, () => ({ mode: currentMode, gitBranch, activeProfile, thinkingLevel: pi.getThinkingLevel() }));
       clearModesStatus(ctx);
+      // DC5: rebuild the fallback adapter with the live context (it owns
+      // the working-message slot write from here on).
+      fallbackAdapter.shutdown();
+      fallbackAdapter = createFallbackAdapter({
+        hasUI: ctx.hasUI,
+        setWorkingMessage: (m) => ctx.ui.setWorkingMessage(m),
+        theme: ctx.ui.theme,
+      });
+      fallbackAdapter.startup();
     }
 
     // If a profile was activated (via flag or persisted state), apply its
@@ -2433,6 +2435,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     void ctx;
   });
   pi.on("session_shutdown", () => {
+    fallbackAdapter.shutdown();
     forwardingPoller?.stop();
     forwardingPoller = undefined;
     forwardingClaimedIds.clear();

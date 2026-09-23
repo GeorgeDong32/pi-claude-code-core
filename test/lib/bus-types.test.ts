@@ -89,7 +89,8 @@ describe("P1-BUS-07 reader total matrix", () => {
 		const read = readCoreStatus({ __piClaudeCodeCore: published });
 		// The reader's projection of a real publish matches the published data.
 		expect(read.modes.mode).toBe("auto");
-		expect(read.version).toBe(1);
+		// DC5: publishes are v2 (onChange DATA field); readers accept >=1.
+		expect(read.version).toBe(2);
 		expect(read.revision).toBe(published.revision);
 	});
 });

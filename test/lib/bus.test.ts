@@ -29,15 +29,18 @@ describe("P1-BUS-01 snapshot shape", () => {
 		expect((globalThis as Record<string, unknown>).__piClaudeCodeCore).toBe(snap);
 		expect(Object.isFrozen(snap)).toBe(true);
 		expect(Object.isFrozen(snap.modes)).toBe(true);
-		// Pure data: JSON round-trips and no function-valued properties.
-		expect(JSON.parse(JSON.stringify(snap))).toEqual(snap);
+		// DC5 (P1-BUS-10 v2): the ONE function-valued field is the data-carried
+		// subscription point; everything else stays JSON-pure data.
+		expect(snap.version).toBe(2);
+		expect(typeof snap.onChange).toBe("function");
+		const { onChange, ...data } = snap;
+		void onChange;
+		expect(JSON.parse(JSON.stringify(data))).toEqual(data);
 		const walk = (v: unknown): void => {
-			if (typeof v === "function") throw new Error("function in snapshot");
+			if (typeof v === "function") throw new Error("unexpected function in snapshot data");
 			if (v && typeof v === "object") Object.values(v).forEach(walk);
 		};
-		expect(() => walk(snap)).not.toThrow();
-		// P1-BUS-10 (v1): no subscription/event fields — the snapshot is data.
-		expect("onChange" in snap).toBe(false);
+		expect(() => walk(data)).not.toThrow();
 	});
 
 	it("installs the Cmd write channel; unknown command is total (P1-BUS-08)", () => {
@@ -63,8 +66,10 @@ describe("P1-BUS-01 snapshot shape", () => {
 		expect(g.__piClaudeCodeCore).toBeUndefined();
 		expect(g.__piClaudeCodeCoreCmd).toBeUndefined();
 		// legacy projection remains exactly as last published
-		expect(g.__piPermissionModes).toEqual({ version: 1, active: true, mode: "ask", workingStats: "↑1" });
-		expect(g.__pmWorkingStats).toBe("(↑1)");
+		expect(g.__piPermissionModes).toEqual({ version: 1, active: true, mode: "ask", workingStats: "↑1", meta: undefined });
+		// DC5 gating: the legacy stats key is written only for a live CCTUI
+		// (its consumer) — absent here by design (P0-CT-02 negative).
+		expect(g.__pmWorkingStats).toBeUndefined();
 	});
 });
 
@@ -82,7 +87,13 @@ describe("P1-BUS-03/05 single publish point + legacy derivation", () => {
 			mode: snap.modes.mode,
 			workingStats: snap.modes.workingStats,
 		});
-		expect(g.__pmWorkingStats).toBe(`(${snap.modes.workingStats})`);
+		// DC5: without a live CCTUI the legacy stats key stays unset even when
+		// the publish carries stats (always-full snapshot + presence-gated write).
+		expect(g.__pmWorkingStats).toBeUndefined();
+		g.__piCcTui = { active: true };
+		bus.publish({ modes: { mode: "auto", workingStats: "↑1" } });
+		expect(g.__pmWorkingStats).toBe("(↑1)");
+		delete g.__piCcTui;
 	});
 
 	it("legacy stats key is NOT written while workingStats is null (CT-02 negative)", () => {

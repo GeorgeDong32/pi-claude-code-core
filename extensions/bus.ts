@@ -97,6 +97,17 @@ const g = globalThis as Record<string, unknown>;
 export function createCoreBus(): CoreBus {
 	let current: CoreSnapshot = deepFreeze(initialSnapshot());
 	const commandHandlers = new Map<string, CommandHandler>();
+	// P1-BUS-10 / DC5: the subscription point is DATA on the v2 snapshot —
+	// snapshot.onChange(listener) registers, returns an unsubscribe. The
+	// listener set lives here; each publish re-serves an equivalent register
+	// function. deepFreeze skips functions, so the frozen invariant holds.
+	const listeners = new Set<() => void>();
+	const onChangeRegister = (fn: () => void): (() => void) => {
+		listeners.add(fn);
+		return () => {
+			listeners.delete(fn);
+		};
+	};
 
 	function deriveLegacy(snapshot: CoreSnapshot): void {
 		// Legacy CCTUI key — a projection of the modes channel (PmCapability).
@@ -109,19 +120,29 @@ export function createCoreBus(): CoreBus {
 			// so consumers stay single-sourced until they read the snapshot itself.
 			meta: snapshot.modes.meta,
 		};
-		// Written only once stats exist — mirrors pm 2.8.0 behavior pinned by
-		// P0-CT-02 (without CCTUI presence the key must stay unset).
-		if (snapshot.modes.workingStats !== null) {
+		// DC5 gating flip: publishes are always-full now, so the legacy key
+		// write is what stays presence-gated — written only for a live CCTUI
+		// (its consumer). P0-CT-02's negative (without CCTUI the key stays
+		// unset) keeps holding under the new semantics.
+		const ccTuiLive = (g.__piCcTui as { active?: boolean } | undefined)?.active === true || g.__ccTuiActive === true;
+		if (ccTuiLive && snapshot.modes.workingStats !== null) {
 			g.__pmWorkingStats = `(${snapshot.modes.workingStats})`;
 		}
 	}
 
 	const bus: CoreBus = {
 		publish(patch: CorePatch): CoreSnapshot {
-			current = deepFreeze({ ...current, ...patch, revision: current.revision + 1 });
+			current = deepFreeze({
+				...current,
+				...patch,
+				version: 2,
+				onChange: onChangeRegister,
+				revision: current.revision + 1,
+			});
 			g.__piClaudeCodeCore = current;
 			g.__piClaudeCodeCoreCmd = (cmd: CoreCommand) => bus.handleCommand(cmd);
 			deriveLegacy(current);
+			for (const listener of listeners) listener();
 			return current;
 		},
 		snapshot: () => current,
@@ -140,6 +161,7 @@ export function createCoreBus(): CoreBus {
 		dispose() {
 			delete g.__piClaudeCodeCore;
 			delete g.__piClaudeCodeCoreCmd;
+			listeners.clear();
 			current = deepFreeze(initialSnapshot());
 			commandHandlers.clear();
 		},

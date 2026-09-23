@@ -13,8 +13,10 @@ export interface LegacyPmCapability {
 }
 
 export interface CoreSnapshot {
-	version: 1;
+	version: number;
 	revision: number;
+	/** DC5 (P1-BUS-10): data-carried subscription point — snapshot.onChange(fn) registers, returns unsubscribe. v2+ only. */
+	onChange?: (fn: () => void) => () => void;
 	modes: {
 		mode: "ask" | "plan" | "auto" | "bypass" | "";
 		planPhase?: "exploring" | "refining" | "reviewing" | "executing";
@@ -44,6 +46,8 @@ export interface CoreCommandResult {
 export interface CoreStatus {
 	version: number;
 	revision: number;
+	/** DC5 (P1-BUS-10): data-carried subscription point — snapshot.onChange(fn) registers, returns unsubscribe. v2+ only. */
+	onChange?: (fn: () => void) => () => void;
 	modes: {
 		mode: string;
 		planPhase?: string;
