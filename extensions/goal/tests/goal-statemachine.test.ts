@@ -136,3 +136,70 @@ test("ui: focused goal vanishing from disk reconciles to the none snapshot", asy
 		f.cleanup();
 	}
 });
+
+test("ui: /goals injects a compact custom message — full prompt to the model, topic kept for display", async () => {
+	const f = setup({ ui: true });
+	try {
+		await f.host.fire("session_start", { reason: "new" }, f.ctx);
+		f.host.sentMessages.length = 0;
+		f.host.userMessages.length = 0;
+		await f.host.commands.get("goals")!("ship the retry decoder", f.ctx);
+		// Injection moved off sendUserMessage: no raw user-message transcript dump.
+		assert.equal(f.host.userMessages.length, 0);
+		const sent = f.host.sentMessages.at(-1);
+		assert.equal(sent?.message.customType, "pi-goal-event");
+		assert.equal(sent?.message.display, true);
+		const text = typeof sent?.message.content === "string" ? sent.message.content : "";
+		assert.match(text, /\[GOAL CONFIRMATION focus=goal\]/);
+		assert.ok(text.includes("ship the retry decoder"));
+		const details = asRecord(sent?.message.details);
+		assert.equal(details?.kind, "drafting");
+		assert.equal(details?.objective, "ship the retry decoder");
+		assert.equal(details?.focus, "goal");
+		const opts = asRecord(sent?.opts);
+		assert.equal(opts?.triggerTurn, true);
+		assert.equal(opts?.deliverAs, "steer"); // fake ctx isIdle() === false
+	} finally {
+		f.cleanup();
+	}
+});
+
+test("ui: /sisyphus injects the sisyphus drafting variant of the same channel", async () => {
+	const f = setup({ ui: true });
+	try {
+		await f.host.fire("session_start", { reason: "new" }, f.ctx);
+		f.host.sentMessages.length = 0;
+		await f.host.commands.get("sisyphus")!("ordered retry rollout", f.ctx);
+		const sent = f.host.sentMessages.at(-1);
+		assert.equal(sent?.message.customType, "pi-goal-event");
+		const text = typeof sent?.message.content === "string" ? sent.message.content : "";
+		assert.match(text, /\[GOAL CONFIRMATION focus=sisyphus\]/);
+		const details = asRecord(sent?.message.details);
+		assert.equal(details?.kind, "drafting");
+		assert.equal(details?.focus, "sisyphus");
+		assert.equal(details?.objective, "ordered retry rollout");
+	} finally {
+		f.cleanup();
+	}
+});
+
+test("message_end keeps drafting custom messages visible but hides checkpoints", async () => {
+	const f = setup({ ui: true });
+	try {
+		const replace = async (message: Record<string, unknown>) =>
+			(await f.host.fire("message_end", { message }, f.ctx)) as unknown;
+		const drafting = { role: "custom", customType: "pi-goal-event", display: true, content: "x", details: { kind: "drafting", goalId: "d1" } };
+		const checkpoint = { role: "custom", customType: "pi-goal-event", display: true, content: "x", details: { kind: "checkpoint", goalId: "g1" } };
+		const results = await Promise.all([replace(drafting), replace(checkpoint)]);
+		const draftingResult = asRecord(asRecord(results[0])?.message);
+		const checkpointResult = asRecord(asRecord(results[1])?.message);
+		assert.equal(draftingResult, null); // drafting passes through untouched
+		assert.equal(checkpointResult?.display, false); // checkpoint forced hidden
+	} finally {
+		f.cleanup();
+	}
+});
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+	return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}

@@ -29,7 +29,7 @@ export interface WidgetCall {
 	value: unknown;
 }
 export interface SentMessage {
-	message: { customType?: string; content?: unknown; display?: boolean };
+	message: { customType?: string; content?: unknown; display?: boolean; details?: unknown };
 	opts?: unknown;
 }
 
@@ -134,6 +134,7 @@ export class FakeHost {
 			model: undefined,
 			modelRegistry: host.piObject().modelRegistry,
 			getContextUsage: () => undefined,
+			isIdle: () => false,
 			isProjectTrusted: () => true,
 			sessionManager: {
 				getBranch: () => opts.sessionEntries ?? [],

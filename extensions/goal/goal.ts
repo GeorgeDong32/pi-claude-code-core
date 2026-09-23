@@ -246,13 +246,19 @@ interface GoalAuditEventDetails {
 	auditor?: string;
 }
 
-function renderGoalEvent(message: { details?: GoalEventDetails }, options: { expanded: boolean }, theme: Theme): Text {
+export function renderGoalEvent(message: { details?: GoalEventDetails }, options: { expanded: boolean }, theme: Theme): Text {
 	const details = normalizeGoalEventDetails(message.details);
 	const label =
 		details.kind === "stale" ? "stale checkpoint"
 			: details.kind === "drafting" ? (details.focus === "sisyphus" ? "sisyphus drafting" : "goal drafting")
 				: "checkpoint";
 	if (!options.expanded) {
+		// Drafting with a topic: collapse the injected confirmation protocol to
+		// the user's own words (the full prompt still goes to the model).
+		if (details.kind === "drafting" && details.objective) {
+			const noun = details.focus === "sisyphus" ? "Sisyphus" : "Goal";
+			return new Text(theme.fg("customMessageLabel", `⟳ ${noun} `) + theme.fg("customMessageText", truncateText(details.objective, 72)), 0, 0);
+		}
 		return new Text(theme.fg("customMessageLabel", "Goal ") + theme.fg("customMessageText", label), 0, 0);
 	}
 	const lines = [`Status: ${details.status === "active" ? "running" : details.status ?? "unknown"}`];
@@ -1030,7 +1036,23 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		};
 		syncGoalTools();
 		try {
-			pi.sendUserMessage(goalDraftingPrompt(trimmed, focus), { deliverAs: ctx.isIdle() ? "followUp" : "steer" });
+			// Custom message keeps the full drafting prompt as LLM-visible user
+			// content while the TUI renders a compact "Goal <topic>" line.
+			pi.sendMessage<GoalEventDetails>(
+				{
+					customType: GOAL_EVENT_ENTRY,
+					content: goalDraftingPrompt(trimmed, focus),
+					display: true,
+					details: {
+						kind: "drafting",
+						goalId: `draft-${Date.now().toString(36)}`,
+						objective: trimmed || undefined,
+						focus,
+						timestamp: Date.now(),
+					},
+				},
+				{ triggerTurn: true, deliverAs: ctx.isIdle() ? "followUp" : "steer" },
+			);
 		} catch (err) {
 			uiNotify(ctx, `Could not start ${label.toLowerCase()}: ${(err as Error).message}`, "error");
 		}
@@ -2158,7 +2180,10 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	pi.on("message_end", async (event, ctx) => {
 		if (isAbortedAssistantMessage(event.message)) pauseActiveGoal(ctx);
 		const raw = asRecord(event.message);
-		if (raw?.role === "custom" && raw.customType === GOAL_EVENT_ENTRY && raw.display !== false) {
+		// Drafting injections stay visible (compact "Goal <topic>" line);
+		// checkpoint/continuation events remain hidden.
+		const kind = asRecord(raw?.details)?.kind;
+		if (raw?.role === "custom" && raw.customType === GOAL_EVENT_ENTRY && raw.display !== false && kind !== "drafting") {
 			return { message: { ...event.message, display: false } as typeof event.message };
 		}
 	});
