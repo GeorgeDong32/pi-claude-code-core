@@ -296,7 +296,10 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 			const q = currentQuestion();
 			const opts = displayOptions();
 			const add = (s: string) => lines.push(truncateToWidth(s, safeWidth, "…", true));
-			const addWrapped = (s: string) => lines.push(...wrapTextWithAnsi(s, safeWidth));
+			// Indented wrap: continuation lines (and every line of multi-line
+			// context) keep the indent instead of flushing to column 0.
+			const addWrapped = (s: string, indent = " ") =>
+				lines.push(...wrapTextWithAnsi(s, safeWidth - visibleWidth(indent)).map((line) => indent + line));
 
 			add(theme.fg("accent", "─".repeat(safeWidth)));
 			if (isMulti) {
@@ -326,8 +329,8 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 			}
 
 			if (inputMode && q) {
-				addWrapped(theme.fg("text", ` ${q.question}`));
-				if (q.context) addWrapped(theme.fg("muted", ` ${q.context}`));
+				addWrapped(theme.fg("text", q.question));
+				if (q.context) addWrapped(theme.fg("muted", q.context));
 				lines.push("");
 				if (q.options.length > 0) {
 					renderOptions();
@@ -347,8 +350,8 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 				lines.push("");
 				add(allAnswered() ? theme.fg("success", " Press Enter to submit") : theme.fg("warning", ` Unanswered: ${questions.filter((qq) => !answers.has(qq.id)).map((qq) => qq.id).join(", ")}`));
 			} else if (q) {
-				addWrapped(theme.fg("text", ` ${q.question}`));
-				if (q.context) addWrapped(theme.fg("muted", ` ${q.context}`));
+				addWrapped(theme.fg("text", q.question));
+				if (q.context) addWrapped(theme.fg("muted", q.context));
 				const existing = answers.get(q.id);
 				if (existing) add(theme.fg("dim", ` Current: ${existing.wasCustom ? "(wrote) " : ""}${existing.answer}`));
 				lines.push("");
