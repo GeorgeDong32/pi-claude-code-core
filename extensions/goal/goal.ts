@@ -142,6 +142,9 @@ const POST_STOP_ALLOWED_TOOL_SET = new Set<string>(POST_STOP_ALLOWED_TOOLS);
  * arbitrary write/edit calls.
  */
 let tweakDraftingFor: string | null = null;
+// Approved-audit message held until the finishing turn ends, so "Goal
+// achieved" lands after the model's closing summary (bottom of transcript).
+let pendingGoalAchievement: { content: string; details: GoalAuditEventDetails } | null = null;
 
 /**
  * Thin session-local confirmation intent for /goals and /sisyphus.
@@ -1814,10 +1817,10 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			// "goal achieved" line carries the final usage numbers.
 			accountProgress(ctx);
 			const finalUsage = state.goal ? { ...state.goal.usage } : null;
-			pi.sendMessage<GoalAuditEventDetails>({
-				customType: GOAL_AUDIT_ENTRY,
+			// Deferred to the end of this finishing turn so the model's closing
+			// summary renders first and "Goal achieved" becomes the last line.
+			pendingGoalAchievement = {
 				content: approvalText,
-				display: true,
 				details: {
 					phase: "approved",
 					goalId: auditTarget.id,
@@ -1826,7 +1829,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 						? { achievedAt: Date.now(), activeSeconds: finalUsage.activeSeconds, tokensUsed: finalUsage.tokensUsed, auditAttempts: auditAttemptNo }
 						: {}),
 				},
-			});
+			};
 			state.goal = auditTarget;
 			stopActiveGoal("complete", "agent", ctx);
 			const completedGoal = state.goal;
@@ -2225,6 +2228,11 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("turn_end", async (event, ctx) => {
+		if (pendingGoalAchievement) {
+			const held = pendingGoalAchievement;
+			pendingGoalAchievement = null;
+			pi.sendMessage<GoalAuditEventDetails>({ customType: GOAL_AUDIT_ENTRY, ...held, display: true });
+		}
 		const message = event.message as AssistantMessageLike;
 		if (confirmationIntent !== null || tweakDraftingFor !== null) return;
 		const tokens = assistantTurnTokens(message);
