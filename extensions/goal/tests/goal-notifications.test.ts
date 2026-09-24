@@ -3,14 +3,14 @@ import test from "node:test";
 
 import { buildGoalRunningNotification } from "../widgets/goal-notifications.ts";
 
-test("buildGoalRunningNotification uses compact widget-style lines", () => {
+test("buildGoalRunningNotification is a one-line ack that does not duplicate the widget", () => {
 	assert.equal(
 		buildGoalRunningNotification({
 			objective: "=== Goal ===\nObjective: 研究 pi-goal 的 compact 行为\nSuccess criteria: answer",
 			sisyphus: false,
 			autoContinue: true,
 		}),
-		"● Goal running\n├─ ⟡ 研究 pi-goal 的 compact 行为\n└─ auto-continue on",
+		"Goal set · auto-continue on",
 	);
 	assert.equal(
 		buildGoalRunningNotification({
@@ -18,6 +18,6 @@ test("buildGoalRunningNotification uses compact widget-style lines", () => {
 			sisyphus: true,
 			autoContinue: false,
 		}),
-		"◆ Sisyphus running\n├─ ⟡ Ship safely\n└─ manual mode",
+		"Sisyphus goal set · manual mode",
 	);
 });
