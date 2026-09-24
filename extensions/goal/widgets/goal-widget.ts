@@ -67,18 +67,20 @@ export function renderGoalWidgetLines(goal: GoalWidgetRecord | null, theme: Them
 		const openGoalCount = options.openGoalCount ?? 0;
 		if (openGoalCount <= 0) return [];
 		const safeWidth = Math.max(1, width);
+		const unfocusedLeft = `${theme.fg("warning", "◇")} ${theme.fg("warning", theme.bold("Goal"))} ${theme.fg("muted", "unfocused")}${theme.fg("dim", " · ")}${theme.fg("muted", `${openGoalCount} open`)}`;
 		return [
-			heading(theme, safeWidth, `${theme.fg("warning", "◇")} ${theme.fg("warning", theme.bold("Goal"))} ${theme.fg("muted", "unfocused")}`, theme.fg("muted", `${openGoalCount} open`)),
+			heading(theme, safeWidth, unfocusedLeft),
 			branchLine(theme, safeWidth, true, `${theme.fg("muted", "Run /goal-focus to choose this session's goal")}`),
 		];
 	}
 	const safeWidth = Math.max(1, width);
 	const { icon, color, label } = displayIcon(goal);
 	const mode = goal.sisyphus ? "Sisyphus" : "Goal";
-	const headingLeft = `${theme.fg(color, icon)} ${theme.fg(color, theme.bold(mode))} ${theme.fg("muted", label.replace(/^sisyphus |^goal /, ""))}`;
 	const otherOpenGoalCount = Math.max(0, (options.openGoalCount ?? (goal ? 1 : 0)) - 1);
-	const headingRight = theme.fg("muted", headingMeta(goal, otherOpenGoalCount));
-	const lines: string[] = [heading(theme, safeWidth, headingLeft, headingRight)];
+	const meta = headingMeta(goal, otherOpenGoalCount);
+	// One left-aligned line: "● Goal running · auto · 21s · 122K tokens".
+	const headingLeft = `${theme.fg(color, icon)} ${theme.fg(color, theme.bold(mode))} ${theme.fg("muted", label.replace(/^sisyphus |^goal /, ""))}${meta ? `${theme.fg("dim", " · ")}${theme.fg("muted", meta)}` : ""}`;
+	const lines: string[] = [heading(theme, safeWidth, headingLeft)];
 	const body: string[] = [];
 
 	const titleWidth = Math.max(12, safeWidth - 8);

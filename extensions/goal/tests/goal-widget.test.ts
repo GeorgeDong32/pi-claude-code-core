@@ -66,3 +66,15 @@ test("renderGoalWidgetLines shows other open goals and unfocused multi-goal guid
 	assert.match(unfocused[0], /2 open/);
 	assert.match(unfocused.join("\n"), /\/goal-focus/);
 });
+
+test("active heading merges the meta inline after the label", () => {
+	const lines = renderGoalWidgetLines(goal(), theme, 100, { openGoalCount: 1 });
+	assert.match(lines[0], /Sisyphus running · auto · 1m05s · 2\.5K \(2,500\) tokens/);
+	const plain = renderGoalWidgetLines(goal({ sisyphus: false }), theme, 100, { openGoalCount: 1 });
+	assert.match(plain[0], /Goal running · auto · 1m05s · 2\.5K \(2,500\) tokens/);
+});
+
+test("unfocused heading merges the open count inline", () => {
+	const lines = renderGoalWidgetLines(null, theme, 100, { openGoalCount: 2 });
+	assert.match(lines[0], /Goal unfocused · 2 open/);
+});
