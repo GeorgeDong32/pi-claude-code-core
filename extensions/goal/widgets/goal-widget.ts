@@ -124,7 +124,11 @@ export class GoalWidgetComponent implements Component {
 	}
 
 	render(width: number): string[] {
-		return renderGoalWidgetLines(this.getGoal(), this.theme, width, { openGoalCount: this.getOpenGoalCount() });
+		const lines = renderGoalWidgetLines(this.getGoal(), this.theme, width, { openGoalCount: this.getOpenGoalCount() });
+		// Breathing room between the goal block and the cc-status spinner row
+		// below it; stays zero-height when goal-less.
+		if (lines.length > 0) lines.push("");
+		return lines;
 	}
 
 	invalidate(): void {
