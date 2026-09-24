@@ -244,7 +244,7 @@ function normalizeGoalEventDetails(value: unknown): GoalEventDetails {
 }
 
 export interface GoalAuditEventDetails {
-	phase: "started" | "approved" | "rejected";
+	phase: "started" | "passed" | "approved" | "rejected";
 	goalId: string;
 	auditor?: string;
 	/** Approved-only completion stats backing the compact summary line. */
@@ -311,10 +311,11 @@ export function renderGoalAuditEvent(message: { content?: unknown; details?: Goa
 			}
 			return new Text(theme.fg("customMessageLabel", "Goal Audit approved"), 0, 0);
 		}
-		const summary = phase === "rejected" ? "rejected — expand (ctrl+o) for the report" : "start ...";
+		if (phase === "passed") return new Text(theme.fg("customMessageLabel", "Goal Audit pass"), 0, 0);
+		const summary = phase === "rejected" ? "failed — expand (ctrl+o) for the report" : "start ...";
 		return new Text(theme.fg("customMessageLabel", `Goal Audit ${summary}`), 0, 0);
 	}
-	const label = phase === "approved" ? "approved" : phase === "rejected" ? "rejected" : "started";
+	const label = phase === "approved" || phase === "passed" ? "passed" : phase === "rejected" ? "rejected" : "started";
 	const content = typeof message.content === "string" ? message.content : `Goal audit ${label}.`;
 	return new Text(
 		theme.fg("customMessageLabel", `Goal audit ${label}`) + "\n" + theme.fg("customMessageText", content),
@@ -1817,8 +1818,15 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			// "goal achieved" line carries the final usage numbers.
 			accountProgress(ctx);
 			const finalUsage = state.goal ? { ...state.goal.usage } : null;
-			// Deferred to the end of this finishing turn so the model's closing
-			// summary renders first and "Goal achieved" becomes the last line.
+			// In-place audit verdict marker; the summary line below is deferred
+			// to the end of this finishing turn so the model's closing summary
+			// renders first and "Goal achieved" becomes the last line.
+			pi.sendMessage<GoalAuditEventDetails>({
+				customType: GOAL_AUDIT_ENTRY,
+				content: approvalText,
+				display: true,
+				details: { phase: "passed", goalId: auditTarget.id, auditor: auditor.model },
+			});
 			pendingGoalAchievement = {
 				content: approvalText,
 				details: {
