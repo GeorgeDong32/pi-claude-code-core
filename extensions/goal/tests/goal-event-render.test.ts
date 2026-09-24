@@ -65,11 +65,29 @@ test("collapsed audit start shows the tool-call-like line", () => {
 
 test("collapsed approved renders the goal-achieved summary with final usage", () => {
 	const out = renderGoalAuditEvent(
-		auditDetails({ phase: "approved", achievedAt: new Date("2026-09-24T14:32:00").getTime(), activeSeconds: 3725, tokensUsed: 45200 }),
+		auditDetails({ phase: "approved", achievedAt: new Date("2026-09-24T14:32:00").getTime(), activeSeconds: 3725, tokensUsed: 45200, auditAttempts: 3 }),
 		{ expanded: false },
 		theme,
 	);
-	assert.equal(textOf(out), "\uf4de Goal achieved at 14:32, used 1 hour 2 minutes, 45K tokens");
+	assert.equal(textOf(out), "\uf4de Goal achieved at 14:32 (1h02m05s · 3 attempts · 45K tokens)");
+});
+
+test("first-try approval reads naturally as one attempt", () => {
+	const out = renderGoalAuditEvent(
+		auditDetails({ phase: "approved", achievedAt: new Date("2026-09-24T14:32:00").getTime(), activeSeconds: 23, tokensUsed: 566, auditAttempts: 1 }),
+		{ expanded: false },
+		theme,
+	);
+	assert.equal(textOf(out), "\uf4de Goal achieved at 14:32 (23s · 1 attempt · 566 tokens)");
+});
+
+test("collapsed approved without attempts omits the stat (legacy entries)", () => {
+	const out = renderGoalAuditEvent(
+		auditDetails({ phase: "approved", achievedAt: new Date("2026-09-24T14:32:00").getTime(), activeSeconds: 23, tokensUsed: 566 }),
+		{ expanded: false },
+		theme,
+	);
+	assert.equal(textOf(out), "\uf4de Goal achieved at 14:32 (23s · 566 tokens)");
 });
 
 test("collapsed approved without stats falls back to the plain label", () => {

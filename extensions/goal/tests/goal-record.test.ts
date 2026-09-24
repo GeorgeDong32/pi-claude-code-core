@@ -95,3 +95,11 @@ test("goal focus entries persist only session focus metadata", () => {
 	});
 	assert.equal(normalizeGoalFocusEntry({ version: 3, focusedGoalId: "abc" }), null);
 });
+
+test("normalizeGoalRecord preserves positive audit attempt counts, drops junk", () => {
+	const base = { id: "goal-a", objective: "Pass the audit" };
+	const kept = normalizeGoalRecord({ ...base, auditAttempts: 2 });
+	assert.equal(kept?.auditAttempts, 2);
+	const dropped = normalizeGoalRecord({ ...base, auditAttempts: -1 });
+	assert.equal(dropped?.auditAttempts, undefined);
+});

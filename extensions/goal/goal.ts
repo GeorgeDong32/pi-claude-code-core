@@ -6,7 +6,6 @@ import { Text, visibleWidth } from "@earendil-works/pi-tui";
 import {
 	footerStatus,
 	formatDuration,
-	formatDurationWords,
 	formatTokenValue,
 	statusLabel,
 	truncateText,
@@ -249,6 +248,8 @@ export interface GoalAuditEventDetails {
 	achievedAt?: number;
 	activeSeconds?: number;
 	tokensUsed?: number;
+	/** Which audit attempt finally approved the goal (1 = first try). */
+	auditAttempts?: number;
 }
 
 export function renderGoalEvent(message: { details?: GoalEventDetails }, options: { expanded: boolean }, theme: Theme): Text {
@@ -294,8 +295,13 @@ export function renderGoalAuditEvent(message: { content?: unknown; details?: Goa
 			const tokens = typeof details?.tokensUsed === "number" ? details.tokensUsed : undefined;
 			if (at !== undefined && seconds !== undefined && tokens !== undefined) {
 				const hhmm = new Date(at).toTimeString().slice(0, 5);
+				// "Goal achieved at 14:32 (23s · 1 attempt · 566 tokens)" —
+				// attempts omitted for legacy entries without the count.
+				const stats = [formatDuration(seconds)];
+				if (typeof details?.auditAttempts === "number") stats.push(`${details.auditAttempts} attempt${details.auditAttempts === 1 ? "" : "s"}`);
+				stats.push(`${formatTokenValue(tokens).split(" ")[0]} tokens`);
 				return new Text(
-					theme.fg("customMessageLabel", `\uf4de Goal achieved at ${hhmm}, used ${formatDurationWords(seconds)}, ${formatTokenValue(tokens).split(" ")[0]} tokens`),
+					theme.fg("customMessageLabel", `\uf4de Goal achieved at ${hhmm} (${stats.join(" · ")})`),
 					0,
 					0,
 				);
@@ -1712,7 +1718,12 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				};
 			}
 			if (!state.goal) throw new Error("Goal disappeared during completion validation.");
-			const auditTarget = mergeGoalPromptFromDisk(ctx, state.goal);
+			// Which audit attempt this is (1 = first try) — persisted up front
+			// so the count survives a rejected audit and process restarts.
+			const auditAttemptNo = (state.goal.auditAttempts ?? 0) + 1;
+			const auditTarget = { ...mergeGoalPromptFromDisk(ctx, state.goal), auditAttempts: auditAttemptNo };
+			state.goal = { ...state.goal, auditAttempts: auditAttemptNo };
+			persist(ctx);
 			// Append ledger: completion requested
 			try {
 				appendGoalEvent(ctx, {
@@ -1812,7 +1823,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 					goalId: auditTarget.id,
 					auditor: auditor.model,
 					...(finalUsage
-						? { achievedAt: Date.now(), activeSeconds: finalUsage.activeSeconds, tokensUsed: finalUsage.tokensUsed }
+						? { achievedAt: Date.now(), activeSeconds: finalUsage.activeSeconds, tokensUsed: finalUsage.tokensUsed, auditAttempts: auditAttemptNo }
 						: {}),
 				},
 			});

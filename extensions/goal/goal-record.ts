@@ -18,6 +18,8 @@ export interface GoalRecord {
 	sisyphus: boolean;
 	createdAt: string;
 	updatedAt: string;
+	/** How many completion audits this goal has been through (persisted per attempt). */
+	auditAttempts?: number;
 	activePath?: string;
 	archivedPath?: string;
 	stopReason?: StopReason;
@@ -167,5 +169,8 @@ export function normalizeGoalRecord(value: unknown): GoalRecord | null {
 		stopReason: raw.stopReason === "agent" || raw.stopReason === "user" ? raw.stopReason : undefined,
 		pauseReason: typeof raw.pauseReason === "string" && raw.pauseReason.trim() ? raw.pauseReason : undefined,
 		pauseSuggestedAction: typeof raw.pauseSuggestedAction === "string" && raw.pauseSuggestedAction.trim() ? raw.pauseSuggestedAction : undefined,
+		...(typeof raw.auditAttempts === "number" && Number.isFinite(raw.auditAttempts) && raw.auditAttempts > 0
+			? { auditAttempts: Math.floor(raw.auditAttempts) }
+			: {}),
 	};
 }
