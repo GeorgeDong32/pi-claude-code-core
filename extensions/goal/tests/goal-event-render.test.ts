@@ -60,7 +60,7 @@ function auditDetails(overrides: Partial<GoalAuditEventDetails>): { content?: un
 
 test("collapsed audit start shows the tool-call-like line", () => {
 	const out = renderGoalAuditEvent(auditDetails({}), { expanded: false }, theme);
-	assert.equal(textOf(out), "Goal Audit start ...");
+	assert.equal(textOf(out), "\uf4af Goal Audit start ...");
 });
 
 test("collapsed approved renders the goal-achieved summary with final usage", () => {
@@ -97,7 +97,7 @@ test("collapsed approved without stats falls back to the plain label", () => {
 
 test("collapsed rejected points at the report; expanded keeps full content", () => {
 	const collapsed = renderGoalAuditEvent(auditDetails({ phase: "rejected" }), { expanded: false }, theme);
-	assert.equal(textOf(collapsed), "Goal Audit failed — expand (ctrl+o) for the report");
+	assert.equal(textOf(collapsed), "\uf4e7 Goal Audit failed — expand (ctrl+o) for the report");
 	const expanded = renderGoalAuditEvent({ ...auditDetails({ phase: "rejected" }), content: "report body" }, { expanded: true }, theme);
 	assert.match(textOf(expanded), /Goal audit rejected/);
 	assert.match(textOf(expanded), /report body/);
@@ -105,5 +105,5 @@ test("collapsed rejected points at the report; expanded keeps full content", () 
 
 test("collapsed passed renders the in-place pass marker", () => {
 	const out = renderGoalAuditEvent(auditDetails({ phase: "passed" }), { expanded: false }, theme);
-	assert.equal(textOf(out), "Goal Audit pass");
+	assert.equal(textOf(out), "\uf41d Goal Audit pass");
 });

@@ -311,9 +311,9 @@ export function renderGoalAuditEvent(message: { content?: unknown; details?: Goa
 			}
 			return new Text(theme.fg("customMessageLabel", "Goal Audit approved"), 0, 0);
 		}
-		if (phase === "passed") return new Text(theme.fg("customMessageLabel", "Goal Audit pass"), 0, 0);
-		const summary = phase === "rejected" ? "failed — expand (ctrl+o) for the report" : "start ...";
-		return new Text(theme.fg("customMessageLabel", `Goal Audit ${summary}`), 0, 0);
+		if (phase === "passed") return new Text(theme.fg("customMessageLabel", "\uf41d Goal Audit pass"), 0, 0);
+		if (phase === "rejected") return new Text(theme.fg("customMessageLabel", "\uf4e7 Goal Audit failed — expand (ctrl+o) for the report"), 0, 0);
+		return new Text(theme.fg("customMessageLabel", "\uf4af Goal Audit start ..."), 0, 0);
 	}
 	const label = phase === "approved" || phase === "passed" ? "passed" : phase === "rejected" ? "rejected" : "started";
 	const content = typeof message.content === "string" ? message.content : `Goal audit ${label}.`;
