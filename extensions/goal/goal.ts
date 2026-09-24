@@ -2236,11 +2236,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("turn_end", async (event, ctx) => {
-		if (pendingGoalAchievement) {
-			const held = pendingGoalAchievement;
-			pendingGoalAchievement = null;
-			pi.sendMessage<GoalAuditEventDetails>({ customType: GOAL_AUDIT_ENTRY, ...held, display: true });
-		}
 		const message = event.message as AssistantMessageLike;
 		if (confirmationIntent !== null || tweakDraftingFor !== null) return;
 		const tokens = assistantTurnTokens(message);
@@ -2262,6 +2257,23 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		) {
 			queueContinuation(ctx);
 		}
+	});
+
+	// Flush the held "Goal achieved" marker after the agent loop has fully
+	// settled. Flushing at turn_end appended the custom message while the
+	// loop was still streaming; pi then flushed it into agent state, and
+	// since custom messages map to user-role LLM content, the loop treated
+	// it as an unanswered user message and ran ANOTHER turn (the model then
+	// "answered" the marker). One macrotask after agent_settled, isStreaming
+	// is false and the append is display-only.
+	pi.on("agent_settled", async () => {
+		if (!pendingGoalAchievement) return;
+		const held = pendingGoalAchievement;
+		pendingGoalAchievement = null;
+		const t = setTimeout(() => {
+			pi.sendMessage<GoalAuditEventDetails>({ customType: GOAL_AUDIT_ENTRY, ...held, display: true });
+		}, 0);
+		t.unref?.();
 	});
 
 	pi.on("message_end", async (event, ctx) => {
