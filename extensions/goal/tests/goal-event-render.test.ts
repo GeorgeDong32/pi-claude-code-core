@@ -23,12 +23,12 @@ function details(overrides: Partial<GoalEventDetails>): { details: GoalEventDeta
 
 test("collapsed drafting with topic renders the user's words, not the protocol", () => {
 	const out = renderGoalEvent(details({ objective: "ship the retry decoder" }), { expanded: false }, theme);
-	assert.equal(textOf(out), "\uf4de Goal ship the retry decoder");
+	assert.equal(textOf(out), "\uf4de  Goal ship the retry decoder");
 });
 
 test("collapsed sisyphus drafting uses the Sisyphus noun", () => {
 	const out = renderGoalEvent(details({ objective: "ordered rollout", focus: "sisyphus" }), { expanded: false }, theme);
-	assert.equal(textOf(out), "\uf4de Sisyphus ordered rollout");
+	assert.equal(textOf(out), "\uf4de  Sisyphus ordered rollout");
 });
 
 test("collapsed drafting without a topic keeps the bare label", () => {
@@ -60,7 +60,7 @@ function auditDetails(overrides: Partial<GoalAuditEventDetails>): { content?: un
 
 test("collapsed audit start shows the tool-call-like line", () => {
 	const out = renderGoalAuditEvent(auditDetails({}), { expanded: false }, theme);
-	assert.equal(textOf(out), "\uf4af Goal Audit start ...");
+	assert.equal(textOf(out), "\uf4af  Goal Audit start ...");
 });
 
 test("collapsed approved renders the goal-achieved summary with final usage", () => {
@@ -69,7 +69,7 @@ test("collapsed approved renders the goal-achieved summary with final usage", ()
 		{ expanded: false },
 		theme,
 	);
-	assert.equal(textOf(out), "\uf4de Goal achieved at 14:32 (1h02m05s · 3 attempts · 45K tokens)");
+	assert.equal(textOf(out), "\uf4de  Goal achieved at 14:32 (1h02m05s · 3 attempts · 45K tokens)");
 });
 
 test("first-try approval reads naturally as one attempt", () => {
@@ -78,7 +78,7 @@ test("first-try approval reads naturally as one attempt", () => {
 		{ expanded: false },
 		theme,
 	);
-	assert.equal(textOf(out), "\uf4de Goal achieved at 14:32 (23s · 1 attempt · 566 tokens)");
+	assert.equal(textOf(out), "\uf4de  Goal achieved at 14:32 (23s · 1 attempt · 566 tokens)");
 });
 
 test("collapsed approved without attempts omits the stat (legacy entries)", () => {
@@ -87,7 +87,7 @@ test("collapsed approved without attempts omits the stat (legacy entries)", () =
 		{ expanded: false },
 		theme,
 	);
-	assert.equal(textOf(out), "\uf4de Goal achieved at 14:32 (23s · 566 tokens)");
+	assert.equal(textOf(out), "\uf4de  Goal achieved at 14:32 (23s · 566 tokens)");
 });
 
 test("collapsed approved without stats falls back to the plain label", () => {
@@ -97,7 +97,7 @@ test("collapsed approved without stats falls back to the plain label", () => {
 
 test("collapsed rejected points at the report; expanded keeps full content", () => {
 	const collapsed = renderGoalAuditEvent(auditDetails({ phase: "rejected" }), { expanded: false }, theme);
-	assert.equal(textOf(collapsed), "\uf4e7 Goal Audit failed — expand (ctrl+o) for the report");
+	assert.equal(textOf(collapsed), "\uf4e7  Goal Audit failed — expand (ctrl+o) for the report");
 	const expanded = renderGoalAuditEvent({ ...auditDetails({ phase: "rejected" }), content: "report body" }, { expanded: true }, theme);
 	assert.match(textOf(expanded), /Goal audit rejected/);
 	assert.match(textOf(expanded), /report body/);
@@ -105,5 +105,5 @@ test("collapsed rejected points at the report; expanded keeps full content", () 
 
 test("collapsed passed renders the in-place pass marker", () => {
 	const out = renderGoalAuditEvent(auditDetails({ phase: "passed" }), { expanded: false }, theme);
-	assert.equal(textOf(out), "\uf41d Goal Audit pass");
+	assert.equal(textOf(out), "\uf41d  Goal Audit pass");
 });

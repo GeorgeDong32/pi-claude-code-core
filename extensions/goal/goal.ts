@@ -268,7 +268,7 @@ export function renderGoalEvent(message: { details?: GoalEventDetails }, options
 		// stays in the normal message color.
 		if (details.kind === "drafting" && details.objective) {
 			const noun = details.focus === "sisyphus" ? "Sisyphus" : "Goal";
-			return new Text(theme.fg("customMessageLabel", `\uf4de ${noun} `) + theme.fg("customMessageText", truncateText(details.objective, 72)), 0, 0);
+			return new Text(theme.fg("customMessageLabel", `\uf4de  ${noun} `) + theme.fg("customMessageText", truncateText(details.objective, 72)), 0, 0);
 		}
 		// Other goal-authored rows are fully theme-colored.
 		return new Text(theme.fg("customMessageLabel", `Goal ${label}`), 0, 0);
@@ -304,16 +304,16 @@ export function renderGoalAuditEvent(message: { content?: unknown; details?: Goa
 				if (typeof details?.auditAttempts === "number") stats.push(`${details.auditAttempts} attempt${details.auditAttempts === 1 ? "" : "s"}`);
 				stats.push(`${formatTokenValue(tokens).split(" ")[0]} tokens`);
 				return new Text(
-					theme.fg("customMessageLabel", `\uf4de Goal achieved at ${hhmm} (${stats.join(" · ")})`),
+					theme.fg("customMessageLabel", `\uf4de  Goal achieved at ${hhmm} (${stats.join(" · ")})`),
 					0,
 					0,
 				);
 			}
 			return new Text(theme.fg("customMessageLabel", "Goal Audit approved"), 0, 0);
 		}
-		if (phase === "passed") return new Text(theme.fg("customMessageLabel", "\uf41d Goal Audit pass"), 0, 0);
-		if (phase === "rejected") return new Text(theme.fg("customMessageLabel", "\uf4e7 Goal Audit failed — expand (ctrl+o) for the report"), 0, 0);
-		return new Text(theme.fg("customMessageLabel", "\uf4af Goal Audit start ..."), 0, 0);
+		if (phase === "passed") return new Text(theme.fg("customMessageLabel", "\uf41d  Goal Audit pass"), 0, 0);
+		if (phase === "rejected") return new Text(theme.fg("customMessageLabel", "\uf4e7  Goal Audit failed — expand (ctrl+o) for the report"), 0, 0);
+		return new Text(theme.fg("customMessageLabel", "\uf4af  Goal Audit start ..."), 0, 0);
 	}
 	const label = phase === "approved" || phase === "passed" ? "passed" : phase === "rejected" ? "rejected" : "started";
 	const content = typeof message.content === "string" ? message.content : `Goal audit ${label}.`;
