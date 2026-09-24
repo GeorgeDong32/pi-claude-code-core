@@ -27,7 +27,7 @@ test("normalizeQuestionnaireQuestions trims ids, de-duplicates, filters options,
 	);
 });
 
-test("formatQuestionnaireAnswers emits stable Q/A records with context and options", () => {
+test("formatQuestionnaireAnswers records answers only — questions stay in the call args", () => {
 	const result: GoalQuestionnaireResult = {
 		cancelled: false,
 		questions: [
@@ -40,10 +40,7 @@ test("formatQuestionnaireAnswers emits stable Q/A records with context and optio
 		],
 	};
 
-	assert.equal(
-		formatQuestionnaireAnswers(result),
-		"**Q:** Scope?\nPick one\nOptions: A / B\n**A:** A\n\n---\n\n**Q:** Notes?\n**A:** Custom",
-	);
+	assert.equal(formatQuestionnaireAnswers(result), "**scope:** A\n**notes:** (wrote) Custom");
 });
 
 test("headless question sufficiency blocks vague-topic default fabrication", () => {

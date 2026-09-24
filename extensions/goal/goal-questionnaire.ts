@@ -46,14 +46,12 @@ export function normalizeQuestionnaireQuestions(rawQuestions: GoalQuestionnaireQ
 }
 
 export function formatQuestionnaireAnswers(result: GoalQuestionnaireResult): string {
-	return result.answers.map((answer) => {
-		const question = result.questions.find((q) => q.id === answer.id);
-		const lines = [`**Q:** ${answer.question}`];
-		if (question?.context) lines.push(`\n${question.context}`);
-		if (question && question.options.length > 0) lines.push(`\nOptions: ${question.options.join(" / ")}`);
-		lines.push(`\n**A:** ${answer.answer}`);
-		return lines.join("");
-	}).join("\n\n---\n\n");
+	// The full questions (context, options) already live in the tool-call
+	// args the model sent — echoing them back doubles the context cost.
+	// Record answers only, keyed by question id.
+	return result.answers
+		.map((answer) => `**${answer.id}:** ${answer.wasCustom ? "(wrote) " : ""}${answer.answer}`)
+		.join("\n");
 }
 
 export function shouldAutoConfirmProposal(args: { hasUI: boolean; autoConfirmEnv?: string }): boolean {
