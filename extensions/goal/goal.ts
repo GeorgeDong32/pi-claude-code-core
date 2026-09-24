@@ -1670,7 +1670,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				replaceGoal(config, ctx, false);
 				syncGoalTools();
 				return {
-					content: [{ type: "text", text: buildGoalCreatedReport({ objective, detailedSummary: detailedSummary(state.goal) }) }],
+					content: [{ type: "text", text: buildGoalCreatedReport({ objective, detailedSummary: detailedSummary(state.goal), autoContinue: state.goal?.autoContinue, sisyphus: state.goal?.sisyphus }) }],
 					details: goalDetails(state.goal),
 					terminate: true,
 				};

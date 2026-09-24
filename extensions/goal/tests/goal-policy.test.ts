@@ -113,7 +113,7 @@ test("pause, resume, and clear policy preserve human-owned lifecycle affordances
 	);
 	assert.equal(
 		buildGoalCreatedReport({ objective: "# Objective\nShip the feature.", detailedSummary: "Status: active" }),
-		"Goal confirmed and created.\n\nFinalized goal:\n\n# Objective\nShip the feature.\n\nGoal details:\nStatus: active",
+		"Goal set · auto-continue on",
 	);
 });
 

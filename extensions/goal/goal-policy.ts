@@ -129,13 +129,13 @@ export function buildCompletionReport(args: { detailedSummary: string; completio
 	return lines.join("\n");
 }
 
-export function buildGoalCreatedReport(args: { objective: string; detailedSummary?: string | null }): string {
-	const lines = ["Goal confirmed and created.", "", "Finalized goal:", "", args.objective.trim()];
-	const summary = args.detailedSummary?.trim();
-	if (summary) {
-		lines.push("", "Goal details:", summary);
-	}
-	return lines.join("\n");
+export function buildGoalCreatedReport(args: { objective: string; detailedSummary?: string | null; autoContinue?: boolean; sisyphus?: boolean }): string {
+	// One-line ack: the contract text the model just sent lives in the
+	// tool-call args, and the goal widget/files carry it for the user —
+	// echoing it back only duplicated the transcript.
+	const noun = args.sisyphus ? "Sisyphus goal" : "Goal";
+	const mode = args.autoContinue === false ? "auto-continue off" : "auto-continue on";
+	return `${noun} set · ${mode}`;
 }
 
 export function shouldQueueContinuation(goal: Pick<GoalPolicyRecordLike, "status" | "autoContinue"> | null): boolean {
