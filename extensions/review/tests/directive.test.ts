@@ -316,3 +316,37 @@ describe("tui-renderer flat report card (v0.8.5)", () => {
 		assert.match(rows[0]!, /^⏺ pi-review result: Comment$/);
 	});
 });
+describe("tui-renderer command echo (fused: CC user-bar style)", () => {
+	// Pass-through theme: assertions see the plain text, structure only.
+	const passthroughTheme = {
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+	};
+
+	async function renderEcho(contentText = "/review 测试 review", width = 80): Promise<string[]> {
+		const { commandEchoRow } = await import("../src/tui-renderer.js");
+		return commandEchoRow(contentText, passthroughTheme).render(width);
+	}
+
+	test("echo is a single CC user-bar row: dim ❯ + command text, no [pi-review] prefix", async () => {
+		const rows = await renderEcho();
+		assert.equal(rows.length, 1);
+		const stripped = stripTerminalSequences(rows[0]!).replace(/\u00A0+$/, "");
+		assert.match(stripped, /^❯ \/review 测试 review$/);
+		assert.ok(!stripped.includes("[pi-review]"), "echo must not carry the [pi-review] prefix");
+	});
+
+	test("bar spans the row on the CC userMessageBackground", async () => {
+		const rows = await renderEcho();
+		assert.match(rows[0]!, /\x1b\[48;2;55;55;55m/);
+		assert.ok(visibleWidth(rows[0]!) >= 78, `bar should span the row: ${rows[0]}`);
+		assert.ok(visibleWidth(rows[0]!) <= 80, `bar exceeds viewport: ${rows[0]}`);
+	});
+
+	test("overlong commands truncate with an ellipsis within the viewport", async () => {
+		const rows = await renderEcho(`/review ${"x".repeat(200)}`, 60);
+		const stripped = stripTerminalSequences(rows[0]!);
+		assert.ok(visibleWidth(rows[0]!) <= 60, `row exceeds viewport: ${stripped}`);
+		assert.match(stripped, /…/);
+	});
+});

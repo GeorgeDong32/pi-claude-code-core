@@ -15,8 +15,12 @@
  * renderer — the report tool returns the markdown to the main agent, which
  * outputs it as plain chat text. This card now serves only the `/review`
  * command echo, `/review-show` re-renders, and replay of older sessions.
+ *
+ * Fused-followup: the `/review` command echo dropped its `[pi-review]` box
+ * and renders as a CC-style user command bar (dim `❯` + white text on the
+ * CC user background), matching CC-TUI's typed-message bars.
  */
-import { Box, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import type { IssueSeverity, Verdict } from "./types.js";
@@ -124,6 +128,29 @@ export function reportCard(header: ReportHeader, contentText: string, theme: Car
 	};
 }
 
+/**
+ * CC renders slash-command echoes like ordinary user bars
+ * (UserCommandMessage): dim `❯` + white command text on the CC
+ * userMessageBackground, spanning the row. Constants mirror CC-TUI's
+ * user-bar transform so the echo reads exactly like a typed message there.
+ */
+export function commandEchoRow(contentText: string, theme: CardTheme) {
+	return {
+		invalidate() {},
+		render(width: number): string[] {
+			const bg = "\x1b[48;2;55;55;55m"; // CC userMessageBackground rgb(55,55,55)
+			const bgOff = "\x1b[49m";
+			const white = "\x1b[38;2;255;255;255m";
+			const reset = "\x1b[39m";
+			const clipped = truncateToWidth(contentText, Math.max(10, width - 2), "…");
+			const content = `${theme.fg("dim", "❯ ")}${white}${clipped}${reset}`;
+			// NBSP padding: plain trailing spaces get trimmed downstream.
+			const pad = "\u00A0".repeat(Math.max(0, width - visibleWidth(content) - 1));
+			return [`${bg}${content}${pad}${bgOff}`];
+		},
+	};
+}
+
 export function registerPiReviewRenderer(pi: ExtensionAPI): void {
 	pi.registerMessageRenderer("pi-review", (message, _options, theme) => {
 		const contentText = typeof message.content === "string"
@@ -136,12 +163,9 @@ export function registerPiReviewRenderer(pi: ExtensionAPI): void {
 					return parts.join("\n");
 				})();
 		// The `/review` command echo shares this customType with reports.
-		// Echoes render verbatim with their own prefix.
+		// Echoes render as a CC-style user command bar, no prefix.
 		if (contentText.startsWith("/review")) {
-			const echo = theme.fg("toolTitle", "[pi-review] ") + contentText;
-			const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
-			box.addChild(new Text(echo, 0, 0));
-			return box;
+			return commandEchoRow(contentText, theme);
 		}
 		return reportCard(extractHeader(contentText), contentText, theme);
 	});
