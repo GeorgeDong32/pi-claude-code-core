@@ -50,8 +50,9 @@ Facts, then "Why:" / "How to apply:" lines for guidance-type memories. Link
 related memories with [[their-slug]].
 \`\`\`
 
-Update MEMORY.md in the same layer with ONE line per memory:
-\`- [Title](file.md) — hook\`.
+Both memory directories already exist — write files directly, no ls/mkdir
+needed. The MEMORY.md index in each layer is derived automatically; do not
+edit it by hand.
 Write memories proactively when the user states a durable preference, a
 correction, or a project fact that is not derivable from the repo. Never
 store secrets or credentials.

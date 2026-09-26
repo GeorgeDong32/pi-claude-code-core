@@ -17,7 +17,7 @@
  * Injection failures NEVER block a turn (P3-ME-09): every hook body is
  * try/catch-wrapped at the boundary.
  */
-import { accessSync, constants as fsConstants, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { accessSync, constants as fsConstants, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -48,6 +48,9 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 	let sessionBytesUsed = 0;
 	let memorySettings: MemorySettings = { automation: true };
 	const automationState: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0 };
+	// AD1 (OPT-3): memory files the model already read this session — not
+	// re-injected; cleared on compact (CC semantics: compact resets recall)
+	const readMemoryKeys = new Set<string>();
 
 	function memoryDir(ctx?: { cwd?: string }): string {
 		// anchor on the SESSION cwd (ctx.cwd); process.cwd() is only the
@@ -69,6 +72,7 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 	pi.on("session_start", (_event, ctx: ExtensionContext) => {
 		try {
 			sessionBytesUsed = 0;
+			readMemoryKeys.clear();
 			gate.probeStatic();
 			memorySettings = loadMemorySettings(join(process.env.HOME ?? home, ".pi", "agent"));
 			automationState.enabled = memorySettings.automation;
@@ -103,6 +107,7 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_compact", () => {
 		sessionBytesUsed = 0;
+		readMemoryKeys.clear(); // AD1: compact resets recall
 	});
 
 	pi.on("before_agent_start", (event, ctx: ExtensionContext) => {
@@ -137,6 +142,26 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 		}
 	});
 
+	/** Canonical recall-block key for a memory file (header form). */
+	const whereKey = (layer: "user" | "project", file: string): string =>
+		layer === "user" ? `user-memory/${file}` : `memory/${file}`;
+
+	/** AD1: keys already surfaced in prior pi-memory-recall blocks (parsed
+	 * from the live message list — compact naturally drops them). */
+	function surfacedRecallKeys(messages: Array<Record<string, unknown>>): Set<string> {
+		const keys = new Set<string>();
+		for (const m of messages) {
+			if (m.customType !== "pi-memory-recall") continue;
+			const text = Array.isArray(m.content)
+				? (m.content as Array<{ type?: string; text?: string }>).filter((p) => p?.type === "text").map((p) => p.text ?? "").join("\n")
+				: "";
+			for (const match of text.matchAll(/\((user-memory|memory)\/([A-Za-z0-9._-]+\.md)\)/g)) {
+				keys.add(`${match[1]}/${match[2]}`);
+			}
+		}
+		return keys;
+	}
+
 	pi.on("context", (event, ctx: ExtensionContext): { messages: typeof event.messages } | undefined => {
 		try {
 			if (gate.state.yielded) return undefined;
@@ -165,7 +190,10 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 				})),
 			];
 
-			const { files } = selectForTurn(prompt, memories, sessionBytesUsed);
+			// AD1: never re-inject what this session already surfaced or read
+			const surfaced = surfacedRecallKeys(messages as unknown as Array<Record<string, unknown>>);
+			const fresh = memories.filter((m) => !surfaced.has(whereKey(m.layer ?? "project", m.file)) && !readMemoryKeys.has(whereKey(m.layer ?? "project", m.file)));
+			const { files } = selectForTurn(prompt, fresh, sessionBytesUsed);
 			if (files.length === 0) return undefined;
 
 			const blocks: string[] = ["<memory-recall>"];
@@ -195,6 +223,14 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 		try {
 			const name = typeof event.toolName === "string" ? event.toolName : "";
 			const input = (event.input ?? {}) as Record<string, unknown>;
+			// AD1: a read into either memory layer marks the file as seen
+			if (name === "read" && typeof input.path === "string") {
+				const layer = [userMemoryDir(ctx), memoryDir(ctx)] as const;
+				if (layer[0] === input.path.slice(0, layer[0].length) || input.path.startsWith(`${layer[0]}/`) || input.path.startsWith(`${layer[1]}/`)) {
+					const isUser = input.path.startsWith(layer[0]);
+					readMemoryKeys.add(whereKey(isUser ? "user" : "project", input.path.split("/").pop() ?? ""));
+				}
+			}
 			// V2-D2: both layers are guarded (project first, then user)
 			const verdict = [memoryDir(ctx), userMemoryDir(ctx)]
 				.map((d) => guardMemoryWrites(name, input, d))
@@ -230,13 +266,33 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 			/* never block the turn */
 		}
 	});
-	pi.on("tool_result", (event) => {
+	pi.on("tool_result", (event, ctx: ExtensionContext) => {
 		try {
 			// B3: in-flight only — the turn is still the directive's turn
 			if ((event as { toolName?: string }).toolName === "memory_consolidate") consolidation.settle();
+			// AD2: policy-driven reads carry no freshness signal — stamp a
+			// staleness note on reads into the memory layers
+			const e = event as { toolName?: string; input?: Record<string, unknown>; content?: Array<{ type: string; text?: string }> };
+			if (e.toolName === "read" && typeof e.input?.path === "string") {
+				const path = e.input.path;
+				if ([userMemoryDir(ctx), memoryDir(ctx)].some((d) => path === d || path.startsWith(`${d}/`))) {
+					const header = (() => {
+						try {
+							return freshnessHeader(statSync(path).mtimeMs);
+						} catch {
+							return null;
+						}
+					})();
+					if (header && Array.isArray(e.content)) {
+						const note = { type: "text" as const, text: `[memory] this file is ${header.replace(/\[|\]/g, "")}` };
+						return { content: [...(e.content as Array<{ type: "text"; text: string }>), note] };
+					}
+				}
+			}
 		} catch {
 			/* never block */
 		}
+		return undefined;
 	});
 	pi.on("agent_settled", () => {
 		try {

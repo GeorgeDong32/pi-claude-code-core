@@ -123,8 +123,12 @@ export function byteLength(text: string): number {
 	return Buffer.byteLength(text, "utf8");
 }
 
-/** Freshness header: memories older than a day get a verify hint. */
+/** Freshness header (AD2, OPT-3): graded age in days — models handle
+ * "47 days ago" far better than date arithmetic; only genuinely stale
+ * memories carry the verify hint. */
 export function freshnessHeader(mtimeMs: number, now = Date.now()): string | null {
-	if (now - mtimeMs <= 24 * 60 * 60 * 1000) return null;
-	return "[older than a day — verify before relying on it]";
+	const ageDays = Math.floor((now - mtimeMs) / (24 * 60 * 60 * 1000));
+	if (ageDays < 1) return null;
+	if (ageDays <= 7) return `[${ageDays} day${ageDays === 1 ? "" : "s"} ago]`;
+	return `[${ageDays} days ago — verify before relying on it]`;
 }

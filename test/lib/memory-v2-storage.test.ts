@@ -14,7 +14,8 @@ import { resetCoreBusForTests } from "../../extensions/bus.ts";
 import memoryExtension from "../../extensions/memory/index.ts";
 import { parseMemoryFrontmatter, scanMemoryDir, reconcileMemoryIndex } from "../../extensions/memory/memdir.ts";
 import { resolveMemoryPaths, isMemoryWritePath } from "../../extensions/memory/paths.ts";
-import { userLayerSection, projectLayerSection, buildPolicyInjection } from "../../extensions/memory/policy.ts";
+import { freshnessHeader } from "../../extensions/memory/selection.ts";
+import { userLayerSection, projectLayerSection, buildPolicyInjection, POLICY_COMPACT } from "../../extensions/memory/policy.ts";
 import { guardMemoryWrites } from "../../extensions/memory/guard.ts";
 import { USER_INDEX_MAX, PINNED_TOTAL_MAX } from "../../extensions/memory/policy.ts";
 import { layerStats } from "../../extensions/memory/store.js";
@@ -265,5 +266,60 @@ describe("V2 Phase 2 (B5) — exact lane accounting", () => {
 		expect(section.text).toContain("### p4");
 		expect(section.text).not.toContain("### p5");
 		expect(section.text).toContain("1 pinned file(s) dropped");
+	});
+});
+
+describe("V2 Phase 3 (AD1/AD3/AD4) — injection dedupe + policy text", () => {
+	it("AD1: a file surfaced in a prior recall block is never re-injected for the same prompt", async () => {
+		writeMemory("user", "lang.md", "language", "replies language chinese", "user", "所有回复默认中文");
+		const host = setup();
+		const ctx = host.makeCtx({ cwd: project, ui: true });
+		await host.fire("session_start", {}, ctx);
+		const handler = host.handlers.get("context")![0] as (e: unknown, c: unknown) => Promise<{ messages?: Array<Record<string, unknown>> } | undefined>;
+		const userMsg = { role: "user", content: [{ type: "text", text: "回复语言偏好是什么 language preference" }] };
+		const first = (await handler({ messages: [userMsg] }, ctx))!;
+		const recall = first.messages!.at(-1) as { customType: string; content: Array<{ text: string }> };
+		expect(recall.customType).toBe("pi-memory-recall");
+		expect(recall.content[0].text).toContain("(user-memory/lang.md)");
+		// second turn: the message list now CONTAINS the prior recall block →
+		// the same file must not be injected again (handler: no injection ⇒ undefined)
+		const second = await handler({ messages: [userMsg, recall] }, ctx);
+		expect(second).toBeUndefined();
+	});
+
+	it("AD1: a memory file the model read is filtered from selection until compact clears it", async () => {
+		writeMemory("user", "lang2.md", "language2", "replies language chinese", "user", "所有回复默认中文");
+		const host = setup();
+		const ctx = host.makeCtx({ cwd: project, ui: true });
+		await host.fire("session_start", {}, ctx);
+		await host.fire("tool_call", { toolName: "read", input: { path: join(dirs().udir, "lang2.md") } }, ctx);
+		const handler = host.handlers.get("context")![0] as (e: unknown, c: unknown) => Promise<{ messages?: Array<Record<string, unknown>> } | undefined>;
+		const r = (await handler({ messages: [{ role: "user", content: [{ type: "text", text: "回复语言偏好是什么 language preference" }] }] }, ctx))!;
+		expect(r?.messages?.some((m) => m.customType === "pi-memory-recall")).toBeFalsy();
+		// compact resets the read set
+		await host.fire("session_compact", {}, ctx);
+		const r2 = (await handler({ messages: [{ role: "user", content: [{ type: "text", text: "回复语言偏好是什么 language preference" }] }] }, ctx))!;
+		expect(r2?.messages?.some((m) => m.customType === "pi-memory-recall")).toBeTruthy();
+	});
+
+	it("AD2/AD3/AD4: graded age header; policy no longer teaches manual index edits and points at direct writes", async () => {
+		const now = Date.now();
+		expect(freshnessHeader(now - 2 * 60 * 60 * 1000, now)).toBeNull();
+		expect(freshnessHeader(now - 3 * 24 * 60 * 60 * 1000, now)).toBe("[3 days ago]");
+		expect(freshnessHeader(now - 47 * 24 * 60 * 60 * 1000, now)).toContain("47 days ago");
+		expect(POLICY_COMPACT).not.toContain("Update MEMORY.md");
+		expect(POLICY_COMPACT).toContain("already exist — write files directly");
+	});
+
+	it("AD2: reading a stale memory file gets a staleness note appended to the tool result", async () => {
+		const { utimesSync } = await import("node:fs");
+		writeMemory("user", "old.md", "old-fact", "an old fact", "user", "fact text");
+		const file = join(dirs().udir, "old.md");
+		utimesSync(file, new Date(Date.now() - 30 * 24 * 3600 * 1000), new Date(Date.now() - 30 * 24 * 3600 * 1000));
+		const host = setup();
+		const ctx = host.makeCtx({ cwd: project, ui: true });
+		await host.fire("session_start", {}, ctx);
+		const r = (await host.fire("tool_result", { toolName: "read", input: { path: file }, content: [{ type: "text", text: "fact text" }] }, ctx)) as { content?: Array<{ text?: string }> };
+		expect(r?.content?.at(-1)?.text).toContain("30 days ago");
 	});
 });

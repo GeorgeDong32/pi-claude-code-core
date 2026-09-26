@@ -173,7 +173,8 @@ function getMessageText(message: unknown): string {
 		.join("\n");
 }
 
-function conversationParts(ctx: ExtensionContext, limit: number, perMessageCap = 2000): ConversationPart[] {
+/** Full conversation snapshot (user/assistant text, per-message cap). */
+function allConversationParts(ctx: ExtensionContext, perMessageCap = 2000): ConversationPart[] {
 	const parts: ConversationPart[] = [];
 	try {
 		const entries = ctx.sessionManager.getBranch() as Array<{ type?: string; message?: unknown }>;
@@ -188,7 +189,12 @@ function conversationParts(ctx: ExtensionContext, limit: number, perMessageCap =
 	} catch {
 		/* stale session manager → empty snapshot */
 	}
-	return parts.slice(-limit);
+	return parts;
+}
+
+/** Last-N window (correction/flush use fixed windows). */
+function conversationParts(ctx: ExtensionContext, limit: number): ConversationPart[] {
+	return allConversationParts(ctx).slice(-limit);
 }
 
 function countToolCalls(message: unknown): number {
@@ -240,6 +246,12 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): void {
 	let toolCallsSinceReview = 0;
 	let userTurnCount = 0;
 	let reviewInFlight = false;
+	// AD5 (OPT-3): extraction cursor — only messages beyond the last review
+	// are processed (no window overlap); shrinks (fork/compact) reset it.
+	let reviewCursorParts = 0;
+	// AD5: the main model writing memory this window means it already
+	// captured what mattered — a second extraction pass would duplicate
+	let modelWroteMemory = false;
 	const sessionAbort = new AbortController();
 
 	const REVIEW_TURNS = 10;
@@ -304,6 +316,21 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): void {
 		}
 	};
 
+	pi.on("tool_call", (event, ctx: ExtensionContext) => {
+		try {
+			const e = event as { toolName?: string; input?: Record<string, unknown> };
+			if (e.toolName !== "write" && e.toolName !== "edit") return;
+			const path = e.input?.path;
+			if (typeof path !== "string") return;
+			const d = dirs(ctx);
+			if (path === d.user || path.startsWith(`${d.user}/`) || path === d.project || path.startsWith(`${d.project}/`)) {
+				modelWroteMemory = true;
+			}
+		} catch {
+			/* never block */
+		}
+	});
+
 	pi.on("message_end", (event) => {
 		try {
 			if (gate.state.yielded || !state.enabled) return;
@@ -352,8 +379,19 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): void {
 			if (reviewDue && userTurnCount >= 3 && !reviewInFlight && !sessionAbort.signal.aborted) {
 				turnsSinceReview = 0;
 				toolCallsSinceReview = 0;
+				// AD5 mutex: the model wrote memory itself this window — skip
+				// the extraction pass (advance the cursor so it never replays)
+				if (modelWroteMemory) {
+					modelWroteMemory = false;
+					reviewCursorParts = allConversationParts(ctx).length;
+					state.reviews++;
+					state.lastReview = "skipped — model wrote memory this window";
+					return;
+				}
 				reviewInFlight = true;
-				const parts = conversationParts(ctx, 40);
+				const allParts = allConversationParts(ctx);
+				const parts = reviewCursorParts > allParts.length ? allParts : allParts.slice(reviewCursorParts);
+				reviewCursorParts = allParts.length;
 				void runOps("review", ctx, REVIEW_SYSTEM, parts)
 					.then((applied) => {
 						state.reviews++;

@@ -450,3 +450,75 @@ describe("V2 Phase 2 (B3) — settle timing", () => {
 		expect(await reviewsOf()).toBe(1);
 	});
 });
+
+describe("V2 Phase 3 (AD5) — extraction cursor + model-wrote mutex", () => {
+	it("second review processes only messages beyond the cursor (no window overlap)", async () => {
+		const entries: Array<{ type: string; message: { role: string; content: Array<{ type: string; text: string }> } }> =
+			Array.from({ length: 8 }, (_, i) => ({
+				type: "message",
+				message: { role: i % 2 ? "assistant" : "user", content: [{ type: "text", text: `window-one message ${i}` }] },
+			}));
+		const prompts: string[] = [];
+		const host = new FakeHost();
+		const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0 };
+		setupAutomation(host.asPi(), {
+			gate: { state: { yielded: false } },
+			dirs: () => ({ project: dir, user: udir }),
+			trigger: new ConsolidationTrigger({ sendDirective: () => {} }),
+			settings: () => ({ automation: true }),
+			state,
+			deps: { complete: ((_m: unknown, req: { messages: Array<{ content: Array<{ text?: string }> }> }) => {
+				prompts.push(req.messages[0]!.content.map((c) => c.text ?? "").join(" "));
+				return Promise.resolve({ stopReason: "stop", content: [{ type: "text", text: '{"operations":[]}' }] });
+			}) as never },
+		});
+		const ctx = host.makeCtx({ cwd: project, ui: true, sessionEntries: entries });
+		ctx.model = fakeModel;
+		ctx.modelRegistry = fakeRegistry;
+		// first review: full window
+		for (let i = 0; i < 3; i++) await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `u${i}` }] } }, ctx);
+		for (let i = 0; i < 10; i++) await host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, ctx);
+		await until(() => state.reviews === 1);
+		expect(prompts.length).toBe(1);
+		expect(prompts[0]).toContain("window-one message 0");
+		// branch grows; second review must see ONLY the new messages
+		entries.push(
+			...Array.from({ length: 6 }, (_, i) => ({
+				type: "message",
+				message: { role: i % 2 ? "assistant" : "user", content: [{ type: "text", text: `window-two message ${i}` }] },
+			})),
+		);
+		for (let i = 10; i < 20; i++) await host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, ctx);
+		await until(() => state.reviews === 2);
+		expect(prompts.length).toBe(2);
+		expect(prompts[1]).not.toContain("window-one message 0");
+		expect(prompts[1]).toContain("window-two message 0");
+	});
+
+	it("model writing a memory file suppresses the review LLM pass (cursor still advances)", async () => {
+		const calls: string[] = [];
+		const host = new FakeHost();
+		const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0 };
+		setupAutomation(host.asPi(), {
+			gate: { state: { yielded: false } },
+			dirs: () => ({ project: dir, user: udir }),
+			trigger: new ConsolidationTrigger({ sendDirective: () => {} }),
+			settings: () => ({ automation: true }),
+			state,
+			deps: { complete: (() => { calls.push("x"); return Promise.resolve({ stopReason: "stop", content: [{ type: "text", text: '{"operations":[]}' }] }); }) as never },
+		});
+		const ctx = host.makeCtx({ cwd: project, ui: true, sessionEntries: [] });
+		ctx.model = fakeModel;
+		ctx.modelRegistry = fakeRegistry;
+		for (let i = 0; i < 3; i++) await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `u${i}` }] } }, ctx);
+		// the model writes into a memory layer → mutex arms
+		await host.fire("tool_call", { toolName: "write", input: { path: join(udir, "self.md"), content: "---\nname: s\ndescription: d\nmetadata:\n  type: user\n---\n\nb" } }, ctx);
+		for (let i = 0; i < 10; i++) await host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, ctx);
+		await until(() => state.reviews === 1);
+		expect(calls.length).toBe(0); // no LLM pass
+		expect(state.lastReview).toContain("model wrote memory");
+		// next window without writes resumes LLM reviews
+		for (let i = 10; i < 20; i++) await host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, ctx);
+		await until(() => calls.length === 1);
+	});
+});
