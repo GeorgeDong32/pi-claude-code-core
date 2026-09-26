@@ -3,7 +3,7 @@
  * (P3-ME-08). Both are idempotent: re-running produces zero duplicates.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { reconcileMemoryIndex } from "./memdir.js";
@@ -85,6 +85,24 @@ export function importFromHermes(hermesFile: string, targetDir: string): ImportR
 	}
 	reconcileMemoryIndex(targetDir);
 	return report;
+}
+
+
+/** B6 (OPT-3): read a still-live hermes source safely — if its mtime moves
+ * across the read (hermes flushing on message_end), the content may be a
+ * torn section; the migration is idempotent so a flagged re-run heals it.
+ * The read function is injectable for tests. */
+export function readSourceStable(path: string, read: (p: string) => string = (p) => readFileSync(p, "utf-8")): { raw: string; torn: boolean } {
+	const mtime = (p: string): number => {
+		try {
+			return statSync(p).mtimeMs;
+		} catch {
+			return -1;
+		}
+	};
+	const before = mtime(path);
+	const raw = read(path);
+	return { raw, torn: mtime(path) !== before };
 }
 
 // ─── V2-M: full hermes migration (DESIGN-MEMORY-V2 §7) ───
@@ -258,7 +276,9 @@ export function importHermesFull(args: {
 	] as const) {
 		const path = join(hermesDir, file);
 		if (!existsSync(path)) continue;
-		for (const raw of splitHermesSections(readFileSync(path, "utf-8"))) {
+		const source = readSourceStable(path);
+		if (source.torn) report.notes.push(`${file} changed during migration (hermes still writing?) — re-run /memory-import-hermes to be safe (idempotent)`);
+		for (const raw of splitHermesSections(source.raw)) {
 			const section = parseHermesSection(raw);
 			if (!section.body) {
 				report.skipped++;
@@ -279,7 +299,9 @@ export function importHermesFull(args: {
 				report.otherProjects.push(name);
 				continue;
 			}
-			for (const raw of splitHermesSections(readFileSync(storeFile, "utf-8"))) {
+			const source = readSourceStable(storeFile);
+			if (source.torn) report.notes.push(`projects-memory/${name}/MEMORY.md changed during migration — re-run /memory-import-hermes to be safe (idempotent)`);
+			for (const raw of splitHermesSections(source.raw)) {
 				const section = parseHermesSection(raw);
 				if (!section.body) {
 					report.skipped++;

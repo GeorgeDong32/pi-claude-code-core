@@ -250,3 +250,21 @@ describe("V2-M data-safety (Phase 0 D1/D4)", () => {
 		expect(content).toContain("[tool-quirk]");
 	});
 });
+
+describe("V2 Phase 2 (B6) — torn-source detection", () => {
+	it("a source rewritten during the read is flagged torn; a stable one is not", async () => {
+		const { readSourceStable } = await import("../../extensions/memory/importers.ts");
+		const store = mkdtempSync(join(tmpdir(), "torn-"));
+		const file = join(store, "s.md");
+		writeFileSync(file, "§ fact one\nbody");
+		expect(readSourceStable(file).torn).toBe(false);
+		// injectable read that mutates the file mid-read → mtime moves
+		const torn = readSourceStable(file, (p) => {
+			const raw = readFileSync(p, "utf-8");
+			writeFileSync(p, raw + "\n§ fact two\nmore");
+			return raw;
+		});
+		expect(torn.torn).toBe(true);
+		rmSync(store, { recursive: true, force: true });
+	});
+});

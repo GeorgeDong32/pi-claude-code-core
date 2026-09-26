@@ -77,10 +77,11 @@ function cappedRows(
 /** Pinned bodies section (V2-D5): always-active instructions, ≤5 files,
  * PINNED_TOTAL_MAX bytes shared — a file that does not fit whole is DROPPED,
  * never truncated (a cut instruction is worse than a missing one). */
-function pinnedSection(files: Array<{ entry: MemoryEntry; body: string }>): { text: string | null; bytes: number } {
+function pinnedSection(files: Array<{ entry: MemoryEntry; body: string }>): { text: string | null; bytes: number; dropped: number } {
 	// a standing instruction longer than this is not a standing instruction
-	const pinned = files.filter((f) => f.entry.pinned && f.body.length <= 1200).slice(0, PINNED_MAX_FILES);
-	if (pinned.length === 0) return { text: null, bytes: 0 };
+	const candidates = files.filter((f) => f.entry.pinned && f.body.length <= 1200);
+	if (candidates.length === 0) return { text: null, bytes: 0, dropped: files.filter((f) => f.entry.pinned).length };
+	const pinned = candidates.slice(0, PINNED_MAX_FILES);
 	const blocks: string[] = [];
 	let size = 0;
 	for (const f of pinned) {
@@ -90,8 +91,10 @@ function pinnedSection(files: Array<{ entry: MemoryEntry; body: string }>): { te
 		blocks.push(block);
 		size += blockBytes;
 	}
-	if (blocks.length === 0) return { text: null, bytes: 0 };
-	return { text: `## Pinned memories (always active)\n\n${blocks.join("\n\n")}`, bytes: size };
+	const rendered = blocks.length;
+	const dropped = files.filter((f) => f.entry.pinned).length - rendered;
+	if (rendered === 0) return { text: null, bytes: 0, dropped };
+	return { text: `## Pinned memories (always active)\n\n${blocks.join("\n\n")}`, bytes: size, dropped };
 }
 
 export interface LayerInput {
@@ -100,33 +103,54 @@ export interface LayerInput {
 	files?: Array<{ entry: MemoryEntry; body: string }>;
 }
 
-/** User-layer section: index rows + pinned bodies, capped at USER_INDEX_MAX. */
+/** User-layer section: index rows + pinned bodies, capped at USER_INDEX_MAX
+ * with EXACT byte accounting (B5, OPT-3) — headers and joins count, so the
+ * lane total below is a hard bound, not ~70B-over. Pinned files that don't
+ * fit (per-file cap, the 5-file cap, or lane overflow) are dropped whole
+ * and reported in a trailing comment. */
 export function userLayerSection(input: LayerInput): { text: string; bytes: number } {
-	const parts: string[] = [];
-	let total = 0;
-	const [rows, rowsBytes] = cappedRows(input.entries, USER_INDEX_MAX);
-	if (rows.length > 0) {
-		parts.push(`# User memory index (cross-project)\n\n${rows.join("\n")}`);
-		total += rowsBytes + 40;
-	}
 	const pinned = pinnedSection(input.files ?? []);
-	if (pinned.text && total + pinned.bytes <= USER_INDEX_MAX) {
-		parts.push(pinned.text);
-		total += pinned.bytes;
+	const pinnedBytes = pinned.text ? Buffer.byteLength(pinned.text, "utf8") : 0;
+	// rows get whatever the pinned block leaves of the lane
+	const [rows] = cappedRows(input.entries, USER_INDEX_MAX - pinnedBytes - (pinned.text ? 2 : 0) - 64);
+	const rowText = rows.length > 0 ? `# User memory index (cross-project)\n\n${rows.join("\n")}` : null;
+
+	let text: string | null = null;
+	let dropped = pinned.dropped;
+	if (rowText && pinned.text) text = `${rowText}\n\n${pinned.text}`;
+	else if (rowText) text = rowText;
+	else if (pinned.text) text = pinned.text;
+
+	// pinned alone overflowing the lane → drop it whole (never truncate)
+	if (text && Buffer.byteLength(text, "utf8") > USER_INDEX_MAX && pinned.text) {
+		text = rowText;
+		dropped = pinned.dropped + (pinned.text ? countRendered(pinned.text) : 0);
 	}
-	if (parts.length === 0) return { text: "User memory index: (empty)", bytes: 32 };
-	return { text: parts.join("\n\n"), bytes: total };
+	if (!text) text = "User memory index: (empty)";
+	if (dropped > 0) {
+		const note = `<!-- memory: ${dropped} pinned file(s) dropped (over budget) -->`;
+		if (Buffer.byteLength(`${text}\n${note}`, "utf8") <= USER_INDEX_MAX) text = `${text}\n${note}`;
+	}
+	return { text, bytes: Buffer.byteLength(text, "utf8") };
 }
 
-/** Project-layer section: capped at whatever remains of the lane budget. */
+/** How many rendered pinned blocks a section text carries (for the drop note). */
+function countRendered(pinnedText: string): number {
+	return (pinnedText.match(/^### /gm) ?? []).length;
+}
+
+/** Project-layer section: capped at whatever remains of the lane budget —
+ * header included (B5 exact accounting). */
 export function projectLayerSection(
 	entries: Array<{ title: string; description: string; file: string }>,
 	userBytesUsed: number,
 ): { text: string; bytes: number } {
-	const remaining = Math.max(0, MEMORY_INDEX_MAX - userBytesUsed);
-	const [rows, bytes] = cappedRows(entries, remaining);
-	if (rows.length === 0) return { text: "Project memory index: (empty)", bytes: 32 };
-	return { text: `# Project memory index\n\n${rows.join("\n")}`, bytes };
+	const header = `# Project memory index\n\n`;
+	const headerBytes = Buffer.byteLength(header, "utf8");
+	const remaining = Math.max(0, MEMORY_INDEX_MAX - userBytesUsed - headerBytes);
+	const [rows] = cappedRows(entries, remaining);
+	const text = rows.length > 0 ? `${header}${rows.join("\n")}` : "Project memory index: (empty)";
+	return { text, bytes: Buffer.byteLength(text, "utf8") };
 }
 
 /** Full injection block for before_agent_start (V2 two-layer shape). */

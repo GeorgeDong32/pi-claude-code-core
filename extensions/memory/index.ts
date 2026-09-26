@@ -232,6 +232,7 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 	});
 	pi.on("tool_result", (event) => {
 		try {
+			// B3: in-flight only — the turn is still the directive's turn
 			if ((event as { toolName?: string }).toolName === "memory_consolidate") consolidation.settle();
 		} catch {
 			/* never block */
@@ -239,7 +240,7 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 	});
 	pi.on("agent_settled", () => {
 		try {
-			consolidation.settle();
+			consolidation.settle({ directive: true });
 		} catch {
 			/* never block */
 		}

@@ -257,10 +257,12 @@ describe("V2-C directive + trigger state machine", () => {
 		expect(host.sentMessages.length).toBe(0);
 	});
 
-	it("needsConsolidation detects truncated index and count overflow", async () => {
-		expect(needsConsolidation({ dir, files: 10, totalBytes: 1000, indexBytes: 500, indexTruncated: true })).toBe("index truncated");
-		expect(needsConsolidation({ dir, files: 205, totalBytes: 1000, indexBytes: 500, indexTruncated: false })).toContain("205 files");
-		expect(needsConsolidation({ dir, files: 10, totalBytes: 1000, indexBytes: 500, indexTruncated: false })).toBeNull();
+	it("needsConsolidation detects truncated index, byte overflow (B1), and count overflow", async () => {
+		expect(needsConsolidation({ dir, files: 10, totalBytes: 1000, indexBytes: 500, indexTruncated: true }, 25_000)).toBe("index truncated");
+		// B1: a 9KB user-layer index over its 8KB cap — no WARNING on disk, but over budget
+		expect(needsConsolidation({ dir, files: 10, totalBytes: 1000, indexBytes: 9_000, indexTruncated: false }, 8_000)).toContain("9000/8000 bytes");
+		expect(needsConsolidation({ dir, files: 205, totalBytes: 1000, indexBytes: 500, indexTruncated: false }, 25_000)).toContain("205 files");
+		expect(needsConsolidation({ dir, files: 10, totalBytes: 1000, indexBytes: 500, indexTruncated: false }, 25_000)).toBeNull();
 	});
 });
 
@@ -309,5 +311,32 @@ describe("V2-C /memory-consolidate command + tool registration", () => {
 		await expect(
 			tool.execute("t1", { writes: [{ file: "a.md", content: "---\nname: alpha\ndescription: d\nmetadata:\n  type: project\n---\n\n" + "x".repeat(400) }], deletes: [] }, undefined, undefined, ctx),
 		).rejects.toThrow("does not shrink");
+	});
+});
+
+describe("V2 Phase 2 (B4) — same-batch duplicate adds", () => {
+	it("two adds with the same derived name: second is skipped as an in-batch duplicate", () => {
+		const out = applyMemoryOps(
+			[
+				{ action: "add", layer: "project", name: "build-flow", description: "d1", body: "first" },
+				{ action: "add", layer: "project", name: "build-flow", description: "d2", body: "second" },
+			],
+			{ user: udir, project: dir },
+		);
+		expect(out.applied).toBe(1);
+		expect(out.skipped[0]!.reason).toContain("already added in this batch");
+		expect(readFileSync(join(dir, "build-flow.md"), "utf-8")).toContain("first");
+	});
+
+	it("add + replace of the same name in one batch: replace is skipped (target not on disk at preflight)", () => {
+		const out = applyMemoryOps(
+			[
+				{ action: "add", layer: "project", name: "x", description: "d", body: "b" },
+				{ action: "replace", layer: "project", file: "x.md", body: "new" },
+			],
+			{ user: udir, project: dir },
+		);
+		expect(out.applied).toBe(1);
+		expect(out.skipped.some((sk) => sk.reason!.includes("not found"))).toBe(true);
 	});
 });

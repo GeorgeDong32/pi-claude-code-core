@@ -413,3 +413,40 @@ describe("V2-A full wiring smoke (memoryExtension registers the hooks)", () => {
 		).resolves.toBeUndefined();
 	});
 });
+
+describe("V2 Phase 2 (B3) — settle timing", () => {
+	it("tool_result settle keeps the turn directive-owned (no review counting); agent_settled re-opens accounting", async () => {
+		const host = new FakeHost();
+		memoryExtension(host.asPi());
+		const ctx = host.makeCtx({ cwd: project, ui: true });
+		ctx.model = fakeModel;
+		ctx.modelRegistry = fakeRegistry;
+		await host.fire("session_start", {}, ctx);
+		for (let i = 0; i < 3; i++) await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `u ${i}` }] } }, ctx);
+		mkdirSync(dir, { recursive: true });
+		for (let i = 0; i < 205; i++) {
+			writeFileSync(join(dir, `m${String(i).padStart(3, "0")}.md`), `---\nname: m${i}\ndescription: d\nmetadata:\n  type: project\n---\n\nfact ${i}`);
+		}
+		const reviewsOf = async (): Promise<number> => {
+			host.sentMessages.length = 0;
+			await host.commands.get("memory")?.("", ctx);
+			const msg = host.sentMessages.find((m) => m.message.customType === "pi-memory-status");
+			const m = /reviews (\d+)/.exec((msg!.message as { content?: string }).content ?? "");
+			return Number(m?.[1] ?? -1);
+		};
+		// over-budget store → directive fires; its turn is directive-owned
+		await host.fire("turn_end", { turnIndex: 0, message: { role: "assistant" }, toolResults: [] }, ctx);
+		expect(host.sentMessages.some((m) => m.message.customType === "pi-memory-consolidate")).toBe(true);
+		// tool returns mid-turn (B3: settles in-flight ONLY, turn stays owned)
+		await host.fire("tool_result", { toolName: "memory_consolidate", content: [], isError: false }, ctx);
+		// 11 turn_ends past the review threshold — still the directive's turn:
+		// the hook early-returns, review never ticks
+		for (let i = 1; i <= 11; i++) await host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, ctx);
+		expect(await reviewsOf()).toBe(0);
+		// turn fully settles → accounting re-opens; 10 fresh turns → one review
+		await host.fire("agent_settled", {}, ctx);
+		for (let i = 12; i <= 21; i++) await host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, ctx);
+		await new Promise((r) => setTimeout(r, 80));
+		expect(await reviewsOf()).toBe(1);
+	});
+});

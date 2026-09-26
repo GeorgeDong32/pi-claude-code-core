@@ -161,10 +161,13 @@ export interface TriggerState {
 	lastReason?: string;
 }
 
-/** Over-budget probe for one layer: index truncated, or file count over the
- * threshold (both mean the index can no longer represent the store). */
-export function needsConsolidation(stats: LayerStats): string | null {
+/** Over-budget probe for one layer: index truncated, index bytes over the
+ * layer's cap, or file count over the threshold (all mean the index can no
+ * longer represent the store). B1 (OPT-3): the bytes check closes the gap
+ * where a 9-24KB user-layer index had no WARNING yet injected at 8KB. */
+export function needsConsolidation(stats: LayerStats, indexCap: number): string | null {
 	if (stats.indexTruncated) return "index truncated";
+	if (stats.indexBytes > indexCap) return `index ${stats.indexBytes}/${indexCap} bytes`;
 	if (stats.files > INDEX_MAX_LINES) return `${stats.files} files`;
 	return null;
 }
@@ -188,7 +191,7 @@ export class ConsolidationTrigger {
 			["user", userDir, USER_INDEX_MAX],
 		] as const) {
 			const stats = layerStats(dir);
-			const reason = needsConsolidation(stats);
+			const reason = needsConsolidation(stats, cap);
 			if (!reason) continue;
 			this.fire(layer, stats, cap, reason);
 			return;
@@ -209,7 +212,7 @@ export class ConsolidationTrigger {
 		for (const [layer, dir, cap] of order) {
 			const stats = layerStats(dir);
 			if (stats.files === 0) continue;
-			this.fire(layer, stats, cap, needsConsolidation(stats) ?? "manual request");
+			this.fire(layer, stats, cap, needsConsolidation(stats, cap) ?? "manual request");
 			return { sent: true, detail: `${layer} layer (${stats.files} files)` };
 		}
 		return { sent: false, detail: "no memory files to consolidate" };
@@ -224,10 +227,13 @@ export class ConsolidationTrigger {
 		this.deps.sendDirective(layer, buildConsolidationDirective(layer, stats, cap, reason));
 	}
 
-	/** tool_result(memory_consolidate) or agent_settled clears in-flight. */
-	settle(): void {
+	/** tool_result(memory_consolidate) or agent_settled clears in-flight.
+	 * B3 (OPT-3): only agent_settled clears directiveTurnActive — clearing it
+	 * at tool_result let the tail of the consolidation turn (the model's
+	 * summary) leak into review/correction accounting. */
+	settle(options?: { directive?: boolean }): void {
 		this.state.inFlight = false;
-		this.directiveTurnActive = false;
+		if (options?.directive) this.directiveTurnActive = false;
 	}
 }
 

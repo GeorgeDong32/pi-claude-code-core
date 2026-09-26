@@ -113,13 +113,13 @@ describe("V2-M1 two-layer injection", () => {
 			file: `u${i}.md`,
 		}));
 		const user = userLayerSection({ entries: userEntries, files: [] });
-		expect(user.bytes).toBeLessThanOrEqual(USER_INDEX_MAX + 120); // header allowance
+		expect(user.bytes).toBeLessThanOrEqual(USER_INDEX_MAX); // B5: exact, no header allowance
 		const project = projectLayerSection(
 			Array.from({ length: 40 }, (_, i) => ({ title: `p${i}`, description: "y".repeat(900), file: `p${i}.md` })),
 			user.bytes,
 		);
-		// combined stays inside the lane
-		expect(user.bytes + project.bytes).toBeLessThanOrEqual(MEMORY_INDEX_MAX + 200);
+		// combined stays inside the lane — hard bound (B5)
+		expect(user.bytes + project.bytes).toBeLessThanOrEqual(MEMORY_INDEX_MAX);
 	});
 
 	it("pinned bodies render in the user section, capped at 5 files / PINNED_TOTAL_MAX bytes", () => {
@@ -137,7 +137,7 @@ describe("V2-M1 two-layer injection", () => {
 		expect(section.text).toContain("### pin4");
 		expect(section.text).not.toContain("### pin5");
 		expect(section.text).not.toContain("never in pinned section");
-		expect(section.bytes).toBeLessThanOrEqual(USER_INDEX_MAX + 120);
+		expect(section.bytes).toBeLessThanOrEqual(USER_INDEX_MAX);
 	});
 
 	it("oversized pinned bodies are dropped whole, never truncated mid-file", () => {
@@ -244,5 +244,26 @@ describe("V2 data-safety (Phase 0 D2/D3)", () => {
 		const r = (await handler({ systemPrompt: "BASE" }, ctx))!;
 		expect(r.systemPrompt).toContain("Pinned memories (always active)");
 		expect(r.systemPrompt).toContain("### always-zh");
+	});
+});
+
+describe("V2 Phase 2 (B5) — exact lane accounting", () => {
+	it("oversized pinned block is dropped whole with a trailing warning comment", () => {
+		const big = { entry: { file: "big.md", title: "big", description: "d", type: "user", pinned: true }, body: "B".repeat(1500) };
+		const section = userLayerSection({ entries: [], files: [big] });
+		expect(section.text).not.toContain("### big");
+		expect(section.text).toContain("1 pinned file(s) dropped");
+		expect(section.bytes).toBeLessThanOrEqual(USER_INDEX_MAX);
+	});
+
+	it("6th pinned file beyond the 5-file cap is reported in the drop warning", () => {
+		const files = Array.from({ length: 6 }, (_, i) => ({
+			entry: { file: `p${i}.md`, title: `p${i}`, description: "d", type: "user", pinned: true },
+			body: `rule ${i}`,
+		}));
+		const section = userLayerSection({ entries: [], files });
+		expect(section.text).toContain("### p4");
+		expect(section.text).not.toContain("### p5");
+		expect(section.text).toContain("1 pinned file(s) dropped");
 	});
 });

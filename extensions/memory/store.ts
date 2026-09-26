@@ -113,7 +113,14 @@ export function applyMemoryOps(
 	type Planned = { kind: "write"; file: string; dir: string; content: string } | { kind: "delete"; file: string; dir: string };
 	const planned: Planned[] = [];
 	const postFileCount = new Map<string, number>();
-	for (const d of [dirs.user, dirs.project]) postFileCount.set(d, listMemoryFiles(d).length);
+	// B4 (OPT-3): disk existence alone cannot see this batch's own planned
+	// writes — without the set, two same-name adds both "pass" preflight and
+	// the second silently last-wins the first
+	const plannedAdds = new Map<string, Set<string>>();
+	for (const d of [dirs.user, dirs.project]) {
+		postFileCount.set(d, listMemoryFiles(d).length);
+		plannedAdds.set(d, new Set());
+	}
 
 	for (const op of ops) {
 		const dir = dirFor(op.layer);
@@ -137,10 +144,15 @@ export function applyMemoryOps(
 				outcome.skipped.push({ file: op.file, action: op.action, reason: `unsafe file name "${file}"` });
 				continue;
 			}
+			if (plannedAdds.get(dir)!.has(file)) {
+				outcome.skipped.push({ file: op.file, action: op.action, reason: `${file} already added in this batch (duplicate)` });
+				continue;
+			}
 			if (existsSync(join(dir, file))) {
 				outcome.skipped.push({ file: op.file, action: op.action, reason: `${file} already exists (use replace)` });
 				continue;
 			}
+			plannedAdds.get(dir)!.add(file);
 			const content = renderFile(op);
 			const secret = findSecret(content);
 			if (secret) {
