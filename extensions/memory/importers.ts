@@ -78,7 +78,10 @@ export function importFromHermes(hermesFile: string, targetDir: string): ImportR
 		}
 		const outcome = importSection(section, targetDir, typeHeuristic(section.body));
 		if (outcome === "copied") report.copied++;
-		else report.skipped++;
+		else {
+			if (outcome === "collision") report.notes.push(`slug collision on "${section.firstLine.slice(0, 40)}" — two distinct facts share it; rename one manually`);
+			report.skipped++;
+		}
 	}
 	reconcileMemoryIndex(targetDir);
 	return report;
@@ -145,7 +148,7 @@ function importSection(
 	descriptionPrefix = "",
 	seen?: Set<string>,
 	fileNamePrefix = "hermes-",
-): "copied" | "skipped" | "dup" {
+): "copied" | "skipped" | "dup" | "collision" {
 	// cross-source dedupe: same leading 120 chars = same fact (MEMORY.md and
 	// failures.md overlap by design in hermes)
 	const fp = section.body.replace(/\s+/g, " ").slice(0, 120).toLowerCase();
@@ -154,17 +157,25 @@ function importSection(
 		seen.add(fp);
 	}
 	const title = section.firstLine.replace(/^#+\s*/, "").trim().slice(0, 60) || "fact";
-	const name = slugify(`${descriptionPrefix}${title}`) || "memory";
+	const base = slugify(`${descriptionPrefix}${title}`) || "memory";
 	const description = `${descriptionPrefix}${section.firstLine.replace(/^#+\s*/, "").trim().slice(0, 90)}`;
-	const fileName = `${fileNamePrefix}${name}.md`;
-	const target = join(targetDir, fileName);
-	// idempotent: existing target skipped (local edits win on re-import)
-	if (existsSync(target)) return "skipped";
-	mkdirSync(targetDir, { recursive: true });
 	const created = section.created ? `\n\n<!-- hermes: ${section.created} -->` : "";
-	const frontmatter = `---\nname: ${name}\ndescription: ${description}\nmetadata:\n  type: ${type}\n---\n\n${section.body}${created}\n`;
-	writeFileSync(target, frontmatter, "utf-8");
-	return "copied";
+	// D1: distinct facts whose titles collapse to the same slug (pure-CJK
+	// titles all strip to "memory") must not silently drop the second one —
+	// disambiguate with a body-fingerprint suffix; content match on either
+	// slot keeps re-runs idempotent
+	for (const candidate of [base, `${base}-${Buffer.from(fp).toString("hex").slice(0, 6)}`]) {
+		const fileName = `${fileNamePrefix}${candidate}.md`;
+		const target = join(targetDir, fileName);
+		if (!existsSync(target)) {
+			mkdirSync(targetDir, { recursive: true });
+			const frontmatter = `---\nname: ${candidate}\ndescription: ${description}\nmetadata:\n  type: ${type}\n---\n\n${section.body}${created}\n`;
+			writeFileSync(target, frontmatter, "utf-8");
+			return "copied";
+		}
+		if (readFileSync(target, "utf-8").includes(section.body)) return "skipped"; // same fact — idempotent
+	}
+	return "collision"; // both slots held by different facts — caller surfaces a note
 }
 
 /** Decode a hermes project64 tag ("Q2hlcnJ5UJI" → "CherryPR"); null on failure. */
@@ -213,10 +224,14 @@ export function importHermesFull(args: {
 		return report;
 	}
 
+	let collisions = 0;
 	const count = (outcome: string, layer: "user" | "project"): void => {
 		if (outcome === "copied") {
 			report.copied++;
 			report.routed[layer]++;
+		} else if (outcome === "collision") {
+			collisions++;
+			report.skipped++;
 		} else if (outcome === "skipped") report.skipped++;
 	};
 
@@ -227,7 +242,7 @@ export function importHermesFull(args: {
 			if (name && projectMatchesCurrent(name, args.projectDir)) {
 				count(importSection(section, args.projectDir, type, categoryPrefix, seen), "project");
 			} else if (name) {
-				count(importSection(section, args.userDir, type === "user" ? "user" : "reference", `[${name}] `, seen), "user");
+				count(importSection(section, args.userDir, type === "user" ? "user" : type === "project" ? "reference" : type, `[${name}] `, seen), "user");
 			} else {
 				count(importSection(section, args.userDir, type, categoryPrefix, seen), "user");
 			}
@@ -277,6 +292,9 @@ export function importHermesFull(args: {
 
 	reconcileMemoryIndex(args.projectDir);
 	reconcileMemoryIndex(args.userDir);
+	if (collisions > 0) {
+		report.notes.push(`${collisions} slug collision(s): distinct facts sharing a title were disambiguated with a fingerprint suffix or skipped; review the hermes-* files`);
+	}
 	if (report.otherProjects.length > 0) {
 		report.notes.push(`other hermes projects not migrated (run the command inside them): ${report.otherProjects.join(", ")}`);
 	}

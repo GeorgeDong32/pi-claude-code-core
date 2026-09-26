@@ -7,8 +7,14 @@
  * writer, interactive or automatic.
  *
  * Semantics:
- *   - preflight validates the WHOLE batch; a batch with any invalid op
- *     writes nothing (logical batch atomicity; per-file writes are tmp+rename)
+ *   - per-op preflight: invalid ops are skipped (reason recorded) while
+ *     valid ops in the same batch still apply — one hallucinated op must
+ *     not discard a whole LLM capture batch (skip-invalid, hermes-equivalent
+ *     semantics). Two gates ARE batch-fatal (nothing written): >200 ops and
+ *     a layer file-count cap breach.
+ *   - per-file writes are tmp+rename; a mid-batch IO failure leaves the
+ *     already-written files in place and the index converges on the next
+ *     reconcile
  *   - frontmatter / type / secret / size / count caps enforced here
  *   - replace/remove take an optional `old_text` anchor inside the current
  *     file: when provided and absent, the op is skipped as stale (the model

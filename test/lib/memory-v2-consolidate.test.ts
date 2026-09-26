@@ -75,20 +75,26 @@ describe("V2-C ops engine", () => {
 		expect(readFileSync(join(dir, "MEMORY.md"), "utf-8")).toContain("[build-flow](build-flow.md)");
 	});
 
-	it("batch atomicity: one invalid op ⇒ nothing written", () => {
+	it("skip-invalid semantics: invalid ops skipped, valid ops in the same batch apply; batch-fatal gates reject wholesale", () => {
 		put(dir, "a.md", "a");
 		const ops: MemoryOp[] = [
 			{ action: "add", layer: "project", name: "good", description: "d", body: "ok" },
 			{ action: "add", layer: "project", name: "bad", description: "d", body: "token = " + "x".repeat(20) }, // secret
 		];
 		const out = applyMemoryOps(ops, { user: udir, project: dir });
-		// the secret op is skipped (not fatal); but a FATAL error is different:
+		// one hallucinated op must not discard the batch (决1: skip-invalid)
 		expect(out.skipped.length).toBe(1);
 		expect(existsSync(join(dir, "good.md"))).toBe(true); // valid op still applies
-		// fatal path: replace of a missing file + count cap violation
+		// invalid-target op: skipped with reason
 		const out2 = applyMemoryOps([{ action: "remove", layer: "project", file: "missing.md" }], { user: udir, project: dir });
 		expect(out2.applied).toBe(0);
 		expect(out2.skipped[0]!.reason).toContain("not found");
+		// batch-fatal gate 1: >200 ops → nothing written
+		const tooMany: MemoryOp[] = Array.from({ length: 201 }, (_, i) => ({ action: "add", layer: "project", name: `n${i}`, description: "d", body: "b" }));
+		const out3 = applyMemoryOps(tooMany, { user: udir, project: dir });
+		expect(out3.error).toContain("batch too large");
+		expect(out3.applied).toBe(0);
+		expect(existsSync(join(dir, "n0.md"))).toBe(false);
 	});
 
 	it("replace preserves frontmatter, honors stale anchors", () => {

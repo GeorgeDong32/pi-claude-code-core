@@ -17,7 +17,7 @@
  * Injection failures NEVER block a turn (P3-ME-09): every hook body is
  * try/catch-wrapped at the boundary.
  */
-import { accessSync, constants as fsConstants, existsSync, readFileSync } from "node:fs";
+import { accessSync, constants as fsConstants, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -72,6 +72,17 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 			gate.probeStatic();
 			memorySettings = loadMemorySettings(join(process.env.HOME ?? home, ".pi", "agent"));
 			automationState.enabled = memorySettings.automation;
+			// pre-create both layers (D3a): a fresh project must not degrade the
+			// WHOLE injection (incl. the user layer) to policy-only just because
+			// its project memory dir doesn't exist yet — the probe below reads
+			// ENOENT as "not writable"
+			for (const d of [memoryDir(ctx), userMemoryDir(ctx)]) {
+				try {
+					mkdirSync(d, { recursive: true });
+				} catch {
+					/* unwritable parent — the probe below degrades correctly */
+				}
+			}
 			reconcileMemoryIndex(memoryDir(ctx));
 			reconcileMemoryIndex(userMemoryDir(ctx)); // V2-D1 user layer
 			// writability probe: a failed write degrades to policy-only

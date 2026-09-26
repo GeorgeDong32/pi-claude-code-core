@@ -5,18 +5,19 @@
  * project layer unchanged. Lane budget stays ≤ MEMORY_INDEX_MAX total.
  */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { FakeHost, clearCoreGlobals, snapshotCoreGlobals } from "../contracts/fake-host.ts";
 import { resetCoreBusForTests } from "../../extensions/bus.ts";
 import memoryExtension from "../../extensions/memory/index.ts";
-import { parseMemoryFrontmatter } from "../../extensions/memory/memdir.ts";
+import { parseMemoryFrontmatter, scanMemoryDir, reconcileMemoryIndex } from "../../extensions/memory/memdir.ts";
 import { resolveMemoryPaths, isMemoryWritePath } from "../../extensions/memory/paths.ts";
 import { userLayerSection, projectLayerSection, buildPolicyInjection } from "../../extensions/memory/policy.ts";
 import { guardMemoryWrites } from "../../extensions/memory/guard.ts";
 import { USER_INDEX_MAX, PINNED_TOTAL_MAX } from "../../extensions/memory/constants.ts";
+import { layerStats } from "../../extensions/memory/store.js";
 import { MEMORY_INDEX_MAX } from "../../lib/context-budget.js";
 import { targets } from "../contracts/targets.ts";
 
@@ -216,5 +217,32 @@ describe("V2-M1 regression — single-layer behaviors", () => {
 			[{ title: "p", description: "d", file: "p.md" }],
 		);
 		expect(injection.split("<memory-policy>").length - 1).toBe(1);
+	});
+});
+
+describe("V2 data-safety (Phase 0 D2/D3)", () => {
+	it("D2: dot-prefixed .tmp-*.md leftovers are invisible to scans, index, and stats", () => {
+		const { dir } = dirs();
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, ".tmp-123-abc.md"), "---\nname: zombie\ndescription: torn write\nmetadata:\n  type: project\n---\n\nbody");
+		writeMemory("project", "real.md", "real", "real fact");
+		const { entries, skipped } = scanMemoryDir(dir);
+		expect(entries.map((e) => e.file)).toEqual(["real.md"]);
+		expect(skipped).toBe(0); // invisible, not even counted as invalid
+		reconcileMemoryIndex(dir);
+		const index = readFileSync(join(dir, "MEMORY.md"), "utf-8");
+		expect(index).not.toContain("zombie");
+		expect(layerStats(dir).files).toBe(1);
+	});
+
+	it("D3: on-disk pinned file renders the always-active section through the real hook chain", async () => {
+		writeMemory("user", "pin.md", "always-zh", "replies in chinese", "user", "所有回复默认中文", true);
+		const host = setup();
+		const ctx = host.makeCtx({ cwd: project, ui: true });
+		await host.fire("session_start", {}, ctx);
+		const handler = host.handlers.get("before_agent_start")![0] as (e: unknown, c: unknown) => Promise<{ systemPrompt?: string }>;
+		const r = (await handler({ systemPrompt: "BASE" }, ctx))!;
+		expect(r.systemPrompt).toContain("Pinned memories (always active)");
+		expect(r.systemPrompt).toContain("### always-zh");
 	});
 });

@@ -59,7 +59,7 @@ export function scanMemoryDir(memoryDir: string): { entries: MemoryEntry[]; skip
 	let skipped = 0;
 	let files: string[];
 	try {
-		files = readdirSync(memoryDir).filter((f) => f.endsWith(".md") && f !== "MEMORY.md").sort();
+		files = readdirSync(memoryDir).filter((f) => f.endsWith(".md") && f !== "MEMORY.md" && !f.startsWith(".")).sort();
 	} catch {
 		return { entries, skipped };
 	}
@@ -71,7 +71,7 @@ export function scanMemoryDir(memoryDir: string): { entries: MemoryEntry[]; skip
 				skipped++;
 				continue;
 			}
-			entries.push({ file, title: fm.title, description: fm.description, type: fm.type });
+			entries.push({ file, title: fm.title, description: fm.description, type: fm.type, pinned: fm.pinned });
 		} catch {
 			skipped++;
 		}
@@ -114,7 +114,7 @@ function dirFingerprint(memoryDir: string, names: string[]): string {
 export function scanMemoryDirCached(memoryDir: string): { files: MemoryFile[]; skipped: number } {
 	let names: string[];
 	try {
-		names = readdirSync(memoryDir).filter((f) => f.endsWith(".md") && f !== "MEMORY.md").sort();
+		names = readdirSync(memoryDir).filter((f) => f.endsWith(".md") && f !== "MEMORY.md" && !f.startsWith(".")).sort();
 	} catch {
 		return { files: [], skipped: 0 };
 	}
@@ -136,7 +136,7 @@ export function scanMemoryDirCached(memoryDir: string): { files: MemoryFile[]; s
 				continue;
 			}
 			files.push({
-				entry: { file, title: fm.title, description: fm.description, type: fm.type },
+				entry: { file, title: fm.title, description: fm.description, type: fm.type, pinned: fm.pinned },
 				body: content,
 				mtimeMs: st.mtimeMs,
 			});
@@ -181,7 +181,7 @@ export function reconcileMemoryIndex(memoryDir: string): ReconcileResult {
 	const names: string[] = [];
 	try {
 		for (const f of readdirSync(memoryDir)) {
-			if (!f.endsWith(".md") || f === "MEMORY.md") continue;
+			if (!f.endsWith(".md") || f === "MEMORY.md" || f.startsWith(".")) continue;
 			names.push(f);
 			try {
 				newestMd = Math.max(newestMd, statSync(join(memoryDir, f)).mtimeMs);

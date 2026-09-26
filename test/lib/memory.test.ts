@@ -488,8 +488,13 @@ describe("adversarial-audit fixes (2026-09-22)", () => {
 		// corrupt the local copy's frontmatter (invisible to scanMemoryDir)
 		writeFileSync(join(dir, "hermes-deploy-flow.md"), "not valid frontmatter at all");
 		const second = importFromHermes(store, dir);
-		expect(second.copied).toBe(0);
+		// D1 (2026-09-26): "exists with different content" now means "a
+		// distinct fact shares the slug" — the corrupted local file is still
+		// never clobbered, but the source fact imports under a fingerprint
+		// suffix instead of being silently dropped
+		expect(second.copied).toBe(1);
 		expect(readFileSync(join(dir, "hermes-deploy-flow.md"), "utf-8")).toBe("not valid frontmatter at all");
+		expect(existsSync(join(dir, "hermes-deploy-flow-646570.md"))).toBe(true);
 	});
 
 	it("C1b: function-word bigrams alone do not satisfy the overlap threshold", () => {

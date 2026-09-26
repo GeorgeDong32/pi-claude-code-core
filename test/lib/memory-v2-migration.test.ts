@@ -222,3 +222,31 @@ describe("V2-M commands + diagnostics", () => {
 	});
 });
 
+
+describe("V2-M data-safety (Phase 0 D1/D4)", () => {
+	it("D1: two distinct pure-CJK facts don't collide — both land, idempotent on re-run", () => {
+		hermesFixture({ user: "所有回复默认中文。 <!-- created=2026-08-02 -->\n§\n以后都先跑测试再提交代码。 <!-- created=2026-08-03 -->" });
+		const args = { agentDir, cwd: project, projectDir: dir, userDir: udir };
+		const r1 = importHermesFull(args);
+		expect(r1.copied).toBe(2);
+		const files = readdirSync(udir).filter((f) => f.startsWith("hermes-"));
+		expect(files.length).toBe(2);
+		expect(files).toContain("hermes-memory.md");
+		expect(files.some((f) => /^hermes-memory-[a-z0-9]{6}\.md$/.test(f))).toBe(true);
+		const r2 = importHermesFull(args);
+		expect(r2.copied).toBe(0);
+		expect(r2.skipped).toBe(2);
+	});
+
+	it("D4: failures.md foreign-project section keeps type feedback (category prefix preserved)", () => {
+		hermesFixture({
+			failures: `[tool-quirk] grep 在 Zed 里会挂，回退到 bash grep。 <!-- created=2026-08-03, project64=${Buffer.from("CherryPR").toString("base64")} -->`,
+		});
+		const r = importHermesFull({ agentDir, cwd: project, projectDir: dir, userDir: udir });
+		expect(r.copied).toBe(1);
+		const files = readdirSync(udir).filter((f) => f.startsWith("hermes-"));
+		const content = readFileSync(join(udir, files[0]!), "utf-8");
+		expect(content).toContain("type: feedback");
+		expect(content).toContain("[tool-quirk]");
+	});
+});
