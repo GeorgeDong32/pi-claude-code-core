@@ -24,8 +24,7 @@ import { confirmChoice } from "./ui/confirm.ts";
 import { notify as uiNotify } from "../ui/notify.ts";
 import { createFallbackAdapter } from "../ui/fallback.ts";
 import { coreBus } from "../bus.ts"
-import { isInsideDir } from "../../lib/rule-text.js"
-import { resolveMemoryPaths } from "../memory/paths.ts"
+import { isMemoryWritePath } from "../memory/paths.ts"
 import { clearSessionGrants, clearSessionState, grantSession, hasSessionGrant, isBypassActive, listSessionGrants, matchFamily, noteAdjudicated, familyRuleMentions, setBypassIndicator } from "./rule-families.ts"
 import { getSharedEffortOwner, type OwnerEffortLevel } from "../../lib/effort-owner.ts";
 import { readFileSync } from "node:fs"
@@ -401,7 +400,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     if (tool !== "write" && tool !== "edit") return false;
     const path = typeof input?.path === "string" ? input.path : "";
     if (!path) return false;
-    return isInsideDir(path, resolveMemoryPaths(ctx.cwd ?? process.cwd()).memoryDir);
+    return isMemoryWritePath(path, ctx.cwd ?? process.cwd());
   }
 
   async function promptWithPermissionOptions(

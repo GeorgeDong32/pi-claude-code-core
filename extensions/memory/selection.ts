@@ -13,6 +13,8 @@ import type { MemoryEntry } from "./memdir.js";
 export interface SelectableMemory extends MemoryEntry {
 	body: string;
 	mtimeMs: number;
+	/** Which layer the file lives in (V2-D1); affects rendering only. */
+	layer?: "user" | "project";
 }
 
 export interface SelectionBudget {

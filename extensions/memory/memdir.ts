@@ -17,6 +17,8 @@ export interface MemoryEntry {
 	title: string;
 	description: string;
 	type: string;
+	/** frontmatter metadata.pinned — always-on injection (V2-D5 pin downgrade) */
+	pinned?: boolean;
 }
 
 export interface ReconcileResult {
@@ -28,7 +30,7 @@ export interface ReconcileResult {
 const VALID_TYPES = new Set(["user", "feedback", "project", "reference"]);
 
 /** Parse a memory file's frontmatter; null when invalid for indexing. */
-export function parseMemoryFrontmatter(content: string): { title: string; description: string; type: string } | null {
+export function parseMemoryFrontmatter(content: string): { title: string; description: string; type: string; pinned?: boolean } | null {
 	if (!content.startsWith("---")) return null;
 	const lines = content.split("\n");
 	let close = -1;
@@ -48,7 +50,7 @@ export function parseMemoryFrontmatter(content: string): { title: string; descri
 		fm[m[1]] = v;
 	}
 	if (!fm.name || !fm.description || !VALID_TYPES.has(fm.type)) return null;
-	return { title: fm.name, description: fm.description, type: fm.type };
+	return { title: fm.name, description: fm.description, type: fm.type, pinned: fm.pinned === "true" };
 }
 
 /** Scan the memory dir and classify files (valid entries + skipped count). */

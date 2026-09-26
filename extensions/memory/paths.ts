@@ -1,15 +1,19 @@
 /**
- * memory/paths.ts — disk location resolution (P3-ME-01).
+ * memory/paths.ts — disk location resolution (P3-ME-01, V2-M1 user layer).
  *
- * Memory dir: `~/.pi/agent/projects/<sanitized-git-root>/memory/`
+ * Project memory dir: `~/.pi/agent/projects/<sanitized-git-root>/memory/`
  * The sanitizer matches pi's own sessions directory naming (`/` → `-`),
  * and the root is the git CANONICAL root so linked worktrees share memory.
+ * User memory dir (V2-D1): `~/.pi/agent/memory/` — cross-project facts and
+ * preferences, same per-file format and reconciler as the project layer.
  */
 
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+
+import { isInsideDir } from "../../lib/rule-text.js";
 
 /** Sanitize a path exactly like pi's sessions directory naming. */
 export function sanitizePath(p: string): string {
@@ -54,6 +58,10 @@ export interface MemoryPaths {
 	memoryDir: string;
 	/** the memory index file */
 	indexFile: string;
+	/** <agentDir>/memory — user-level layer (V2-D1) */
+	userMemoryDir: string;
+	/** user layer index file */
+	userIndexFile: string;
 }
 
 export function resolveMemoryPaths(cwd: string, home = process.env.HOME ?? homedir()): MemoryPaths {
@@ -61,7 +69,20 @@ export function resolveMemoryPaths(cwd: string, home = process.env.HOME ?? homed
 	const root = gitCanonicalRoot(cwd) ?? cwd;
 	const projectsDir = join(agentDir, "projects", sanitizePath(root));
 	const memoryDir = join(projectsDir, "memory");
-	return { agentDir, projectsDir, memoryDir, indexFile: join(memoryDir, "MEMORY.md") };
+	const userMemoryDir = join(agentDir, "memory");
+	return { agentDir, projectsDir, memoryDir, indexFile: join(memoryDir, "MEMORY.md"), userMemoryDir, userIndexFile: join(userMemoryDir, "MEMORY.md") };
+}
+
+/** Both write-guarded memory roots (project layer + user layer, V2-D2). */
+export function memoryWriteRoots(cwd: string, home = process.env.HOME ?? homedir()): string[] {
+	const p = resolveMemoryPaths(cwd, home);
+	return [p.memoryDir, p.userMemoryDir];
+}
+
+/** True when a write/edit path targets either memory layer. Shared by the
+ * modes carve-out and the secret guard so the two can never drift. */
+export function isMemoryWritePath(path: string, cwd: string, home = process.env.HOME ?? homedir()): boolean {
+	return memoryWriteRoots(cwd, home).some((root) => isInsideDir(path, root));
 }
 
 /** The sessions dir for a cwd (session_recall scans here; shared sanitizer). */

@@ -1,14 +1,18 @@
 /**
- * memory/index.ts — the memory module wiring (DESIGN-MEMORY 定稿形状:
- * 1 tool + 3 commands + 5 hooks, 0 exported types, zero deps, zero LLM).
+ * memory/index.ts — the memory module wiring (DESIGN-MEMORY V1 形状 + V2 扩容:
+ * 2 tools + 4 commands + 9 hooks, 0 exported types, zero deps, one LLM lane).
  *
- *   session_start       reconcile + budget reset + static yield probe
+ *   session_start       reconcile both layers + budget reset + static yield probe
  *   session_compact     per-turn budget reset
- *   before_agent_start  dynamic yield probe → policy + capped index (gated)
- *   context             lexical selectForTurn injection (gated, not persisted)
- *   tool_call           guardMemoryWrites secret interceptor
- *   registerTool        session_recall
- *   registerCommand     /memory, /memory-import-claude, /memory-import-hermes
+ *   before_agent_start  dynamic yield probe → policy + two-layer capped index
+ *   context             lexical selectForTurn injection (both layers pooled)
+ *   tool_call           guardMemoryWrites secret interceptor (both layers)
+ *   turn_end            auto-consolidation trigger (V2-C) + P3 automation
+ *   tool_result         memory_consolidate settle
+ *   agent_settled       consolidation in-flight clear
+ *   registerTool        session_recall, memory_consolidate (V2-C)
+ *   registerCommand     /memory, /memory-consolidate, /memory-import-claude,
+ *                       /memory-import-hermes
  *
  * Injection failures NEVER block a turn (P3-ME-09): every hook body is
  * try/catch-wrapped at the boundary.
@@ -29,7 +33,10 @@ import { guardMemoryWrites } from "./guard.ts";
 import { InjectionGate } from "./yield.ts";
 import { sessionRecall } from "./session-recall.ts";
 import { MEMORY_INDEX_MAX } from "../../lib/context-budget.js";
-import { importFromClaude, importFromHermes } from "./importers.ts";
+import { USER_INDEX_MAX } from "./constants.js";
+import { ConsolidationTrigger, CONSOLIDATE_DIRECTIVE_TYPE, registerConsolidation } from "./consolidate.js";
+import { setupAutomation, loadMemorySettings, type AutomationState, type MemorySettings } from "./automation.js";
+import { importFromClaude, importFromHermes, importHermesFull } from "./importers.ts";
 
 export default function memoryExtension(pi: ExtensionAPI): void {
 	const home = homedir();
@@ -39,11 +46,17 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 	let degradedNotified = false;
 	let memoryDirWritable = true;
 	let sessionBytesUsed = 0;
+	let memorySettings: MemorySettings = { automation: true };
+	const automationState: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0 };
 
 	function memoryDir(ctx?: { cwd?: string }): string {
 		// anchor on the SESSION cwd (ctx.cwd); process.cwd() is only the
 		// fallback. Re-resolve per call so HOME overrides (tests) apply.
 		return resolveMemoryPaths(ctx?.cwd ?? process.cwd(), process.env.HOME ?? home).memoryDir;
+	}
+
+	function userMemoryDir(ctx?: { cwd?: string }): string {
+		return resolveMemoryPaths(ctx?.cwd ?? process.cwd(), process.env.HOME ?? home).userMemoryDir;
 	}
 
 	function notifyOnce(ctx: ExtensionContext | undefined, msg: string): void {
@@ -57,7 +70,10 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 		try {
 			sessionBytesUsed = 0;
 			gate.probeStatic();
+			memorySettings = loadMemorySettings(join(process.env.HOME ?? home, ".pi", "agent"));
+			automationState.enabled = memorySettings.automation;
 			reconcileMemoryIndex(memoryDir(ctx));
+			reconcileMemoryIndex(userMemoryDir(ctx)); // V2-D1 user layer
 			// writability probe: a failed write degrades to policy-only
 			try {
 				// existence is not writability (review #17): probe the access mode
@@ -90,16 +106,20 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 			}
 			if (gate.state.yielded) return undefined; // hermes owns injection
 			const dir = memoryDir(ctx);
-			const { files, skipped } = scanMemoryDirCached(dir);
+			const udir = userMemoryDir(ctx);
 			if (!memoryDirWritable) {
 				notifyOnce(ctx, "memory dir not writable — running policy-only");
 				// policy-only: the index derives from the (unwritable) dir and
 				// cannot be trusted to match, so inject just the policy block
 				return { systemPrompt: `${event.systemPrompt ?? ""}\n\n${POLICY_COMPACT}` };
 			}
+			const userFiles = scanMemoryDirCached(udir).files;
 			const injection = buildPolicyInjection(
-				files.map((f) => ({ ...f.entry })),
-			) + (skipped > 0 ? `\n<!-- memory: ${skipped} file(s) skipped (invalid frontmatter) -->` : "");
+				{ entries: userFiles.map((f) => ({ ...f.entry })), files: userFiles.map((f) => ({ entry: f.entry, body: f.body })) },
+				scanMemoryDirCached(dir).files.map((f) => ({ ...f.entry })),
+			) + (scanMemoryDirCached(dir).skipped + scanMemoryDirCached(udir).skipped > 0
+				? `\n<!-- memory: ${scanMemoryDirCached(dir).skipped + scanMemoryDirCached(udir).skipped} file(s) skipped (invalid frontmatter) -->`
+				: "");
 			return { systemPrompt: `${event.systemPrompt ?? ""}\n\n${injection}` };
 		} catch {
 			return undefined; // injection failure never blocks the turn
@@ -119,11 +139,20 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 			const prompt = extractUserText(lastUser);
 			if (!prompt) return undefined;
 
-			const memories: SelectableMemory[] = scanMemoryDirCached(dir).files.map((f) => ({
-				...f.entry,
-				body: f.body,
-				mtimeMs: f.mtimeMs,
-			}));
+			const memories: SelectableMemory[] = [
+				...scanMemoryDirCached(userMemoryDir(ctx)).files.map((f) => ({
+					...f.entry,
+					body: f.body,
+					mtimeMs: f.mtimeMs,
+					layer: "user" as const,
+				})),
+				...scanMemoryDirCached(dir).files.map((f) => ({
+					...f.entry,
+					body: f.body,
+					mtimeMs: f.mtimeMs,
+					layer: "project" as const,
+				})),
+			];
 
 			const { files } = selectForTurn(prompt, memories, sessionBytesUsed);
 			if (files.length === 0) return undefined;
@@ -133,7 +162,8 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 				const header = freshnessHeader(file.mtimeMs);
 				// charge the session budget for the whole rendered block
 				// (title + freshness header + body), in bytes, not just body chars
-				const block = `## ${file.title} (memory/${file.file})${header ? `\n${header}` : ""}\n\n${file.body}`;
+				const where = file.layer === "user" ? `user-memory/${file.file}` : `memory/${file.file}`;
+				const block = `## ${file.title} (${where})${header ? `\n${header}` : ""}\n\n${file.body}`;
 				sessionBytesUsed += byteLength(block);
 				blocks.push(block);
 			}
@@ -154,14 +184,63 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 		try {
 			const name = typeof event.toolName === "string" ? event.toolName : "";
 			const input = (event.input ?? {}) as Record<string, unknown>;
-			const verdict = guardMemoryWrites(name, input, memoryDir(ctx));
-			if (verdict.block) {
+			// V2-D2: both layers are guarded (project first, then user)
+			const verdict = [memoryDir(ctx), userMemoryDir(ctx)]
+				.map((d) => guardMemoryWrites(name, input, d))
+				.find((v) => v.block);
+			if (verdict) {
 				return { block: true, reason: verdict.reason };
 			}
 		} catch {
 			/* guard failure must not break the tool call */
 		}
 		return undefined;
+	});
+
+	// ── V2-C consolidation: directive + triggerTurn, native tool rendering ──
+	const consolidation = new ConsolidationTrigger({
+		sendDirective: (layer, directive) => {
+			pi.sendMessage(
+				{ customType: CONSOLIDATE_DIRECTIVE_TYPE, content: `(${layer} layer) ${directive}`, display: false },
+				{ triggerTurn: true, deliverAs: "followUp" },
+			);
+		},
+	});
+	registerConsolidation(
+		pi,
+		(ctx) => ({ project: memoryDir(ctx), user: userMemoryDir(ctx) }),
+		consolidation,
+	);
+	pi.on("turn_end", (_event, ctx: ExtensionContext) => {
+		try {
+			if (gate.state.yielded) return; // hermes owns memory while present
+			consolidation.onTurnEnd(memoryDir(ctx), userMemoryDir(ctx));
+		} catch {
+			/* never block the turn */
+		}
+	});
+	pi.on("tool_result", (event) => {
+		try {
+			if ((event as { toolName?: string }).toolName === "memory_consolidate") consolidation.settle();
+		} catch {
+			/* never block */
+		}
+	});
+	pi.on("agent_settled", () => {
+		try {
+			consolidation.settle();
+		} catch {
+			/* never block */
+		}
+	});
+
+	// ── V2-A automatic maintenance: correction / review / flush ──
+	setupAutomation(pi, {
+		gate,
+		dirs: (ctx) => ({ project: memoryDir(ctx), user: userMemoryDir(ctx) }),
+		trigger: consolidation,
+		settings: () => memorySettings,
+		state: automationState,
 	});
 
 	pi.registerTool(defineTool({
@@ -208,21 +287,38 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 	}));
 
 	pi.registerCommand("memory", {
-		description: "Show memory dir status (file count, skipped files, index size)",
+		description: "Show memory status (two layers: file counts, skipped files, index sizes)",
 		handler: async (_args, ctx) => {
 			const dir = memoryDir(ctx as ExtensionContext);
+			const udir = userMemoryDir(ctx as ExtensionContext);
 			const { entries, skipped } = scanMemoryDir(dir);
+			const user = scanMemoryDir(udir);
 			let indexBytes = 0;
+			let userIndexBytes = 0;
 			try {
 				indexBytes = byteLength(readFileSync(join(dir, "MEMORY.md"), "utf-8"));
 			} catch {
 				/* no index */
 			}
+			try {
+				userIndexBytes = byteLength(readFileSync(join(udir, "MEMORY.md"), "utf-8"));
+			} catch {
+				/* no index */
+			}
 			const lines = [
-				`memory dir: ${dir}`,
-				`files: ${entries.length}, skipped (invalid frontmatter): ${skipped}`,
-				`MEMORY.md: ${indexBytes}/${MEMORY_INDEX_MAX} bytes`,
+				`user memory: ${udir} — files: ${user.entries.length}, skipped: ${user.skipped}, index: ${userIndexBytes}/${USER_INDEX_MAX} bytes`,
+				`project memory: ${dir} — files: ${entries.length}, skipped: ${skipped}, index: ${indexBytes}/${MEMORY_INDEX_MAX} bytes`,
+				`automation: ${automationState.enabled ? "on" : "off"} — reviews ${automationState.reviews}${automationState.lastReview ? ` (last: ${automationState.lastReview})` : ""}, corrections ${automationState.corrections}${automationState.lastCorrection ? ` (last: ${automationState.lastCorrection})` : ""}, flushes ${automationState.flushes}${automationState.lastFlush ? ` (last: ${automationState.lastFlush})` : ""}, ops applied ${automationState.opsApplied}`,
+				`consolidation: ${consolidation.state.inFlight ? `in-flight (attempt ${consolidation.state.attempts}/2${consolidation.state.lastReason ? `, ${consolidation.state.lastReason}` : ""})` : `idle${consolidation.state.lastReason ? ` (last: ${consolidation.state.lastReason}, attempt ${consolidation.state.attempts}/2)` : ""}`}`,
+				...(automationState.lastError ? [`last automation error: ${automationState.lastError}`] : []),
 				`yielded to hermes: ${gate.state.yielded}${gate.state.detectedBy ? ` (${gate.state.detectedBy})` : ""}`,
+				...(existsSync(join(process.env.HOME ?? home, ".pi", "agent", "pi-hermes-memory", "MEMORY.md")) ||
+				existsSync(join(process.env.HOME ?? home, ".pi", "agent", "pi-hermes-memory", "USER.md"))
+					? ["hermes data found — run /memory-import-hermes to migrate it, then uninstall hermes"]
+					: []),
+				`--- user memories ---`,
+				...user.entries.map((e) => `- [${e.title}](${e.file}) — ${e.description} [${e.type}]`),
+				`--- project memories ---`,
 				...entries.map((e) => `- [${e.title}](${e.file}) — ${e.description} [${e.type}]`),
 			];
 			pi.sendMessage({ customType: "pi-memory-status", content: lines.join("\n"), display: true });
@@ -245,15 +341,29 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("memory-import-hermes", {
-		description: "Import a hermes §-store file into per-fact memory files",
+		description: "Migrate ALL hermes data (USER.md + MEMORY.md + failures.md + this project's store) into the two core layers; a file argument imports that single §-store",
 		handler: async (args, ctx) => {
-			const file = args.trim() || join(memoryDir(ctx as ExtensionContext), "hermes-import.md");
-			const report = importFromHermes(file, memoryDir(ctx as ExtensionContext));
-			const text = [
-				`memory-import-hermes: converted ${report.copied}, skipped ${report.skipped} (idempotent)`,
-				...report.notes,
-			].join("\n");
-			pi.sendMessage({ customType: "pi-memory-status", content: text, display: true });
+			const cctx = ctx as ExtensionContext;
+			const text: string[] = [];
+			if (args.trim()) {
+				// legacy single-file mode
+				const file = args.trim();
+				const report = importFromHermes(file, memoryDir(cctx));
+				text.push(`memory-import-hermes: converted ${report.copied}, skipped ${report.skipped} (idempotent)`, ...report.notes);
+			} else {
+				const agentDir = join(process.env.HOME ?? home, ".pi", "agent");
+				const report = importHermesFull({
+					agentDir,
+					cwd: cctx.cwd ?? process.cwd(),
+					projectDir: memoryDir(cctx),
+					userDir: userMemoryDir(cctx),
+				});
+				text.push(
+					`memory-import-hermes: migrated ${report.copied} fact(s) — user layer: ${report.routed.user}, project layer: ${report.routed.project}, skipped: ${report.skipped} (idempotent)`,
+					...report.notes,
+				);
+			}
+			pi.sendMessage({ customType: "pi-memory-status", content: text.join("\n"), display: true });
 		},
 	});
 }

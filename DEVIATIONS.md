@@ -198,3 +198,8 @@
 ④**C1b**:中文高频虚词 bigram(我们/一个/这个…20 条)入 STOPWORDS 且 bigram 分支补停用词过滤(原只在 ASCII 分支过滤)——红队实测「我们需要整理一个计划」凭两个虚词 bigram 误命中无关记忆;信息密度低于英文词的固有松散由 #27 升 3 通道继续跟踪。
 顺手:broker probe 前 stop 旧 mirror(throw 时不再遗留订阅);globalHome 惰性初始化(静态初始化会在测试 HOME 覆盖前捕获)。
 **挂账(红队疑点,择优认定)**:broker direct 双拼 `mcp_exa_exa_search`(fail-closed 方向安全,adapter 真机接入时观测);Tab 补全 max 在模型原生含 max 时重复展示;effort 三处裸调 ctx.isIdle 与 syncEffortUi 防御风格不一(真实运行时 isIdle 恒在,extensions/types.d.ts:232);ALL_LEVELS_WITHOUT_XHIGH 无消费者(dead export);C2 人类句子误拦(`password: "my-password-is-long-enough"`)——over-blocking 声明内。测试 vitest **574**(+4)+ node--test 312 + 契约 17 全绿。
+
+## memory v2 批（DESIGN-MEMORY-V2，2026-09-24）
+
+67. **modes carve-out 判定外移（V2 唯一跨模块改动）**：任务约束「不动 core 其它模块」，但 D1 用户层（~/.pi/agent/memory/）的模型写入若不进 P3-PM-01 豁免，ask 模式下每次写用户记忆都弹审批，「自动化优先」不成立。改法：`memory/paths.ts` 导出 `isMemoryWritePath(path, cwd)`（两层根目录单一真相，guard 与 modes 共用防漂移），modes/index.ts 判定行换调它（净 -1 行，依赖方向 modes→memory 原本已存在）。豁免行为由新增用例钉住（memory-v2-storage.test.ts「modes carve-out skips the approval dialog for USER-layer writes」）。
+68. **hermes 子进程 fallback 链不迁移（择优认定）**：hermes 的 direct→`pi -p` 子进程兜底（超时预算共享/交接/心跳/锁协调全套）整体不迁移，direct 失败=静默跳过记 `/memory` 诊断，下个钩子自然重试。理由：捕获类钩子（review/correction/flush）天然有下一次机会，fallback 链是 hermes 复杂度大头；重开条件=真机 parse_error 率实测偏高（spec §10a）。

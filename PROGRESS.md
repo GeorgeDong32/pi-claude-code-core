@@ -337,3 +337,25 @@ spec rev2（红队处置版）全 Phase 落地，见 `../CORE-UI-DECOUPLE-PLAN.m
 1. notify 直写 leg 的删除：旧 cctui 装机清零时。
 2. `deriveLegacy` 撤除：cctui ≥1.5.0 且装机率到位（contracts/README.md 准则）。
 3. 命令区交互类触点（select/editor）按 spec §3 呈现/交互分治有意留在逻辑侧。
+
+---
+
+## memory v2 批（V2-M1/M-C/M-A，2026-09-24）—— 全量替代 pi-hermes-memory
+
+spec `../specs/design/DESIGN-MEMORY-V2.md`，报告 `../MEMORY-V2-REPORT.md`（替代矩阵/冒烟脚本/卸载清单在报告）。四阶段全落地，**未 commit**（等用户真机冒烟）：
+
+- **P1 存储+写入（MV2-S）**：用户层 `~/.pi/agent/memory/`（同款 per-file + 同一 reconciler）；注入=用户索引(≤8K 含 pinned 常驻段)+项目索引吃 25K 车道余量；selection 池合并两层；guard 双目录；modes carve-out 换 `isMemoryWritePath`（DEVIATIONS #67）；`pinned: true` frontmatter 吸收 STANDING 语义（≤5 文件/2KB，超限整丢不截断）。
+- **P2 整合（MV2-C）**：`store.ts` ops engine（preflight 全量校验→批原子落盘，单文件 tmp+rename；mkdir 锁 TTL 10min）；`memory_consolidate` 工具（必须收缩不变量，原生渲染，reject 即 throw）；directive+triggerTurn（followUp）；turn_end 自动触发（索引截断 WARNING/条目>200，会话 ≤2 次、10-turn 间隔、tool_result/agent_settled 清 in-flight）；`/memory-consolidate` 兜底命令。
+- **P3 自动维护（MV2-A）**：`llm.ts` side-channel `completeSimple()`（auth 轮换重试一次/60s 超时/严格 JSON ops 提取——schema 仅 prose 防思维链复述误解析）；纠正检测（EN 强/弱/负 + CJK 补齐——hermes 仅英文，对本机用户实质改进；1/3 turns 节流）；review（≥10 turns 或 ≥15 tool calls，≥3 user turns 预热，fire-and-forget）；flush（before_compact 60s 跟 signal + shutdown≠reload 10s）；settings 两旋钮（`memory.automation`/`memory.model`）；整合指令 turn 不计入捕获计数；yielded 时全部静默。
+- **P4 迁移+收敛（MV2-M）**：§ 切分修复（v1 `/^§ /m` 与真实数据不匹配）+ 全量迁移（USER.md→用户层、全局 MEMORY.md 按 project64 路由、failures.md→feedback 带类别前缀、projects-memory 项目匹配 endsWith 规则、跨源去重、created 保留）；`/memory` 诊断升级（两层占用+automation/consolidation/lastError+hermes 提示）；命令面=2 稳态+2 一次性迁移。
+
+### 测试计数（终态）
+
+- vitest **662**（+72：storage 12 + consolidate 19 + automation 28 + migration 12 + 既有回归）；既有 memory/carveout 用例零改动全绿；tsc 双 project 零错。
+- 真实数据实弹：临时 HOME 拷贝跑 `importHermesFull`（Pi-Extension 身份）→ 39 条全量路由正确、幂等、去重生效。
+
+### 剩余（用户门控）
+
+1. 真机冒烟（报告 §7 脚本）→ 卸载 hermes（packages 移除 + 数据目录归档，清单在报告 §7）。
+2. commit 拆分建议：P1+P2+P3+P4 各一或两批（`memory v2` 主题）。
+3. 冒烟后观察项：side-channel parse_error 率（高则按 spec §10a 降频/改 directive 形态）、CJK 纠正误报率（高则收紧强模式）。

@@ -3,7 +3,7 @@
  * (P3-ME-08). Both are idempotent: re-running produces zero duplicates.
  */
 
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { reconcileMemoryIndex } from "./memdir.js";
@@ -57,8 +57,9 @@ export function importFromClaude(projectMemoryDir: string, targetDir: string): I
 
 /**
  * /memory-import-hermes: split a hermes §-delimited store into per-fact
- * frontmatter files. Section shape: lines starting with `§ ` begin a fact;
- * the first line after the marker is the fact title.
+ * frontmatter files. Section shape: a line containing only `§` separates
+ * facts; the first line of a fact is its de-facto title; trailing HTML
+ * comments carry created/last/project64 metadata.
  */
 export function importFromHermes(hermesFile: string, targetDir: string): ImportReport {
 	const report: ImportReport = { copied: 0, skipped: 0, notes: [] };
@@ -67,39 +68,217 @@ export function importFromHermes(hermesFile: string, targetDir: string): ImportR
 		return report;
 	}
 	const raw = readFileSync(hermesFile, "utf-8");
-	const sections = raw.split(/^§ /m).map((s) => s.trim()).filter(Boolean);
+	const sections = splitHermesSections(raw);
 
-	for (const section of sections) {
-		const lines = section.split("\n");
-		const title = slugify(lines[0].replace(/^#+\s*/, "").trim() || "fact");
-		const body = lines.slice(1).join("\n").trim();
-		if (!body) {
+	for (const rawSection of sections) {
+		const section = parseHermesSection(rawSection);
+		if (!section.body) {
 			report.skipped++;
 			continue;
 		}
-		// type heuristics from content
-		const type = /prefer|style|always|never|instead/i.test(body)
-			? "feedback"
-			: /repo|project|branch|build|release/i.test(body)
-				? "project"
-				: "reference";
-		const fileName = `hermes-${title}.md`;
-		const frontmatter = `---\nname: ${title}\ndescription: ${lines[0].replace(/^#+\s*/, "").trim().slice(0, 80)}\nmetadata:\n  type: ${type}\n---\n\n${body}\n`;
-		const target = join(targetDir, fileName);
-		// filesystem-level existence: a locally corrupted file (invalid
-		// frontmatter → invisible to scanMemoryDir) must still never be
-		// silently clobbered by a re-import
-		if (existsSync(target)) {
-			// identical → idempotent skip; diverged → local edits win
-			if (readFileSync(target, "utf-8") !== frontmatter) {
-				report.notes.push(`${fileName}: kept local (differs from source; delete to re-import)`);
-			}
-			report.skipped++;
-			continue;
-		}
-		writeFileSync(target, frontmatter, "utf-8");
-		report.copied++;
+		const outcome = importSection(section, targetDir, typeHeuristic(section.body));
+		if (outcome === "copied") report.copied++;
+		else report.skipped++;
 	}
 	reconcileMemoryIndex(targetDir);
+	return report;
+}
+
+// ─── V2-M: full hermes migration (DESIGN-MEMORY-V2 §7) ───
+
+export interface HermesMigrationReport extends ImportReport {
+	/** sections routed to each core layer */
+	routed: { user: number; project: number };
+	/** hermes projects-memory projects that do NOT match the current cwd */
+	otherProjects: string[];
+}
+
+/** Split a hermes store on §-prefixed separator lines. Both on-disk shapes
+ * are supported: a line containing ONLY `§` (real hermes data) and the
+ * `§ Title` prefix form (v1 fixture shape); the v1 `/^§ /m`-only split
+ * never matched actual hermes data. */
+export function splitHermesSections(raw: string): string[] {
+	return raw
+		.split(/^§(?:[ \t]+|[ \t]*$)/m)
+		.map((s) => s.trim())
+		.filter(Boolean);
+}
+
+export interface HermesSection {
+	firstLine: string;
+	body: string;
+	created?: string;
+	project64?: string;
+}
+
+/** Parse one section: first line = title, body = rest. Trailing hermes
+ * metadata comments (`<!-- created=…, project64=… -->`, sometimes stacked)
+ * are stripped from the body and merged into the metadata. */
+export function parseHermesSection(section: string): HermesSection {
+	const attrRe = /<!--\s*(created=[^>]*?)\s*-->/g;
+	let created = "";
+	let project64: string | undefined;
+	for (const m of section.matchAll(attrRe)) {
+		const inner = m[1]!;
+		created = created ? `${created}; ${inner}` : inner;
+		const p64 = /project64=([A-Za-z0-9+/=]+)/.exec(inner);
+		if (p64 && !project64) project64 = p64[1]!;
+	}
+	const body = section.replace(attrRe, "").trim();
+	const lines = body.split("\n");
+	return { firstLine: lines[0] ?? "", body, created: created || undefined, project64 };
+}
+
+function typeHeuristic(body: string): string {
+	return /prefer|style|always|never|instead|偏好|总是|不要|别/i.test(body)
+		? "feedback"
+		: /repo|project|branch|build|release|仓库|分支|构建/i.test(body)
+			? "project"
+			: "reference";
+}
+
+/** Import one section into a layer dir. Returns "copied" | "skipped" | "dup". */
+function importSection(
+	section: HermesSection,
+	targetDir: string,
+	type: string,
+	descriptionPrefix = "",
+	seen?: Set<string>,
+	fileNamePrefix = "hermes-",
+): "copied" | "skipped" | "dup" {
+	// cross-source dedupe: same leading 120 chars = same fact (MEMORY.md and
+	// failures.md overlap by design in hermes)
+	const fp = section.body.replace(/\s+/g, " ").slice(0, 120).toLowerCase();
+	if (seen) {
+		if (seen.has(fp)) return "dup";
+		seen.add(fp);
+	}
+	const title = section.firstLine.replace(/^#+\s*/, "").trim().slice(0, 60) || "fact";
+	const name = slugify(`${descriptionPrefix}${title}`) || "memory";
+	const description = `${descriptionPrefix}${section.firstLine.replace(/^#+\s*/, "").trim().slice(0, 90)}`;
+	const fileName = `${fileNamePrefix}${name}.md`;
+	const target = join(targetDir, fileName);
+	// idempotent: existing target skipped (local edits win on re-import)
+	if (existsSync(target)) return "skipped";
+	mkdirSync(targetDir, { recursive: true });
+	const created = section.created ? `\n\n<!-- hermes: ${section.created} -->` : "";
+	const frontmatter = `---\nname: ${name}\ndescription: ${description}\nmetadata:\n  type: ${type}\n---\n\n${section.body}${created}\n`;
+	writeFileSync(target, frontmatter, "utf-8");
+	return "copied";
+}
+
+/** Decode a hermes project64 tag ("Q2hlcnJ5UJI" → "CherryPR"); null on failure. */
+export function decodeProject64(b64: string): string | null {
+	try {
+		const decoded = Buffer.from(b64, "base64").toString("utf-8");
+		return decoded.trim() || null;
+	} catch {
+		return null;
+	}
+}
+
+/** The core project key for a memory dir (.../projects/<key>/memory). */
+export function projectKeyOf(memoryDir: string): string {
+	const parts = memoryDir.replace(/\\/g, "/").split("/");
+	return parts.length >= 2 ? parts[parts.length - 2]! : parts[0]!;
+}
+
+/** Does a hermes project name refer to the current project? Rule: the core
+ * sanitized project key equals the name or ends with "-<name>". */
+export function projectMatchesCurrent(hermesName: string, projectDir: string): boolean {
+	const key = projectKeyOf(projectDir);
+	return key === hermesName || key.endsWith(`-${hermesName}`);
+}
+
+/**
+ * /memory-import-hermes (no args) — full migration:
+ *   USER.md                    → user layer (type user)
+ *   MEMORY.md untagged         → user layer
+ *   MEMORY.md project64=this   → project layer; other tags → user layer + [tag]
+ *   failures.md                → type feedback, same routing, category prefix
+ *   projects-memory/<n>/MEMORY.md matching this cwd → project layer
+ * Copy-not-move; idempotent; cross-source dedupe; other projects listed.
+ */
+export function importHermesFull(args: {
+	agentDir: string;
+	cwd: string;
+	projectDir: string;
+	userDir: string;
+}): HermesMigrationReport {
+	const report: HermesMigrationReport = { copied: 0, skipped: 0, notes: [], routed: { user: 0, project: 0 }, otherProjects: [] };
+	const hermesDir = join(args.agentDir, "pi-hermes-memory");
+	const seen = new Set<string>();
+	if (!existsSync(hermesDir)) {
+		report.notes.push(`no hermes data at ${hermesDir}`);
+		return report;
+	}
+
+	const count = (outcome: string, layer: "user" | "project"): void => {
+		if (outcome === "copied") {
+			report.copied++;
+			report.routed[layer]++;
+		} else if (outcome === "skipped") report.skipped++;
+	};
+
+	// route a tagged/untagged section from a global store
+	const routeGlobal = (section: HermesSection, type: string, categoryPrefix: string): void => {
+		if (section.project64) {
+			const name = decodeProject64(section.project64);
+			if (name && projectMatchesCurrent(name, args.projectDir)) {
+				count(importSection(section, args.projectDir, type, categoryPrefix, seen), "project");
+			} else if (name) {
+				count(importSection(section, args.userDir, type === "user" ? "user" : "reference", `[${name}] `, seen), "user");
+			} else {
+				count(importSection(section, args.userDir, type, categoryPrefix, seen), "user");
+			}
+		} else {
+			count(importSection(section, args.userDir, type, categoryPrefix, seen), "user");
+		}
+	};
+
+	for (const [file, type, prefix] of [
+		["USER.md", "user", ""],
+		["MEMORY.md", "reference", ""],
+		["failures.md", "feedback", ""],
+	] as const) {
+		const path = join(hermesDir, file);
+		if (!existsSync(path)) continue;
+		for (const raw of splitHermesSections(readFileSync(path, "utf-8"))) {
+			const section = parseHermesSection(raw);
+			if (!section.body) {
+				report.skipped++;
+				continue;
+			}
+			const category = /^\[(failure|correction|insight|convention|tool-quirk|preference)\]/i.exec(section.firstLine)?.[1]?.toLowerCase();
+			routeGlobal(section, file === "USER.md" ? "user" : file === "failures.md" ? "feedback" : typeHeuristic(section.body), category ? `[${category}] ` : prefix);
+		}
+	}
+
+	// per-project stores: only the current project's; others are listed
+	const projectsMemoryDir = join(args.agentDir, "projects-memory");
+	if (existsSync(projectsMemoryDir)) {
+		for (const name of readdirSync(projectsMemoryDir).sort()) {
+			const storeFile = join(projectsMemoryDir, name, "MEMORY.md");
+			if (!existsSync(storeFile)) continue;
+			if (!projectMatchesCurrent(name, args.projectDir)) {
+				report.otherProjects.push(name);
+				continue;
+			}
+			for (const raw of splitHermesSections(readFileSync(storeFile, "utf-8"))) {
+				const section = parseHermesSection(raw);
+				if (!section.body) {
+					report.skipped++;
+					continue;
+				}
+				count(importSection(section, args.projectDir, typeHeuristic(section.body), "", seen), "project");
+			}
+		}
+	}
+
+	reconcileMemoryIndex(args.projectDir);
+	reconcileMemoryIndex(args.userDir);
+	if (report.otherProjects.length > 0) {
+		report.notes.push(`other hermes projects not migrated (run the command inside them): ${report.otherProjects.join(", ")}`);
+	}
 	return report;
 }

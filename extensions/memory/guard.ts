@@ -25,6 +25,15 @@ const SECRET_PATTERNS: Array<[RegExp, string]> = [
 	[/(?:api[_-]?key|secret|token|password)\s*[:=]\s*["']?[A-Za-z0-9/_+=-]{16,}["']?/i, "key=value secret"],
 ];
 
+/** Shared secret probe (guard + ops engine + memory_consolidate — one truth).
+ * Returns the pattern label on a hit, null when clean. */
+export function findSecret(text: string): string | null {
+	for (const [pattern, label] of SECRET_PATTERNS) {
+		if (pattern.test(text)) return label;
+	}
+	return null;
+}
+
 /** Inspect a write/edit targeting the memory dir; block on secret shapes. */
 export function guardMemoryWrites(
 	toolName: string,
@@ -45,10 +54,9 @@ export function guardMemoryWrites(
 	if (contents.length === 0) return { block: false };
 
 	for (const text of contents) {
-		for (const [pattern, label] of SECRET_PATTERNS) {
-			if (pattern.test(text)) {
-				return { block: true, reason: `memory write blocked: looks like a ${label}` };
-			}
+		const secret = findSecret(text);
+		if (secret) {
+			return { block: true, reason: `memory write blocked: looks like a ${secret}` };
 		}
 	}
 	return { block: false };
