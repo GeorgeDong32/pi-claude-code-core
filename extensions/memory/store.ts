@@ -25,9 +25,17 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { parseMemoryFrontmatter, reconcileMemoryIndex } from "./memdir.js";
+import { isValidMemoryType, listMemoryFiles, reconcileMemoryIndex, slugify, splitFrontmatter } from "./memdir.js";
 import { findSecret } from "./guard.js";
-import { MEMORY_FILE_BODY_MAX, MEMORY_FILES_MAX } from "./constants.js";
+
+/** Per-file body cap enforced by the write engine (S3: lives with its only enforcer). */
+export const MEMORY_FILE_BODY_MAX = 8 * 1024;
+/** Whole-file cap = body cap + frontmatter/created-marker allowance. The ONE
+ * size limit for memory files — applyMemoryOps and runConsolidation share it
+ * (was two encodings of the same number that could drift). */
+export const MEMORY_FILE_TOTAL_MAX = MEMORY_FILE_BODY_MAX + 2048;
+/** Per-layer file count cap (consolidation trigger co-signal). */
+export const MEMORY_FILES_MAX = 80;
 
 export type MemoryLayer = "user" | "project";
 
@@ -53,13 +61,8 @@ export interface OpsOutcome {
 	error?: string;
 }
 
-const VALID_TYPES = new Set(["user", "feedback", "project", "reference"]);
-
-function slugify(name: string): string {
-	return name.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "memory";
-}
-
-function safeFileName(file: string): boolean {
+/** Basename safety for memory writes (S2: exported — consolidation shares it). */
+export function safeMemoryFileName(file: string): boolean {
 	return /^[A-Za-z0-9][A-Za-z0-9._-]*\.md$/.test(file) && !file.startsWith(".") && file !== "MEMORY.md";
 }
 
@@ -68,15 +71,8 @@ function renderFile(op: MemoryOp): string {
 	return `---\nname: ${op.name}\ndescription: ${op.description}\nmetadata:\n  type: ${type}\n---\n\n${op.body}\n`;
 }
 
-function listMemoryFiles(dir: string): string[] {
-	try {
-		return readdirSync(dir).filter((f) => f.endsWith(".md") && f !== "MEMORY.md" && !f.startsWith("."));
-	} catch {
-		return [];
-	}
-}
-
-function fileBytes(path: string): number {
+/** File size in bytes (total: missing → 0). */
+export function fileBytes(path: string): number {
 	try {
 		return statSync(path).size;
 	} catch {
@@ -84,20 +80,21 @@ function fileBytes(path: string): number {
 	}
 }
 
+/** Atomic single-file write: tmp+rename inside the layer dir (S2: the ONE
+ * write primitive — applyMemoryOps and runConsolidation share it). Throws
+ * on IO error; a landed rename is never rolled back. */
+export function atomicWriteFile(dir: string, file: string, content: string): void {
+	mkdirSync(dir, { recursive: true });
+	const tmp = join(dir, `.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}.md`);
+	writeFileSync(tmp, content, "utf-8");
+	renameSync(tmp, join(dir, file));
+}
+
 /** Split a memory file into frontmatter fields + body; null when invalid. */
 function splitContent(content: string): { name: string; description: string; type: string; body: string } | null {
-	const parsed = parseMemoryFrontmatter(content);
-	if (!parsed) return null;
-	const lines = content.split("\n");
-	let close = -1;
-	for (let i = 1; i < lines.length; i++) {
-		if (lines[i].trim() === "---") {
-			close = i;
-			break;
-		}
-	}
-	if (close === -1) return null;
-	return { name: parsed.title, description: parsed.description, type: parsed.type, body: lines.slice(close + 1).join("\n").replace(/^\n+/, "") };
+	const split = splitFrontmatter(content);
+	if (!split) return null;
+	return { name: split.title, description: split.description, type: split.type, body: split.body };
 }
 
 /** Validate + apply a batch against the two layer dirs. Total function:
@@ -127,7 +124,7 @@ export function applyMemoryOps(
 				outcome.skipped.push({ file: op.file, action: op.action, reason: "add requires name + description" });
 				continue;
 			}
-			if (op.type && !VALID_TYPES.has(op.type)) {
+			if (op.type && !isValidMemoryType(op.type)) {
 				outcome.skipped.push({ file: op.file, action: op.action, reason: `invalid type "${op.type}"` });
 				continue;
 			}
@@ -136,7 +133,7 @@ export function applyMemoryOps(
 				continue;
 			}
 			const file = op.file ?? `${slugify(op.name)}.md`;
-			if (!safeFileName(file)) {
+			if (!safeMemoryFileName(file)) {
 				outcome.skipped.push({ file: op.file, action: op.action, reason: `unsafe file name "${file}"` });
 				continue;
 			}
@@ -150,15 +147,15 @@ export function applyMemoryOps(
 				outcome.skipped.push({ file: op.file, action: op.action, reason: `looks like a ${secret}` });
 				continue;
 			}
-			if (Buffer.byteLength(content, "utf8") > MEMORY_FILE_BODY_MAX + 2048) {
-				outcome.skipped.push({ file: op.file, action: op.action, reason: `file exceeds ${MEMORY_FILE_BODY_MAX + 2048} bytes` });
+			if (Buffer.byteLength(content, "utf8") > MEMORY_FILE_TOTAL_MAX) {
+				outcome.skipped.push({ file: op.file, action: op.action, reason: `file exceeds ${MEMORY_FILE_TOTAL_MAX} bytes` });
 				continue;
 			}
 			planned.push({ kind: "write", file, dir, content });
 			postFileCount.set(dir, (postFileCount.get(dir) ?? 0) + 1);
 		} else if (op.action === "replace") {
 			const file = op.file ?? "";
-			if (!safeFileName(file) || !existsSync(join(dir, file))) {
+			if (!safeMemoryFileName(file) || !existsSync(join(dir, file))) {
 				outcome.skipped.push({ file: op.file, action: op.action, reason: `replace target "${file}" not found` });
 				continue;
 			}
@@ -188,14 +185,14 @@ export function applyMemoryOps(
 				outcome.skipped.push({ file: op.file, action: op.action, reason: `looks like a ${secret}` });
 				continue;
 			}
-			if (Buffer.byteLength(content, "utf8") > MEMORY_FILE_BODY_MAX + 2048) {
-				outcome.skipped.push({ file: op.file, action: op.action, reason: `file exceeds ${MEMORY_FILE_BODY_MAX + 2048} bytes` });
+			if (Buffer.byteLength(content, "utf8") > MEMORY_FILE_TOTAL_MAX) {
+				outcome.skipped.push({ file: op.file, action: op.action, reason: `file exceeds ${MEMORY_FILE_TOTAL_MAX} bytes` });
 				continue;
 			}
 			planned.push({ kind: "write", file, dir, content });
 		} else if (op.action === "remove") {
 			const file = op.file ?? "";
-			if (!safeFileName(file) || !existsSync(join(dir, file))) {
+			if (!safeMemoryFileName(file) || !existsSync(join(dir, file))) {
 				outcome.skipped.push({ file: op.file, action: op.action, reason: `remove target "${file}" not found` });
 				continue;
 			}
@@ -224,14 +221,8 @@ export function applyMemoryOps(
 	const touched = new Set<string>();
 	for (const step of planned) {
 		try {
-			if (step.kind === "write") {
-				mkdirSync(step.dir, { recursive: true });
-				const tmp = join(step.dir, `.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}.md`);
-				writeFileSync(tmp, step.content, "utf-8");
-				renameSync(tmp, join(step.dir, step.file));
-			} else {
-				unlinkSync(join(step.dir, step.file));
-			}
+			if (step.kind === "write") atomicWriteFile(step.dir, step.file, step.content);
+			else unlinkSync(join(step.dir, step.file));
 			outcome.applied++;
 			touched.add(step.dir);
 		} catch (err) {

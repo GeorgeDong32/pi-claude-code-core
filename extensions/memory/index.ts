@@ -33,7 +33,7 @@ import { guardMemoryWrites } from "./guard.ts";
 import { InjectionGate } from "./yield.ts";
 import { sessionRecall } from "./session-recall.ts";
 import { MEMORY_INDEX_MAX } from "../../lib/context-budget.js";
-import { USER_INDEX_MAX } from "./constants.js";
+import { USER_INDEX_MAX } from "./policy.js";
 import { ConsolidationTrigger, CONSOLIDATE_DIRECTIVE_TYPE, registerConsolidation } from "./consolidate.js";
 import { setupAutomation, loadMemorySettings, type AutomationState, type MemorySettings } from "./automation.js";
 import { importFromClaude, importFromHermes, importHermesFull } from "./importers.ts";

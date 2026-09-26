@@ -14,7 +14,15 @@
 
 import type { MemoryEntry } from "./memdir.js";
 import { MEMORY_INDEX_MAX } from "../../lib/context-budget.js";
-import { USER_INDEX_MAX, PINNED_TOTAL_MAX, PINNED_MAX_FILES } from "./constants.js";
+
+/** User-layer index + pinned budget (renders before the project index).
+ * S3 (OPT-3): injection-lane budgets live with their only enforcer. */
+export const USER_INDEX_MAX = 8_000;
+
+/** Pinned bodies section cap, shared across all pinned files (hermes
+ * STANDING_MAX_CHARS=2000 semantics — always-on instructions stay tiny). */
+export const PINNED_TOTAL_MAX = 2_000;
+export const PINNED_MAX_FILES = 5;
 
 export const POLICY_COMPACT = `<memory-policy>
 You have persistent memory in TWO layers. Before answering, scan the memory

@@ -16,7 +16,7 @@ import { parseMemoryFrontmatter, scanMemoryDir, reconcileMemoryIndex } from "../
 import { resolveMemoryPaths, isMemoryWritePath } from "../../extensions/memory/paths.ts";
 import { userLayerSection, projectLayerSection, buildPolicyInjection } from "../../extensions/memory/policy.ts";
 import { guardMemoryWrites } from "../../extensions/memory/guard.ts";
-import { USER_INDEX_MAX, PINNED_TOTAL_MAX } from "../../extensions/memory/constants.ts";
+import { USER_INDEX_MAX, PINNED_TOTAL_MAX } from "../../extensions/memory/policy.ts";
 import { layerStats } from "../../extensions/memory/store.js";
 import { MEMORY_INDEX_MAX } from "../../lib/context-budget.js";
 import { targets } from "../contracts/targets.ts";

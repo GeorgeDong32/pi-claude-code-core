@@ -8,10 +8,10 @@
  * with a full batch. Tool call + result render through pi's native
  * ●/⎿ pipeline — no custom status UI.
  *
- * The tool is a batch transaction: writes (complete file contents) +
- * deletes, validated by the same rules as the ops engine, held to a
- * must-shrink invariant (bytes or file count strictly reduced), serialized
- * across processes by a mkdir lock.
+ * S2 (OPT-3): consolidation is a POLICY on the shared write engine —
+ * validation rules (filename predicate, frontmatter, secret scan, size
+ * cap) and the atomic write primitive all come from store.ts; what stays
+ * here is the must-shrink invariant, the mkdir lock, and the trigger.
  */
 
 import { existsSync, mkdirSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
@@ -20,10 +20,19 @@ import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { parseMemoryFrontmatter, reconcileMemoryIndex } from "./memdir.js";
+import { INDEX_MAX_LINES, listMemoryFiles, parseMemoryFrontmatter, reconcileMemoryIndex } from "./memdir.js";
 import { findSecret } from "./guard.js";
-import { acquireLayerLock, layerStats, type LayerLock, type LayerStats } from "./store.js";
-import { CONSOLIDATE_COUNT_THRESHOLD, USER_INDEX_MAX } from "./constants.js";
+import {
+	acquireLayerLock,
+	atomicWriteFile,
+	fileBytes,
+	layerStats,
+	MEMORY_FILE_TOTAL_MAX,
+	safeMemoryFileName,
+	type LayerLock,
+	type LayerStats,
+} from "./store.js";
+import { USER_INDEX_MAX } from "./policy.js";
 import { MEMORY_INDEX_MAX } from "../../lib/context-budget.js";
 
 export const CONSOLIDATE_DIRECTIVE_TYPE = "pi-memory-consolidate";
@@ -79,7 +88,7 @@ export function runConsolidation(
 	const before = layerStats(dir);
 
 	// validate every write BEFORE touching anything
-	const safe = (f: string): boolean => /^[A-Za-z0-9][A-Za-z0-9._-]*\.md$/.test(f) && !f.startsWith(".") && f !== "MEMORY.md";
+	const safe = safeMemoryFileName; // S2: the engine's one filename predicate
 	const deleteSet = new Set(deletes);
 	for (const w of writes) {
 		if (!safe(w.file)) return fail(`unsafe file name "${w.file}"`);
@@ -87,7 +96,7 @@ export function runConsolidation(
 		if (!fm) return fail(`${w.file}: invalid frontmatter (need name/description/type)`);
 		const secret = findSecret(w.content);
 		if (secret) return fail(`${w.file}: looks like a ${secret}`);
-		if (Buffer.byteLength(w.content, "utf8") > 10 * 1024) return fail(`${w.file}: exceeds 10KB`);
+		if (Buffer.byteLength(w.content, "utf8") > MEMORY_FILE_TOTAL_MAX) return fail(`${w.file}: exceeds ${MEMORY_FILE_TOTAL_MAX} bytes`);
 	}
 	for (const d of deletes) {
 		if (!safe(d)) return fail(`unsafe delete target "${d}"`);
@@ -99,13 +108,13 @@ export function runConsolidation(
 	// must-shrink invariant: post state strictly smaller in bytes or files
 	const beforeFiles = before.files;
 	const fileNamesAfter = new Set<string>(
-		[...readdirSafe(dir), ...writes.map((w) => w.file)].filter((f) => !deleteSet.has(f)),
+		[...listMemoryFiles(dir), ...writes.map((w) => w.file)].filter((f) => !deleteSet.has(f)),
 	);
 	const bytesAfter =
 		writes.reduce((sum, w) => sum + Buffer.byteLength(w.content, "utf8"), 0) +
 		[...fileNamesAfter]
 			.filter((f) => !writes.some((w) => w.file === f))
-			.reduce((sum, f) => sum + fileSizeSafe(join(dir, f)), 0);
+			.reduce((sum, f) => sum + fileBytes(join(dir, f)), 0);
 	if (!(bytesAfter < before.totalBytes || fileNamesAfter.size < beforeFiles)) {
 		return fail(`batch does not shrink the store (${beforeFiles} files/${before.totalBytes}B → ${fileNamesAfter.size} files/${bytesAfter}B); merge more or delete stale files`);
 	}
@@ -114,12 +123,7 @@ export function runConsolidation(
 	if (!lock) return fail("consolidation already in progress (another session holds the lock)");
 
 	try {
-		mkdirSync(dir, { recursive: true });
-		for (const w of writes) {
-			const tmp = join(dir, `.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}.md`);
-			writeFileSync(tmp, w.content, "utf-8");
-			renameSync(tmp, join(dir, w.file));
-		}
+		for (const w of writes) atomicWriteFile(dir, w.file, w.content);
 		for (const d of deletes) {
 			if (existsSync(join(dir, d))) unlinkSync(join(dir, d));
 		}
@@ -140,21 +144,7 @@ export function runConsolidation(
 	}
 }
 
-function readdirSafe(dir: string): string[] {
-	try {
-		return readdirSync(dir).filter((f) => f.endsWith(".md") && f !== "MEMORY.md" && !f.startsWith("."));
-	} catch {
-		return [];
-	}
-}
 
-function fileSizeSafe(path: string): number {
-	try {
-		return statSync(path).size;
-	} catch {
-		return 0;
-	}
-}
 
 // ─── auto-trigger state machine (V2-C) ───
 
@@ -175,7 +165,7 @@ export interface TriggerState {
  * threshold (both mean the index can no longer represent the store). */
 export function needsConsolidation(stats: LayerStats): string | null {
 	if (stats.indexTruncated) return "index truncated";
-	if (stats.files > CONSOLIDATE_COUNT_THRESHOLD) return `${stats.files} files`;
+	if (stats.files > INDEX_MAX_LINES) return `${stats.files} files`;
 	return null;
 }
 

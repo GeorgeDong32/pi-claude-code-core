@@ -29,8 +29,35 @@ export interface ReconcileResult {
 
 const VALID_TYPES = new Set(["user", "feedback", "project", "reference"]);
 
-/** Parse a memory file's frontmatter; null when invalid for indexing. */
-export function parseMemoryFrontmatter(content: string): { title: string; description: string; type: string; pinned?: boolean } | null {
+/** True for a valid memory type frontmatter value. */
+export function isValidMemoryType(type: string): boolean {
+	return VALID_TYPES.has(type);
+}
+
+/** S1 (OPT-3): the ONE "what is a memory file" predicate — every scanner,
+ * the ops engine and the consolidation tool consume this. Dot-prefix
+ * entries (.tmp-* torn writes, .consolidate.lock) are never memory files. */
+export function isMemoryFile(name: string): boolean {
+	return name.endsWith(".md") && name !== "MEMORY.md" && !name.startsWith(".");
+}
+
+/** All memory file names in a dir (total: missing dir → empty). */
+export function listMemoryFiles(dir: string): string[] {
+	try {
+		return readdirSync(dir).filter(isMemoryFile).sort();
+	} catch {
+		return [];
+	}
+}
+
+/** Shared kebab-slug derivation (ops engine + hermes importer). */
+export function slugify(name: string): string {
+	return name.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "memory";
+}
+
+/** Split into frontmatter fields + body with ONE close-marker scan (K6);
+ * null when the frontmatter is absent or invalid for indexing. */
+export function splitFrontmatter(content: string): { title: string; description: string; type: string; pinned: boolean; body: string } | null {
 	if (!content.startsWith("---")) return null;
 	const lines = content.split("\n");
 	let close = -1;
@@ -50,19 +77,27 @@ export function parseMemoryFrontmatter(content: string): { title: string; descri
 		fm[m[1]] = v;
 	}
 	if (!fm.name || !fm.description || !VALID_TYPES.has(fm.type)) return null;
-	return { title: fm.name, description: fm.description, type: fm.type, pinned: fm.pinned === "true" };
+	return {
+		title: fm.name,
+		description: fm.description,
+		type: fm.type,
+		pinned: fm.pinned === "true",
+		body: lines.slice(close + 1).join("\n").replace(/^\n+/, ""),
+	};
+}
+
+/** Parse a memory file's frontmatter; null when invalid for indexing. */
+export function parseMemoryFrontmatter(content: string): { title: string; description: string; type: string; pinned?: boolean } | null {
+	const split = splitFrontmatter(content);
+	if (!split) return null;
+	return { title: split.title, description: split.description, type: split.type, pinned: split.pinned };
 }
 
 /** Scan the memory dir and classify files (valid entries + skipped count). */
 export function scanMemoryDir(memoryDir: string): { entries: MemoryEntry[]; skipped: number } {
 	const entries: MemoryEntry[] = [];
 	let skipped = 0;
-	let files: string[];
-	try {
-		files = readdirSync(memoryDir).filter((f) => f.endsWith(".md") && f !== "MEMORY.md" && !f.startsWith(".")).sort();
-	} catch {
-		return { entries, skipped };
-	}
+	const files = listMemoryFiles(memoryDir);
 	for (const file of files) {
 		try {
 			const content = readFileSync(join(memoryDir, file), "utf-8");
@@ -112,12 +147,7 @@ function dirFingerprint(memoryDir: string, names: string[]): string {
  * read every file's content three times per turn.
  */
 export function scanMemoryDirCached(memoryDir: string): { files: MemoryFile[]; skipped: number } {
-	let names: string[];
-	try {
-		names = readdirSync(memoryDir).filter((f) => f.endsWith(".md") && f !== "MEMORY.md" && !f.startsWith(".")).sort();
-	} catch {
-		return { files: [], skipped: 0 };
-	}
+	const names = listMemoryFiles(memoryDir);
 	const fingerprint = dirFingerprint(memoryDir, names);
 	const cached = bodyCache.get(memoryDir);
 	if (cached && cached.fingerprint === fingerprint) {
@@ -181,7 +211,7 @@ export function reconcileMemoryIndex(memoryDir: string): ReconcileResult {
 	const names: string[] = [];
 	try {
 		for (const f of readdirSync(memoryDir)) {
-			if (!f.endsWith(".md") || f === "MEMORY.md" || f.startsWith(".")) continue;
+			if (!isMemoryFile(f)) continue;
 			names.push(f);
 			try {
 				newestMd = Math.max(newestMd, statSync(join(memoryDir, f)).mtimeMs);
