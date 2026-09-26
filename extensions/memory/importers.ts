@@ -6,7 +6,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { reconcileMemoryIndex } from "./memdir.js";
+import { reconcileMemoryIndex } from "./memdir.ts";
 
 export interface ImportReport {
 	copied: number;
@@ -214,8 +214,8 @@ export function projectKeyOf(memoryDir: string): string {
 
 /** Does a hermes project name refer to the current project? Rule: the core
  * sanitized project key equals the name or ends with "-<name>". */
-export function projectMatchesCurrent(hermesName: string, projectDir: string): boolean {
-	const key = projectKeyOf(projectDir);
+export function projectMatchesCurrent(hermesName: string, memoryDir: string): boolean {
+	const key = projectKeyOf(memoryDir);
 	return key === hermesName || key.endsWith(`-${hermesName}`);
 }
 
@@ -230,9 +230,9 @@ export function projectMatchesCurrent(hermesName: string, projectDir: string): b
  */
 export function importHermesFull(args: {
 	agentDir: string;
-	cwd: string;
-	projectDir: string;
-	userDir: string;
+	/** the CURRENT project's memory dir (routing target for matching sections) */
+	projectMemoryDir: string;
+	userMemoryDir: string;
 }): HermesMigrationReport {
 	const report: HermesMigrationReport = { copied: 0, skipped: 0, notes: [], routed: { user: 0, project: 0 }, otherProjects: [] };
 	const hermesDir = join(args.agentDir, "pi-hermes-memory");
@@ -257,15 +257,15 @@ export function importHermesFull(args: {
 	const routeGlobal = (section: HermesSection, type: string, categoryPrefix: string): void => {
 		if (section.project64) {
 			const name = decodeProject64(section.project64);
-			if (name && projectMatchesCurrent(name, args.projectDir)) {
-				count(importSection(section, args.projectDir, type, categoryPrefix, seen), "project");
+			if (name && projectMatchesCurrent(name, args.projectMemoryDir)) {
+				count(importSection(section, args.projectMemoryDir, type, categoryPrefix, seen), "project");
 			} else if (name) {
-				count(importSection(section, args.userDir, type === "user" ? "user" : type === "project" ? "reference" : type, `[${name}] `, seen), "user");
+				count(importSection(section, args.userMemoryDir, type === "user" ? "user" : type === "project" ? "reference" : type, `[${name}] `, seen), "user");
 			} else {
-				count(importSection(section, args.userDir, type, categoryPrefix, seen), "user");
+				count(importSection(section, args.userMemoryDir, type, categoryPrefix, seen), "user");
 			}
 		} else {
-			count(importSection(section, args.userDir, type, categoryPrefix, seen), "user");
+			count(importSection(section, args.userMemoryDir, type, categoryPrefix, seen), "user");
 		}
 	};
 
@@ -295,7 +295,7 @@ export function importHermesFull(args: {
 		for (const name of readdirSync(projectsMemoryDir).sort()) {
 			const storeFile = join(projectsMemoryDir, name, "MEMORY.md");
 			if (!existsSync(storeFile)) continue;
-			if (!projectMatchesCurrent(name, args.projectDir)) {
+			if (!projectMatchesCurrent(name, args.projectMemoryDir)) {
 				report.otherProjects.push(name);
 				continue;
 			}
@@ -307,13 +307,13 @@ export function importHermesFull(args: {
 					report.skipped++;
 					continue;
 				}
-				count(importSection(section, args.projectDir, typeHeuristic(section.body), "", seen), "project");
+				count(importSection(section, args.projectMemoryDir, typeHeuristic(section.body), "", seen), "project");
 			}
 		}
 	}
 
-	reconcileMemoryIndex(args.projectDir);
-	reconcileMemoryIndex(args.userDir);
+	reconcileMemoryIndex(args.projectMemoryDir);
+	reconcileMemoryIndex(args.userMemoryDir);
 	if (collisions > 0) {
 		report.notes.push(`${collisions} slug collision(s): distinct facts sharing a title were disambiguated with a fingerprint suffix or skipped; review the hermes-* files`);
 	}

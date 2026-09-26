@@ -25,8 +25,8 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { isValidMemoryType, listMemoryFiles, reconcileMemoryIndex, slugify, splitFrontmatter } from "./memdir.js";
-import { findSecret } from "./guard.js";
+import { isValidMemoryType, listMemoryFiles, reconcileMemoryIndex, slugify, splitFrontmatter } from "./memdir.ts";
+import { findSecret } from "./guard.ts";
 
 /** Per-file body cap enforced by the write engine (S3: lives with its only enforcer). */
 export const MEMORY_FILE_BODY_MAX = 8 * 1024;

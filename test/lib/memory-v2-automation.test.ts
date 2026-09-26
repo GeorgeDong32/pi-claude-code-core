@@ -16,9 +16,9 @@ import { join } from "node:path";
 import { FakeHost, clearCoreGlobals, snapshotCoreGlobals } from "../contracts/fake-host.ts";
 import { resetCoreBusForTests } from "../../extensions/bus.ts";
 import memoryExtension from "../../extensions/memory/index.ts";
-import { parseOperations, completeMemoryOps } from "../../extensions/memory/llm.js";
-import { isCorrection, loadMemorySettings, resolveSideChannelModel, setupAutomation, type AutomationState } from "../../extensions/memory/automation.js";
-import { ConsolidationTrigger } from "../../extensions/memory/consolidate.js";
+import { parseOperations, completeMemoryOps } from "../../extensions/memory/llm.ts";
+import { isCorrection, loadMemorySettings, resolveSideChannelModel, setupAutomation, type AutomationState } from "../../extensions/memory/automation.ts";
+import { ConsolidationTrigger } from "../../extensions/memory/consolidate.ts";
 import { resolveMemoryPaths } from "../../extensions/memory/paths.ts";
 
 let globalsSnapshot: Record<string, unknown>;

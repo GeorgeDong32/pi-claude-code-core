@@ -16,7 +16,7 @@
 
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { completeSimple } from "@earendil-works/pi-ai/compat";
-import type { MemoryOp } from "./store.js";
+import type { MemoryOp } from "./store.ts";
 
 export type LlmComplete = typeof completeSimple;
 

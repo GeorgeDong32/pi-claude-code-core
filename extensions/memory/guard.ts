@@ -12,7 +12,7 @@ export interface GuardVerdict {
 	reason?: string;
 }
 
-import { isInsideDir } from "../../lib/rule-text.js";
+import { isInsideDir } from "../../lib/rule-text.ts";
 
 /** Patterns strong enough to block on; deliberate over-blocking is fine. */
 const SECRET_PATTERNS: Array<[RegExp, string]> = [

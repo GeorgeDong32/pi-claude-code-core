@@ -13,7 +13,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import { isInsideDir } from "../../lib/rule-text.js";
+import { isInsideDir } from "../../lib/rule-text.ts";
 
 /** Sanitize a path exactly like pi's sessions directory naming. */
 export function sanitizePath(p: string): string {

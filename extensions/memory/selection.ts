@@ -8,7 +8,7 @@
  * same input → same selection.
  */
 
-import type { MemoryEntry } from "./memdir.js";
+import type { MemoryEntry } from "./memdir.ts";
 
 export interface SelectableMemory extends MemoryEntry {
 	body: string;

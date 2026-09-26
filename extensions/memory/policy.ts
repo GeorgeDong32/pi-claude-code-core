@@ -12,8 +12,8 @@
  * frontmatter) — mechanism-aligned wording, no proprietary text.
  */
 
-import type { MemoryEntry } from "./memdir.js";
-import { MEMORY_INDEX_MAX } from "../../lib/context-budget.js";
+import type { MemoryEntry } from "./memdir.ts";
+import { MEMORY_INDEX_MAX } from "../../lib/context-budget.ts";
 
 /** User-layer index + pinned budget (renders before the project index).
  * S3 (OPT-3): injection-lane budgets live with their only enforcer. */
@@ -161,10 +161,4 @@ export function buildPolicyInjection(user: LayerInput, project: Array<{ title: s
 	return `${POLICY_COMPACT}\n\n${userLayer.text}\n\n${projectLayer.text}`;
 }
 
-/** @deprecated V1 single-layer shape — kept for the policy-only degradation
- * path where only the policy block (no indexes) is injected. */
-export function indexEntrypoint(entries: Array<{ title: string; description: string; file: string }>): string {
-	const [rows] = cappedRows(entries, MEMORY_INDEX_MAX);
-	if (rows.length === 0) return "Memory index: (empty)";
-	return `# Memory index\n\n${rows.join("\n")}`;
-}
+

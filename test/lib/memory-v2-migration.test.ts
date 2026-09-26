@@ -108,7 +108,7 @@ describe("V2-M full migration routing", () => {
 				`CherryPR-specific review workflow details. <!-- created=2026-08-12, project64=Q2hlcnJ5UFI -->`,
 			].join("\n"),
 		});
-		const r = importHermesFull({ agentDir, cwd: project, projectDir: dir, userDir: udir });
+		const r = importHermesFull({ agentDir, projectMemoryDir: dir, userMemoryDir: udir });
 		expect(r.copied).toBe(5);
 		expect(r.routed.user).toBe(4); // 2 USER + global + CherryPR-tagged
 		expect(r.routed.project).toBe(1); // the current-project tag
@@ -125,7 +125,7 @@ describe("V2-M full migration routing", () => {
 		hermesFixture({
 			failures: "[tool-quirk] grep may fail in Zed — fall back to bash grep. <!-- created=2026-08-03 -->\n§\n[failure] plain npm ci fails without lockfile. <!-- created=2026-08-16 -->",
 		});
-		const r = importHermesFull({ agentDir, cwd: project, projectDir: dir, userDir: udir });
+		const r = importHermesFull({ agentDir, projectMemoryDir: dir, userMemoryDir: udir });
 		expect(r.copied).toBe(2);
 		const userIndex = readFileSync(join(udir, "MEMORY.md"), "utf-8");
 		expect(userIndex).toContain("[tool-quirk]");
@@ -141,7 +141,7 @@ describe("V2-M full migration routing", () => {
 			memory: `${fact} <!-- created=2026-08-16 -->`,
 			failures: `${fact} <!-- created=2026-08-16, last=2026-08-16 -->`,
 		});
-		const r = importHermesFull({ agentDir, cwd: project, projectDir: dir, userDir: udir });
+		const r = importHermesFull({ agentDir, projectMemoryDir: dir, userMemoryDir: udir });
 		expect(r.copied).toBe(1);
 	});
 
@@ -154,7 +154,7 @@ describe("V2-M full migration routing", () => {
 				CherryPR: "CherryPR fact that must NOT land in this project. <!-- created=2026-08-20 -->",
 			},
 		});
-		const r = importHermesFull({ agentDir, cwd: project, projectDir: dir, userDir: udir });
+		const r = importHermesFull({ agentDir, projectMemoryDir: dir, userMemoryDir: udir });
 		expect(r.routed.project).toBe(1);
 		expect(r.otherProjects).toContain("CherryPR");
 		expect(readFileSync(join(dir, "MEMORY.md"), "utf-8")).toContain("deploy steps");
@@ -165,7 +165,7 @@ describe("V2-M full migration routing", () => {
 
 	it("idempotent: a second run copies nothing", () => {
 		hermesFixture({ user: "George prefers pnpm. <!-- created=2026-08-02 -->" });
-		const args = { agentDir, cwd: project, projectDir: dir, userDir: udir };
+		const args = { agentDir, projectMemoryDir: dir, userMemoryDir: udir };
 		expect(importHermesFull(args).copied).toBe(1);
 		const second = importHermesFull(args);
 		expect(second.copied).toBe(0);
@@ -173,7 +173,7 @@ describe("V2-M full migration routing", () => {
 	});
 
 	it("missing hermes data degrades to a note", () => {
-		const r = importHermesFull({ agentDir, cwd: project, projectDir: dir, userDir: udir });
+		const r = importHermesFull({ agentDir, projectMemoryDir: dir, userMemoryDir: udir });
 		expect(r.copied).toBe(0);
 		expect(r.notes[0]).toContain("no hermes data");
 	});
@@ -226,7 +226,7 @@ describe("V2-M commands + diagnostics", () => {
 describe("V2-M data-safety (Phase 0 D1/D4)", () => {
 	it("D1: two distinct pure-CJK facts don't collide — both land, idempotent on re-run", () => {
 		hermesFixture({ user: "所有回复默认中文。 <!-- created=2026-08-02 -->\n§\n以后都先跑测试再提交代码。 <!-- created=2026-08-03 -->" });
-		const args = { agentDir, cwd: project, projectDir: dir, userDir: udir };
+		const args = { agentDir, projectMemoryDir: dir, userMemoryDir: udir };
 		const r1 = importHermesFull(args);
 		expect(r1.copied).toBe(2);
 		const files = readdirSync(udir).filter((f) => f.startsWith("hermes-"));
@@ -242,7 +242,7 @@ describe("V2-M data-safety (Phase 0 D1/D4)", () => {
 		hermesFixture({
 			failures: `[tool-quirk] grep 在 Zed 里会挂，回退到 bash grep。 <!-- created=2026-08-03, project64=${Buffer.from("CherryPR").toString("base64")} -->`,
 		});
-		const r = importHermesFull({ agentDir, cwd: project, projectDir: dir, userDir: udir });
+		const r = importHermesFull({ agentDir, projectMemoryDir: dir, userMemoryDir: udir });
 		expect(r.copied).toBe(1);
 		const files = readdirSync(udir).filter((f) => f.startsWith("hermes-"));
 		const content = readFileSync(join(udir, files[0]!), "utf-8");

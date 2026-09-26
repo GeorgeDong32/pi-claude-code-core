@@ -22,7 +22,7 @@ import {
 	ConsolidationTrigger,
 	CONSOLIDATE_DIRECTIVE_TYPE,
 	needsConsolidation,
-} from "../../extensions/memory/consolidate.js";
+} from "../../extensions/memory/consolidate.ts";
 import { resolveMemoryPaths } from "../../extensions/memory/paths.ts";
 
 let globalsSnapshot: Record<string, unknown>;

@@ -20,8 +20,8 @@ import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { INDEX_MAX_LINES, listMemoryFiles, parseMemoryFrontmatter, reconcileMemoryIndex } from "./memdir.js";
-import { findSecret } from "./guard.js";
+import { INDEX_MAX_LINES, listMemoryFiles, parseMemoryFrontmatter, reconcileMemoryIndex } from "./memdir.ts";
+import { findSecret } from "./guard.ts";
 import {
 	acquireLayerLock,
 	atomicWriteFile,
@@ -31,9 +31,9 @@ import {
 	safeMemoryFileName,
 	type LayerLock,
 	type LayerStats,
-} from "./store.js";
-import { USER_INDEX_MAX } from "./policy.js";
-import { MEMORY_INDEX_MAX } from "../../lib/context-budget.js";
+} from "./store.ts";
+import { USER_INDEX_MAX } from "./policy.ts";
+import { MEMORY_INDEX_MAX } from "../../lib/context-budget.ts";
 
 export const CONSOLIDATE_DIRECTIVE_TYPE = "pi-memory-consolidate";
 

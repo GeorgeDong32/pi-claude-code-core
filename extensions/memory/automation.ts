@@ -23,9 +23,9 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
 
-import { completeMemoryOps, type LlmComplete, type OpsCompletion } from "./llm.js";
-import { applyMemoryOps, type MemoryOp } from "./store.js";
-import type { ConsolidationTrigger } from "./consolidate.js";
+import { completeMemoryOps, type LlmComplete, type OpsCompletion } from "./llm.ts";
+import { applyMemoryOps, type MemoryOp } from "./store.ts";
+import type { ConsolidationTrigger } from "./consolidate.ts";
 import { scanMemoryDirCached } from "./memdir.ts";
 
 // ─── settings (two knobs, DESIGN-MEMORY-V2 §4) ───
@@ -366,7 +366,7 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): void {
 						state.lastCorrection = applied > 0 ? `saved ${applied} op(s)` : "nothing durable";
 						if (applied > 0) notify(ctx, `🔧 correction captured — memory updated (${applied} op${applied === 1 ? "" : "s"})`);
 					})
-					.catch(() => {})
+					.catch(() => { /* P3-ME-09: fire-and-forget capture must never block the turn */ })
 					.finally(() => {
 						correctionInFlight = false;
 					});
@@ -398,7 +398,7 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): void {
 						state.lastReview = applied > 0 ? `saved ${applied} op(s)` : "nothing durable";
 						if (applied > 0) notify(ctx, `💾 memory auto-reviewed (${applied} op${applied === 1 ? "" : "s"})`);
 					})
-					.catch(() => {})
+					.catch(() => { /* P3-ME-09: fire-and-forget capture must never block the turn */ })
 					.finally(() => {
 						reviewInFlight = false;
 					});

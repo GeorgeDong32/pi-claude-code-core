@@ -24,7 +24,7 @@ import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { coreBus } from "../bus.js";
+import { coreBus } from "../bus.ts";
 import { reconcileMemoryIndex, scanMemoryDir, scanMemoryDirCached } from "./memdir.ts";
 import { resolveMemoryPaths, sessionsDirFor } from "./paths.ts";
 import { buildPolicyInjection, POLICY_COMPACT } from "./policy.ts";
@@ -32,10 +32,10 @@ import { selectForTurn, freshnessHeader, byteLength, type SelectableMemory } fro
 import { guardMemoryWrites } from "./guard.ts";
 import { InjectionGate } from "./yield.ts";
 import { sessionRecall } from "./session-recall.ts";
-import { MEMORY_INDEX_MAX } from "../../lib/context-budget.js";
-import { USER_INDEX_MAX } from "./policy.js";
-import { ConsolidationTrigger, CONSOLIDATE_DIRECTIVE_TYPE, registerConsolidation } from "./consolidate.js";
-import { setupAutomation, loadMemorySettings, type AutomationState, type MemorySettings } from "./automation.js";
+import { MEMORY_INDEX_MAX } from "../../lib/context-budget.ts";
+import { USER_INDEX_MAX } from "./policy.ts";
+import { ConsolidationTrigger, CONSOLIDATE_DIRECTIVE_TYPE, registerConsolidation } from "./consolidate.ts";
+import { setupAutomation, loadMemorySettings, type AutomationState, type MemorySettings } from "./automation.ts";
 import { importFromClaude, importFromHermes, importHermesFull } from "./importers.ts";
 
 export default function memoryExtension(pi: ExtensionAPI): void {
@@ -129,13 +129,13 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 				// cannot be trusted to match, so inject just the policy block
 				return { systemPrompt: `${event.systemPrompt ?? ""}\n\n${POLICY_COMPACT}` };
 			}
-			const userFiles = scanMemoryDirCached(udir).files;
+			const userScan = scanMemoryDirCached(udir);
+			const projectScan = scanMemoryDirCached(dir);
+			const skippedTotal = userScan.skipped + projectScan.skipped;
 			const injection = buildPolicyInjection(
-				{ entries: userFiles.map((f) => ({ ...f.entry })), files: userFiles.map((f) => ({ entry: f.entry, body: f.body })) },
-				scanMemoryDirCached(dir).files.map((f) => ({ ...f.entry })),
-			) + (scanMemoryDirCached(dir).skipped + scanMemoryDirCached(udir).skipped > 0
-				? `\n<!-- memory: ${scanMemoryDirCached(dir).skipped + scanMemoryDirCached(udir).skipped} file(s) skipped (invalid frontmatter) -->`
-				: "");
+				{ entries: userScan.files.map((f) => ({ ...f.entry })), files: userScan.files.map((f) => ({ entry: f.entry, body: f.body })) },
+				projectScan.files.map((f) => ({ ...f.entry })),
+			) + (skippedTotal > 0 ? `\n<!-- memory: ${skippedTotal} file(s) skipped (invalid frontmatter) -->` : "");
 			return { systemPrompt: `${event.systemPrompt ?? ""}\n\n${injection}` };
 		} catch {
 			return undefined; // injection failure never blocks the turn
@@ -422,9 +422,8 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 				const agentDir = join(process.env.HOME ?? home, ".pi", "agent");
 				const report = importHermesFull({
 					agentDir,
-					cwd: cctx.cwd ?? process.cwd(),
-					projectDir: memoryDir(cctx),
-					userDir: userMemoryDir(cctx),
+					projectMemoryDir: memoryDir(cctx),
+					userMemoryDir: userMemoryDir(cctx),
 				});
 				text.push(
 					`memory-import-hermes: migrated ${report.copied} fact(s) — user layer: ${report.routed.user}, project layer: ${report.routed.project}, skipped: ${report.skipped} (idempotent)`,

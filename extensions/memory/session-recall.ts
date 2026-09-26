@@ -9,7 +9,7 @@
 
 import { openSync, readSync, closeSync, fstatSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { sessionsDirFor } from "./paths.js";
+import { sessionsDirFor } from "./paths.ts";
 
 export interface RecallHit {
 	file: string;

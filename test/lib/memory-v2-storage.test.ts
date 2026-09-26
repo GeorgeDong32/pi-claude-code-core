@@ -18,8 +18,8 @@ import { freshnessHeader } from "../../extensions/memory/selection.ts";
 import { userLayerSection, projectLayerSection, buildPolicyInjection, POLICY_COMPACT } from "../../extensions/memory/policy.ts";
 import { guardMemoryWrites } from "../../extensions/memory/guard.ts";
 import { USER_INDEX_MAX, PINNED_TOTAL_MAX } from "../../extensions/memory/policy.ts";
-import { layerStats } from "../../extensions/memory/store.js";
-import { MEMORY_INDEX_MAX } from "../../lib/context-budget.js";
+import { layerStats } from "../../extensions/memory/store.ts";
+import { MEMORY_INDEX_MAX } from "../../lib/context-budget.ts";
 import { targets } from "../contracts/targets.ts";
 
 let globalsSnapshot: Record<string, unknown>;
