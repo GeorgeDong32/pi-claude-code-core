@@ -204,6 +204,9 @@ export function buildReviewDirective(input: ReviewDirectiveInput): string {
 	blocks.push("");
 	blocks.push("```js");
 	blocks.push("subagent({");
+	// CC parity (AgentTool description param): a short model-facing label for
+	// the call-row headline — the fleet roster and tool rows render it.
+	blocks.push(`  label: "Code review",`);
 	blocks.push("  workflowScript: `");
 	// The raw script, verbatim (no escaping). The script contains no
 	// backticks and no ${, so the template literal is lossless.

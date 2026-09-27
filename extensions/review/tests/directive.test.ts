@@ -89,6 +89,13 @@ describe("buildReviewDirective — user-facing copy", () => {
 		assert.doesNotMatch(d, /chatProgress: "milestones"/);
 	});
 
+	test("pins a CC-style label for the call-row headline", () => {
+		const d = buildReviewDirective(baseInput());
+		assert.match(d, /label: "Code review"/);
+		const step2 = d.slice(d.indexOf("## Step 2"));
+		assert.equal((step2.match(/label: /g) ?? []).length, 1, "exactly one label in the pinned call");
+	});
+
 	test("top-level shape stays compatible with the workflowScript API", () => {
 		const d = buildReviewDirective(baseInput());
 		assert.match(d, /async: false/);
