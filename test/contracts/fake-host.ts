@@ -38,6 +38,9 @@ export interface FakeCtxOptions {
 	/** Present = hasUI true and ctx.ui methods callable. */
 	ui?: boolean;
 	sessionEntries?: unknown[];
+	/** Session dir/id served by the fake ctx.sessionManager (FAKEHOST-01). */
+	sessionDir?: string;
+	sessionId?: string;
 }
 
 export const CORE_GLOBAL_KEYS = [
@@ -91,7 +94,7 @@ export class FakeHost {
 	readonly handlers = new Map<string, Handler[]>();
 	readonly commands = new Map<string, CommandHandler>();
 	readonly shortcuts = new Map<string, Handler>();
-	readonly tools = new Map<string, { name: string; execute: (...args: any[]) => Promise<unknown> }>();
+	readonly tools = new Map<string, { name: string; parameters?: unknown; execute: (...args: any[]) => Promise<unknown> }>();
 	readonly flags: Record<string, boolean | string | undefined> = {};
 	readonly statusCalls: StatusCall[] = [];
 	readonly widgetCalls: WidgetCall[] = [];
@@ -100,7 +103,11 @@ export class FakeHost {
 	readonly sentMessages: SentMessage[] = [];
 	readonly userMessages: Array<{ text: string; opts?: unknown }> = [];
 	readonly notifications: string[] = [];
-	/** ToolInfo list returned by getAllTools(); tests may mutate before firing. */
+	/**
+	 * ToolInfo list merged into getAllTools(); tests may mutate before firing.
+	 * Registered tools are projected alongside so `registerTool` overrides are
+	 * observable through getAllTools (FAKEHOST-01).
+	 */
 	readonly toolInfos: Array<{ name: string; sourceInfo?: unknown }> = [];
 	private thinkingLevel = "off";
 
@@ -140,6 +147,9 @@ export class FakeHost {
 				getBranch: () => opts.sessionEntries ?? [],
 				getEntries: () => opts.sessionEntries ?? [],
 				getGitBranch: () => "",
+				// FAKEHOST-01: observation-pack derives its store root from these.
+				getSessionDir: () => opts.sessionDir ?? "",
+				getSessionId: () => opts.sessionId ?? "",
 			},
 		};
 	}
@@ -159,7 +169,7 @@ export class FakeHost {
 			registerShortcut(key: string, def: { handler: Handler }) {
 				host.shortcuts.set(key, def.handler);
 			},
-			registerTool(def: { name: string; execute: (...args: any[]) => Promise<unknown> }) {
+			registerTool(def: { name: string; parameters?: unknown; execute: (...args: any[]) => Promise<unknown> }) {
 				host.tools.set(def.name, def);
 			},
 			registerFlag(name: string, def: { default?: unknown }) {
@@ -182,7 +192,24 @@ export class FakeHost {
 				host.userMessages.push({ text, opts });
 			},
 			getActiveTools: () => ["read", "edit", "write", "bash", "grep", "find"],
-			getAllTools: () => [...host.toolInfos],
+			getAllTools: () => {
+				// Same-name registration wins, mirroring pi's definitionRegistry
+				// override semantics (FAKEHOST-01).
+				const registered = new Map(
+					[...host.tools.values()].map((tool) => [
+						tool.name,
+						{
+							name: tool.name,
+							parameters: tool.parameters,
+							sourceInfo: { source: "extension", scope: "user" },
+						},
+					]),
+				);
+				return [
+					...host.toolInfos.filter((info) => !registered.has(info.name)),
+					...registered.values(),
+				];
+			},
 			setActiveTools() {},
 			getThinkingLevel: () => host.thinkingLevel,
 			setThinkingLevel(level: unknown) {
