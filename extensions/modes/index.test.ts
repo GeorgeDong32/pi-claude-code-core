@@ -1232,6 +1232,24 @@ describe("permission-modes extension: model profiles", () => {
 		expect(pi.getThinkingLevel()).toBe("off")
 	})
 
+	it("applyProfileModelForMode accepts profile effort \"max\" (native ThinkingLevel tier)", async () => {
+		setupProfile({
+			active: "main",
+			main: { ask: { model: "prov1/askModel", effort: "max" } },
+		})
+		pi.flags["model-profile"] = "main"
+		const notifs: string[] = []
+		permissionModesExtension(makeFakePiForExtension(pi))
+		await pi.simulateSessionStart("/home/user/project/src", {
+			notify: (m: string) => notifs.push(m),
+			select: async () => "Block",
+		}, {
+			find: () => ({ id: "askModel" }),
+		})
+		expect(notifs.some((n) => /Unknown effort/i.test(n))).toBe(false)
+		expect(pi.getThinkingLevel()).toBe("max")
+	})
+
 	it("applyProfileModelForMode warns (not crashes) when model is not in registry", async () => {
 		setupProfile({
 			active: "main",

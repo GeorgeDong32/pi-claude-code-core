@@ -164,6 +164,9 @@ const PROFILE_EFFORT_LEVELS = new Set([
   "medium",
   "high",
   "xhigh",
+  // pi's ThinkingLevel union includes "max" (a native tier some models
+  // expose); /effort already accepts it — profiles must too.
+  "max",
 ]);
 
 const MODE_CYCLE: Mode[] = ["ask", "plan", "auto", "bypass"];
