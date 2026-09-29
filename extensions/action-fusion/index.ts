@@ -31,6 +31,7 @@ import { resolveToolPath, withFusedFileQueue } from "./file-queue.ts";
 import {
 	createThenRunSchema,
 	executeMutationThenRun,
+	type FileQueueFn,
 	THEN_RUN_SUCCEEDED,
 	type ThenRunInput,
 } from "./then-run.ts";
@@ -83,8 +84,14 @@ export function createActionFusionExtension(options: ActionFusionOptions = {}): 
 			coreBus().publish({ display: { footer: [`action-fusion requires pi >=0.87`] } });
 			return;
 		}
-		// FUS-03: official queue preferred; ported promise-chain fallback.
-		const queue = compat.mutationQueue ? withFileMutationQueue : withFusedFileQueue;
+		// FUS-03 (revised after TST-04): the OUTER serialization must be the
+		// ported fused queue. pi's builtin write/edit already wrap their own
+		// bodies in the official withFileMutationQueue for the same path, so
+		// using it as the outer layer too deadlocks on re-entry (sandbox-proven:
+		// the session froze mid-write). The official export stays as a
+		// host-health probe only.
+		void compat.mutationQueue;
+		const queue: FileQueueFn = withFusedFileQueue;
 
 		const baseEdit = memoizeByCwd((cwd: string) => createEditToolDefinition(cwd, options.editOptions));
 		const baseWrite = memoizeByCwd((cwd: string) => createWriteToolDefinition(cwd, options.writeOptions));
