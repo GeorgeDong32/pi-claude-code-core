@@ -16,16 +16,16 @@ import {
 	createEditToolDefinition,
 	createWriteToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { FakeHost } from "./fake-host.ts";
+import { FakeHost, type Handler } from "./fake-host.ts";
 
 describe("pi host semantics the economy modules depend on (CON-01)", () => {
 	it("① a context handler's rewritten messages become the projection result", async () => {
 		const host = new FakeHost();
 		const ctx = host.makeCtx({ cwd: "/tmp" });
 		const rewritten = [{ role: "user", content: [{ type: "text", text: "projected" }] }] as never;
-		host.piObject().on("context", () => ({ messages: rewritten }));
-		const handlers = host.handlers.get("context")!;
-		const result = (await handlers[0]!(
+		(host.piObject() as { on: (e: string, h: Handler) => void }).on("context", () => ({ messages: rewritten }));
+		const handlers = host.handlers.get("context")! as Handler[];
+		const result = (await handlers[0](
 			{ type: "context", messages: [] } as never,
 			ctx as never,
 		)) as { messages: unknown };
@@ -35,15 +35,16 @@ describe("pi host semantics the economy modules depend on (CON-01)", () => {
 	it("② load-time registerTool with the same name overrides getAllTools parameters", () => {
 		const host = new FakeHost();
 		host.toolInfos.push({ name: "write", sourceInfo: { source: "builtin" } });
-		host.piObject().registerTool({
+		(host.piObject() as {
+			registerTool: (def: { name: string; parameters?: unknown; execute: (...a: any[]) => Promise<unknown> }) => void;
+		}).registerTool({
 			name: "write",
 			parameters: { type: "object", properties: { path: {}, content: {}, then_run: {} } },
 			execute: async () => ({}) as never,
 		});
-		const write = host.piObject().getAllTools().find((t: { name: string }) => t.name === "write") as {
-			parameters?: { properties?: Record<string, unknown> };
-		};
-		expect(Object.keys(write.parameters?.properties ?? {})).toContain("then_run");
+		const pi = host.piObject() as { getAllTools: () => Array<{ name: string; parameters?: { properties?: Record<string, unknown> } }> };
+		const write = pi.getAllTools().find((t) => t.name === "write");
+		expect(Object.keys(write?.parameters?.properties ?? {})).toContain("then_run");
 	});
 
 	it("③ withFileMutationQueue is a callable export of the real pi package", async () => {

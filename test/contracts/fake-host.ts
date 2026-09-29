@@ -17,7 +17,7 @@
  * call site; runtime structure is what the contracts pin.
  */
 
-type Handler = (...args: any[]) => unknown;
+export type Handler = (...args: any[]) => unknown;
 type CommandHandler = (args: string, ctx: any) => unknown | Promise<unknown>;
 
 export interface StatusCall {
