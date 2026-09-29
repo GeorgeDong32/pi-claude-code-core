@@ -95,7 +95,7 @@ interface FakePi extends ExtensionAPI {
 	setModelCalls: Array<{ model: unknown }>
 	modelRegistry: { find: (provider: string, model: string) => unknown }
 	/** Redeclared loose: accepts every typed overload's (event, handler) pair. */
-	on(event: string, handler: Handler): void
+	on(event: string, handler: Handler): () => void
 	/** Same generic shape as ExtensionAPI so the satisfies contract is exact. */
 	registerTool<TParams extends TSchema, TDetails = unknown, TState = any>(
 		tool: ToolDefinition<TParams, TDetails, TState>,
@@ -190,6 +190,13 @@ function createFakePi(): FakePi {
 			const list = handlers.get(event) ?? []
 			list.push(handler)
 			handlers.set(event, list)
+			// 0.87 ExtensionAPI.on returns an unsubscribe function.
+			return () => {
+				const current = handlers.get(event)
+				if (!current) return
+				const index = current.indexOf(handler)
+				if (index >= 0) current.splice(index, 1)
+			}
 		},
 		registerCommand(name: string, def: { handler: CommandHandler }) {
 			commands.set(name, def.handler)

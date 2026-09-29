@@ -610,7 +610,7 @@ describe("classifyToolCall faux-provider smoke (no mocks)", () => {
 			find: () => faux.getModel() as unknown as Model<Api>,
 			getApiKeyAndHeaders: async () => ({ ok: true }),
 			complete: async (model, context, options) =>
-				faux.stream(model as never, context, options as never).result(),
+				faux.stream(model as never, context as never, options as never).result(),
 		}
 		const verdict = await classifyToolCall({
 			modelRef: "faux-smoke/smoke-model",
