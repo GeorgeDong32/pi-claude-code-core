@@ -89,10 +89,13 @@ describe("placeholder excerpt (OBS-02)", () => {
 		const excerptBytes = Buffer.byteLength(placeholder, "utf8");
 		// 1KB excerpt + ~10 header lines: hard upper bound sanity.
 		assert.ok(excerptBytes < 1600, `placeholder too large: ${excerptBytes}`);
-		// No partial lines: every excerpt line ends at \n boundaries.
-		for (const l of placeholder.split("\n")) {
-			if (l.startsWith("line-") || /^\d+ original bytes/.test(l)) continue;
-		}
+		// Every excerpted line is a complete line of the original text.
+		const originalLines = new Set(text.split("\n"));
+		const excerpted = placeholder
+			.split("\n")
+			.filter((l) => l.length > 0)
+			.filter((l) => !l.startsWith("[") && !/^id: |^tool: |^original_|^estimated_|^retrieve: /.test(l));
+		for (const line of excerpted) assert.ok(originalLines.has(line), `partial line leaked: ${line.slice(0, 40)}`);
 	});
 
 	it("FULL_SENDS is 2 and recall limits derive from the upstream constants", () => {

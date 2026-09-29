@@ -83,7 +83,7 @@ describe("pi host semantics the economy modules depend on (CON-01)", () => {
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import observationPack from "../../extensions/observation-pack/index.ts";
+import { targets } from "./targets.ts";
 
 function largeToolResult(text: string): never {
 	return {
@@ -98,18 +98,12 @@ function largeToolResult(text: string): never {
 describe("observation-pack context projection (CON-03)", () => {
 	it("keeps original bytes per-message when the store is broken (fail-open)", async () => {
 		const host = new FakeHost();
-		observationPack()(host.piObject() as never);
+		targets["observation-pack"].factory(host.piObject() as never);
 		const root = await mkdtemp(join(tmpdir(), "con03-"));
 		// OBS-03 topology: <sessionDir>/observation-pack/<sessionId>/objects.
 		await mkdir(join(root, "observation-pack", "sess-1"), { recursive: true });
 		await writeFile(join(root, "observation-pack", "sess-1", "objects"), "blocks the directory", "utf8");
 		const ctx = host.makeCtx({ cwd: root, sessionDir: root, sessionId: "sess-1" });
-		const fire = async () =>
-			(await (host.handlers.get("context")! as Handler[])[0](
-				{ type: "context", messages: [] } as never,
-				ctx as never,
-			)) as { messages: unknown[] } | undefined;
-		// Warm the send counter past FULL_SENDS first (broken store still counts sends).
 		const text = "z".repeat(11 * 1024);
 		const messages = [largeToolResult(text)];
 		for (let i = 0; i < 4; i += 1) {
@@ -121,12 +115,11 @@ describe("observation-pack context projection (CON-03)", () => {
 			const kept = projected[0] as { content: Array<{ type: string; text: string }> };
 			expect(kept.content[0].text).toBe(text);
 		}
-		void fire;
 	});
 
 	it("replaces with a placeholder from the request after FULL_SENDS (healthy store)", async () => {
 		const host = new FakeHost();
-		observationPack()(host.piObject() as never);
+		targets["observation-pack"].factory(host.piObject() as never);
 		const root = await mkdtemp(join(tmpdir(), "con03b-"));
 		const ctx = host.makeCtx({ cwd: root, sessionDir: root, sessionId: "sess-2" });
 		const text = Array.from({ length: 400 }, (_, i) => `row-${i}-${"y".repeat(40)}`).join("\n");
@@ -160,22 +153,36 @@ describe("observation-pack context projection (CON-03)", () => {
 import coreExtension from "../../extensions/index.ts";
 
 describe("assembly order (CON-04)", () => {
-	it("observation-pack registers its context handler after modes and memory", async () => {
+	it("observation-pack owns the FINAL context handler slot after modes and memory", async () => {
 		const host = new FakeHost();
-		const pi = host.piObject() as {
-			on: (e: string, h: Handler) => () => void;
-			registerTool: (def: { name: string; parameters?: unknown; execute: (...a: any[]) => Promise<unknown> }) => void;
-			getAllTools: () => Array<{ name: string }>;
-		};
-		// Keep the assembly cheap: core factories only need on/registerTool/
-		// command surfaces; anything else they touch on the fake is recorded.
-		await coreExtension(pi as never);
+		// Snapshot the chain BEFORE the assembly to know how many handlers
+		// earlier modules contributed.
+		(host.piObject() as { on: (e: string, h: Handler) => () => void }).on("context", () => undefined);
+		const before = (host.handlers.get("context")! as Handler[]).length;
+		await coreExtension(host.piObject() as never);
 		const contextHandlers = host.handlers.get("context")! as Handler[];
-		expect(contextHandlers.length).toBeGreaterThan(0);
+		expect(contextHandlers.length).toBeGreaterThan(before);
+
+		// The LAST handler is observation-pack's: firing it alone replaces a
+		// large tool result past FULL_SENDS — the projection-owner behaviour
+		// ASM-01 exists to guarantee.
+		const root = await mkdtemp(join(tmpdir(), "con04-"));
+		const ctx = host.makeCtx({ cwd: root, sessionDir: root, sessionId: "sess-con04" });
+		const text = Array.from({ length: 400 }, (_, i) => `row-${i}-${"y".repeat(40)}`).join("\n");
+		const messages = [largeToolResult(text)];
+		const fire = contextHandlers.at(-1)!;
+		for (let i = 0; i < 3; i += 1) {
+			const result = (await fire({ type: "context", messages } as never, ctx as never)) as {
+				messages: Array<{ content: Array<{ type: string; text: string }> }>;
+			};
+			if (i === 2) {
+				expect(result.messages[0].content[0].text).toContain("retrieve: call obs_recall");
+			}
+		}
 		const names = (host.piObject() as { getAllTools: () => Array<{ name: string }> })
 			.getAllTools()
 			.map((t) => t.name);
-		expect(names).toContain("write"); // modes registers its surfaces; fusion replaced write
+		expect(names).toContain("write");
 		expect(names).toContain("obs_recall");
 	});
 });

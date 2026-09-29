@@ -24,6 +24,7 @@ import { probePiCompat } from "../../lib/pi-compat.ts";
 import { coreBus } from "../bus.ts";
 import { createLedger, type Ledger } from "./ledger.ts";
 import {
+	countLines,
 	createObservation,
 	ensureStored,
 	estimateTokens,
@@ -50,6 +51,7 @@ const RECALL_LIMITS = {
 const SENTINEL_STREAK_LIMIT = 3;
 let sentinelWarned = false;
 let sentinelStreak = 0;
+let noSessionWarned = false;
 
 export interface ObservationRoots {
 	/** Per-session observation root; empty string = no persistent session. */
@@ -103,26 +105,43 @@ export function createObservationPackExtension(hostExports: {
 			async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 				const id = String(params.id);
 				if (!isObservationId(id)) {
-					return { content: [{ type: "text", text: `Unknown observation id ${id}` }], details: {} };
+					return { content: [{ type: "text", text: `Unknown observation id: ${id}` }], details: {} };
 				}
 				const offset = Math.max(0, Number(params.offset ?? 0));
 				const { root } = observationRootsFor(ctx);
 				try {
 					const chunk = await readRecallChunk(observationPath(root, id), offset, RECALL_LIMITS);
+					// Upstream protocol: the paging header must live in the model-visible
+					// text — details never reach the provider request, and the placeholder
+					// promises "continue with returned next_offset".
+					const header = [
+						`[obs_recall id=${id} offset=${offset} next_offset=${chunk.nextOffset} eof=${chunk.eof}]`,
+						`[chunk_bytes=${chunk.bytes} chunk_lines=${chunk.lines}; use next_offset to continue]`,
+					].join("\n");
+					const text = `${header}\n${chunk.text}`;
+					if (Buffer.byteLength(text, "utf8") > RECALL_MAX_BYTES || countLines(text) > RECALL_MAX_LINES) {
+						return { content: [{ type: "text", text: "Recall output exceeded its hard limit" }], details: { id, offset } };
+					}
 					return {
-						content: [{ type: "text", text: chunk.text }],
+						content: [{ type: "text", text }],
 						details: { id, offset, bytes: chunk.bytes, lines: chunk.lines, nextOffset: chunk.nextOffset, eof: chunk.eof },
 					};
 				} catch (error) {
 					const reason = error instanceof Error ? error.message : String(error);
-					return { content: [{ type: "text", text: `Unknown observation id ${id} (${reason})` }], details: { id } };
+					return { content: [{ type: "text", text: `Unknown observation id: ${id} (${reason})` }], details: { id } };
 				}
 			},
 		});
 
 		pi.on("context", async (event, ctx) => {
 			const { root } = observationRootsFor(ctx);
-			if (!root) return undefined; // --no-session: projection off, no error.
+			if (!root) {
+				if (!noSessionWarned) {
+					noSessionWarned = true;
+					console.warn("[observation-pack] no persistent session directory; projection disabled for this session");
+				}
+				return undefined;
+			}
 
 			const projected = [...event.messages];
 			let replacedThisRequest = 0;
@@ -148,6 +167,9 @@ export function createObservationPackExtension(hostExports: {
 
 					const sendCountKey = `${root}\0${observation.id}`;
 					const previousSends = sentCounts.get(sendCountKey) ?? priorAssistantCounts[index] ?? 0;
+					// CMP-04: eligibility is counted before any replacement attempt so a
+					// broken store or a dropped projection still trips the sentinel.
+					if (previousSends >= FULL_SENDS) eligiblePastFullSends += 1;
 					if (previousSends < FULL_SENDS) {
 						await ledgerFor(root)({
 							event: "full",
@@ -184,7 +206,6 @@ export function createObservationPackExtension(hostExports: {
 						// OBS-09: cumulative avoided tokens on the capability bus.
 						coreBus().publish({ observation: { tokensAvoided: savedTokens, placeholders: placeholderCount } });
 					}
-					if (previousSends >= FULL_SENDS) eligiblePastFullSends += 1;
 				} catch (error) {
 					// OBS-08 fail-open, per-message: one failure keeps that
 					// message's original bytes; the rest of the loop continues.
