@@ -52,8 +52,16 @@ export interface NotificationsPatch {
 export interface MemoryPatch {
 	memory?: { yielded: boolean; dir?: string };
 }
+/** SPEC OBS-09: cumulative observation-pack savings (optional channel). */
+export interface ObservationPatch {
+	observation?: { tokensAvoided: number; placeholders: number };
+}
+/** SPEC FUS-09: cumulative action-fusion savings (optional channel). */
+export interface FusionPatch {
+	fusion?: { fusedCount: number };
+}
 
-export type CorePatch = ModesPatch | EffortPatch | GoalPatch | ReviewPatch | DisplayPatch | ContextBudgetPatch | MemoryPatch | NotificationsPatch;
+export type CorePatch = ModesPatch | EffortPatch | GoalPatch | ReviewPatch | DisplayPatch | ContextBudgetPatch | MemoryPatch | NotificationsPatch | ObservationPatch | FusionPatch;
 
 type CommandHandler = (cmd: CoreCommand) => CoreCommandResult;
 

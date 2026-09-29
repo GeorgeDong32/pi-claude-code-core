@@ -32,6 +32,8 @@ export interface CoreSnapshot {
 	display?: { footer?: readonly string[] };
 	contextBudget?: { rulesMax: number; memoryIndexMax: number; dynamicSteerMax: number };
 	memory?: { yielded: boolean; dir?: string };
+	observation?: { tokensAvoided: number; placeholders: number };
+	fusion?: { fusedCount: number };
 }
 
 export type CoreCommand =
@@ -62,6 +64,8 @@ export interface CoreStatus {
 	display?: { footer?: readonly string[] };
 	contextBudget?: { rulesMax: number; memoryIndexMax: number; dynamicSteerMax: number };
 	memory?: { yielded: boolean; dir?: string };
+	observation?: { tokensAvoided: number; placeholders: number };
+	fusion?: { fusedCount: number };
 }
 
 export function readCoreStatus(g?: unknown): CoreStatus;
