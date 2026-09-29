@@ -32,6 +32,10 @@ import memoryExtension from "./memory/index.ts";
 // P4: governance modules (rule families + broker mirror + /core panel)
 import mcpGovExtension from "./mcp-gov/index.ts";
 import { createWebRuleFamily } from "./web-gov/index.ts";
+// Economy modules (SPEC 2026-09-29-solpi-absorption): ported from NVlabs/SoL-Pi
+import { loadCoreEconomy } from "../lib/core-economy.ts";
+import createActionFusion from "./action-fusion/index.ts";
+import observationPack from "./observation-pack/index.ts";
 
 type ModuleFactory = (pi: ExtensionAPI) => void | Promise<void>;
 
@@ -54,6 +58,14 @@ const moduleFactories: ModuleFactory[] = [
 		createWebRuleFamily();
 	},
 	mcpGovExtension,
+	// SPEC ASM-01: economy modules last — observation-pack must own the FINAL
+	// context projection slot (after modes/memory handlers), action-fusion's
+	// registration order is position-independent but fixed here too.
+	function economy(pi: ExtensionAPI) {
+		const config = loadCoreEconomy();
+		if (config.actionFusion) createActionFusion()(pi);
+		if (config.observationPack) observationPack()(pi);
+	},
 ];
 
 export default async function coreExtension(pi: ExtensionAPI): Promise<void> {

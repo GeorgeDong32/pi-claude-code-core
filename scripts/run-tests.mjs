@@ -22,6 +22,8 @@ const nodeTestDirs = [
 	join(root, "extensions", "effort", "tests"),
 	join(root, "extensions", "goal", "tests"),
 	join(root, "extensions", "review", "tests"),
+	join(root, "extensions", "action-fusion", "tests"),
+	join(root, "extensions", "observation-pack", "tests"),
 ].filter(existsSync);
 
 let failed = false;

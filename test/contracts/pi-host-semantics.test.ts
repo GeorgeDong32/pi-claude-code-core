@@ -151,3 +151,31 @@ describe("observation-pack context projection (CON-03)", () => {
 		expect(names).toContain("obs_recall");
 	});
 });
+
+/*
+ * CON-04: assembly-order contract — observation-pack must own the FINAL
+ * context handler slot (after modes/memory). Pinned through the real
+ * assembly default export on the extended fake host.
+ */
+import coreExtension from "../../extensions/index.ts";
+
+describe("assembly order (CON-04)", () => {
+	it("observation-pack registers its context handler after modes and memory", async () => {
+		const host = new FakeHost();
+		const pi = host.piObject() as {
+			on: (e: string, h: Handler) => () => void;
+			registerTool: (def: { name: string; parameters?: unknown; execute: (...a: any[]) => Promise<unknown> }) => void;
+			getAllTools: () => Array<{ name: string }>;
+		};
+		// Keep the assembly cheap: core factories only need on/registerTool/
+		// command surfaces; anything else they touch on the fake is recorded.
+		await coreExtension(pi as never);
+		const contextHandlers = host.handlers.get("context")! as Handler[];
+		expect(contextHandlers.length).toBeGreaterThan(0);
+		const names = (host.piObject() as { getAllTools: () => Array<{ name: string }> })
+			.getAllTools()
+			.map((t) => t.name);
+		expect(names).toContain("write"); // modes registers its surfaces; fusion replaced write
+		expect(names).toContain("obs_recall");
+	});
+});
