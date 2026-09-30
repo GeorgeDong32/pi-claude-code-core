@@ -90,6 +90,7 @@ export async function executeMutationThenRun<TDetails>({
 	signal,
 	ctx,
 	queue,
+	yieldForInterference,
 }: {
 	toolCallId: string;
 	absolutePath: string;
@@ -99,6 +100,8 @@ export async function executeMutationThenRun<TDetails>({
 	signal: AbortSignal | undefined;
 	ctx: ExtensionContext;
 	queue: FileQueueFn;
+	/** Test seam: runs between the post-mutation hash reads (default: one macrotask). */
+	yieldForInterference?: () => Promise<void>;
 }): Promise<AgentToolResult<TDetails>> {
 	return queue(absolutePath, async () => {
 		let mutationResult: AgentToolResult<TDetails>;
@@ -115,7 +118,7 @@ export async function executeMutationThenRun<TDetails>({
 			return mutationResult;
 		}
 
-		await assertUnchangedBeforeCommand(absolutePath);
+		await assertUnchangedBeforeCommand(absolutePath, yieldForInterference);
 		const bash = createBashToolDefinition(ctx.cwd, bashOptions);
 		try {
 			// 0.99 types the execute ctx as ExtensionToolContext (superset with

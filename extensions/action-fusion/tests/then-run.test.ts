@@ -137,16 +137,16 @@ describe("executeMutationThenRun (FUS-04/10)", () => {
 					toolCallId: "t5",
 					absolutePath: file,
 					thenRun: { command: "true" },
-					mutate: async () => {
-						// The mutation "succeeds" but writes something else than the
-						// post-check expects: change the file right after returning.
-						setImmediate(() => void writeFile(file, "interfered\n", "utf8"));
-						return { content: [{ type: "text", text: "wrote" }], details: undefined };
-					},
+					mutate: async () => ({ content: [{ type: "text", text: "wrote" }], details: undefined }),
 					bashOptions: undefined,
 					signal: undefined,
 					ctx: fakeCtx(),
 					queue: passthroughQueue,
+					// Deterministic seam: the interference lands exactly between the
+					// two hash reads (the old setImmediate timing flaked 1-in-6).
+					yieldForInterference: async () => {
+						await writeFile(file, "interfered\n", "utf8");
+					},
 				}),
 			(err) => (err as Error).message.includes(THEN_RUN_SKIPPED),
 		);
