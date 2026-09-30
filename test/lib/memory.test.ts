@@ -320,6 +320,18 @@ describe("P3-ME-08 importers", () => {
 		rmSync(source, { recursive: true, force: true });
 	});
 
+	it("claude import creates a missing target project dir (live ENOENT regression)", () => {
+		const source = mkdtempSync(join(tmpdir(), "cc-mem-nodir-"));
+		writeFileSync(join(source, "fresh.md"), "---\nname: fresh\ndescription: x\n---\n\nbody");
+		// Target layer dir does NOT exist — a CC project never opened in pi.
+		const dir = join(tmpdir(), "pi-proj-mem-", `t${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+		const report = importFromClaude(source, dir);
+		expect(report.copied).toBe(1);
+		expect(readFileSync(join(dir, "fresh.md"), "utf-8")).toContain("body");
+		rmSync(source, { recursive: true, force: true });
+		rmSync(dir, { recursive: true, force: true });
+	});
+
 	it("hermes §-store splits into frontmatter files; idempotent", () => {
 		const store = mkdtempSync(join(tmpdir(), "hermes-"));
 		const file = join(store, "store.md");

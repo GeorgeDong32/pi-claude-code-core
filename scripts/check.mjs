@@ -22,16 +22,9 @@ import { fileURLToPath } from "node:url";
 // The contract suite imports the four READ-ONLY sibling source packages;
 // a fresh clone without them fails with confusing resolver errors.
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-const siblings = ["pi-permission-modes", "pi-effort", "pi-goal", "pi-review"];
-const missing = siblings.filter((s) => !existsSync(join(repoRoot, "..", s)));
-if (missing.length > 0) {
-	console.error(
-		`check: missing sibling source packages: ${missing.join(", ")}.\n` +
-			"The contract suite imports them read-only — clone them next to this repo\n" +
-			"(see test/contracts/README.md), or run `bun run test` for the core-only suites.",
-	);
-	process.exit(1);
-}
+// Sibling-source-packages gate removed 2026-09-30: the retired packages moved
+// to Pi-Extension/archive/repos and the contract suite has imported the core
+// modules exclusively since P1 (targets.ts) — no external checkout is needed.
 
 // goal fork drift allowlist removed 2026-09-21: fixed in-tree (P2-GO).
 const GOAL_DRIFTS = [];

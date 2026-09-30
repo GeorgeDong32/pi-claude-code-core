@@ -26,6 +26,10 @@ export function importFromClaude(projectMemoryDir: string, targetDir: string): I
 		return report;
 	}
 	const files = readdirSync(projectMemoryDir).filter((f) => f.endsWith(".md"));
+	// The target project may never have been opened in pi — create the layer
+	// dir before the first write (found live: migrating a CC project that has
+	// no pi-side dir yet failed with ENOENT on the first file).
+	mkdirSync(targetDir, { recursive: true });
 	// Do NOT trust the source MEMORY.md — rebuild from files.
 	for (const file of files) {
 		if (file === "MEMORY.md") continue;
