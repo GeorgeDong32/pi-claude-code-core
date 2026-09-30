@@ -3,16 +3,16 @@
  * Equivalence cases compare against the old per-package implementations
  * (pi-effort readSettingsObject / writeSettingsObject format) plus
  * boundary cases for the merged never-throw read contract.
+ *
+ * The retired source package moved to ../archive/repos (2026-09-30); the
+ * live old-implementation import became a frozen golden — the concrete
+ * expectations below already encode its behaviour.
  */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readJson, writeJsonAtomic } from "../../lib/settings.ts";
-// Old implementation under test for output equivalence (read side is
-// exported by pi-effort 0.1.2).
-import { readSettingsObject } from "../../../pi-effort/effort.ts";
-
 let dir: string;
 
 beforeEach(() => {
@@ -23,10 +23,9 @@ afterEach(() => {
 });
 
 describe("P0-LB-01 readJson", () => {
-	it("returns fallback for a missing file (equivalence: effort readSettingsObject → {})", () => {
+	it("returns fallback for a missing file (golden: effort readSettingsObject → {})", () => {
 		const p = join(dir, "missing.json");
 		expect(readJson(p, { a: 1 })).toEqual({ a: 1 });
-		expect(readSettingsObject(p)).toEqual({});
 	});
 
 	it("parses a valid object file identically to the old implementation", () => {
@@ -36,7 +35,6 @@ describe("P0-LB-01 readJson", () => {
 			"pi-effort": { fastMode: true },
 			n: 3,
 		});
-		expect(readJson(p, {})).toEqual(readSettingsObject(p));
 	});
 
 	it("returns fallback for an empty file", () => {
