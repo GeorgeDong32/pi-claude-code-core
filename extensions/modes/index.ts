@@ -175,6 +175,15 @@ const MODE_CYCLE: Mode[] = ["ask", "plan", "auto", "bypass"];
 // Tools available in plan mode (edit/write only for plan.md via tool_call gate).
 const PLAN_TOOLS = ["read", "bash", "grep", "find", "ls", "edit", "write", "plan_ready"];
 const PLAN_READ_TOOLS = new Set(["read", "grep", "find", "ls"]);
+/**
+ * Gate-side classification for pi 0.99's meta tools (SPEC META-01..03):
+ * `tool_search` only loads tool declarations (retrieval), `codemode` runs
+ * model-written scripts that call other tools (execution surface). Also
+ * matches the official MCP tool shape so plan read-only-ness holds once
+ * tool_search declares MCP tools (declaring != executing, but every MCP
+ * tool is a potential mutation, so plan denies them outright).
+ */
+const MCP_TOOL_NAME = /^(?:mcp__|mcp_)([A-Za-z0-9_-]+)__(.+)$/;
 const PLAN_DISABLED = new Set<string>();
 
 type Block = { block: true; reason: string } | undefined;
@@ -1781,6 +1790,22 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       if (PLAN_READ_TOOLS.has(tool)) {
         return undefined;
       }
+      // META-01 (SPEC 0.99 adaptation): meta tools + declared MCP tools.
+      if (tool === "tool_search") {
+        return undefined; // retrieval only: loads declarations, executes nothing
+      }
+      if (tool === "codemode") {
+        return {
+          block: true,
+          reason: "Plan mode: codemode is not available (it can execute other tools).",
+        };
+      }
+      if (MCP_TOOL_NAME.test(tool)) {
+        return {
+          block: true,
+          reason: `Plan mode: MCP tool ${tool} is not available (plan is read-only).`,
+        };
+      }
       if (tool === "edit" || tool === "write") {
         const pathStr = String(input.path ?? "");
         if (pathStr && isPlanFilePath(pathStr, ctx.cwd)) {
@@ -1805,6 +1830,10 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
 
     // AUTO: tiered gate with optional classifier + user prompts for risky ops
     if (currentMode === "auto") {
+      // META-03: retrieval-only meta tool passes like the read tier.
+      if (tool === "tool_search") {
+        return undefined;
+      }
       if (tool === "read" || tool === "grep" || tool === "find" || tool === "ls") {
         const pathStr = String(input.path ?? "");
         if (pathStr && isSensitivePath(pathStr, ctx.cwd)) {

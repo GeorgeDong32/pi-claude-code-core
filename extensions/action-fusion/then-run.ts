@@ -118,7 +118,9 @@ export async function executeMutationThenRun<TDetails>({
 		await assertUnchangedBeforeCommand(absolutePath);
 		const bash = createBashToolDefinition(ctx.cwd, bashOptions);
 		try {
-			const bashResult = await bash.execute(`${toolCallId}:then_run`, thenRun, signal, undefined, ctx);
+			// 0.99 types the execute ctx as ExtensionToolContext (superset with
+			// tools/executeTool); runtime provides it. 0.87 accepts ExtensionContext.
+			const bashResult = await bash.execute(`${toolCallId}:then_run`, thenRun, signal, undefined, ctx as Parameters<typeof bash.execute>[4]);
 			const output = resultText(bashResult);
 			return {
 				...mutationResult,

@@ -162,6 +162,20 @@ export default function effortExtension(pi: ExtensionAPI): void {
     },
   });
 
+  // ─── External thinking changes: adopt pi's thinking_level_select (EFF-01)
+  // Covers pi's own thinking.cycle keybinding (shift+tab by default, alt+e on
+  // this machine) and any other writer calling setThinkingLevel outside core.
+  // Guard on owner.lastApplied(): the owner's own writes also emit this event,
+  // and pi updates state before emitting, so comparing against
+  // pi.getThinkingLevel() would false-skip exactly the no-slot case.
+  pi.on("thinking_level_select", (event) => {
+    if (event.level === owner.lastApplied()) return;
+    const outcome = owner.setExplicit(event.level, "shortcut");
+    if (outcome === "pinned-by-env") return;
+    // No ctx here: bus sync only; the footer chip reads pi.getThinkingLevel().
+    coreBus().publish({ effort: { level: pi.getThinkingLevel(), source: owner.currentSource() } });
+  });
+
   // ─── session_start: env pin + sync UI + apply --effort flag ──────
   pi.on("session_start", (_event, ctx) => {
     // Track model for tab completion

@@ -39,6 +39,14 @@ export interface EffortOwner {
 	resetExplicit(): void;
 	/** The ① value, or null when env does not pin. */
 	envPin(): OwnerEffortLevel | null;
+	/**
+	 * The level this owner last wrote through pi.setThinkingLevel (null before
+	 * the first apply). The thinking_level_select listener uses it to tell its
+	 * own echoes (skip) from external changes (adopt) — pi updates state and
+	 * emits the event atomically, so comparing against pi.getThinkingLevel()
+	 * would false-skip exactly the no-slot case external changes target.
+	 */
+	lastApplied(): OwnerEffortLevel | null;
 	/** ① > ② > ③ > ④ (falls through to pi's current level at ④). */
 	effective(): OwnerEffortLevel;
 	/** Source of the effective value (bus `effort.source`). */
@@ -65,6 +73,7 @@ function createEffortOwner(pi: ExtensionAPI): EffortOwner {
 	let envLevel: OwnerEffortLevel | null = null;
 	let explicit: { v: OwnerEffortLevel; src: ExplicitSource } | null = null;
 	let profile: { v: OwnerEffortLevel; profile: string } | null = null;
+	let applied: OwnerEffortLevel | null = null;
 	const listeners: Array<(v: OwnerEffortLevel) => void> = [];
 
 	function normalize(v: string): OwnerEffortLevel | null {
@@ -82,6 +91,11 @@ function createEffortOwner(pi: ExtensionAPI): EffortOwner {
 	function apply(): void {
 		const r = resolved();
 		if (!r) return; // ④ model default: never write
+		// Record BEFORE writing: setThinkingLevel emits its event
+		// synchronously, and the listener's echo guard compares against
+		// lastApplied() — writing afterwards leaves the guard one write
+		// behind and re-adopts the owner's own change.
+		applied = r.v;
 		if (pi.getThinkingLevel() !== r.v) {
 			pi.setThinkingLevel(r.v);
 		}
@@ -113,6 +127,7 @@ function createEffortOwner(pi: ExtensionAPI): EffortOwner {
 			apply();
 		},
 		envPin: () => envLevel,
+		lastApplied: () => applied,
 		effective(): OwnerEffortLevel {
 			const r = resolved();
 			return r ? r.v : pi.getThinkingLevel();

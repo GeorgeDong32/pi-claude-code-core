@@ -61,6 +61,7 @@ function fakeToolInfo(name: string): ToolInfo {
 	return {
 		name,
 		description: `fake ${name} tool`,
+		exposure: "direct" as ToolInfo["exposure"],
 		parameters: { type: "object", properties: {} } as ToolInfo["parameters"],
 		sourceInfo: {
 			path: `fake://${name}`,
@@ -224,6 +225,14 @@ function createFakePi(): FakePi {
 		appendEntry(type: string, data: unknown) {
 			appendEntries.push({ type, data })
 		},
+		// 0.99 ExtensionAPI surface: modes ignores these; stubs satisfy the
+		// compile-time contract so real drift still fails typecheck.
+		getSettings: () => ({}) as never,
+		registerMcpServer: () => {},
+		unregisterMcpServer: () => {},
+		getMcpServers: () => [] as never,
+		registerVirtualModel: () => ({}) as never,
+		unregisterVirtualModel: () => {},
 		getActiveTools() {
 			return [...activeTools]
 		},
@@ -410,6 +419,49 @@ describe("permission-modes extension: tool_call gate", () => {
 		pi.flags["permission-mode"] = mode
 		await pi.simulateSessionStart(realProjectRoot)
 	}
+
+	describe("pi 0.99 meta tools and MCP shape (SPEC META-04)", () => {
+		it("plan: tool_search allowed (retrieval only)", async () => {
+			await switchMode("plan")
+			const result = await callToolCall("tool_search", { query: "jira" })
+			expect(result).toBeUndefined()
+		})
+
+		it("plan: codemode denied with an explicit reason", async () => {
+			await switchMode("plan")
+			const result = await callToolCall("codemode", { script: "return 1" })
+			expect(result).toMatchObject({ block: true })
+			expect(String((result as { reason?: string }).reason)).toContain("codemode is not available")
+		})
+
+		it("plan: declared MCP tools are denied (read-only holds)", async () => {
+			await switchMode("plan")
+			const result = await callToolCall("mcp__exa__search", { query: "x" })
+			expect(result).toMatchObject({ block: true })
+			expect(String((result as { reason?: string }).reason)).toContain("Plan mode: MCP tool")
+		})
+
+		it("auto: tool_search passes like the read tier", async () => {
+			await switchMode("auto")
+			const result = await callToolCall("tool_search", { query: "jira" })
+			expect(result).toBeUndefined()
+		})
+
+		it("auto: mcp__ tools fall through to the tiered gate (not auto-allowed)", async () => {
+			await switchMode("auto")
+			const result = await callToolCall("mcp__exa__search", { query: "x" }, {
+				select: async () => "Block",
+			})
+			// Tier-3 surfaces a prompt in this harness; the pin is "not undefined-allowed".
+			expect(result).not.toBeUndefined()
+		})
+
+		it("plan: regular read tools unaffected by the new branches", async () => {
+			await switchMode("plan")
+			const result = await callToolCall("grep", { pattern: "x" })
+			expect(result).toBeUndefined()
+		})
+	})
 
 	describe("ask mode", () => {
 		it("prompts on edit (inside cwd)", async () => {
