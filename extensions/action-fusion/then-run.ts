@@ -122,6 +122,12 @@ export async function executeMutationThenRun<TDetails>({
 			// tools/executeTool); runtime provides it. 0.87 accepts ExtensionContext.
 			const bashResult = await bash.execute(`${toolCallId}:then_run`, thenRun, signal, undefined, ctx as Parameters<typeof bash.execute>[4]);
 			const output = resultText(bashResult);
+			// pi 0.99's bash RETURNS nonzero exits (isError + "Command exited
+			// with code N") instead of throwing like 0.87 — treat both shapes as
+			// THEN_RUN_FAILED so a failed command is never reported as succeeded.
+			if ((bashResult as { isError?: boolean }).isError || /Command exited with code \d+/u.test(output)) {
+				throw new Error(output || "then_run command failed");
+			}
 			return {
 				...mutationResult,
 				content: [

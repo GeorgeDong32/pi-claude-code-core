@@ -447,6 +447,14 @@ describe("permission-modes extension: tool_call gate", () => {
 			expect(result).toBeUndefined()
 		})
 
+		it("auto: codemode falls through to the tiered gate (not auto-allowed)", async () => {
+			await switchMode("auto")
+			const result = await callToolCall("codemode", { script: "return 1" }, {
+				select: async () => "Block",
+			})
+			expect(result).not.toBeUndefined()
+		})
+
 		it("auto: mcp__ tools fall through to the tiered gate (not auto-allowed)", async () => {
 			await switchMode("auto")
 			const result = await callToolCall("mcp__exa__search", { query: "x" }, {
