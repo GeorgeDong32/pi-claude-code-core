@@ -6,59 +6,34 @@
  * `input.tool` → `mcp_exa_search`. Non-MCP names return null — the family
  * never claims beyond its boundary.
  *
+ * canonicalizeMcpTool stays the single authority (invariant 4); its pure
+ * shape core lives in lib/mcp-shape.ts and is shared verbatim with the
+ * modes plan gate (arch batch B1) so the two consumers cannot drift.
+ *
  * resolve order: deny > ask > allow (the pm engine's order, applied to
  * rule strings over the canonical id with `mcp_<server>_*` prefixes
  * matching first, then the bare `mcp_*`).
  */
 
+import { canonicalizeMcpShape } from "../../lib/mcp-shape.js";
 import { ruleMatchesId, ruleValueText } from "../../lib/rule-text.js";
 import type { PermissionRule } from "../modes/permissions.ts";
 import { registerRuleFamily, type RuleFamily } from "../modes/rule-families.ts";
+
+// B1: the pure core + env parse moved to lib/mcp-shape.ts; re-exported
+// here so existing consumers (web-gov) keep their import surface.
+export { directKnownServersFromEnv } from "../../lib/mcp-shape.js";
 
 export function canonicalizeMcpTool(
 	toolName: string,
 	input: Record<string, unknown>,
 	knownServers: ReadonlySet<string> = new Set(),
 ): string | null {
-	// proxy shape: tool name IS "mcp" and the real tool sits in input.tool
-	const proxyTarget = typeof input.tool === "string" ? input.tool : "";
-	const raw = toolName === "mcp" && proxyTarget ? proxyTarget : toolName;
-
-	// native prefix: mcp__server__tool / mcp_server__tool
-	const native = /^(?:mcp__|mcp_)([A-Za-z0-9_-]+)__(.+)$/.exec(raw)
-		?? /^(?:mcp__|mcp_)([A-Za-z0-9_-]+)_(.+)$/.exec(raw);
-	if (native) {
-		const server = native[1];
-		const tool = native[2];
-		if (!server || !tool) return null;
-		return `mcp_${server}_${tool}`;
-	}
-	if (raw.startsWith("mcp_")) return raw;
-	// direct naming (exa_search): ONLY when the leading server id is on the
-	// configured known-servers list — otherwise any foo_bar extension tool
-	// would be misclaimed (P4-FAM-02④ keeps non-mcp unknown tools untouched;
-	// risk ② "宁漏勿误")
-	const direct = /^([a-z][a-z0-9]*)_[a-z][a-z0-9_]*$/i.exec(raw);
-	if (direct && knownServers.has(direct[1].toLowerCase())) {
-		return `mcp_${raw}`;
-	}
-	return null;
+	return canonicalizeMcpShape(toolName, input, knownServers);
 }
 
 function ruleMatchesCanonicalId(ruleText: string, canonicalId: string): boolean {
 	return ruleMatchesId(ruleText, canonicalId);
-}
-
-/**
- * Direct-naming server allowlist from env (DEVIATIONS #47④):
- * `PI_CORE_MCP_DIRECT_SERVERS=exa,github`. Shared by the mcp and web
- * families so both claim direct-shaped tools with the same boundary.
- */
-export function directKnownServersFromEnv(): string[] {
-	return (process.env.PI_CORE_MCP_DIRECT_SERVERS ?? "")
-		.split(",")
-		.map((s) => s.trim())
-		.filter(Boolean);
 }
 
 /**

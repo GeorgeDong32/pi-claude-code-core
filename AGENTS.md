@@ -79,7 +79,10 @@ Per-module docs live in [docs/en/](docs/en) / [docs/zh/](docs/zh) — start with
    `modes/rule-families.ts` (`registerRuleFamily`). web-gov is assembled
    BEFORE mcp-gov so URL-carrying calls hit domain rules first.
    `mcp-gov/family.ts#canonicalizeMcpTool` is the single authority on
-   "is this an MCP-shaped tool" — reuse it, don't reimplement.
+   "is this an MCP-shaped tool" — reuse it, don't reimplement. Its pure
+   shape core lives in `lib/mcp-shape.ts` and is shared with the modes
+   plan gate (arch B1); consume the authority or the lib core, never
+   write a second shape test.
 5. **Context budget** (`lib/context-budget.ts`): rules 40K / memory index 25K /
    dynamic steer 8K characters. Producers must clamp to these.
 6. **Contract suite protocol**: every cross-package surface change must be

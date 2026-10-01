@@ -27,6 +27,10 @@ import { coreBus } from "../bus.ts"
 import { isMemoryWritePath } from "../memory/paths.ts"
 import { clearSessionGrants, clearSessionState, grantSession, hasSessionGrant, isBypassActive, listSessionGrants, matchFamily, noteAdjudicated, familyRuleMentions, setBypassIndicator } from "./rule-families.ts"
 import { getSharedEffortOwner, type OwnerEffortLevel } from "../../lib/effort-owner.ts";
+// B1: shared MCP-shape core — the authority (mcp-gov/family.ts
+// #canonicalizeMcpTool) and this plan gate consume the same lib predicate,
+// so the gate can never again drift from the family on MCP shapes.
+import { isMcpShapedCall, knownServersSetFromEnv } from "../../lib/mcp-shape.ts";
 import { readFileSync } from "node:fs"
 import { homedir } from "node:os";
 import path from "node:path";
@@ -178,12 +182,11 @@ const PLAN_READ_TOOLS = new Set(["read", "grep", "find", "ls"]);
 /**
  * Gate-side classification for pi 0.99's meta tools (SPEC META-01..03):
  * `tool_search` only loads tool declarations (retrieval), `codemode` runs
- * model-written scripts that call other tools (execution surface). Also
- * matches the official MCP tool shape so plan read-only-ness holds once
- * tool_search declares MCP tools (declaring != executing, but every MCP
- * tool is a potential mutation, so plan denies them outright).
+ * model-written scripts that call other tools (execution surface). MCP
+ * tools are detected via the shared lib/mcp-shape.ts predicate (native /
+ * proxy / direct-named / bare `mcp_*` — declaring != executing, but every
+ * MCP tool is a potential mutation, so plan denies them outright).
  */
-const MCP_TOOL_NAME = /^(?:mcp__|mcp_)([A-Za-z0-9_-]+)__(.+)$/;
 const PLAN_DISABLED = new Set<string>();
 
 type Block = { block: true; reason: string } | undefined;
@@ -1800,7 +1803,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
           reason: "Plan mode: codemode is not available (it can execute other tools).",
         };
       }
-      if (MCP_TOOL_NAME.test(tool)) {
+      if (isMcpShapedCall(tool, input, knownServersSetFromEnv())) {
         return {
           block: true,
           reason: `Plan mode: MCP tool ${tool} is not available (plan is read-only).`,

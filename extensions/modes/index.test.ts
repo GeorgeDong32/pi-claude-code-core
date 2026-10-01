@@ -441,6 +441,46 @@ describe("permission-modes extension: tool_call gate", () => {
 			expect(String((result as { reason?: string }).reason)).toContain("Plan mode: MCP tool")
 		})
 
+		// B1 shape pins: the plan gate shares lib/mcp-shape.ts with the rule-family
+		// authority, so EVERY MCP shape is denied — the old private `__`-only regex
+		// let the four shapes below through.
+		it("plan: single-underscore native MCP names are denied", async () => {
+			await switchMode("plan")
+			const result = await callToolCall("mcp_exa_search", { query: "x" })
+			expect(result).toMatchObject({ block: true })
+			expect(String((result as { reason?: string }).reason)).toContain("Plan mode: MCP tool")
+		})
+
+		it("plan: proxy-shaped MCP calls (tool 'mcp') are denied", async () => {
+			await switchMode("plan")
+			const result = await callToolCall("mcp", { tool: "mcp_exa_search" })
+			expect(result).toMatchObject({ block: true })
+		})
+
+		it("plan: direct-named MCP tools on the known-servers list are denied", async () => {
+			const prev = process.env.PI_CORE_MCP_DIRECT_SERVERS
+			process.env.PI_CORE_MCP_DIRECT_SERVERS = "exa"
+			try {
+				await switchMode("plan")
+				const result = await callToolCall("exa_search", { query: "x" })
+				expect(result).toMatchObject({ block: true })
+				expect(String((result as { reason?: string }).reason)).toContain("Plan mode: MCP tool")
+			} finally {
+				if (prev === undefined) delete process.env.PI_CORE_MCP_DIRECT_SERVERS
+				else process.env.PI_CORE_MCP_DIRECT_SERVERS = prev
+			}
+		})
+
+		it("plan: bare mcp_* names are denied; unknown non-MCP names still pass", async () => {
+			await switchMode("plan")
+			const bare = await callToolCall("mcp_customtool", { x: 1 })
+			expect(bare).toMatchObject({ block: true })
+			// direct-named shape WITHOUT the server on the known list stays
+			// unclaimed ("宁漏勿误") and falls through the plan gate untouched
+			const unknown = await callToolCall("foo_bar", { x: 1 })
+			expect(unknown).toBeUndefined()
+		})
+
 		it("auto: tool_search passes like the read tier", async () => {
 			await switchMode("auto")
 			const result = await callToolCall("tool_search", { query: "jira" })

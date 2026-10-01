@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed (plan-gate MCP shape leak, arch batch B1)
+- **plan mode now recognizes every MCP call shape**: the read-only plan gate used a private double-underscore-only regex that had drifted from the rule-family authority — single-underscore native names (`mcp_exa_search`), proxy-shaped calls (tool `mcp` with `input.tool`), direct-named tools on `PI_CORE_MCP_DIRECT_SERVERS`, and bare `mcp_*` names all slipped past it (every MCP tool is a potential mutation, so plan denies them outright). The pure shape core now lives in `lib/mcp-shape.ts` and is shared verbatim by the authority (`canonicalizeMcpTool`) and the plan gate, so the two consumers cannot drift again (4 new shape pins + the p4-families authority pins stay green).
+
 ### Fixed (goal-hijack, spec 2026-10-01-goal-hijack-fix)
 - **Subagent spawns no longer fail while a goal is active**: the goal module used to adopt the project's on-disk active goal in subagent child sessions (same cwd) and arm its continuation — the `<pi_goal_continuation>` checkpoint occupied the child's agent loop before the dispatched task prompt could be delivered, so every subagent dispatch in the project failed with "Agent is already processing a prompt". Child sessions (`PI_SUBAGENT_CHILD=1`) now skip disk-goal adoption entirely and never arm continuations (belt and braces); parent-session behavior is unchanged (red-green pinned).
 - Test harness: `FakeHost.makeCtx` gained `idle` / `hasPendingMessages` options (the missing `hasPendingMessages` made the goal continuation path silently no-op in fakes — pre-existing fidelity gap).

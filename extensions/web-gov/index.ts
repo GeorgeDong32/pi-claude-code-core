@@ -17,7 +17,9 @@ import { ruleValueText } from "../../lib/rule-text.js";
 import type { PermissionRule } from "../modes/permissions.ts";
 import { registerRuleFamily, type RuleFamily } from "../modes/rule-families.ts";
 // canonicalizeMcpTool is the single authority on "is this an MCP-shaped
-// tool" (native/proxy/direct+knownServers) — reuse, don't reimplement
+// tool" (native/proxy/direct+knownServers) — reuse, don't reimplement;
+// its pure shape core lives in lib/mcp-shape.ts, shared with the modes
+// plan gate (arch B1)
 import { canonicalizeMcpTool, directKnownServersFromEnv } from "../mcp-gov/family.ts";
 
 /** CC-style preapproved documentation/reference domains (P4-WB-02). */
