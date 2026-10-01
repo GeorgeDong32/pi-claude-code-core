@@ -2,6 +2,25 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## goal-hijack 修复批(2026-10-01,spec 2026-10-01-goal-hijack-fix)
+
+**状态:实现完成 + 对抗 review 通过折入(v1.2,F1-F9 全处置:runner env 纪律/GH-04 断言/台账同步),三门全绿(常规与模拟子代理 env 双复验)。**
+
+- **GH-02** `loadState` 子会话跳过磁盘收养 + **GH-02b** `reconcileFocusedGoalFromDisk` 同判定返回(补充守卫:命令/工具路径 mid-session 重读盘,实施中发现);**GH-03** `queueContinuation` 顶部早退(双保险,五调用点)。
+- 探测复用 `modes/permission-forwarding#isSubagentChildProcess`(goal→modes 跨模块 import,无环;PI_SUBAGENT_* 只消费,P0-CT-06 边界不动)。
+- FakeHost 补 `idle`/`hasPendingMessages` ctx 选项(既有 fidelity 缺口:缺 hasPendingMessages 时 product try/catch 吞 TypeError,续跑在 fake 从未武装)。
+
+## memory 召回修复批(2026-10-01,spec 2026-10-01-memory-recall-fix v3.1)
+
+**状态:实现完成 + 对抗 review 通过折入(v3.2,findings F1-F11 全处置:1 major 补计费守卫测试、F4/F5 两处代码缝隙修复、其余文字/nit),三门全绿复验。**
+
+- **MR-01/02/03** per-turn pin & re-project:`pinnedTurn` 状态,turn 首个 context 事件选取+pin(查询=最后一条非 customType user 消息),turn 内逐请求重投影字节级同一块;`before_agent_start` 清 pin,`session_compact`/`session_start` 全量重置。删除 `surfacedRecallKeys`(宿主源码取证:投影 request-ephemeral,反查永远空集)。
+- **MR-04** 双域匹配:primary(title+description ≥2)或次级(≥1 且 body ≥2)入选,body 仅 tiebreaker;body-only 永不入选。
+- **MR-05/08** `surfacedKeys` 计费化(每文件每 session 一次,`isPrePaid` 谓词不再消耗剩余预算);read 抑制保留。
+- **MR-09** 缓存纪律:尾部追加不变量、turn 内字节稳定、systemPrompt 索引字节稳定(三守卫用例)。
+- **用例翻转**:memory-v2-storage AD1 用例改写为 v2 语义;mode-inherit.test 预存隔离 bug 顺手修(ambient env 泄漏)。
+- 新增 describe `MR memory-recall fix v3.1` 8 用例 + isPrePaid 直测。
+
 ## 二轮深审修复批(2026-09-22,REVIEW-II)
 
 **状态:实现完成 + 对抗审计通过(红队 3 subagent:真实性轴全绿,回归轴 4 残留已修),三命令全绿,已待 commit。**
