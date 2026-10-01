@@ -2,6 +2,8 @@
 
 Unified core extension for the [pi coding agent](https://github.com/earendil-works/pi-coding-agent): permission modes + effort + goal + review in one package, plus rules / memory / mcp-gov / web-gov modules.
 
+> Contributing? Start with [AGENTS.md](AGENTS.md) (agent working guide, 中文版 [AGENTS.zh.md](AGENTS.zh.md)) and the architecture docs under [docs/](docs/README.md) (bilingual, `en/` + `zh/`).
+
 > **Status: P0 scaffold preview (0.1.0-next).** This is an empty shell + shared lib + contract test suite. Function modules land phase by phase (P1 modes/effort/bus → P2 goal/review → P3 rules/memory → P4 mcp-gov/web-gov). Specs live in the parent workspace `../specs/`.
 
 ## Install (once released)
