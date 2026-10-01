@@ -2,10 +2,17 @@
  * memory/selection.ts — deterministic lexical per-turn injection
  * (P3-ME-04, DESIGN-MEMORY's borrowed D2 selectForTurn).
  *
- * Zero LLM: strong token overlap between the current user prompt and a
- * memory file's (title + description + body tokens) is required before a
- * file is injected. Deterministic ordering (score desc, then title asc);
- * same input → same selection.
+ * Zero LLM. Qualification is two-domain (spec 2026-10-01-memory-recall-fix
+ * MR-04): a memory qualifies when EITHER
+ *   primary:  ≥ MIN_TOKEN_OVERLAP distinct query tokens hit title+description, OR
+ *   secondary: ≥1 primary hit AND ≥ SECONDARY_BODY_MIN body hits
+ *             (tiered fallback — anchors topical relevance in the curated
+ *             description line while still catching “description mentions the
+ *             topic once, body elaborates”; body-only overlap NEVER qualifies).
+ * Body hits otherwise act only as a same-score tiebreaker. Deterministic
+ * ordering (primary desc, bodyHits desc, then title asc); same input → same
+ * selection. Budgets are byte-denominated; pre-paid files (already charged
+ * this session) don't consume remaining budget again (MR-05).
  */
 
 import type { MemoryEntry } from "./memdir.ts";
@@ -32,8 +39,12 @@ export const DEFAULT_SELECTION: SelectionBudget = {
 	sessionBytes: 60 * 1024,
 };
 
-/** Overlap threshold: at least this many distinct query tokens must hit. */
+/** Primary qualification: query tokens hitting title+description. */
 export const MIN_TOKEN_OVERLAP = 2;
+/** Secondary qualification: with ≥1 primary hit, this many body hits also
+ * qualifies. ≥2 not ≥4: a 3-bigram query (e.g. 「发版流程」) can hit the body
+ * at most 3 times — a ≥4 gate would dead-letter the anchor case outright. */
+export const SECONDARY_BODY_MIN = 2;
 
 const STOPWORDS = new Set([
 	"the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "with", "is",
@@ -87,23 +98,41 @@ export function selectForTurn(
 	memories: SelectableMemory[],
 	sessionBytesUsed: number,
 	budget: SelectionBudget = DEFAULT_SELECTION,
+	/** MR-05: files already charged this session — selectable (projection is
+	 * never suppressed) but they don't consume remaining budget again. */
+	isPrePaid?: (mem: SelectableMemory) => boolean,
 ): SelectionResult {
 	const queryTokens = tokenize(prompt);
-	if (queryTokens.size === 0 || sessionBytesUsed >= budget.sessionBytes) {
+	if (queryTokens.size === 0) {
 		return { files: [], remainingSessionBytes: budget.sessionBytes - sessionBytesUsed };
 	}
+	// NOTE: no exhausted-budget early return here — at remaining ≤ 0 unpaid
+	// files still break out of the loop below (bytes > remaining), while
+	// pre-paid files remain selectable (v3.2, review F4: the early exit
+	// blinded exactly the files calibration ③ was meant to rescue).
 
-	const scored: Array<{ mem: SelectableMemory; score: number }> = [];
+	const scored: Array<{ mem: SelectableMemory; primary: number; bodyHits: number }> = [];
 	for (const mem of memories) {
-		const memTokens = tokenize(`${mem.title} ${mem.description} ${mem.body}`);
-		let score = 0;
+		// two-domain scoring (MR-04): primary = curated title+description line,
+		// body counts only for the tiered fallback + same-score tiebreak
+		const primaryTokens = tokenize(`${mem.title} ${mem.description}`);
+		const bodyTokens = tokenize(mem.body);
+		let primary = 0;
+		let bodyHits = 0;
 		for (const token of queryTokens) {
-			if (memTokens.has(token)) score++;
+			if (primaryTokens.has(token)) primary++;
+			if (bodyTokens.has(token)) bodyHits++;
 		}
-		if (score >= MIN_TOKEN_OVERLAP) scored.push({ mem, score });
+		const qualifies =
+			primary >= MIN_TOKEN_OVERLAP ||
+			(primary >= 1 && bodyHits >= SECONDARY_BODY_MIN);
+		if (qualifies) scored.push({ mem, primary, bodyHits });
 	}
 
-	scored.sort((a, b) => (a.score !== b.score ? b.score - a.score : a.mem.title < b.mem.title ? -1 : 1));
+	scored.sort((a, b) =>
+		a.primary !== b.primary ? b.primary - a.primary
+			: a.bodyHits !== b.bodyHits ? b.bodyHits - a.bodyHits
+				: a.mem.title < b.mem.title ? -1 : 1);
 
 	let remaining = budget.sessionBytes - sessionBytesUsed;
 	const files: SelectableMemory[] = [];
@@ -111,9 +140,12 @@ export function selectForTurn(
 		if (files.length >= budget.maxFiles) break;
 		const bytes = byteLength(mem.body);
 		if (bytes > budget.perFileBytes) continue; // oversized: skip, never truncate silently
-		if (bytes > remaining) break;
+		const prePaid = isPrePaid?.(mem) === true;
+		if (!prePaid) {
+			if (bytes > remaining) break;
+			remaining -= bytes;
+		}
 		files.push(mem);
-		remaining -= bytes;
 	}
 	return { files, remainingSessionBytes: remaining };
 }

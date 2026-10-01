@@ -5,7 +5,10 @@
  *   session_start       reconcile both layers + budget reset + static yield probe
  *   session_compact     per-turn budget reset
  *   before_agent_start  dynamic yield probe → policy + two-layer capped index
- *   context             lexical selectForTurn injection (both layers pooled)
+ *   context             per-turn pin & re-project: select once on the turn's
+ *                      first request (query = last real user message), then
+ *                      re-project the byte-identical block for every remaining
+ *                      request in the turn (spec 2026-10-01-memory-recall-fix)
  *   tool_call           guardMemoryWrites secret interceptor (both layers)
  *   turn_end            auto-consolidation trigger (V2-C) + P3 automation
  *   tool_result         memory_consolidate settle
@@ -28,7 +31,7 @@ import { coreBus } from "../bus.ts";
 import { reconcileMemoryIndex, scanMemoryDir, scanMemoryDirCached } from "./memdir.ts";
 import { resolveMemoryPaths, sessionsDirFor } from "./paths.ts";
 import { buildPolicyInjection, POLICY_COMPACT } from "./policy.ts";
-import { selectForTurn, freshnessHeader, byteLength, type SelectableMemory } from "./selection.ts";
+import { selectForTurn, freshnessHeader, byteLength, DEFAULT_SELECTION, type SelectableMemory } from "./selection.ts";
 import { guardMemoryWrites } from "./guard.ts";
 import { InjectionGate } from "./yield.ts";
 import { sessionRecall } from "./session-recall.ts";
@@ -51,6 +54,15 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 	// AD1 (OPT-3): memory files the model already read this session — not
 	// re-injected; cleared on compact (CC semantics: compact resets recall)
 	const readMemoryKeys = new Set<string>();
+	// MR-05 (spec 2026-10-01-memory-recall-fix): files already CHARGED to the
+	// session budget this session — billing-only dedup, NEVER projection
+	// suppression (a paid file stays re-projectable in later turns)
+	const surfacedKeys = new Set<string>();
+	// MR-01: the current turn's pinned injection — selection happens once per
+	// turn; every remaining request in the turn re-projects the SAME text
+	// (byte-identical, cache-discipline MR-09). null = nothing pinned yet;
+	// text === null = pinned "selected, nothing to inject".
+	let pinnedTurn: { text: string | null } | null = null;
 
 	function memoryDir(ctx?: { cwd?: string }): string {
 		// anchor on the SESSION cwd (ctx.cwd); process.cwd() is only the
@@ -73,6 +85,8 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 		try {
 			sessionBytesUsed = 0;
 			readMemoryKeys.clear();
+			surfacedKeys.clear();
+			pinnedTurn = null;
 			gate.probeStatic();
 			memorySettings = loadMemorySettings(join(process.env.HOME ?? home, ".pi", "agent"));
 			automationState.enabled = memorySettings.automation;
@@ -106,12 +120,20 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_compact", () => {
+		// MR-02: budget + read + billing state reset — compaction rebuilds the
+		// context, so recall starts fresh against the new context (NOT because
+		// "old injections were dropped": projections never entered live context)
 		sessionBytesUsed = 0;
-		readMemoryKeys.clear(); // AD1: compact resets recall
+		readMemoryKeys.clear();
+		surfacedKeys.clear();
+		pinnedTurn = null;
 	});
 
 	pi.on("before_agent_start", (event, ctx: ExtensionContext) => {
 		try {
+			// MR-01 turn boundary: a new agent run = a new user turn → drop the
+			// pin so the first context event of this turn selects fresh
+			pinnedTurn = null;
 			const wasYielded = gate.state.yielded;
 			gate.probePrompt(event.systemPrompt ?? "");
 			if (gate.state.yielded !== wasYielded) {
@@ -146,35 +168,46 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 	const whereKey = (layer: "user" | "project", file: string): string =>
 		layer === "user" ? `user-memory/${file}` : `memory/${file}`;
 
-	/** AD1: keys already surfaced in prior pi-memory-recall blocks (parsed
-	 * from the live message list — compact naturally drops them). */
-	function surfacedRecallKeys(messages: Array<Record<string, unknown>>): Set<string> {
-		const keys = new Set<string>();
-		for (const m of messages) {
-			if (m.customType !== "pi-memory-recall") continue;
-			const text = Array.isArray(m.content)
-				? (m.content as Array<{ type?: string; text?: string }>).filter((p) => p?.type === "text").map((p) => p.text ?? "").join("\n")
-				: "";
-			for (const match of text.matchAll(/\((user-memory|memory)\/([A-Za-z0-9._-]+\.md)\)/g)) {
-				keys.add(`${match[1]}/${match[2]}`);
-			}
-		}
-		return keys;
-	}
+	/** MR-06/MR-09: the projected injection message. display:false is INERT on
+	 * the projection path — no renderer consumes projections (spec MF-0d
+	 * forensics) — kept for shape consistency with the sendMessage contract. */
+	const makeInjection = (text: string) => ({
+		customType: "pi-memory-recall",
+		role: "user" as const,
+		content: [{ type: "text", text }],
+		display: false,
+	});
 
 	pi.on("context", (event, ctx: ExtensionContext): { messages: typeof event.messages } | undefined => {
 		try {
 			if (gate.state.yielded) return undefined;
-			const dir = memoryDir(ctx);
 			const messages = event.messages ?? [];
-			// skip injected custom blocks (pi-memory-recall, pi-rules-activate…):
-			// otherwise our own selection could become the next recall prompt
+
+			// MR-01: within the turn, re-project the pinned block verbatim — no
+			// re-selection (which drifted on tool output between requests) and
+			// no re-billing. Projections are request-ephemeral (MF-0a): per-request
+			// re-projection is the ONLY way memory stays visible across a run.
+			if (pinnedTurn) {
+				if (pinnedTurn.text === null) return undefined;
+				return { messages: [...messages, makeInjection(pinnedTurn.text) as never] };
+			}
+
+			// Turn's first request (MR-03): the query snapshot is the LAST real
+			// user message — role=user without customType, so tool results and
+			// injected custom blocks can never become the recall prompt
 			const lastUser = [...messages].reverse().find(
 				(m: { role?: string; customType?: string }) => m.role === "user" && !m.customType,
 			);
 			const prompt = extractUserText(lastUser);
-			if (!prompt) return undefined;
+			if (!prompt) {
+				// MR-03 symmetry (v3.2, review F5): a turn whose first request has
+				// no real user text (e.g. image-only) pins the empty decision,
+				// exactly like an empty selection — both paths must behave alike
+				pinnedTurn = { text: null };
+				return undefined;
+			}
 
+			const dir = memoryDir(ctx);
 			const memories: SelectableMemory[] = [
 				...scanMemoryDirCached(userMemoryDir(ctx)).files.map((f) => ({
 					...f.entry,
@@ -190,30 +223,42 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 				})),
 			];
 
-			// AD1: never re-inject what this session already surfaced or read
-			const surfaced = surfacedRecallKeys(messages as unknown as Array<Record<string, unknown>>);
-			const fresh = memories.filter((m) => !surfaced.has(whereKey(m.layer ?? "project", m.file)) && !readMemoryKeys.has(whereKey(m.layer ?? "project", m.file)));
-			const { files } = selectForTurn(prompt, fresh, sessionBytesUsed);
-			if (files.length === 0) return undefined;
+			// MR-08: files read via tool are excluded from selection entirely;
+			// surfaced (paid) files stay selectable — billing-only dedup (MR-05)
+			const fresh = memories.filter((m) => !readMemoryKeys.has(whereKey(m.layer ?? "project", m.file)));
+			const { files } = selectForTurn(
+				prompt,
+				fresh,
+				sessionBytesUsed,
+				DEFAULT_SELECTION,
+				(m) => surfacedKeys.has(whereKey(m.layer ?? "project", m.file)),
+			);
+			if (files.length === 0) {
+				// pin the empty decision too — later requests in this turn must not
+				// re-select against a changed message list either
+				pinnedTurn = { text: null };
+				return undefined;
+			}
 
 			const blocks: string[] = ["<memory-recall>"];
 			for (const file of files) {
 				const header = freshnessHeader(file.mtimeMs);
-				// charge the session budget for the whole rendered block
-				// (title + freshness header + body), in bytes, not just body chars
 				const where = file.layer === "user" ? `user-memory/${file.file}` : `memory/${file.file}`;
 				const block = `## ${file.title} (${where})${header ? `\n${header}` : ""}\n\n${file.body}`;
-				sessionBytesUsed += byteLength(block);
+				// MR-05 + F7: charge each file ONCE per session, AFTER the block
+				// string exists — a mid-render throw must not mark an uninjected
+				// file as paid
+				const key = whereKey(file.layer ?? "project", file.file);
+				if (!surfacedKeys.has(key)) {
+					surfacedKeys.add(key);
+					sessionBytesUsed += byteLength(block);
+				}
 				blocks.push(block);
 			}
 			blocks.push("</memory-recall>");
-			const injection = {
-				customType: "pi-memory-recall",
-				role: "user" as const,
-				content: [{ type: "text", text: blocks.join("\n\n") }],
-				display: false,
-			};
-			return { messages: [...messages, injection as never] };
+			const text = blocks.join("\n\n");
+			pinnedTurn = { text };
+			return { messages: [...messages, makeInjection(text) as never] };
 		} catch {
 			return undefined;
 		}

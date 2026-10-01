@@ -35,6 +35,10 @@ describe("mode-inherit", () => {
 
 	it("ignores invalid modes", () => {
 		delete process.env[SUBAGENT_CHILD_ENV];
+		// hermetic: clear any ambient value first — running the suite from
+		// inside a pi session leaks PERMISSION_MODES_INHERITED_MODE (published
+		// live by the modes module) and afterEach would restore it between tests
+		delete process.env[PERMISSION_MODES_INHERITED_MODE_ENV];
 		publishInheritedPermissionMode("yolo");
 		expect(resolveInheritedPermissionMode()).toBeUndefined();
 	});

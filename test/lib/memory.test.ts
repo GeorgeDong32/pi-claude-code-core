@@ -117,7 +117,7 @@ describe("P3-ME-03 policy injection", () => {
 });
 
 describe("P3-ME-04 per-turn lexical injection", () => {
-	it("injects at most 5 files, skips >4KB bodies, honors the 60KB session budget", async () => {
+	it("injects at most 5 files, skips >4KB bodies; the pin re-projects the same set for every request in the turn", async () => {
 		for (let i = 0; i < 6; i++) {
 			writeMemory(`f${i}.md`, `release flow number ${i}`, `about release flow step ${i}`, "project", `release flow detail ${i}`);
 		}
@@ -138,8 +138,8 @@ describe("P3-ME-04 per-turn lexical injection", () => {
 			return out;
 		};
 
-		const messages = await fireContext();
-		const recall = messages.find((m) => m.customType === "pi-memory-recall") as
+		const first = await fireContext();
+		const recall = first.find((m) => m.customType === "pi-memory-recall") as
 			| { content: Array<{ text: string }> }
 			| undefined;
 		expect(recall).toBeDefined();
@@ -148,12 +148,15 @@ describe("P3-ME-04 per-turn lexical injection", () => {
 		expect(blocks).toBeLessThanOrEqual(5);
 		expect(text).not.toContain("HHHH"); // oversized body skipped, not truncated
 
-		// session budget: hammering until exhausted → no further injection
-		for (let i = 0; i < 30; i++) await fireContext();
-		// (60KB budget with ~small files may not exhaust here; the guard is
-		// that injection never throws and stays bounded)
-		const last = await fireContext();
-		expect(last.length).toBeGreaterThan(0);
+		// (v3.2 redesign, review F3): under per-turn pin & re-project, repeated
+		// requests in the SAME turn re-project the pinned block byte-identically.
+		// Budget-gate coverage moved to the MR-05 direct tests below — per-request
+		// hammering no longer exercises any budget path here.
+		const later = await fireContext();
+		const recall2 = later.find((m) => m.customType === "pi-memory-recall") as
+			| { content: Array<{ text: string }> }
+			| undefined;
+		expect(recall2?.content[0]?.text).toBe(text);
 	});
 });
 
@@ -522,5 +525,238 @@ describe("adversarial-audit fixes (2026-09-22)", () => {
 			},
 		], 0);
 		expect(miss.files).toHaveLength(0);
+	});
+});
+
+describe("MR memory-recall fix v3.1 (2026-10-01, spec 2026-10-01-memory-recall-fix)", () => {
+	const userMsg = (text: string) => ({ role: "user", content: [{ type: "text", text }] });
+
+	function makeHarness() {
+		const host = setup();
+		const ctx = host.makeCtx({ cwd: project, ui: true });
+		const fireContext = async (messages: Array<Record<string, unknown>>) => {
+			let out: Array<Record<string, unknown>> | undefined;
+			for (const h of host.handlers.get("context") ?? []) {
+				const r = (await (h as (e: unknown, c: unknown) => Promise<{ messages?: Array<Record<string, unknown>> } | undefined>)(
+					{ messages },
+					ctx,
+				)) as { messages?: Array<Record<string, unknown>> } | undefined;
+				if (r?.messages) out = r.messages;
+			}
+			return out;
+		};
+		const fireTurnStart = async () => {
+			for (const h of host.handlers.get("before_agent_start") ?? []) {
+				await (h as (e: unknown, c: unknown) => Promise<unknown>)({ systemPrompt: "BASE" }, ctx);
+			}
+		};
+		const fire = (event: string, payload: unknown) => host.fire(event, payload, ctx);
+		const recallText = (messages: Array<Record<string, unknown>> | undefined) => {
+			const inj = messages?.find((m) => m.customType === "pi-memory-recall") as { content: Array<{ text: string }> } | undefined;
+			return inj?.content[0]?.text;
+		};
+		return { host, ctx, fireContext, fireTurnStart, fire, recallText };
+	}
+
+	it("MR-04: body-only overlap never qualifies (two-domain gate)", () => {
+		const mem = {
+			file: "x.md", title: "unrelated", description: "completely different topic", type: "project",
+			body: "release flow details inside body", mtimeMs: Date.now(),
+		};
+		// query shares ZERO tokens with title/description, TWO with the body
+		expect(selectForTurn("how does the release flow work", [mem], 0).files).toHaveLength(0);
+	});
+
+	it("MR-04 secondary: 1 primary + ≥2 body hits qualifies; 1+1 does not (npm-publishing anchor)", () => {
+		const anchor = {
+			file: "npm.md", title: "npm-publishing", description: "发版与 NPM Trusted Publishing", type: "reference",
+			body: "发版流程习惯：常用 npm version 手动发版，流程走 CI 验证", mtimeMs: Date.now(),
+		};
+		// 「发版流程」= 3 bigrams; primary=1 (发版), body=3 (发版/版流/流程) → secondary path
+		expect(selectForTurn("发版流程", [anchor], 0).files.map((f) => f.file)).toContain("npm.md");
+		const weak = { ...anchor, body: "发版 note only" };
+		// primary=1, body=1 → below SECONDARY_BODY_MIN → excluded
+		expect(selectForTurn("发版流程", [weak], 0).files).toHaveLength(0);
+	});
+
+	it("MR-01/03/09: pinned re-projection is byte-identical, drift-immune, tail-append only", async () => {
+		writeMemory("alpha.md", "alpha topic", "alpha description");
+		writeMemory("beta.md", "beta topic", "beta description");
+		const h = makeHarness();
+		await h.fire("session_start", {});
+
+		const original = [userMsg("tell me about alpha topic")];
+		const first = await h.fireContext(original);
+		const t1 = h.recallText(first);
+		expect(t1).toContain("alpha topic");
+
+		// MR-09 cache guard ①: original elements preserved by reference, the
+		// injection is the ONLY addition and sits at the tail
+		expect(first).toBeDefined();
+		expect(first!.length).toBe(original.length + 1);
+		for (let i = 0; i < original.length; i++) expect(first![i]).toBe(original[i]);
+		expect((first![first!.length - 1] as { customType?: string }).customType).toBe("pi-memory-recall");
+
+		// drift: same turn, a later request whose trailing "user" text matches
+		// beta (tool-output-shaped garbage) — the pin must win, byte-identically
+		const second = await h.fireContext([
+			userMsg("tell me about alpha topic"),
+			{ role: "user", content: [{ type: "text", text: "beta topic beta topic grep output" }] },
+		]);
+		const t2 = h.recallText(second);
+		expect(t2).toBe(t1); // MR-09 ②: byte-identical re-projection within the turn
+		expect(t2).not.toContain("beta topic");
+	});
+
+	it("MR-01: before_agent_start clears the pin — the new turn re-selects", async () => {
+		writeMemory("alpha.md", "alpha topic", "alpha description");
+		writeMemory("beta.md", "beta topic", "beta description");
+		const h = makeHarness();
+		await h.fire("session_start", {});
+
+		const first = await h.fireContext([userMsg("tell me about alpha topic")]);
+		expect(h.recallText(first)).toContain("alpha topic");
+
+		await h.fireTurnStart();
+		const second = await h.fireContext([userMsg("now about beta topic")]);
+		expect(h.recallText(second)).toContain("beta topic");
+		expect(h.recallText(second)).not.toContain("alpha topic");
+	});
+
+	it("MR-01: an empty selection is pinned for the rest of the turn", async () => {
+		writeMemory("alpha.md", "alpha topic", "alpha description");
+		const h = makeHarness();
+		await h.fire("session_start", {});
+
+		expect(await h.fireContext([userMsg("completely unrelated question xyzzy")])).toBeUndefined();
+		// a later request in the SAME turn that would match must NOT re-select
+		expect(await h.fireContext([userMsg("tell me about alpha topic")])).toBeUndefined();
+		// a new turn selects fresh
+		await h.fireTurnStart();
+		const fresh = await h.fireContext([userMsg("tell me about alpha topic")]);
+		expect(h.recallText(fresh)).toContain("alpha topic");
+	});
+
+	it("MR-05: a paid file stays re-projectable in later turns (billing-only dedup)", async () => {
+		writeMemory("alpha.md", "alpha topic", "alpha description");
+		const h = makeHarness();
+		await h.fire("session_start", {});
+
+		const t1 = await h.fireContext([userMsg("tell me about alpha topic")]);
+		expect(h.recallText(t1)).toContain("alpha topic");
+		await h.fireTurnStart();
+		const t2 = await h.fireContext([userMsg("tell me about alpha topic")]);
+		expect(h.recallText(t2)).toContain("alpha topic"); // NOT suppressed by surfacedKeys
+	});
+
+	it("MR-05: pre-paid files don't consume remaining budget (isPrePaid)", () => {
+		const paid = { file: "paid.md", title: "alpha topic", description: "alpha", type: "project", body: "x".repeat(3000), mtimeMs: 1 };
+		const other = { file: "other.md", title: "alpha topic two", description: "alpha", type: "project", body: "y".repeat(3000), mtimeMs: 2 };
+		const budget = { maxFiles: 5, perFileBytes: 4096, sessionBytes: 4000 };
+		// remaining = 500: an unpaid 3000-byte file does not fit…
+		expect(selectForTurn("alpha topic", [other], 3500, budget).files).toHaveLength(0);
+		// …but the same file pre-paid is selected without consuming remaining
+		expect(selectForTurn("alpha topic", [paid], 3500, budget, (m) => m.file === "paid.md").files.map((f) => f.file)).toEqual(["paid.md"]);
+	});
+
+	it("MR-05 billing guard: cross-turn re-injection never re-charges the budget", async () => {
+		// ~2KB block × 40 turns: a per-request-billing regression would exhaust
+		// the 60KB cap after ~30 turns and stop injecting; once-per-file billing
+		// (surfacedKeys) keeps the block visible in EVERY turn
+		writeMemory("paid.md", "alpha topic", "alpha description", "project", "x".repeat(2000));
+		const h = makeHarness();
+		await h.fire("session_start", {});
+		const ask = () => h.fireContext([userMsg("tell me about alpha topic")]);
+		expect(h.recallText(await ask())).toContain("alpha topic");
+		for (let i = 0; i < 39; i++) {
+			await h.fireTurnStart();
+			await ask();
+		}
+		await h.fireTurnStart();
+		expect(h.recallText(await ask())).toContain("alpha topic");
+	});
+
+	it("MR-05: budget exhaustion blocks NEW files but never blinds a paid file (review F4)", async () => {
+		// one paid file + 20 fillers (~3.6KB each) written UPFRONT (the scan
+		// cache is only exercised for pre-existing files here); each filler is
+		// reached by a query unique to it, so the 60KB distinct-file budget
+		// fills turn by turn until a NEW file can no longer enter — while the
+		// already-paid file must stay selectable (v3.2 removed the exhausted
+		// early-return that blinded exactly the pre-paid files)
+		writeMemory("paid0.md", "alpha zero topic", "paid description", "project", "p".repeat(3600));
+		for (let i = 1; i <= 20; i++) {
+			// unique per-file tokens (filler${i}/mark${i}) — a shared word would
+			// qualify five files per query via maxFiles and never fill the budget
+			writeMemory(`fill${i}.md`, `filler${i} mark${i}`, `filler${i} description`, "project", "f".repeat(3600));
+		}
+		const h = makeHarness();
+		await h.fire("session_start", {});
+		const t0 = await h.fireContext([userMsg("alpha zero topic please")]);
+		expect(h.recallText(t0)).toContain("alpha zero topic");
+
+		let blockedAt = -1;
+		for (let i = 1; i <= 20; i++) {
+			await h.fireTurnStart();
+			const out = await h.fireContext([userMsg(`filler${i} mark${i} please`)]);
+			if (out === undefined) { blockedAt = i; break; }
+		}
+		expect(blockedAt).toBeGreaterThan(0); // budget full — a NEW file can no longer enter
+		await h.fireTurnStart();
+		const again = await h.fireContext([userMsg("alpha zero topic please")]);
+		expect(h.recallText(again)).toContain("alpha zero topic"); // paid file unaffected
+	});
+
+	it("MR-08/MR-02: read files are excluded until session_compact resets", async () => {
+		writeMemory("alpha.md", "alpha topic", "alpha description");
+		const h = makeHarness();
+		await h.fire("session_start", {});
+
+		const t1 = await h.fireContext([userMsg("tell me about alpha topic")]);
+		expect(h.recallText(t1)).toContain("alpha topic");
+
+		await h.fire("tool_call", { toolName: "read", input: { path: join(memoryDir(), "alpha.md") } });
+		await h.fireTurnStart();
+		expect(await h.fireContext([userMsg("tell me about alpha topic")])).toBeUndefined();
+
+		await h.fire("session_compact", {});
+		await h.fireTurnStart();
+		const t3 = await h.fireContext([userMsg("tell me about alpha topic")]);
+		expect(h.recallText(t3)).toContain("alpha topic");
+	});
+
+	it("MR-09: systemPrompt index injection is byte-stable while the dir is unchanged", async () => {
+		writeMemory("alpha.md", "alpha topic", "alpha description");
+		const h = makeHarness();
+		await h.fire("session_start", {});
+
+		const run = async (): Promise<string | undefined> => {
+			let out: string | undefined;
+			for (const handler of h.host.handlers.get("before_agent_start") ?? []) {
+				const r = (await (handler as (e: unknown, c: unknown) => Promise<{ systemPrompt?: string } | undefined>)({ systemPrompt: "BASE" }, h.ctx)) ?? {};
+				out = r.systemPrompt;
+			}
+			return out;
+		};
+		const a = await run();
+		const b = await run();
+		expect(a).toContain("alpha topic");
+		expect(a).toBe(b); // byte-identical across turns → cache-safe prefix
+	});
+});
+
+describe("MR v3.2 review follow-ups", () => {
+	it("F5: a turn whose first request has no real user text pins the empty decision (image-only turn)", async () => {
+		writeMemory("alpha.md", "alpha topic", "alpha description");
+		const host = setup();
+		const ctx = host.makeCtx({ cwd: project, ui: true });
+		await host.fire("session_start", {}, ctx);
+		const handler = host.handlers.get("context")![0] as (e: unknown, c: unknown) => Promise<{ messages?: Array<Record<string, unknown>> } | undefined>;
+		// image-only user turn: no text blocks → no prompt
+		const first = await handler({ messages: [{ role: "user", content: [{ type: "image", data: "x" }] }] }, ctx);
+		expect(first).toBeUndefined();
+		// later request in the SAME turn now carries matching text — the empty
+		// decision is pinned, selection must NOT run (F5 symmetry)
+		const later = await handler({ messages: [{ role: "user", content: [{ type: "text", text: "tell me about alpha topic" }] }] }, ctx);
+		expect(later).toBeUndefined();
 	});
 });

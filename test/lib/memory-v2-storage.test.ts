@@ -270,7 +270,7 @@ describe("V2 Phase 2 (B5) — exact lane accounting", () => {
 });
 
 describe("V2 Phase 3 (AD1/AD3/AD4) — injection dedupe + policy text", () => {
-	it("AD1: a file surfaced in a prior recall block is never re-injected for the same prompt", async () => {
+	it("AD1 (v2 re-scoped, MR-05): a prior recall block in the list neither becomes the prompt nor suppresses re-injection", async () => {
 		writeMemory("user", "lang.md", "language", "replies language chinese", "user", "所有回复默认中文");
 		const host = setup();
 		const ctx = host.makeCtx({ cwd: project, ui: true });
@@ -281,10 +281,14 @@ describe("V2 Phase 3 (AD1/AD3/AD4) — injection dedupe + policy text", () => {
 		const recall = first.messages!.at(-1) as { customType: string; content: Array<{ text: string }> };
 		expect(recall.customType).toBe("pi-memory-recall");
 		expect(recall.content[0].text).toContain("(user-memory/lang.md)");
-		// second turn: the message list now CONTAINS the prior recall block →
-		// the same file must not be injected again (handler: no injection ⇒ undefined)
-		const second = await handler({ messages: [userMsg, recall] }, ctx);
-		expect(second).toBeUndefined();
+		// new turn (pin cleared); the prior recall block sits in the message
+		// list — v2 semantics: surfaced files are NOT suppressed (billing-only
+		// dedup); the block itself (customType) can never become the query
+		await host.fire("before_agent_start", { systemPrompt: "BASE" }, ctx);
+		const second = (await handler({ messages: [userMsg, recall] }, ctx))!;
+		const again = second.messages!.at(-1) as { customType: string; content: Array<{ text: string }> };
+		expect(again.customType).toBe("pi-memory-recall");
+		expect(again.content[0].text).toContain("(user-memory/lang.md)");
 	});
 
 	it("AD1: a memory file the model read is filtered from selection until compact clears it", async () => {
