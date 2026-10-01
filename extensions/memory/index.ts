@@ -31,6 +31,8 @@ import { coreBus } from "../bus.ts";
 import { reconcileMemoryIndex, scanMemoryDir, scanMemoryDirCached } from "./memdir.ts";
 import { resolveMemoryPaths, sessionsDirFor } from "./paths.ts";
 import { buildPolicyInjection, POLICY_COMPACT } from "./policy.ts";
+import { createRecallSession } from "./recall-session.ts";
+import { renderMemoryDiagnostics } from "./diagnostics.ts";
 import { selectForTurn, freshnessHeader, byteLength, DEFAULT_SELECTION, type SelectableMemory } from "./selection.ts";
 import { guardMemoryWrites } from "./guard.ts";
 import { InjectionGate } from "./yield.ts";
@@ -48,21 +50,12 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 
 	let degradedNotified = false;
 	let memoryDirWritable = true;
-	let sessionBytesUsed = 0;
 	let memorySettings: MemorySettings = { automation: true };
 	const automationState: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0 };
-	// AD1 (OPT-3): memory files the model already read this session — not
-	// re-injected; cleared on compact (CC semantics: compact resets recall)
-	const readMemoryKeys = new Set<string>();
-	// MR-05 (spec 2026-10-01-memory-recall-fix): files already CHARGED to the
-	// session budget this session — billing-only dedup, NEVER projection
-	// suppression (a paid file stays re-projectable in later turns)
-	const surfacedKeys = new Set<string>();
-	// MR-01: the current turn's pinned injection — selection happens once per
-	// turn; every remaining request in the turn re-projects the SAME text
-	// (byte-identical, cache-discipline MR-09). null = nothing pinned yet;
-	// text === null = pinned "selected, nothing to inject".
-	let pinnedTurn: { text: string | null } | null = null;
+	// B8: the per-turn recall state machine (MR-01..09 + AD1) lives in
+	// recall-session.ts — the wiring only scans layers, extracts the query
+	// snapshot and projects the returned text.
+	const recall = createRecallSession();
 
 	function memoryDir(ctx?: { cwd?: string }): string {
 		// anchor on the SESSION cwd (ctx.cwd); process.cwd() is only the
@@ -83,10 +76,7 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_start", (_event, ctx: ExtensionContext) => {
 		try {
-			sessionBytesUsed = 0;
-			readMemoryKeys.clear();
-			surfacedKeys.clear();
-			pinnedTurn = null;
+			recall.compact();
 			gate.probeStatic();
 			memorySettings = loadMemorySettings(join(process.env.HOME ?? home, ".pi", "agent"));
 			automationState.enabled = memorySettings.automation;
@@ -123,17 +113,14 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 		// MR-02: budget + read + billing state reset — compaction rebuilds the
 		// context, so recall starts fresh against the new context (NOT because
 		// "old injections were dropped": projections never entered live context)
-		sessionBytesUsed = 0;
-		readMemoryKeys.clear();
-		surfacedKeys.clear();
-		pinnedTurn = null;
+		recall.compact();
 	});
 
 	pi.on("before_agent_start", (event, ctx: ExtensionContext) => {
 		try {
 			// MR-01 turn boundary: a new agent run = a new user turn → drop the
 			// pin so the first context event of this turn selects fresh
-			pinnedTurn = null;
+			recall.turnStart();
 			const wasYielded = gate.state.yielded;
 			gate.probePrompt(event.systemPrompt ?? "");
 			if (gate.state.yielded !== wasYielded) {
@@ -164,10 +151,6 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 		}
 	});
 
-	/** Canonical recall-block key for a memory file (header form). */
-	const whereKey = (layer: "user" | "project", file: string): string =>
-		layer === "user" ? `user-memory/${file}` : `memory/${file}`;
-
 	/** MR-06/MR-09: the projected injection message. display:false is INERT on
 	 * the projection path — no renderer consumes projections (spec MF-0d
 	 * forensics) — kept for shape consistency with the sendMessage contract. */
@@ -183,31 +166,14 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 			if (gate.state.yielded) return undefined;
 			const messages = event.messages ?? [];
 
-			// MR-01: within the turn, re-project the pinned block verbatim — no
-			// re-selection (which drifted on tool output between requests) and
-			// no re-billing. Projections are request-ephemeral (MF-0a): per-request
-			// re-projection is the ONLY way memory stays visible across a run.
-			if (pinnedTurn) {
-				if (pinnedTurn.text === null) return undefined;
-				return { messages: [...messages, makeInjection(pinnedTurn.text) as never] };
-			}
-
-			// Turn's first request (MR-03): the query snapshot is the LAST real
-			// user message — role=user without customType, so tool results and
-			// injected custom blocks can never become the recall prompt
+			// MR-03: the query snapshot is the LAST real user message —
+			// role=user without customType, so tool results and injected
+			// custom blocks can never become the recall prompt
 			const lastUser = [...messages].reverse().find(
 				(m: { role?: string; customType?: string }) => m.role === "user" && !m.customType,
 			);
 			const prompt = extractUserText(lastUser);
-			if (!prompt) {
-				// MR-03 symmetry (v3.2, review F5): a turn whose first request has
-				// no real user text (e.g. image-only) pins the empty decision,
-				// exactly like an empty selection — both paths must behave alike
-				pinnedTurn = { text: null };
-				return undefined;
-			}
 
-			const dir = memoryDir(ctx);
 			const memories: SelectableMemory[] = [
 				...scanMemoryDirCached(userMemoryDir(ctx)).files.map((f) => ({
 					...f.entry,
@@ -215,7 +181,7 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 					mtimeMs: f.mtimeMs,
 					layer: "user" as const,
 				})),
-				...scanMemoryDirCached(dir).files.map((f) => ({
+				...scanMemoryDirCached(memoryDir(ctx)).files.map((f) => ({
 					...f.entry,
 					body: f.body,
 					mtimeMs: f.mtimeMs,
@@ -223,42 +189,15 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 				})),
 			];
 
-			// MR-08: files read via tool are excluded from selection entirely;
-			// surfaced (paid) files stay selectable — billing-only dedup (MR-05)
-			const fresh = memories.filter((m) => !readMemoryKeys.has(whereKey(m.layer ?? "project", m.file)));
-			const { files } = selectForTurn(
+			// B8: the MR state machine (pin/re-project/select/bill) lives in
+			// recall-session.ts; this wiring extracts the MR-03 query snapshot,
+			// scans the two layers, and projects whatever the session returns.
+			const result = recall.project({
 				prompt,
-				fresh,
-				sessionBytesUsed,
-				DEFAULT_SELECTION,
-				(m) => surfacedKeys.has(whereKey(m.layer ?? "project", m.file)),
-			);
-			if (files.length === 0) {
-				// pin the empty decision too — later requests in this turn must not
-				// re-select against a changed message list either
-				pinnedTurn = { text: null };
-				return undefined;
-			}
-
-			const blocks: string[] = ["<memory-recall>"];
-			for (const file of files) {
-				const header = freshnessHeader(file.mtimeMs);
-				const where = file.layer === "user" ? `user-memory/${file.file}` : `memory/${file.file}`;
-				const block = `## ${file.title} (${where})${header ? `\n${header}` : ""}\n\n${file.body}`;
-				// MR-05 + F7: charge each file ONCE per session, AFTER the block
-				// string exists — a mid-render throw must not mark an uninjected
-				// file as paid
-				const key = whereKey(file.layer ?? "project", file.file);
-				if (!surfacedKeys.has(key)) {
-					surfacedKeys.add(key);
-					sessionBytesUsed += byteLength(block);
-				}
-				blocks.push(block);
-			}
-			blocks.push("</memory-recall>");
-			const text = blocks.join("\n\n");
-			pinnedTurn = { text };
-			return { messages: [...messages, makeInjection(text) as never] };
+				memories,
+			});
+			if (result.text === null) return undefined;
+			return { messages: [...messages, makeInjection(result.text) as never] };
 		} catch {
 			return undefined;
 		}
@@ -273,7 +212,7 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 				const layer = [userMemoryDir(ctx), memoryDir(ctx)] as const;
 				if (layer[0] === input.path.slice(0, layer[0].length) || input.path.startsWith(`${layer[0]}/`) || input.path.startsWith(`${layer[1]}/`)) {
 					const isUser = input.path.startsWith(layer[0]);
-					readMemoryKeys.add(whereKey(isUser ? "user" : "project", input.path.split("/").pop() ?? ""));
+					recall.markRead(isUser ? "user" : "project", input.path.split("/").pop() ?? "");
 				}
 			}
 			// V2-D2: both layers are guarded (project first, then user)
@@ -418,23 +357,22 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 			} catch {
 				/* no index */
 			}
-			const lines = [
-				`user memory: ${udir} — files: ${user.entries.length}, skipped: ${user.skipped}, index: ${userIndexBytes}/${USER_INDEX_MAX} bytes`,
-				`project memory: ${dir} — files: ${entries.length}, skipped: ${skipped}, index: ${indexBytes}/${MEMORY_INDEX_MAX} bytes`,
-				`automation: ${automationState.enabled ? "on" : "off"} — reviews ${automationState.reviews}${automationState.lastReview ? ` (last: ${automationState.lastReview})` : ""}, corrections ${automationState.corrections}${automationState.lastCorrection ? ` (last: ${automationState.lastCorrection})` : ""}, flushes ${automationState.flushes}${automationState.lastFlush ? ` (last: ${automationState.lastFlush})` : ""}, ops applied ${automationState.opsApplied}`,
-				`consolidation: ${consolidation.state.inFlight ? `in-flight (attempt ${consolidation.state.attempts}/2${consolidation.state.lastReason ? `, ${consolidation.state.lastReason}` : ""})` : `idle${consolidation.state.lastReason ? ` (last: ${consolidation.state.lastReason}, attempt ${consolidation.state.attempts}/2)` : ""}`}`,
-				...(automationState.lastError ? [`last automation error: ${automationState.lastError}`] : []),
-				`yielded to hermes: ${gate.state.yielded}${gate.state.detectedBy ? ` (${gate.state.detectedBy})` : ""}`,
-				...(existsSync(join(process.env.HOME ?? home, ".pi", "agent", "pi-hermes-memory", "MEMORY.md")) ||
-				existsSync(join(process.env.HOME ?? home, ".pi", "agent", "pi-hermes-memory", "USER.md"))
-					? ["hermes data found — run /memory-import-hermes to migrate it, then uninstall hermes"]
-					: []),
-				`--- user memories ---`,
-				...user.entries.map((e) => `- [${e.title}](${e.file}) — ${e.description} [${e.type}]`),
-				`--- project memories ---`,
-				...entries.map((e) => `- [${e.title}](${e.file}) — ${e.description} [${e.type}]`),
-			];
-			pi.sendMessage({ customType: "pi-memory-status", content: lines.join("\n"), display: true });
+			const content = renderMemoryDiagnostics({
+				userDir: udir,
+				projectDir: dir,
+				userScan: user,
+				projectScan: { entries, skipped },
+				userIndexBytes,
+				projectIndexBytes: indexBytes,
+				automation: automationState,
+				consolidation: consolidation.state,
+				yielded: { yielded: gate.state.yielded, detectedBy: gate.state.detectedBy },
+				hermesDataFound:
+					existsSync(join(process.env.HOME ?? home, ".pi", "agent", "pi-hermes-memory", "MEMORY.md")) ||
+					existsSync(join(process.env.HOME ?? home, ".pi", "agent", "pi-hermes-memory", "USER.md")),
+			});
+			
+			pi.sendMessage({ customType: "pi-memory-status", content, display: true });
 		},
 	});
 
