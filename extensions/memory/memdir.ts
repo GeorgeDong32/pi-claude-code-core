@@ -12,6 +12,8 @@
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { MEMORY_INDEX_MAX } from "../../lib/context-budget.ts";
+
 export interface MemoryEntry {
 	file: string;
 	title: string;
@@ -115,7 +117,10 @@ export function scanMemoryDir(memoryDir: string): { entries: MemoryEntry[]; skip
 }
 
 export const INDEX_MAX_LINES = 200;
-export const INDEX_MAX_BYTES = 25_000;
+// B2: derived from the single budget authority (lib/context-budget.ts) —
+// the bus contextBudget channel publishes the same number, so a bump can
+// never silently diverge from the actual clamp.
+export const INDEX_MAX_BYTES = MEMORY_INDEX_MAX;
 
 /** A memory file with its content — what per-turn injection consumes. */
 export interface MemoryFile {

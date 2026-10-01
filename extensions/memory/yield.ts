@@ -13,6 +13,7 @@
  */
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { POLICY_MARKER } from "./policy.ts";
 import { join } from "node:path";
 
 export interface YieldState {
@@ -68,7 +69,9 @@ export class InjectionGate {
 	/** First before_agent_start: dynamic prompt-marker probe (idempotent). */
 	probePrompt(systemPrompt: string): YieldState {
 		if (this.state.yielded) return this.state;
-		if (systemPrompt.includes("<memory-policy")) {
+		// B2: the marker constant is owned by policy.ts (the renderer) — this
+		// probe and the policy text can no longer drift apart silently.
+		if (systemPrompt.includes(POLICY_MARKER)) {
 			this.state.yielded = true;
 			this.state.detectedBy = "dynamic-prompt";
 		}

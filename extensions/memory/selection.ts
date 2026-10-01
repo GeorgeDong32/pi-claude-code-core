@@ -62,6 +62,12 @@ const STOPWORDS = new Set([
  * become BIGRAMS — a whole run as one token never matches differently-phrased
  * Chinese (the reason CJK recall was dead), and unigrams carry no signal.
  * Single-CJK-char tokens (the old dead stopwords) are simply never produced.
+ *
+ * Division of labor (B2): THIS engine governs memory-recall qualification
+ * (two-domain matching over memory files). session-recall.ts deliberately
+ * uses naive per-token `includes` AND-matching (grep-style) over session
+ * JSONL — do not "unify" the two: different corpora, different precision
+ * needs (its query tokens come pre-split from the caller).
  */
 export function tokenize(text: string): Set<string> {
 	const out = new Set<string>();

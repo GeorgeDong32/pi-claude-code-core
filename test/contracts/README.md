@@ -15,6 +15,7 @@
 | session entry 类型 `modes` / `pi-goal-{state,focus,event,audit-event}` / `pi-review{,-directive}` | P0-CT-08 | 旧 session 回放兼容 | 磁盘/session 格式永不静默破坏 |
 | 磁盘布局(pm permissions/plan/profiles/config、effort settings 键、goal `.pi/goals`、review `pi-review.json`+runs) | P0-CT-09 | 全部既有用户数据 | 不移除(冻结) |
 | (P1 起)`__piClaudeCodeCore` 快照 + 2 个 core 可写 legacy key 同步 | P1-BUS-05 | CCTUI ≥1.5.0、panel | 各自独立撤除,互不阻塞(P1-BUS-09) |
+| 注：快照的 memory 可选通道（`MemoryPatch`，P3-ME-06）由 memory 模块发布，当前零外部消费方——不独立登记，俟有真实消费方时按本表规约补行（B2 处置） | —（附注 P1-BUS-05） | 无 | 有消费方时补登记 |
 | CCTUI `externalToolOwner` 以 source 子串过滤外部工具;core 不重注册 CCTUI 已注册的任何工具(§3.2 第 6 条,仅记录) | —(豁免登记) | CCTUI externalToolOwner | 无 P0 行为可钉(core 空壳零注册);P1+ 若 core 重注册任何工具,由 CT-07 同款白名单思路另行加钉 |
 
 维护规约:

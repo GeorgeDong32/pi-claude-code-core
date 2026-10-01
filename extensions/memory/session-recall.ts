@@ -176,6 +176,9 @@ export function sessionRecall(options: RecallOptions): RecallResult {
 			if (since !== undefined && (ts === undefined || ts < since)) continue;
 			if (until !== undefined && (ts === undefined || ts > until)) continue;
 			const haystack = text.text.toLowerCase();
+			// naive per-token AND `includes` — grep-style, NOT selection.ts's
+			// tokenize/bigram engine (that one governs memory-recall qualification;
+			// this governs session-history search — see the note there, B2)
 			if (!tokens.every((t) => haystack.includes(t))) continue;
 			result.hits.push({ file, line: number, role: text.role, text: text.text, timestamp: text.timestamp });
 			if (result.hits.length >= limit) break;

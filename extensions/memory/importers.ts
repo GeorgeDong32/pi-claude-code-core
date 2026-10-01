@@ -6,16 +6,12 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { reconcileMemoryIndex } from "./memdir.ts";
+import { reconcileMemoryIndex, slugify } from "./memdir.ts";
 
 export interface ImportReport {
 	copied: number;
 	skipped: number;
 	notes: string[];
-}
-
-function slugify(name: string): string {
-	return name.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "memory";
 }
 
 /** /memory-import-claude: copy ~/.claude/projects/<root>/memory/*.md. */

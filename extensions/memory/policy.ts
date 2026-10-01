@@ -24,7 +24,12 @@ export const USER_INDEX_MAX = 8_000;
 export const PINNED_TOTAL_MAX = 2_000;
 export const PINNED_MAX_FILES = 5;
 
-export const POLICY_COMPACT = `<memory-policy>
+/** Injection-lane marker shared by the policy renderer and the yield
+ * probe (B2): the probe greps for this opening tag fragment in the system
+ * prompt — one constant, both sides, a rename is a compile error. */
+export const POLICY_MARKER = "<memory-policy";
+
+export const POLICY_COMPACT = `${POLICY_MARKER}>
 You have persistent memory in TWO layers. Before answering, scan the memory
 indexes below; when a listed memory is relevant, read the file (its path is
 in the index line) before relying on assumptions.

@@ -4,10 +4,16 @@
  * observationPack: bool }; both default to true when absent. A malformed file
  * degrades to defaults with one warning instead of blocking the load
  * (deliberately unlike upstream SoL-Pi's fail-fast).
+ *
+ * B2: reading goes through lib/settings.ts readJson (invariant 10 — one
+ * JSON reader). Semantics preserved: missing stays silent; malformed /
+ * empty / non-object warn once and degrade; per-field boolean normalization
+ * stays here (the reader is generic, the schema is ours).
  */
-import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+
+import { readJson } from "./settings.ts";
 
 export interface CoreEconomyConfig {
 	readonly actionFusion: boolean;
@@ -27,20 +33,12 @@ export function setCoreEconomyPath(path: string): void {
 }
 
 export function loadCoreEconomy(): CoreEconomyConfig {
-	let raw: string;
-	try {
-		raw = readFileSync(configPath, "utf-8");
-	} catch {
-		return DEFAULT_CORE_ECONOMY;
-	}
-	try {
-		const parsed = JSON.parse(raw) as Partial<CoreEconomyConfig>;
-		return {
-			actionFusion: typeof parsed.actionFusion === "boolean" ? parsed.actionFusion : true,
-			observationPack: typeof parsed.observationPack === "boolean" ? parsed.observationPack : true,
-		};
-	} catch (error) {
-		console.warn(`[core-economy] malformed config ignored (${(error as Error).message}); defaults apply`);
-		return DEFAULT_CORE_ECONOMY;
-	}
+	const parsed = readJson<Partial<CoreEconomyConfig>>(configPath, {}, (reason) => {
+		if (reason === "missing") return; // absent file = defaults, silently (as before)
+		console.warn(`[core-economy] ${reason} config ignored; defaults apply`);
+	});
+	return {
+		actionFusion: typeof parsed.actionFusion === "boolean" ? parsed.actionFusion : true,
+		observationPack: typeof parsed.observationPack === "boolean" ? parsed.observationPack : true,
+	};
 }
