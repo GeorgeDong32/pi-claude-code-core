@@ -211,7 +211,7 @@ export function createActionFusionExtension(options: ActionFusionOptions = {}): 
 			renderResult: (result, resultOptions, theme, context) => baseWrite(context.cwd).renderResult!(result, resultOptions, theme, context),
 		});
 
-		selfCheck();		selfCheck();
+		selfCheck();
 	};
 }
 

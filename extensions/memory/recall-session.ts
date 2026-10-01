@@ -68,7 +68,7 @@ export function createRecallSession(): RecallSession {
 		const blocks: string[] = ["<memory-recall>"];
 		for (const file of files) {
 			const header = freshnessHeader(file.mtimeMs);
-			const where = file.layer === "user" ? `user-memory/${file.file}` : `memory/${file.file}`;
+			const where = whereKey(file.layer ?? "project", file.file);
 			const block = `## ${file.title} (${where})${header ? `\n${header}` : ""}\n\n${file.body}`;
 			// MR-05 + F7: charge each file ONCE per session, AFTER the block
 			// string exists — a mid-render throw must not mark an uninjected

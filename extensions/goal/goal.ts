@@ -108,7 +108,6 @@ import {
 	clearGoalCommandMessage,
 	shouldArmPostCompactReminder,
 	shouldInjectPostCompactReminder,
-	shouldQueueContinuation,
 	validateGoalAbort,
 	validateGoalCompletion,
 	validatePauseGoal,

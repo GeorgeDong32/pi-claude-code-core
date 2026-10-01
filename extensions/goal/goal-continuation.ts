@@ -15,6 +15,7 @@
  *     shouldQueueContinuation (single implementation).
  */
 
+import { shouldQueueContinuation } from "./goal-policy.ts";
 import type { GoalRecord } from "./goal-record.ts";
 
 /** Monolith parity: the idle-retry delay (kept tiny — test-friendly). */
@@ -73,7 +74,9 @@ export function createContinuationLoop(deps: ContinuationDeps, retryMs: number =
 		scheduledFor = null;
 		deps.onDispatch();
 		const goal = deps.getGoal();
-		if (!goal || goal.id !== goalId || goal.status !== "active" || !goal.autoContinue) {
+		// id guard stays local; the active+autoContinue predicate is
+		// goal-policy's shouldQueueContinuation (single implementation).
+		if (!goal || goal.id !== goalId || !shouldQueueContinuation(goal)) {
 			if (queuedFor === goalId) queuedFor = null;
 			return;
 		}
@@ -102,7 +105,7 @@ export function createContinuationLoop(deps: ContinuationDeps, retryMs: number =
 			if (deps.isSubagentChild()) return;
 			if (deps.isDrafting()) return;
 			const goal = deps.getGoal();
-			if (!goal || goal.status !== "active" || !goal.autoContinue) return;
+			if (!goal || !shouldQueueContinuation(goal)) return;
 			const goalId = goal.id;
 			if (!force && (queuedFor === goalId || scheduledFor === goalId)) return;
 			clearTimer();

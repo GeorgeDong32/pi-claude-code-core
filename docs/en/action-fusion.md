@@ -43,7 +43,8 @@ this back.
 |---|---|
 | `index.ts` | Assembly: re-register write/edit, guidance, execution merge |
 | `then-run.ts` | `createThenRunSchema`, `executeMutationThenRun`, exit-shape logic |
-| `file-queue.ts` | `resolveToolPath`, `withFusedFileQueue` (the outer queue) |
+| `tool-path.ts` | `resolveToolPath` + `normalizeToolPath` (path knowledge, arch B6) |
+| `file-queue.ts` | `withFusedFileQueue` (the outer queue) |
 
 ## Tests
 

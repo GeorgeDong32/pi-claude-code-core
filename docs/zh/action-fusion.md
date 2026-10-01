@@ -38,7 +38,8 @@ NVlabs/SoL-Pi(MIT),SPEC FUS-01..11(0.2.0 吸收)
 |---|---|
 | `index.ts` | 装配:重注册 write/edit、指引、执行合并 |
 | `then-run.ts` | `createThenRunSchema`、`executeMutationThenRun`、退出形状逻辑 |
-| `file-queue.ts` | `resolveToolPath`、`withFusedFileQueue`(外层队列) |
+| `tool-path.ts` | `resolveToolPath`、`normalizeToolPath`(路径知识,arch B6) |
+| `file-queue.ts` | `withFusedFileQueue`(外层队列) |
 
 ## 测试
 
