@@ -21,7 +21,6 @@ import {
 import {
 	goalAuditorConfigPath,
 	loadGoalAuditorFileConfig,
-	runGoalCompletionAuditor,
 	saveGoalAuditorFileConfig,
 	type GoalAuditorConfig,
 } from "./goal-auditor.ts";
@@ -116,6 +115,7 @@ import {
 	validateResumeGoal,
 } from "./goal-policy.ts";
 import { createContinuationLoop } from "./goal-continuation.ts";
+import { runCompletionAudit } from "./goal-audit-flow.ts";
 
 const STATE_ENTRY = "pi-goal-state";
 const FOCUS_ENTRY = "pi-goal-focus";
@@ -1735,111 +1735,40 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			const auditTarget = { ...mergeGoalPromptFromDisk(ctx, state.goal), auditAttempts: auditAttemptNo };
 			state.goal = { ...state.goal, auditAttempts: auditAttemptNo };
 			persist(ctx);
-			// Append ledger: completion requested
-			try {
-				appendGoalEvent(ctx, {
-					type: "completion_requested",
-					goalId: auditTarget.id,
-					summary: params.completionSummary,
-					at: nowIso(),
-				});
-			} catch {
-				// Ledger append failure should not block completion
-			}
-			const auditorConfig = loadGoalAuditorFileConfig(ctx.cwd);
-			const auditorLabel = auditorConfig.provider || auditorConfig.model || auditorConfig.thinkingLevel
-				? `${auditorConfig.provider ?? "default"}/${auditorConfig.model ?? "default"}${auditorConfig.thinkingLevel ? `:${auditorConfig.thinkingLevel}` : ""}`
-				: "default";
-			pi.sendMessage<GoalAuditEventDetails>({
-				customType: GOAL_AUDIT_ENTRY,
-				content: [
-					"Auditor: I am starting the independent completion audit.",
-					`Goal id: ${auditTarget.id}`,
-					`Auditor model: ${auditorLabel}`,
-					params.completionSummary?.trim() ? `Completion claim: ${params.completionSummary.trim()}` : undefined,
-				].filter((line): line is string => line !== undefined).join("\n"),
-				display: true,
-				details: { phase: "started", goalId: auditTarget.id, auditor: auditorLabel },
-			});
-			// Append ledger: audit started
-			try {
-				appendGoalEvent(ctx, {
-					type: "audit_started",
-					goalId: auditTarget.id,
-					provider: auditorConfig.provider,
-					model: auditorConfig.model,
-					thinkingLevel: auditorConfig.thinkingLevel,
-					at: nowIso(),
-				});
-			} catch {
-				// Ledger append failure should not block completion
-			}
-			const auditor = await runGoalCompletionAuditor({
+			const outcome = await runCompletionAudit({
 				ctx,
 				goal: auditTarget,
 				completionSummary: params.completionSummary,
-				detailedSummary: detailedSummary(auditTarget),
+				detailedSummaryText: detailedSummary(auditTarget),
 				signal,
+				sendAuditEvent: ({ content, phase, goalId, auditor }) => {
+					pi.sendMessage<GoalAuditEventDetails>({
+						customType: GOAL_AUDIT_ENTRY,
+						content,
+						display: true,
+						details: { phase, goalId, auditor },
+					});
+				},
 			});
-			// Append ledger: audit result
-			const verdict = auditor.approved ? "approved" : auditor.error ? "error" : "disapproved" as const;
-			try {
-				appendGoalEvent(ctx, {
-					type: "audit_result",
-					goalId: auditTarget.id,
-					verdict,
-					report: auditor.output || "Auditor produced no output.",
-					at: nowIso(),
-				});
-			} catch {
-				// Ledger append failure should not block completion
-			}
-			if (!auditor.approved) {
-				const rejectionText = [
-					"Goal audit rejected.",
-					"",
-					"Goal completion rejected by independent auditor.",
-					auditor.model ? `Auditor model: ${auditor.model}${auditor.thinkingLevel ? `:${auditor.thinkingLevel}` : ""}` : undefined,
-					auditor.error ? `Auditor error: ${auditor.error}` : undefined,
-					"",
-					auditor.output || "Auditor produced no approval marker.",
-				].filter((line): line is string => line !== undefined).join("\n");
-				pi.sendMessage<GoalAuditEventDetails>({
-					customType: GOAL_AUDIT_ENTRY,
-					content: rejectionText,
-					display: true,
-					details: { phase: "rejected", goalId: auditTarget.id, auditor: auditor.model },
-				});
+			if (outcome.verdict === "rejected") {
 				return {
-					content: [{ type: "text", text: rejectionText }],
+					content: [{ type: "text", text: outcome.rejectionText }],
 					details: goalDetails(state.goal, "rejected"),
 				};
 			}
-			const approvalText = [
-				"Auditor: I approve this completion claim.",
-				auditor.model ? `Auditor model: ${auditor.model}${auditor.thinkingLevel ? `:${auditor.thinkingLevel}` : ""}` : undefined,
-				"",
-				auditor.output || "Auditor approved completion.",
-			].filter((line): line is string => line !== undefined).join("\n");
 			// Account for any remaining elapsed time first so the compact
-			// "goal achieved" line carries the final usage numbers.
+				// "goal achieved" line carries the final usage numbers.
 			accountProgress(ctx);
 			const finalUsage = state.goal ? { ...state.goal.usage } : null;
-			// In-place audit verdict marker; the summary line below is deferred
-			// to the end of this finishing turn so the model's closing summary
-			// renders first and "Goal achieved" becomes the last line.
-			pi.sendMessage<GoalAuditEventDetails>({
-				customType: GOAL_AUDIT_ENTRY,
-				content: approvalText,
-				display: true,
-				details: { phase: "passed", goalId: auditTarget.id, auditor: auditor.model },
-			});
+			// In-place audit verdict marker was emitted by the flow; the summary
+				// line below is deferred to the end of this finishing turn so the
+				// model's closing summary renders first and "Goal achieved" last.
 			pendingGoalAchievement = {
-				content: approvalText,
+				content: outcome.approvalText,
 				details: {
 					phase: "approved",
-					goalId: auditTarget.id,
-					auditor: auditor.model,
+					goalId: outcome.goalId,
+					auditor: outcome.auditorModel,
 					...(finalUsage
 						? { achievedAt: Date.now(), activeSeconds: finalUsage.activeSeconds, tokensUsed: finalUsage.tokensUsed, auditAttempts: auditAttemptNo }
 						: {}),
