@@ -388,7 +388,7 @@ spec `../specs/design/DESIGN-MEMORY-V2.md`，报告 `../MEMORY-V2-REPORT.md`（�
 - **B3（C4 goal kind 化 + 死代码）✅ commit 66fa7d9**：GoalStateEntry 加可选 kind（5 产生点标注，version 不 bump）；renderGoalResult kind 优先分派 + legacy prefix 回退（孤儿 prefix 留回放）；删 evaluateDraftingToolGate/ToolGateDecision（no-op + 绿测试假信心）；shouldQueueContinuation 收编为唯一实现；三单例入 factory closure；renderGoalResult 导出 + 3 条渲染 pin。三绿。
 - **B4（C6 pi-compat 注入+degrade 收拢）✅ commit 42b5c81**：probePiCompat 未提供探针不再报 problem（obs 纯 version 探测无噪音）；mutationQueue 纯诊断化（FUS-03 死锁实证，移出 problems）；degradeEconomyModule 共享降级尾巴（纯函数收回调）；ActionFusionOptions.version 注入 + assembly economy 块穿线（首个生产性 options）；obs hostExports 同语义；两条自禁用回归 pin（0.85→零注册+真 bus footer）+ pi-compat 3 新用例。三绿。
 - **B5（C2 obs 纯投影）✅ commit bf17a70**：projection.ts 纯投影步骤（store/appendLedger 两端口 + outcome 携带 failOpenReasons/sentinelWarning/counters）；handler 退 thin adapter；sentinel/noSession flags 移出 module scope（ProjectionState 单对象，factory 持有）；invariant 9 显式 pin（非候选引用透传 + 替换项仅 content 变）；6 条直驱 node:test（原需 ~286 行 FakeHost）；sentinel 触发路径勘误（ledger 抛，非 store 抛——store 抛时 eligible 不计数）。CON-03/04 零改动全绿。三绿。
-- B6（C7 fusion outcome 结构化）→ 待
+- **B6（C7 fusion outcome 结构化）✅ commit a22e471**：executeMutationThenRun 在合并 details 上盖 thenRun:succeeded（既有 details 保留）；两处 substring 嗅探改读字段（THEN_RUN_SUCCEEDED 文本逐字不动，FUS-04）；runFused 单点收拢编排+计数，edit/write 注册块缩至差异项；resolveToolPath+normalizeToolPath 搬 tool-path.ts；fused-count.test.ts 经真注册 write 工具端到端 pin 计数（tmpdir+cat，bus fusedCount 恰好一次）。三绿。
 - B7（C3 goal monolith 拆分）→ 待
 - B8（C5 memory RecallSession）→ 待
 - C9（fail-open seam）→ B8 后决定

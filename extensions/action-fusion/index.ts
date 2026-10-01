@@ -22,17 +22,19 @@ import {
 	type EditToolDetails,
 	type EditToolOptions,
 	type ExtensionAPI,
+	type ExtensionContext,
 	type ExtensionFactory,
 	type WriteToolOptions,
 } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { degradeEconomyModule, probePiCompat } from "../../lib/pi-compat.ts";
 import { coreBus } from "../bus.ts";
-import { resolveToolPath, withFusedFileQueue } from "./file-queue.ts";
+import { withFusedFileQueue } from "./file-queue.ts";
+import { resolveToolPath } from "./tool-path.ts";
 import {
 	createThenRunSchema,
 	executeMutationThenRun,
 	type FileQueueFn,
-	THEN_RUN_SUCCEEDED,
 	type ThenRunInput,
 } from "./then-run.ts";
 import { Type } from "typebox";
@@ -141,34 +143,53 @@ export function createActionFusionExtension(options: ActionFusionOptions = {}): 
 		const fusedGuidance = (description: string | undefined): string =>
 			description ? `${description}${TOOL_DESCRIPTION_GUIDANCE}` : TOOL_DESCRIPTION_GUIDANCE.trim();
 
+		// B6: the fused orchestration + outcome counting lives in ONE place;
+		// the two registrations below differ only in base template, parameters,
+		// description and the mutate closure.
+		const runFused = async <D>(args: {
+			toolCallId: string;
+			absolutePath: string;
+			thenRun: ThenRunInput | undefined;
+			signal: AbortSignal | undefined;
+			ctx: ExtensionContext;
+			mutate: () => Promise<AgentToolResult<D>>;
+		}): Promise<AgentToolResult<D>> => {
+			const result = await executeMutationThenRun<D>({
+				toolCallId: args.toolCallId,
+				absolutePath: args.absolutePath,
+				thenRun: args.thenRun,
+				bashOptions: options.bashOptions,
+				signal: args.signal,
+				ctx: args.ctx,
+				queue,
+				mutate: args.mutate,
+			});
+			// B6: count from the structured outcome on the merged details — the
+			// caller no longer sniffs the THEN_RUN_SUCCEEDED protocol token.
+			if (args.thenRun && (result.details as { thenRun?: string } | undefined)?.thenRun === "succeeded") {
+				noteFused();
+			}
+			return result;
+		};
+
 		pi.registerTool<typeof editParameters, EditToolDetails | undefined>({
 			...editTemplate,
 			parameters: editParameters,
 			description: fusedGuidance(editTemplate.description),
 			async execute(toolCallId, input, signal, onUpdate, ctx) {
 				const { then_run, ...editInput } = input as typeof input & { then_run?: ThenRunInput };
-				const result = await executeMutationThenRun({
+				return runFused({
 					toolCallId,
 					absolutePath: resolveToolPath(ctx.cwd, input.path),
 					thenRun: then_run,
-					bashOptions: options.bashOptions,
 					signal,
 					ctx,
-					queue,
 					mutate: () => baseEdit(ctx.cwd).execute(toolCallId, editInput, signal, onUpdate, ctx),
 				});
-				if (
-					then_run &&
-					result.content.some((block) => block.type === "text" && (block as { text: string }).text.includes(THEN_RUN_SUCCEEDED))
-				) {
-					noteFused();
-				}
-				return result;
 			},
 			// FUS-06: pass the built-in renderers through untouched.
 			renderCall: (args, theme, context) => baseEdit(context.cwd).renderCall!(args, theme, context),
-			renderResult: (result, resultOptions, theme, context) =>
-				baseEdit(context.cwd).renderResult!(result, resultOptions, theme, context),
+			renderResult: (result, resultOptions, theme, context) => baseEdit(context.cwd).renderResult!(result, resultOptions, theme, context),
 		});
 
 		pi.registerTool<typeof writeParameters, undefined>({
@@ -177,29 +198,20 @@ export function createActionFusionExtension(options: ActionFusionOptions = {}): 
 			description: fusedGuidance(writeTemplate.description),
 			async execute(toolCallId, input, signal, onUpdate, ctx) {
 				const { then_run, ...writeInput } = input as typeof input & { then_run?: ThenRunInput };
-				const result = await executeMutationThenRun({
+				return runFused({
 					toolCallId,
 					absolutePath: resolveToolPath(ctx.cwd, input.path),
 					thenRun: then_run,
-					bashOptions: options.bashOptions,
 					signal,
 					ctx,
-					queue,
 					mutate: () => baseWrite(ctx.cwd).execute(toolCallId, writeInput, signal, onUpdate, ctx),
 				});
-				if (
-					then_run &&
-					result.content.some((block) => block.type === "text" && (block as { text: string }).text.includes(THEN_RUN_SUCCEEDED))
-				) {
-					noteFused();
-				}
-				return result;
 			},
 			renderCall: (args, theme, context) => baseWrite(context.cwd).renderCall!(args, theme, context),
-			renderResult: (result, resultOptions, theme, context) =>
-				baseWrite(context.cwd).renderResult!(result, resultOptions, theme, context),
+			renderResult: (result, resultOptions, theme, context) => baseWrite(context.cwd).renderResult!(result, resultOptions, theme, context),
 		});
-		selfCheck();
+
+		selfCheck();		selfCheck();
 	};
 }
 

@@ -18,7 +18,8 @@ import {
 	THEN_RUN_SUCCEEDED,
 	type FileQueueFn,
 } from "../then-run.ts";
-import { resolveToolPath, withFusedFileQueue } from "../file-queue.ts";
+import { withFusedFileQueue } from "../file-queue.ts";
+import { resolveToolPath } from "../tool-path.ts";
 
 const passthroughQueue: FileQueueFn = (_path, work) => work();
 
@@ -101,6 +102,32 @@ describe("executeMutationThenRun (FUS-04/10)", () => {
 		assert.ok(textOf(result).startsWith("wrote target.txt"));
 		assert.ok(textOf(result).includes(THEN_RUN_SUCCEEDED));
 		assert.ok(textOf(result).includes("content"));
+		// B6: structured outcome on the merged details — the token stays
+		// model-facing, the field is for callers.
+		assert.equal((result.details as { thenRun?: string } | undefined)?.thenRun, "succeeded");
+	});
+
+	it("stamps thenRun onto EXISTING mutation details without clobbering them (B6)", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "fus-det-"));
+		const file = join(dir, "target.txt");
+		await writeFile(file, "content\n", "utf8");
+		const mutation: AgentToolResult<{ changedFiles: string[] }> = {
+			content: [{ type: "text", text: "wrote target.txt" }],
+			details: { changedFiles: ["target.txt"] },
+		};
+		const result = await executeMutationThenRun({
+			toolCallId: "t3b",
+			absolutePath: file,
+			thenRun: { command: `cat ${file}` },
+			mutate: async () => mutation,
+			bashOptions: undefined,
+			signal: undefined,
+			ctx: fakeCtx(dir),
+			queue: passthroughQueue,
+		});
+		const details = result.details as { changedFiles?: string[]; thenRun?: string };
+		assert.deepEqual(details.changedFiles, ["target.txt"]);
+		assert.equal(details.thenRun, "succeeded");
 	});
 
 	it("THROWS [then_run:failed] carrying the mutation output when the command fails", async () => {

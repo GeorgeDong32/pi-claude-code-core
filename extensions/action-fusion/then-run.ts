@@ -2,7 +2,9 @@
  * Fused mutation + follow-up command execution.
  * Ported from NVlabs/SoL-Pi (MIT) @ src/sol-pi/extensions/action-fusion/then-run.ts
  * (SPEC FUS-04: error semantics kept exactly — skipped/failed THROW, success
- * APPENDS a text block to the mutation result).
+ * APPENDS a text block to the mutation result and stamps the merged details
+ * with thenRun: "succeeded" — the structured outcome callers count from,
+ * B6; the protocol token text stays byte-identical for upstream compat).
  */
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -131,12 +133,20 @@ export async function executeMutationThenRun<TDetails>({
 			if ((bashResult as { isError?: boolean }).isError || /Command exited with code \d+/u.test(output)) {
 				throw new Error(output || "then_run command failed");
 			}
+			// B6: structured outcome on the merged details — callers count fused
+			// calls from this field instead of sniffing the THEN_RUN_SUCCEEDED
+			// protocol token (the token text itself is frozen, FUS-04).
+			const mergedDetails =
+				mutationResult.details === undefined
+					? { thenRun: "succeeded" }
+					: { ...mutationResult.details, thenRun: "succeeded" };
 			return {
 				...mutationResult,
 				content: [
 					...mutationResult.content,
 					{ type: "text", text: output ? `${THEN_RUN_SUCCEEDED}\n${output}` : THEN_RUN_SUCCEEDED },
 				],
+				details: mergedDetails as typeof mutationResult.details,
 			};
 		} catch (error) {
 			const mutationOutput = resultText(mutationResult);

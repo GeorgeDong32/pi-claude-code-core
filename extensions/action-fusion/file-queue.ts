@@ -2,28 +2,13 @@
  * Fallback per-file serialization when the host does not export the official
  * withFileMutationQueue (SPEC FUS-03 adapter #2).
  * Ported from NVlabs/SoL-Pi (MIT) @ src/sol-pi/extensions/action-fusion/file-queue.ts.
+ * B6: path normalization/resolution moved to tool-path.ts — this file is
+ * queue mechanics only.
  */
 import { realpath } from "node:fs/promises";
-import { homedir } from "node:os";
 import { basename, dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 
 const queueTails = new Map<string, Promise<void>>();
-const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/gu;
-
-function normalizeToolPath(filePath: string): string {
-	const normalized = filePath.replace(UNICODE_SPACES, " ");
-	return normalized.startsWith("@") ? normalized.slice(1) : normalized;
-}
-
-export function resolveToolPath(cwd: string, filePath: string): string {
-	const stripped = normalizeToolPath(filePath);
-	// Pi accepts file URLs; the queue and hash guard must use the same target.
-	const expanded = stripped.startsWith("file://") ? fileURLToPath(stripped) : stripped;
-	if (expanded === "~") return homedir();
-	if (expanded.startsWith("~/")) return resolve(homedir(), expanded.slice(2));
-	return resolve(cwd, expanded);
-}
 
 function isMissingPathError(error: unknown): boolean {
 	return (
