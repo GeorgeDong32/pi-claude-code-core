@@ -41,6 +41,9 @@ export interface FakeCtxOptions {
 	/** Session dir/id served by the fake ctx.sessionManager (FAKEHOST-01). */
 	sessionDir?: string;
 	sessionId?: string;
+	/** Overrides ctx.isIdle() (default false). GH-03: goal continuations send
+	 * immediately only when idle — the hijack repro needs an idle ctx. */
+	idle?: boolean;
 }
 
 export const CORE_GLOBAL_KEYS = [
@@ -102,6 +105,8 @@ export class FakeHost {
 	readonly appendEntries: Array<{ type: string; data: unknown }> = [];
 	readonly sentMessages: SentMessage[] = [];
 	readonly userMessages: Array<{ text: string; opts?: unknown }> = [];
+	/** setActiveTools call history (GH-04 assertions). */
+	readonly activeToolsCalls: string[][] = [];
 	readonly notifications: string[] = [];
 	/**
 	 * ToolInfo list merged into getAllTools(); tests may mutate before firing.
@@ -141,7 +146,8 @@ export class FakeHost {
 			model: undefined,
 			modelRegistry: host.piObject().modelRegistry,
 			getContextUsage: () => undefined,
-			isIdle: () => false,
+			isIdle: () => opts.idle ?? false,
+			hasPendingMessages: () => false,
 			isProjectTrusted: () => true,
 			sessionManager: {
 				getBranch: () => opts.sessionEntries ?? [],
@@ -210,7 +216,9 @@ export class FakeHost {
 					...registered.values(),
 				];
 			},
-			setActiveTools() {},
+			setActiveTools(names: string[]) {
+				host.activeToolsCalls.push(names);
+			},
 			getThinkingLevel: () => host.thinkingLevel,
 			setThinkingLevel(level: unknown) {
 				host.thinkingLevel = level as never;

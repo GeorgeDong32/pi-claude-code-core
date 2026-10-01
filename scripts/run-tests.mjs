@@ -17,6 +17,15 @@ import { fileURLToPath } from "node:url";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
+// Test runs model PARENT-session semantics: strip session-coupling env that
+// pi-subagents injects into every child process. Without this, running the
+// suite from inside a subagent (e.g. a dispatched reviewer) false-reds the
+// goal suites and contracts (adversarial review F1, 2026-10-01). Tests that
+// need child semantics set the vars explicitly.
+for (const key of ["PI_SUBAGENT_CHILD", "PI_SUBAGENT_PARENT_SESSION", "PERMISSION_MODES_INHERITED_MODE"]) {
+	delete process.env[key];
+}
+
 const vitestTargets = [join(root, "test", "lib"), join(root, "extensions", "modes")].filter(existsSync);
 const nodeTestDirs = [
 	join(root, "extensions", "effort", "tests"),

@@ -8,5 +8,6 @@ export default defineConfig({
 		globals: true,
 		environment: "node",
 		include: ["test/contracts/**/*.test.ts"],
+		setupFiles: ["test/contracts/env-setup.ts"],
 	},
 });

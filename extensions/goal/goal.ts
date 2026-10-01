@@ -1,6 +1,7 @@
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { notify as uiNotify } from "../ui/notify.ts";
+import { isSubagentChildProcess } from "../modes/permission-forwarding.ts";
 import { coreBus } from "../bus.ts";
 import { Text, visibleWidth } from "@earendil-works/pi-tui";
 import {
@@ -367,12 +368,24 @@ function usageChannelTokens(value: unknown): number {
 	return Math.max(0, Math.trunc(value));
 }
 
+/**
+ * Sum ALL FOUR usage channels of the message's single API request.
+ * Cache-inclusive accounting (DEVIATIONS #69, 2026-10-01): with prompt
+ * caching the non-cached `input` is a tiny fraction of real processing, so
+ * `cacheRead`/`cacheWrite` must count too — otherwise tokensUsed reads as
+ * ~10× under the provider-reported total.
+ */
 function assistantTurnTokens(message: unknown): number {
 	const raw = asRecord(message);
 	if (!raw || raw.role !== "assistant") return 0;
 	const usage = asRecord(raw.usage);
 	if (!usage) return 0;
-	return usageChannelTokens(usage.input) + usageChannelTokens(usage.output);
+	return (
+		usageChannelTokens(usage.input) +
+		usageChannelTokens(usage.output) +
+		usageChannelTokens(usage.cacheRead) +
+		usageChannelTokens(usage.cacheWrite)
+	);
 }
 
 function isMeaningfulProgressToolCall(toolName: string, args: unknown): boolean {
@@ -533,6 +546,11 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	}
 
 	function reconcileFocusedGoalFromDisk(ctx: ExtensionContext, opts: { preserveMemoryUsage?: boolean } = {}): boolean {
+		// GH-02 (continued): children never reconcile from the project's disk
+		// pool. loadState covers session_start; this closes the mid-session
+		// command/tool paths (goal-list, tweak drafting, …) that would otherwise
+		// re-adopt the pool a dispatch task could then focus into state.goal.
+		if (isSubagentChildProcess()) return true;
 		const current = state.goal;
 		const fresh = readActiveGoalPool(ctx);
 		if (!focusedGoalId) {
@@ -809,7 +827,15 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	}
 
 	function loadState(ctx: ExtensionContext): void {
-		goalsById = readActiveGoalPool(ctx);
+		// GH-02 (spec 2026-10-01-goal-hijack-fix): subagent child sessions share
+		// the project cwd — and therefore the disk goal pool. Adopting it here
+		// arms a continuation timer whose <pi_goal_continuation> message occupies
+		// the child's agent loop before the dispatched task prompt can be
+		// delivered ("already processing" spawn failures). Children never
+		// participate in the goal lifecycle. The session-branch reconciliation
+		// below is naturally empty in fresh child sessions and stays as-is.
+		const childSession = isSubagentChildProcess();
+		goalsById = childSession ? new Map<string, GoalRecord>() : readActiveGoalPool(ctx);
 		focusedGoalId = null;
 		let focusEntry: GoalFocusEntry | null = null;
 		let legacyGoal: GoalRecord | null = null;
@@ -955,6 +981,12 @@ export default function goalExtension(pi: ExtensionAPI): void {
 
 
 	function queueContinuation(ctx: ExtensionContext, force = false): void {
+		// GH-03 belt: never arm continuations in subagent child sessions,
+		// regardless of how state.goal came to be set (covers all five call
+		// sites — session_start/compact, armFocusedContinuation, replaceGoal,
+		// tool paths). GH-02 already keeps children goal-less; this defends
+		// any future path that bypasses the adoption guard.
+		if (isSubagentChildProcess()) return;
 		if (confirmationIntent !== null || tweakDraftingFor !== null) return;
 		if (!state.goal || state.goal.status !== "active" || !state.goal.autoContinue) return;
 		const goalId = state.goal.id;
