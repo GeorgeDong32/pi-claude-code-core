@@ -51,6 +51,42 @@ function modelLine(model: string | undefined, thinkingLevel: string | undefined)
 	return model ? `Auditor model: ${model}${thinkingLevel ? `:${thinkingLevel}` : ""}` : undefined;
 }
 
+/**
+ * The approved-audit message held until the finishing turn settles, so
+ * "Goal achieved" lands after the model's closing summary (the adapter's
+ * agent_settled handler flushes it). B7 step 3: this state belongs to the
+ * audit domain — it lived as a bare factory-closure variable before.
+ */
+export interface PendingAchievement {
+	content: string;
+	details: {
+		phase: "approved";
+		goalId: string;
+		auditor?: string;
+		achievedAt?: number;
+		activeSeconds?: number;
+		tokensUsed?: number;
+		auditAttempts?: number;
+	};
+}
+
+export function createPendingAchievementSlot(): { hold(m: PendingAchievement): void; flush(): PendingAchievement | null; peek(): PendingAchievement | null } {
+	let held: PendingAchievement | null = null;
+	return {
+		hold(message) {
+			held = message;
+		},
+		flush() {
+			const message = held;
+			held = null;
+			return message;
+		},
+		peek() {
+			return held;
+		},
+	};
+}
+
 export async function runCompletionAudit(args: CompletionAuditArgs): Promise<CompletionAuditOutcome> {
 	// Append ledger: completion requested
 	try {

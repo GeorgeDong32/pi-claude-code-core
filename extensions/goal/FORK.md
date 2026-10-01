@@ -36,9 +36,12 @@ handoff 2026-09-20 称「npm 最新 0.1.7、本地领先」。**实测(registry.
 
 ## 上游跟进策略(P2-GO-06)
 
-- 季度 diff `capyup/main` vs fork 基线:仅 cherry-pick bugfix(不带 feature)。
-- `.pi/goals/` 磁盘格式上游 break → **停止跟进**(not-doing 续期),fork 自持。
-- cherry-pick 时同步跑 `bun run test`(goal 75)与契约套件;behavior diff 进 PROGRESS。
+> **结构性 fork 自持声明（arch B7，2026-10-02）**：core 侧重构批（B3 kind 字段化、B7 continuation/audit 模块拆分）之后，goal.ts 与上游 capyup/main 的文件映射已断裂——上游 bugfix 无法再干净 cherry-pick 到本树。自本批起放弃「逐字节一致」白名单维护，改为：上游 diff 仅作人工评估参考（同类 bug 在本树独立修复），不再执行机械 cherry-pick。
+
+- 历史条款（0.2.0 前）：季度 diff capyup/main，仅 cherry-pick bugfix——随结构性 fork 自持声明失效。
+- `.pi/goals/` 磁盘格式上游 break → 不再适用（无同步义务）；格式冻结由 P0-CT-09 契约测试独立保障。
+- 行为回归仍由本树测试套件保障（goal 75+ 项 + 新增 continuation/audit-flow 直测）。
+- cherry-pick 时同步跑 `bun run test`（goal 全量）与契约套件;behavior diff 进 PROGRESS。
 
 ## 与 core 的接缝
 

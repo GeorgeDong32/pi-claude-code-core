@@ -115,7 +115,7 @@ import {
 	validateResumeGoal,
 } from "./goal-policy.ts";
 import { createContinuationLoop } from "./goal-continuation.ts";
-import { runCompletionAudit } from "./goal-audit-flow.ts";
+import { createPendingAchievementSlot, runCompletionAudit } from "./goal-audit-flow.ts";
 
 const STATE_ENTRY = "pi-goal-state";
 const FOCUS_ENTRY = "pi-goal-focus";
@@ -420,8 +420,9 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	let tweakDraftingFor: string | null = null;
 	// Approved-audit message held until the finishing turn ends, so "Goal
 	// achieved" lands after the model's closing summary (transcript bottom).
-	let pendingGoalAchievement: { content: string; details: GoalAuditEventDetails } | null = null;
 	let confirmationIntent: GoalConfirmationIntent | null = null;
+	// B7 step 3: the approved-audit hold lives in the audit domain module.
+	const pendingAchievement = createPendingAchievementSlot();
 	const state = {
 		get goal(): GoalRecord | null {
 			return focusedGoalFromPool(goalsById, focusedGoalId);
@@ -1763,7 +1764,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			// In-place audit verdict marker was emitted by the flow; the summary
 				// line below is deferred to the end of this finishing turn so the
 				// model's closing summary renders first and "Goal achieved" last.
-			pendingGoalAchievement = {
+			pendingAchievement.hold({
 				content: outcome.approvalText,
 				details: {
 					phase: "approved",
@@ -1773,7 +1774,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 						? { achievedAt: Date.now(), activeSeconds: finalUsage.activeSeconds, tokensUsed: finalUsage.tokensUsed, auditAttempts: auditAttemptNo }
 						: {}),
 				},
-			};
+			});
 			state.goal = auditTarget;
 			stopActiveGoal("complete", "agent", ctx);
 			const completedGoal = state.goal;
@@ -2203,9 +2204,8 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	// "answered" the marker). One macrotask after agent_settled, isStreaming
 	// is false and the append is display-only.
 	pi.on("agent_settled", async () => {
-		if (!pendingGoalAchievement) return;
-		const held = pendingGoalAchievement;
-		pendingGoalAchievement = null;
+		const held = pendingAchievement.flush();
+		if (!held) return;
 		const t = setTimeout(() => {
 			pi.sendMessage<GoalAuditEventDetails>({ customType: GOAL_AUDIT_ENTRY, ...held, display: true });
 		}, 0);
