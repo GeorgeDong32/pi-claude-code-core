@@ -60,6 +60,7 @@ import {
 	type GoalEventDetails,
 	type GoalEventKind,
 	type GoalRecord,
+	type GoalResultKind,
 	type GoalStateEntry,
 	type GoalStatus,
 	type StopReason,
@@ -108,6 +109,7 @@ import {
 	clearGoalCommandMessage,
 	shouldArmPostCompactReminder,
 	shouldInjectPostCompactReminder,
+	shouldQueueContinuation,
 	validateGoalAbort,
 	validateGoalCompletion,
 	validatePauseGoal,
@@ -136,18 +138,6 @@ const GOAL_PROGRESS_TOOL_SET = new Set<string>(GOAL_PROGRESS_TOOL_NAMES);
 const POST_STOP_ALLOWED_TOOL_SET = new Set<string>(POST_STOP_ALLOWED_TOOLS);
 
 /**
- * When non-null, /goal-tweak drafting is in progress for this goal id and the
- * agent is allowed to call apply_goal_tweak. Cleared after the tweak is applied
- * or when a user-driven turn arrives without a tweak follow-through. This is
- * the schema-level affordance gate that prevents the agent from "tweaking" via
- * arbitrary write/edit calls.
- */
-let tweakDraftingFor: string | null = null;
-// Approved-audit message held until the finishing turn ends, so "Goal
-// achieved" lands after the model's closing summary (bottom of transcript).
-let pendingGoalAchievement: { content: string; details: GoalAuditEventDetails } | null = null;
-
-/**
  * Thin session-local confirmation intent for /goals and /sisyphus.
  * It protects mode consistency and user confirmation without turning drafting
  * into a separate long-running runtime state machine.
@@ -157,7 +147,6 @@ interface GoalConfirmationIntent {
 	originalTopic: string;
 	startedAt: number;
 }
-let confirmationIntent: GoalConfirmationIntent | null = null;
 
 
 // ---------- summaries ----------
@@ -196,17 +185,30 @@ function oneLineSummary(goal: GoalRecord | null): string {
 
 // ---------- entry / render helpers ----------
 
-function goalDetails(goal: GoalRecord | null): GoalStateEntry {
-	return { version: 3, goal: goal ? cloneGoal(goal) : null };
+function goalDetails(goal: GoalRecord | null, kind?: GoalResultKind): GoalStateEntry {
+	// B3: kind is optional — persisted entries from older versions have none
+	// and render via the legacy prefix fallback. Adding a field is additive;
+	// version stays 3 (frozen entry shape, invariant 7).
+	return { version: 3, ...(kind ? { kind } : {}), goal: goal ? cloneGoal(goal) : null };
 }
 
-function renderGoalResult(result: { details?: unknown; content: Array<{ type: string; text?: string }> }, theme: Theme): Text {
+/** Exported for tests (same pattern as renderGoalEvent/renderGoalAuditEvent). */
+export function renderGoalResult(result: { details?: unknown; content: Array<{ type: string; text?: string }> }, theme: Theme): Text {
 	const first = result.content.find((item) => item.type === "text" && typeof item.text === "string");
 	const firstText = first?.text ?? "";
 	const details = result.details as GoalStateEntry | undefined;
 	if (!details || typeof details !== "object" || !("goal" in details)) {
 		return new Text(firstText, 0, 0);
 	}
+	// B3: structured classification wins — a kind means "show the text as-is"
+	// (info lines: created ack / audit rejection / completion / pause / abort).
+	// Wording changes can no longer silently flip the render branch.
+	if (details.kind !== undefined) {
+		return new Text(firstText, 0, 0);
+	}
+	// Legacy fallback (deprecated, replay-only): entries persisted before the
+	// kind field existed. Includes the orphaned "Goal confirmed and created."
+	// prefix an older build once emitted — keep it so old sessions replay.
 	if (
 		firstText.startsWith("Goal audit ")
 		|| firstText.startsWith("Goal completion rejected")
@@ -406,6 +408,19 @@ function isMeaningfulProgressToolCall(toolName: string, args: unknown): boolean 
 export default function goalExtension(pi: ExtensionAPI): void {
 	let goalsById = new Map<string, GoalRecord>();
 	let focusedGoalId: string | null = null;
+	// B3: the three session-local singletons live INSIDE the factory now —
+	// the module previously kept them at file scope, which made the real
+	// interface of goalExtension() larger than its signature and leaked state
+	// across factory invocations (test isolation).
+	// When non-null, /goal-tweak drafting is in progress for this goal id and
+	// the agent is allowed to call apply_goal_tweak. Cleared after the tweak
+	// is applied or when a user-driven turn arrives without a follow-through
+	// (schema-level affordance gate against "tweaking" via arbitrary writes).
+	let tweakDraftingFor: string | null = null;
+	// Approved-audit message held until the finishing turn ends, so "Goal
+	// achieved" lands after the model's closing summary (transcript bottom).
+	let pendingGoalAchievement: { content: string; details: GoalAuditEventDetails } | null = null;
+	let confirmationIntent: GoalConfirmationIntent | null = null;
 	const state = {
 		get goal(): GoalRecord | null {
 			return focusedGoalFromPool(goalsById, focusedGoalId);
@@ -988,8 +1003,12 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		// any future path that bypasses the adoption guard.
 		if (isSubagentChildProcess()) return;
 		if (confirmationIntent !== null || tweakDraftingFor !== null) return;
-		if (!state.goal || state.goal.status !== "active" || !state.goal.autoContinue) return;
-		const goalId = state.goal.id;
+		// B3: the loop predicate lives in goal-policy (single implementation,
+		// pinned by its own tests) — the inline copy is gone. Local binding keeps
+		// the narrowing the inline version used to provide.
+		const goal = state.goal;
+		if (!goal || !shouldQueueContinuation(goal)) return;
+		const goalId = goal.id;
 		if (!force && (continuationQueuedFor === goalId || continuationScheduledFor === goalId)) return;
 		clearContinuationTimer();
 		let delay = CONTINUATION_IDLE_RETRY_MS;
@@ -1703,7 +1722,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				syncGoalTools();
 				return {
 					content: [{ type: "text", text: buildGoalCreatedReport({ objective, detailedSummary: detailedSummary(state.goal), autoContinue: state.goal?.autoContinue, sisyphus: state.goal?.sisyphus }) }],
-					details: goalDetails(state.goal),
+					details: goalDetails(state.goal, "created"),
 					terminate: true,
 				};
 			}
@@ -1837,7 +1856,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				});
 				return {
 					content: [{ type: "text", text: rejectionText }],
-					details: goalDetails(state.goal),
+					details: goalDetails(state.goal, "rejected"),
 				};
 			}
 			const approvalText = [
@@ -1902,7 +1921,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 						completionSummary: params.completionSummary,
 					}),
 				}],
-				details: goalDetails(completedGoal),
+				details: goalDetails(completedGoal, "complete"),
 				terminate: true,
 			};
 		},
@@ -1966,7 +1985,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 					type: "text",
 					text: `Goal paused. Reason: ${reason}${suggested ? `\nSuggested: ${suggested}` : ""}\nWaiting for user to /goal-resume, /goal-tweak, or /goal-clear. Stop now; do not start another tool call.`,
 				}],
-				details: goalDetails(state.goal),
+				details: goalDetails(state.goal, "paused"),
 				terminate: true,
 			};
 		},
@@ -2038,7 +2057,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 					type: "text",
 					text: `Goal aborted. Reason: ${reason}${archiveLine}\nThe goal has been archived and cleared. Stop now; do not start another tool call.`,
 				}],
-				details: goalDetails(state.goal),
+				details: goalDetails(state.goal, "aborted"),
 				terminate: true,
 			};
 		},

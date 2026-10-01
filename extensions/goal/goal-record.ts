@@ -28,8 +28,15 @@ export interface GoalRecord {
 	pauseSuggestedAction?: string;
 }
 
+/** B3: structured render classification for goal tool results. When
+ * present the renderer shows the result text verbatim; entries persisted
+ * by older versions lack it and fall back to the legacy prefix match. */
+export type GoalResultKind = "created" | "rejected" | "complete" | "paused" | "aborted";
+
 export interface GoalStateEntry {
 	version: 3;
+	/** B3: optional render classification — additive, no version bump. */
+	kind?: GoalResultKind;
 	goal: GoalRecord | null;
 }
 

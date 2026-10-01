@@ -18,10 +18,6 @@ export type DraftProposalValidation =
 	| { ok: true; objective: string; expectedSisyphus: boolean }
 	| { ok: false; message: string; clearDrafting?: boolean };
 
-export type ToolGateDecision =
-	| { block: false }
-	| { block: true; reason: string };
-
 export function promptSafeObjective(objective: string): string {
 	return objective.replace(/<\/?untrusted_objective>/gi, (tag) => tag.replace(/</g, "&lt;").replace(/>/g, "&gt;"));
 }
@@ -48,21 +44,6 @@ export function buildDraftConfirmationText(args: {
 	lines.push("");
 	lines.push(args.objective);
 	return lines.join("\n");
-}
-
-export function evaluateDraftingToolGate(args: {
-	toolName: string;
-	draftingFocus?: GoalDraftingFocus | null;
-	tweakDraftingGoalId?: string | null;
-	activeGoalId?: string | null;
-	proposeToolName?: string;
-	tweakApplyToolName?: string;
-	getGoalToolName?: string;
-}): ToolGateDecision {
-	// Goal confirmation is prompt-guided, not runtime-enforced. The agent should
-	// avoid substantive work before confirmation, but minimal reconnaissance is allowed.
-	void args;
-	return { block: false };
 }
 
 export function validateGoalDraftProposal(input: DraftProposalInput): DraftProposalValidation {

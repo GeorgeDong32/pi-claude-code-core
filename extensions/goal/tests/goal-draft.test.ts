@@ -3,7 +3,6 @@ import test from "node:test";
 
 import {
 	buildDraftConfirmationText,
-	evaluateDraftingToolGate,
 	goalDraftingPrompt,
 	promptSafeObjective,
 	validateGoalDraftProposal,
@@ -148,20 +147,6 @@ test("goalDraftingPrompt describes lightweight confirmation for normal and Sisyp
 	assert.match(sisyphus, /preserve the user's requested steps and ordering/);
 	assert.match(sisyphus, /do not add preflight or reconnaissance steps/);
 	assert.doesNotMatch(sisyphus, /step-count gate/);
-});
-
-test("evaluateDraftingToolGate is a no-op after confirmation soft gate relaxation", () => {
-	assert.deepEqual(evaluateDraftingToolGate({ toolName: "goal_question", draftingFocus: "goal" }), { block: false });
-	assert.deepEqual(evaluateDraftingToolGate({ toolName: "questionnaire", draftingFocus: "goal" }), { block: false });
-	assert.deepEqual(evaluateDraftingToolGate({ toolName: "get_goal", draftingFocus: "sisyphus" }), { block: false });
-	assert.deepEqual(evaluateDraftingToolGate({ toolName: "propose_goal_draft", draftingFocus: "sisyphus" }), { block: false });
-	assert.deepEqual(evaluateDraftingToolGate({ toolName: "bash", draftingFocus: "goal" }), { block: false });
-	assert.deepEqual(evaluateDraftingToolGate({ toolName: "read", draftingFocus: "goal" }), { block: false });
-
-	assert.deepEqual(evaluateDraftingToolGate({ toolName: "goal_question", tweakDraftingGoalId: "g1", activeGoalId: "g1" }), { block: false });
-	assert.deepEqual(evaluateDraftingToolGate({ toolName: "apply_goal_tweak", tweakDraftingGoalId: "g1", activeGoalId: "g1" }), { block: false });
-	assert.deepEqual(evaluateDraftingToolGate({ toolName: "write", tweakDraftingGoalId: "g1", activeGoalId: "g2" }), { block: false });
-	assert.deepEqual(evaluateDraftingToolGate({ toolName: "write", tweakDraftingGoalId: "g1", activeGoalId: "g1" }), { block: false });
 });
 
 test("promptSafeObjective escapes only untrusted objective tags", () => {

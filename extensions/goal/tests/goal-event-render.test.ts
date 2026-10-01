@@ -107,3 +107,35 @@ test("collapsed passed renders the in-place pass marker", () => {
 	const out = renderGoalAuditEvent(auditDetails({ phase: "passed" }), { expanded: false }, theme);
 	assert.equal(textOf(out), "\uf41d  Goal Audit pass");
 });
+
+// ---------- renderGoalResult (B3 structured kind) ----------
+
+import { renderGoalResult } from "../goal.ts";
+import type { GoalRecord, GoalStateEntry } from "../goal-record.ts";
+
+function stateDetails(kind: GoalStateEntry["kind"], goal: GoalRecord | null): { details: GoalStateEntry; content: Array<{ type: string; text: string }> } {
+	return {
+		details: { version: 3, ...(kind ? { kind } : {}), goal },
+		content: [{ type: "text", text: "Goal paused. Reason: user asked." }],
+	};
+}
+
+test("a result with kind renders its text verbatim — wording cannot flip the branch", () => {
+	const out = renderGoalResult(stateDetails("paused", null), theme);
+	assert.equal(textOf(out), "Goal paused. Reason: user asked.");
+});
+
+test("a result without kind falls back to the legacy prefix match", () => {
+	const out = renderGoalResult(stateDetails(undefined, null), theme);
+	assert.equal(textOf(out), "Goal paused. Reason: user asked.");
+});
+
+test("unclassified text without kind renders the one-line goal summary", () => {
+	const goal = { id: "g1", status: "active", autoContinue: true, objective: "ship it", usage: { activeSeconds: 0, tokensUsed: 0 } } as unknown as GoalRecord;
+	const out = renderGoalResult(
+		{ details: { version: 3, goal }, content: [{ type: "text", text: "create_goal REJECTED: direct agent creation is disabled." }] },
+		theme,
+	);
+	assert.match(textOf(out), /^Goal /);
+	assert.doesNotMatch(textOf(out), /REJECTED/);
+});
