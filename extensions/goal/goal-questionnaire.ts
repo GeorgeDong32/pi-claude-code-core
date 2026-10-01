@@ -5,6 +5,14 @@ import { Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth, visib
 
 import { truncateText } from "./goal-core.ts";
 import { QUESTIONNAIRE_TOOL_NAME, QUESTION_TOOL_NAME } from "./goal-tool-names.ts";
+import {
+	availableDialogHeight,
+	clampScrollOffset,
+	optionWindow,
+	pickTerminalHeight,
+	planDialogLayout,
+	scrollStep,
+} from "./questionnaire-layout.ts";
 import type { GoalDraftingFocus } from "./goal-draft.ts";
 
 export interface GoalQuestionnaireQuestion {
@@ -98,6 +106,15 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 		let inputMode = false;
 		let inputQuestionId: string | null = null;
 		let cachedLines: string[] | undefined;
+		// GDS-02: the render cache is keyed by width × height so a terminal
+		// resize re-lays-out even when the width is unchanged.
+		let cachedWidth = -1;
+		let cachedHeight = -1;
+		// Scroll state (GDS-02/GDS-03): body offset plus the geometry captured
+		// by the last render, so key handling can compute half/full pages.
+		let scrollOffset = 0;
+		let lastViewport = 0;
+		let lastBodyCount = 0;
 		const answers = new Map<string, GoalQuestionnaireAnswer>();
 		const drafts = new Map<string, string>();
 
@@ -112,6 +129,16 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 			},
 		};
 		const editor = new Editor(tui, editorTheme);
+
+		// GDS-04 with silent degradation: if a theme key is missing, render
+		// the unstyled text instead of throwing inside render().
+		const safeBg = (key: string, s: string): string => {
+			try {
+				return theme.bg(key, s);
+			} catch {
+				return s;
+			}
+		};
 
 		function refresh() {
 			cachedLines = undefined;
@@ -140,6 +167,7 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 		}
 
 		function enterQuestion(q: GoalQuestionnaireQuestion) {
+			scrollOffset = 0; // tab/answer change resets the body scroll (spec §2.3)
 			const existing = answers.get(q.id);
 			const draft = drafts.get(q.id);
 			if (q.options.length === 0) {
@@ -163,6 +191,7 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 			}
 			if (currentTab < questions.length - 1) currentTab++;
 			else currentTab = questions.length;
+			scrollOffset = 0;
 			const nextQ = currentQuestion();
 			if (nextQ) enterQuestion(nextQ);
 			else optionIndex = 0;
@@ -190,6 +219,7 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 		};
 
 		function exitEditor() {
+			scrollOffset = 0; // leaving the editor changes the pinned footer
 			if (inputQuestionId) {
 				const text = editor.getText();
 				if (text.trim()) drafts.set(inputQuestionId, text);
@@ -216,6 +246,7 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 				if (isMulti && (matchesKey(data, Key.tab) || matchesKey(data, Key.shift("tab")))) {
 					exitEditor();
 					currentTab = matchesKey(data, Key.tab) ? (currentTab + 1) % totalTabs : (currentTab - 1 + totalTabs) % totalTabs;
+					scrollOffset = 0;
 					const nextQ = currentQuestion();
 					if (nextQ) enterQuestion(nextQ);
 					else optionIndex = 0;
@@ -227,12 +258,34 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 				return;
 			}
 
+			// Scroll routing (GDS-03): FIRST, ahead of the multi-tab navigation
+			// and the submit-tab branch — selection mode only. The inputMode
+			// branch above already returned, so the editor keeps ctrl+u/ctrl+d.
+			if (
+				matchesKey(data, Key.pageUp) || matchesKey(data, Key.pageDown) ||
+				matchesKey(data, Key.ctrl("u")) || matchesKey(data, Key.ctrl("d"))
+			) {
+				const up = matchesKey(data, Key.pageUp) || matchesKey(data, Key.ctrl("u"));
+				const page = matchesKey(data, Key.pageUp) || matchesKey(data, Key.pageDown);
+				const next = clampScrollOffset(
+					scrollOffset + (up ? -1 : 1) * scrollStep(lastViewport, page ? "page" : "half"),
+					lastBodyCount,
+					lastViewport,
+				);
+				if (next !== scrollOffset) {
+					scrollOffset = next;
+					refresh();
+				}
+				return;
+			}
+
 			const q = currentQuestion();
 			const opts = displayOptions();
 
 			if (isMulti) {
 				if (matchesKey(data, Key.tab) || matchesKey(data, Key.right)) {
 					currentTab = (currentTab + 1) % totalTabs;
+					scrollOffset = 0;
 					const nextQ = currentQuestion();
 					if (nextQ) enterQuestion(nextQ);
 					else optionIndex = 0;
@@ -241,6 +294,7 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 				}
 				if (matchesKey(data, Key.shift("tab")) || matchesKey(data, Key.left)) {
 					currentTab = (currentTab - 1 + totalTabs) % totalTabs;
+					scrollOffset = 0;
 					const nextQ = currentQuestion();
 					if (nextQ) enterQuestion(nextQ);
 					else optionIndex = 0;
@@ -269,6 +323,7 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 			if (matchesKey(data, Key.enter) && q) {
 				if (q.options.length === 0 || opts[optionIndex]?.isCustom) {
 					inputMode = true;
+					scrollOffset = 0;
 					inputQuestionId = q.id;
 					const draft = drafts.get(q.id);
 					const existing = answers.get(q.id);
@@ -288,18 +343,49 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 		}
 
 		function render(width: number): string[] {
-			if (cachedLines) return cachedLines;
+			// GDS-02: the cache is keyed by width × height; scrolling walks the
+			// existing refresh() path (cache cleared + requestRender). Height
+			// comes from the GDS-05 chain: tui.terminal.rows, then
+			// process.stdout.rows, then the 24-row default.
+			const height = availableDialogHeight(pickTerminalHeight([
+				(tui as { terminal?: { rows?: number } } | null | undefined)?.terminal?.rows,
+				typeof process !== "undefined" ? process.stdout?.rows : undefined,
+			]));
+			if (cachedLines && cachedWidth === width && cachedHeight === height) return cachedLines;
+			try {
+				const lines = computeLines(width, height);
+				cachedWidth = width;
+				cachedHeight = height;
+				cachedLines = lines;
+				return lines;
+			} catch {
+				// render() must never throw (pi's render stack cannot catch);
+				// degrade silently to the last good frame.
+				return cachedLines ?? [];
+			}
+		}
+
+		function computeLines(width: number, height: number): string[] {
 			const safeWidth = Math.max(20, width);
-			const lines: string[] = [];
 			const q = currentQuestion();
 			const opts = displayOptions();
-			const add = (s: string) => lines.push(truncateToWidth(s, safeWidth, "…", true));
+			// GDS-01 sections: pinned header (separator + tab bar + question),
+			// scrollable body (context / answer summary), pinned footer
+			// (option window + key hints + separator). Concatenating the three
+			// without slicing reproduces the legacy flat layout byte for byte.
+			const header: string[] = [];
+			const body: string[] = [];
+			const footer: string[] = [];
+			const addTo = (target: string[]) => (s: string) => target.push(truncateToWidth(s, safeWidth, "…", true));
 			// Indented wrap: continuation lines (and every line of multi-line
 			// context) keep the indent instead of flushing to column 0.
-			const addWrapped = (s: string, indent = " ") =>
-				lines.push(...wrapTextWithAnsi(s, safeWidth - visibleWidth(indent)).map((line) => indent + line));
+			const wrapTo = (target: string[]) => (s: string, indent = " ") =>
+				target.push(...wrapTextWithAnsi(s, safeWidth - visibleWidth(indent)).map((line) => indent + line));
+			const addH = addTo(header);
+			const addB = addTo(body);
+			const addF = addTo(footer);
 
-			add(theme.fg("accent", "─".repeat(safeWidth)));
+			addH(theme.fg("accent", "─".repeat(safeWidth)));
 			if (isMulti) {
 				const tabs: string[] = ["← "];
 				for (let i = 0; i < questions.length; i++) {
@@ -312,56 +398,77 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 				const submitText = " ✓ Submit ";
 				tabs.push(currentTab === questions.length ? theme.bg("selectedBg", theme.fg("text", submitText)) : theme.fg(allAnswered() ? "success" : "dim", submitText));
 				tabs.push(" →");
-				add(` ${tabs.join("")}`);
-				lines.push("");
+				addH(` ${tabs.join("")}`);
+				header.push("");
 			}
 
-			function renderOptions() {
-				for (let i = 0; i < opts.length; i++) {
+			// GDS-04: the selected row gets a selectedBg background; the footer
+			// shows at most MAX_OPTION_WINDOW rows, with the hidden count
+			// reported for the hint line's "(+N more)" note.
+			function renderOptions(target: string[]): number {
+				const win = optionWindow(opts.length, optionIndex);
+				for (let i = win.start; i < win.start + win.shown; i++) {
 					const opt = opts[i];
 					const selected = i === optionIndex;
-					const prefix = selected ? theme.fg("accent", "> ") : "  ";
 					const recTag = !opt.isCustom && q?.recommended === i ? theme.fg("success", " ★") : "";
-					add(prefix + theme.fg(selected ? "accent" : "text", `${i + 1}. ${opt.label}`) + recTag);
+					const row = selected
+						? safeBg("selectedBg", theme.fg("text", ` ❯ ${i + 1}. ${opt.label} `))
+						: "  " + theme.fg("text", `${i + 1}. ${opt.label}`);
+					addTo(target)(row + recTag);
 				}
+				return win.hidden;
 			}
 
+			let hiddenOptions = 0;
 			if (inputMode && q) {
-				addWrapped(theme.fg("text", q.question));
-				if (q.context) addWrapped(theme.fg("muted", q.context));
-				lines.push("");
+				wrapTo(header)(theme.fg("text", q.question));
+				if (q.context) wrapTo(body)(theme.fg("muted", q.context));
+				footer.push("");
 				if (q.options.length > 0) {
-					renderOptions();
-					lines.push("");
+					hiddenOptions = renderOptions(footer);
+					footer.push("");
 				}
-				add(theme.fg("muted", " Your answer:"));
-				for (const line of editor.render(safeWidth - 2)) add(` ${line}`);
-				lines.push("");
-				add(theme.fg("dim", " Enter to submit • Esc to cancel"));
+				addF(theme.fg("muted", " Your answer:"));
+				for (const line of editor.render(safeWidth - 2)) addF(` ${line}`);
+				footer.push("");
+				addF(theme.fg("dim", " Enter to submit • Esc to cancel" + (hiddenOptions > 0 ? ` (+${hiddenOptions} more)` : "")));
 			} else if (currentTab === questions.length) {
-				add(theme.fg("accent", theme.bold(" Ready to submit")));
-				lines.push("");
+				addH(theme.fg("accent", theme.bold(" Ready to submit")));
+				header.push("");
 				for (const question of questions) {
 					const answer = answers.get(question.id);
-					add(`${theme.fg("muted", ` ${question.id}: `)}${answer ? theme.fg("text", `${answer.wasCustom ? "(wrote) " : ""}${answer.answer}`) : theme.fg("warning", "(unanswered)")}`);
+					addB(`${theme.fg("muted", ` ${question.id}: `)}${answer ? theme.fg("text", `${answer.wasCustom ? "(wrote) " : ""}${answer.answer}`) : theme.fg("warning", "(unanswered)")}`);
 				}
-				lines.push("");
-				add(allAnswered() ? theme.fg("success", " Press Enter to submit") : theme.fg("warning", ` Unanswered: ${questions.filter((qq) => !answers.has(qq.id)).map((qq) => qq.id).join(", ")}`));
+				footer.push("");
+				addF(allAnswered() ? theme.fg("success", " Press Enter to submit") : theme.fg("warning", ` Unanswered: ${questions.filter((qq) => !answers.has(qq.id)).map((qq) => qq.id).join(", ")}`));
 			} else if (q) {
-				addWrapped(theme.fg("text", q.question));
-				if (q.context) addWrapped(theme.fg("muted", q.context));
+				wrapTo(header)(theme.fg("text", q.question));
+				if (q.context) wrapTo(body)(theme.fg("muted", q.context));
 				const existing = answers.get(q.id);
-				if (existing) add(theme.fg("dim", ` Current: ${existing.wasCustom ? "(wrote) " : ""}${existing.answer}`));
-				lines.push("");
-				if (opts.length > 0) renderOptions();
-				else add(theme.fg("muted", " Press Enter to write your answer"));
+				if (existing) addB(theme.fg("dim", ` Current: ${existing.wasCustom ? "(wrote) " : ""}${existing.answer}`));
+				footer.push("");
+				if (opts.length > 0) hiddenOptions = renderOptions(footer);
+				else addF(theme.fg("muted", " Press Enter to write your answer"));
 			}
 
-			lines.push("");
-			if (!inputMode) add(theme.fg("dim", isMulti ? " Tab/←→ navigate • ↑↓ select • Enter confirm • Esc cancel" : " ↑↓ navigate • Enter select • Esc cancel"));
-			add(theme.fg("accent", "─".repeat(safeWidth)));
-			cachedLines = lines;
-			return lines;
+			footer.push("");
+			if (!inputMode) {
+				let hint = theme.fg("dim", isMulti ? " Tab/←→ navigate • ↑↓ select • Enter confirm • Esc cancel" : " ↑↓ navigate • Enter select • Esc cancel");
+				if (hiddenOptions > 0) hint += ` (+${hiddenOptions} more)`;
+				addF(hint);
+			}
+			addF(theme.fg("accent", "─".repeat(safeWidth)));
+
+			const plan = planDialogLayout({ header, body, footer }, { availableHeight: height, scrollOffset });
+			if (plan.overflow && footer.length > 0) footer[0] = theme.fg("accent", "─".repeat(safeWidth));
+			lastViewport = plan.viewport;
+			lastBodyCount = body.length;
+			return [
+				...header,
+				...(plan.indicator ? [theme.fg("dim", plan.indicator)] : []),
+				...plan.visibleBody,
+				...footer,
+			];
 		}
 
 		return { render, invalidate: () => { cachedLines = undefined; }, handleInput };

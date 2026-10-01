@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Fixed (goal dialog height management, SPEC 2026-10-01)
+- **goal**: the questionnaire / draft-confirmation dialog now manages its own height instead of overflowing the terminal — pinned header (separator, tab bar, question), scrollable context body (`ctrl+u`/`ctrl+d` half page, `PageUp`/`PageDown` full page, offset clamped), pinned footer with a ≤7-row option window and `(+N more)` hint. Works in both fullscreen and non-fullscreen tui modes, so options are always visible on long goal drafts. The selected option row gets a `selectedBg` highlight (❯ marker); short dialogs render byte-identical to before apart from that highlight. Layout math lives in `extensions/goal/questionnaire-layout.ts` (pure, table-tested).
+
 ## 0.2.0 (2026-09-30)
 
 ### Added (SoL-Pi conservative pair absorbed, SPEC 2026-09-29)
