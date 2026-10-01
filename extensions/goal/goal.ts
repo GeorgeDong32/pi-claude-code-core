@@ -115,6 +115,7 @@ import {
 	validatePauseGoal,
 	validateResumeGoal,
 } from "./goal-policy.ts";
+import { createContinuationLoop } from "./goal-continuation.ts";
 
 const STATE_ENTRY = "pi-goal-state";
 const FOCUS_ENTRY = "pi-goal-focus";
@@ -445,9 +446,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		shouldPauseOnEscape: () => state.goal?.status === "active" && !!state.goal.autoContinue,
 		pauseActiveGoal,
 	});
-	let continuationQueuedFor: string | null = null;
-	let continuationScheduledFor: string | null = null;
-	let continuationTimer: ReturnType<typeof setTimeout> | null = null;
 	let runningGoalId: string | null = null;
 
 
@@ -524,17 +522,40 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		} catch {}
 	}
 
+	// B7 step 1: the continuation loop lives in goal-continuation.ts (no pi
+	// events — probe + emit seams injected). The three wrappers below keep
+	// every call site in this file unchanged.
+	const continuationLoop = createContinuationLoop({
+		getGoal: () => state.goal,
+		isDrafting: () => confirmationIntent !== null || tweakDraftingFor !== null,
+		isSubagentChild: isSubagentChildProcess,
+		promptFor: continuationPrompt,
+		sendFollowUp: (prompt, goal) => {
+			pi.sendMessage<GoalEventDetails>(
+				{
+					customType: GOAL_EVENT_ENTRY,
+					content: prompt,
+					display: false,
+					details: {
+						kind: "checkpoint",
+						goalId: goal.id,
+						status: goal.status,
+						objective: goal.objective,
+						timestamp: Date.now(),
+					},
+				},
+				{ triggerTurn: true, deliverAs: "followUp" },
+			);
+		},
+		onDispatch: syncGoalTools,
+	});
+
 	function clearContinuationTimer(): void {
-		if (continuationTimer) {
-			clearTimeout(continuationTimer);
-			continuationTimer = null;
-		}
-		continuationScheduledFor = null;
+		continuationLoop.stopTimer();
 	}
 
 	function clearContinuationState(): void {
-		clearContinuationTimer();
-		continuationQueuedFor = null;
+		continuationLoop.halt();
 	}
 
 	function clearActiveAccounting(): void {
@@ -953,73 +974,8 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		uiNotify(ctx, "Goal paused.", "info");
 	}
 
-	function sendQueuedContinuation(ctx: ExtensionContext, goalId: string): void {
-		continuationTimer = null;
-		continuationScheduledFor = null;
-		syncGoalTools();
-		if (!state.goal || state.goal.id !== goalId || state.goal.status !== "active" || !state.goal.autoContinue) {
-			if (continuationQueuedFor === goalId) continuationQueuedFor = null;
-			return;
-		}
-
-		let ready: boolean;
-		try {
-			ready = !ctx.hasPendingMessages() && ctx.isIdle();
-		} catch {
-			if (continuationQueuedFor === goalId) continuationQueuedFor = null;
-			return;
-		}
-
-		if (!ready) {
-			continuationScheduledFor = goalId;
-			continuationTimer = setTimeout(() => sendQueuedContinuation(ctx, goalId), CONTINUATION_IDLE_RETRY_MS);
-			continuationTimer.unref?.();
-			return;
-		}
-		continuationQueuedFor = goalId;
-		pi.sendMessage<GoalEventDetails>(
-			{
-				customType: GOAL_EVENT_ENTRY,
-				content: continuationPrompt(state.goal),
-				display: false,
-				details: {
-					kind: "checkpoint",
-					goalId: state.goal.id,
-					status: state.goal.status,
-					objective: state.goal.objective,
-					timestamp: Date.now(),
-				},
-			},
-			{ triggerTurn: true, deliverAs: "followUp" },
-		);
-	}
-
-
 	function queueContinuation(ctx: ExtensionContext, force = false): void {
-		// GH-03 belt: never arm continuations in subagent child sessions,
-		// regardless of how state.goal came to be set (covers all five call
-		// sites — session_start/compact, armFocusedContinuation, replaceGoal,
-		// tool paths). GH-02 already keeps children goal-less; this defends
-		// any future path that bypasses the adoption guard.
-		if (isSubagentChildProcess()) return;
-		if (confirmationIntent !== null || tweakDraftingFor !== null) return;
-		// B3: the loop predicate lives in goal-policy (single implementation,
-		// pinned by its own tests) — the inline copy is gone. Local binding keeps
-		// the narrowing the inline version used to provide.
-		const goal = state.goal;
-		if (!goal || !shouldQueueContinuation(goal)) return;
-		const goalId = goal.id;
-		if (!force && (continuationQueuedFor === goalId || continuationScheduledFor === goalId)) return;
-		clearContinuationTimer();
-		let delay = CONTINUATION_IDLE_RETRY_MS;
-		try {
-			delay = ctx.isIdle() && !ctx.hasPendingMessages() ? 0 : CONTINUATION_IDLE_RETRY_MS;
-		} catch {
-			return;
-		}
-		continuationScheduledFor = goalId;
-		continuationTimer = setTimeout(() => sendQueuedContinuation(ctx, goalId), delay);
-		continuationTimer.unref?.();
+		continuationLoop.queue(ctx, force);
 	}
 
 	function replaceGoal(config: GoalCreationConfig, ctx: ExtensionContext, startNow = true): void {
@@ -2504,7 +2460,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			accountProgress(ctx, { completedTurnTokens: abortedTokens });
 		}
 
-		continuationQueuedFor = null;
+		continuationLoop.clearQueued();
 		if (!state.goal || state.goal.status !== "active" || !state.goal.autoContinue) return;
 		if (endedGoalId && state.goal.id !== endedGoalId) return;
 		if (!reconcileFocusedGoalFromDisk(ctx)) return;
