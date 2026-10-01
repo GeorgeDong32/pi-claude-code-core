@@ -392,3 +392,11 @@ spec `../specs/design/DESIGN-MEMORY-V2.md`，报告 `../MEMORY-V2-REPORT.md`（�
 - **B7（C3 goal monolith 拆分）✅ 分步 3 commits，验收缩水已记 DEVIATIONS #73**：step1 continuation loop → goal-continuation.ts（7 直测）；step2 completion-audit flow → goal-audit-flow.ts（auditor 可注入，3 直测）；step3 pendingGoalAchievement → audit 域 slot。statemachine 全程零改动全过。FORK.md P2-GO-06 改写为结构性 fork 自持。状态机核心（persist/setGoal/池/记账）+ confirmation 粘合仍在 goal.ts——thin adapter 终态未达，终审复核。
 - **B8（C5 memory RecallSession）✅ commit 8d0e189**：recall-session.ts 吃掉四个闭包绑定（MR-01..09+AD1 全部不变量单点，7 条 vitest 直测）；context handler 退 wiring（MR-03 快照提取+两层扫描+投影）；memory.test.ts FakeHost 回归零改动 36/36；/memory 渲染移 diagnostics.ts（纯函数，预算 cap 引权威）。三绿。
 - **C9（fail-open seam）：跳过（2026-10-02 决定）**。理由：(a) B8 抽走 recall 后 memory/index.ts hook body 只剩 wiring 胶水，各 catch 降级值语义各异（undefined / {systemPrompt} / {messages}），adapter 参数化不减少理解面；(b) invariant 8「注入永不阻塞 turn」已由 memory.test.ts FakeHost fail-open 用例端到端钉住；(c) R1 审查判定 deletion test 弱（Speculative）。
+
+### 终审（2 轮对抗，2026-10-02，glm-5.3-flash read-only）：通过 ✅
+
+- Round1「有条件通过」：F1 major（B7 step1 搬家回滚了 B3 谓词收编——goal-continuation.ts 内联两份 active+autoContinue 谓词 vs 头注释宣称 policy 单实现，无行为 bug 但声明失实）+ F2 minor（docs/en/zh 模块表缺 tool-path.ts）+ F3 minor（selfCheck 双调用残留）→ 全部修复（commit f739978）。
+- Round2 判定：四项修复闭合、谓词替换行为恒等、无新问题，verdict **通过**。
+- Residual risks 由主会话闭合：三绿复跑（check OK / vitest 720 / contracts 25）；git diff --stat 证实 goal-statemachine.test.ts / test/lib/memory.test.ts / pi-host-semantics.test.ts 整批（12 commits）零改动；legacy 白名单 git show 与 pre-B3 逐字等价。
+- 设计维度判定：mcp-shape / projection / recall-session / goal-continuation 真加深（deletion test 全过）；goal-audit-flow 诚实搬家+seam（auditor 注入 + emit seam）；diagnostics 合适的浅 formatter——无「搬家不加深」失败案例。
+- 全批终态：12 commits（2a8da74^..HEAD），方案 v2 定稿 2 轮 + 终审 2 轮对抗，全部 glm-5.3-flash。
