@@ -33,6 +33,7 @@ import memoryExtension from "./memory/index.ts";
 import mcpGovExtension from "./mcp-gov/index.ts";
 import { createWebRuleFamily } from "./web-gov/index.ts";
 // Economy modules (SPEC 2026-09-29-solpi-absorption): ported from NVlabs/SoL-Pi
+import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 import { loadCoreEconomy } from "../lib/core-economy.ts";
 import createActionFusion from "./action-fusion/index.ts";
 import observationPack from "./observation-pack/index.ts";
@@ -63,8 +64,11 @@ const moduleFactories: ModuleFactory[] = [
 	// registration order is position-independent but fixed here too.
 	function economy(pi: ExtensionAPI) {
 		const config = loadCoreEconomy();
-		if (config.actionFusion) createActionFusion()(pi);
-		if (config.observationPack) observationPack()(pi);
+		// B4: the host version is threaded through factory options — the
+		// economy factories no longer reach for the pi import themselves on
+		// the probe path (self-disable is now pinnable end-to-end in tests).
+		if (config.actionFusion) createActionFusion({ version: PI_VERSION })(pi);
+		if (config.observationPack) observationPack({ version: PI_VERSION })(pi);
 	},
 ];
 

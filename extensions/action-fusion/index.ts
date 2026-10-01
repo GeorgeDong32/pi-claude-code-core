@@ -25,7 +25,7 @@ import {
 	type ExtensionFactory,
 	type WriteToolOptions,
 } from "@earendil-works/pi-coding-agent";
-import { probePiCompat } from "../../lib/pi-compat.ts";
+import { degradeEconomyModule, probePiCompat } from "../../lib/pi-compat.ts";
 import { coreBus } from "../bus.ts";
 import { resolveToolPath, withFusedFileQueue } from "./file-queue.ts";
 import {
@@ -47,6 +47,10 @@ const TOOL_DESCRIPTION_GUIDANCE =
 	" After a successful write/edit, pass `then_run.command` to run a verification command in the same step instead of a separate bash call.";
 
 export interface ActionFusionOptions {
+	/** B4: host pi version injection — tests pin the self-disable path with
+	 * an old version without touching the real import. Defaults to the
+	 * compiled-in VERSION. */
+	readonly version?: string;
 	/** Optional programmatic bash overrides, primarily for tests. */
 	readonly bashOptions?: BashToolOptions;
 	readonly editOptions?: EditToolOptions;
@@ -70,18 +74,24 @@ function memoizeByCwd<T>(create: (cwd: string) => T): (cwd: string) => T {
 
 export function createActionFusionExtension(options: ActionFusionOptions = {}): ExtensionFactory {
 	return (pi: ExtensionAPI) => {
-		// CMP-02 version gate + FUS-03 queue adapter selection.
+		// CMP-02 version gate + FUS-03 queue adapter selection. B4: version
+		// comes in via options (assembly passes the real one; tests pin the
+		// self-disable path), and the degrade tail is the shared helper.
 		const compat = probePiCompat({
-			version: VERSION,
+			version: options.version ?? VERSION,
 			toolFactories: {
 				write: createWriteToolDefinition,
 				edit: createEditToolDefinition,
 			},
 			mutationQueue: withFileMutationQueue,
 		});
-		if (!compat.versionOk || !compat.toolFactories) {
-			console.warn(`[action-fusion] disabled: ${compat.problems.join("; ")}`);
-			coreBus().publish({ display: { footer: [`action-fusion requires pi >=0.87`] } });
+		if (
+			!degradeEconomyModule({
+				compat,
+				label: "action-fusion",
+				publish: (line) => coreBus().publish({ display: { footer: [line] } }),
+			})
+		) {
 			return;
 		}
 		// FUS-03 (revised after TST-04): the OUTER serialization must be the

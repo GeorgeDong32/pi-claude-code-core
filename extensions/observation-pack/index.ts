@@ -20,7 +20,7 @@ import { join } from "node:path";
 import { VERSION } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { probePiCompat } from "../../lib/pi-compat.ts";
+import { degradeEconomyModule, probePiCompat } from "../../lib/pi-compat.ts";
 import { coreBus } from "../bus.ts";
 import { createLedger, type Ledger } from "./ledger.ts";
 import {
@@ -71,11 +71,16 @@ export function createObservationPackExtension(hostExports: {
 	version?: string;
 } = {}): ExtensionFactory {
 	return (pi: ExtensionAPI) => {
-		// CMP-02 version gate: degrade, never block the session.
+		// CMP-02 version gate: degrade, never block the session. B4: the tail
+		// is the shared helper — version-only probing stays noise-free.
 		const compat = probePiCompat({ version: hostExports.version ?? VERSION });
-		if (!compat.versionOk) {
-			console.warn(`[observation-pack] disabled: ${compat.problems.join("; ")}`);
-			coreBus().publish({ display: { footer: [`observation-pack requires pi >=0.87`] } });
+		if (
+			!degradeEconomyModule({
+				compat,
+				label: "observation-pack",
+				publish: (line) => coreBus().publish({ display: { footer: [line] } }),
+			})
+		) {
 			return;
 		}
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MIN_PI_VERSION, probePiCompat, versionAtLeast } from "../../lib/pi-compat.ts";
+import { MIN_PI_VERSION, probePiCompat, versionAtLeast, degradeEconomyModule } from "../../lib/pi-compat.ts";
 
 describe("pi-compat probes (SPEC CMP)", () => {
 	it("versionAtLeast handles equals, greater, lesser and malformed", () => {
@@ -38,7 +38,9 @@ describe("pi-compat probes (SPEC CMP)", () => {
 			mutationQueue: undefined,
 		});
 		expect(noQueue.mutationQueue).toBe(false);
-		expect(noQueue.problems.includes("withFileMutationQueue unavailable")).toBe(true);
+		// B4: mutationQueue is diagnostics-only (FUS-03: the official queue
+		// deadlocks as the outer layer, so it gates nothing) — never a problem.
+		expect(noQueue.problems).toEqual([]);
 
 		const brokenFactory = probePiCompat({
 			version: "0.87.1",
@@ -46,6 +48,31 @@ describe("pi-compat probes (SPEC CMP)", () => {
 			mutationQueue: () => {},
 		});
 		expect(brokenFactory.toolFactories).toBe(false);
+	});
+
+	it("absent probes are not dependencies (B4: version-only probing stays noise-free)", () => {
+		const compat = probePiCompat({ version: "0.87.1" });
+		expect(compat.versionOk).toBe(true);
+		expect(compat.problems).toEqual([]);
+		expect(compat.toolFactories).toBe(false); // recorded as a fact, not a problem
+	});
+
+	it("degradeEconomyModule warns once, publishes the footer, signals stop (B4)", () => {
+		const compat = probePiCompat({ version: "0.85.0" });
+		const notified: string[] = [];
+		const footers: string[] = [];
+		const healthy = degradeEconomyModule({
+			compat,
+			label: "action-fusion",
+			notify: (m) => notified.push(m),
+			publish: (line) => footers.push(line),
+		});
+		expect(healthy).toBe(false);
+		expect(notified).toEqual(["[action-fusion] disabled: pi 0.85.0 < 0.87.0"]);
+		expect(footers).toEqual(["action-fusion requires pi >=0.87.0"]);
+		// healthy compat passes through untouched
+		const ok = probePiCompat({ version: "0.87.1" });
+		expect(degradeEconomyModule({ compat: ok, label: "x", publish: () => {} })).toBe(true);
 	});
 
 	it("MIN_PI_VERSION pins the semantics the spec verified", () => {
