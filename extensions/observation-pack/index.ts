@@ -36,6 +36,7 @@ import {
 	readRecallChunk,
 	THRESHOLD_BYTES,
 } from "./observation.ts";
+import { createProjectionState, projectContext } from "./projection.ts";
 
 const RECALL_MAX_BYTES = 16 * 1024;
 const RECALL_MAX_LINES = 400;
@@ -46,12 +47,6 @@ const RECALL_LIMITS = {
 	maxBytes: RECALL_MAX_BYTES - RECALL_HEADER_RESERVE_BYTES,
 	maxLines: RECALL_MAX_LINES - RECALL_HEADER_LINES,
 };
-
-/** CMP-04: warn once per process when candidates exist but nothing packs. */
-const SENTINEL_STREAK_LIMIT = 3;
-let sentinelWarned = false;
-let sentinelStreak = 0;
-let noSessionWarned = false;
 
 export interface ObservationRoots {
 	/** Per-session observation root; empty string = no persistent session. */
@@ -84,10 +79,11 @@ export function createObservationPackExtension(hostExports: {
 			return;
 		}
 
-		const sentCounts = new Map<string, number>();
 		const ledgers = new Map<string, Ledger>();
-		let placeholderCount = 0;
-		let savedTokens = 0;
+		// B5: ALL mutable mechanism state lives in one object owned by this
+		// factory instance (was module-global — leaked across tests).
+		const projectionState = createProjectionState();
+		let noSessionWarned = false;
 
 		const ledgerFor = (root: string): Ledger => {
 			let ledger = ledgers.get(root);
@@ -139,6 +135,11 @@ export function createObservationPackExtension(hostExports: {
 		});
 
 		pi.on("context", async (event, ctx) => {
+			// B5: thin adapter — the projection itself is a pure step over
+			// injected ports (projection.ts); this handler only resolves the
+			// session root, wires the ports, and emits the outcome's side
+			// effects (console / bus). CON-03 pins the fail-open contract,
+			// CON-04 pins the final-slot registration order.
 			const { root } = observationRootsFor(ctx);
 			if (!root) {
 				if (!noSessionWarned) {
@@ -148,91 +149,24 @@ export function createObservationPackExtension(hostExports: {
 				return undefined;
 			}
 
-			const projected = [...event.messages];
-			let replacedThisRequest = 0;
-			let eligiblePastFullSends = 0;
-
-			// Requests each candidate has already been part of, counted by the
-			// assistant messages that precede it (upstream heuristic).
-			const priorAssistantCounts = new Array<number>(event.messages.length);
-			let assistantCount = 0;
-			for (let index = event.messages.length - 1; index >= 0; index -= 1) {
-				priorAssistantCounts[index] = assistantCount;
-				if (event.messages[index]?.role === "assistant") assistantCount += 1;
+			const outcome = await projectContext({
+				messages: event.messages,
+				root,
+				state: projectionState,
+				ports: {
+					store: ensureStored,
+					appendLedger: ledgerFor(root),
+				},
+			});
+			for (const reason of outcome.failOpenReasons) {
+				console.error(`[observation-pack] fail-open for tool result: ${reason}`);
 			}
-
-			for (let index = 0; index < event.messages.length; index += 1) {
-				const message = event.messages[index];
-				if (!message || !isPureTextResult(message)) continue;
-
-				try {
-					const observation = createObservation(message, root);
-					if (!observation) continue;
-					await ensureStored(observation);
-
-					const sendCountKey = `${root}\0${observation.id}`;
-					const previousSends = sentCounts.get(sendCountKey) ?? priorAssistantCounts[index] ?? 0;
-					// CMP-04: eligibility is counted before any replacement attempt so a
-					// broken store or a dropped projection still trips the sentinel.
-					if (previousSends >= FULL_SENDS) eligiblePastFullSends += 1;
-					if (previousSends < FULL_SENDS) {
-						await ledgerFor(root)({
-							event: "full",
-							id: observation.id,
-							tool: observation.toolName,
-							originalBytes: observation.bytes,
-							originalLines: observation.lines,
-							originalTokens: observation.tokens,
-							contentHash: observation.contentHash,
-						});
-						sentCounts.set(sendCountKey, previousSends + 1);
-						continue;
-					}
-
-					const placeholder = placeholderFor(observation);
-					const placeholderTokens = estimateTokens(placeholder);
-					const removedTokens = Math.max(0, observation.tokens - placeholderTokens);
-					await ledgerFor(root)({
-						event: "placeholder",
-						id: observation.id,
-						sendNumber: previousSends + 1,
-						tool: observation.toolName,
-						originalBytes: observation.bytes,
-						originalTokens: observation.tokens,
-						placeholderTokens,
-						removedTokens,
-					});
-					projected[index] = { ...message, content: [{ type: "text", text: placeholder }] };
-					sentCounts.set(sendCountKey, previousSends + 1);
-					replacedThisRequest += 1;
-					if (previousSends === FULL_SENDS) {
-						placeholderCount += 1;
-						savedTokens += removedTokens;
-						// OBS-09: cumulative avoided tokens on the capability bus.
-						coreBus().publish({ observation: { tokensAvoided: savedTokens, placeholders: placeholderCount } });
-					}
-				} catch (error) {
-					// OBS-08 fail-open, per-message: one failure keeps that
-					// message's original bytes; the rest of the loop continues.
-					const reason = error instanceof Error ? error.message : String(error);
-					console.error(`[observation-pack] fail-open for tool result: ${reason}`);
-				}
+			if (outcome.sentinelWarning !== null) console.warn(outcome.sentinelWarning);
+			if (outcome.counters !== null) {
+				// OBS-09: cumulative avoided tokens on the capability bus.
+				coreBus().publish({ observation: { tokensAvoided: outcome.counters.tokensAvoided, placeholders: outcome.counters.placeholders } });
 			}
-
-			// CMP-04 sentinel: eligible candidates but the projection produced
-			// nothing — the chain broke somewhere upstream (e.g. a pi upgrade).
-			if (!sentinelWarned && eligiblePastFullSends > 0 && replacedThisRequest === 0) {
-				// Counted per provider request; warn once per process.
-				sentinelStreak += 1;
-				if (sentinelStreak >= SENTINEL_STREAK_LIMIT) {
-					sentinelWarned = true;
-					console.warn("[observation-pack] projection appears ineffective (candidates past FULL_SENDS but no placeholders) — check pi context-event semantics");
-				}
-			} else {
-				sentinelStreak = 0;
-			}
-
-			return { messages: projected };
+			return { messages: [...outcome.messages] };
 		});
 	};
 }

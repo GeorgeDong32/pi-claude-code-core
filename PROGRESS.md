@@ -386,8 +386,8 @@ spec `../specs/design/DESIGN-MEMORY-V2.md`，报告 `../MEMORY-V2-REPORT.md`（�
 - **B1（C1 MCP-shape 谓词下沉）✅ commit 2a8da74**：`lib/mcp-shape.ts` 纯底座（5 分支 + env 解析）；family.ts 组合（authority 不变）；plan gate 消费同一底座 —— 4 个泄漏形态（全单下划线/proxy/direct-named/裸 mcp_*）从放行变拒绝；4 条 shape pin + p4-families 回归绿；AGENTS.md 不变量 4 精确化 + web-gov 注释 + DEVIATIONS #72 + CHANGELOG。三绿。
 - **B2（C8 quick wins）✅ commit 88d63b9**：INDEX_MAX_BYTES 派生权威常量（MEMORY_INDEX_MAX）；POLICY_MARKER 常量化（policy↔yield 单侧改名编译期红）；slugify 去重（memdir 唯一实现）；core-economy 收编 readJson（语义保持：missing 静默/malformed+empty+non-object warn、字段归一留 caller、setCoreEconomyPath seam 保留）；ledger.ts header 正名（write-only 审计，非 sentinel 数据源）；FORK.md 白名单补 ui.ts+questionnaire-layout.ts（DC4b）；selection↔session-recall tokenizer 分工互注；contracts README MemoryPatch 附注 P1-BUS-05（零消费方不独立登记）。三绿。
 - **B3（C4 goal kind 化 + 死代码）✅ commit 66fa7d9**：GoalStateEntry 加可选 kind（5 产生点标注，version 不 bump）；renderGoalResult kind 优先分派 + legacy prefix 回退（孤儿 prefix 留回放）；删 evaluateDraftingToolGate/ToolGateDecision（no-op + 绿测试假信心）；shouldQueueContinuation 收编为唯一实现；三单例入 factory closure；renderGoalResult 导出 + 3 条渲染 pin。三绿。
-- B4（C6 pi-compat 注入）→ 待
-- B5（C2 obs 纯投影）→ 待
+- **B4（C6 pi-compat 注入+degrade 收拢）✅ commit 42b5c81**：probePiCompat 未提供探针不再报 problem（obs 纯 version 探测无噪音）；mutationQueue 纯诊断化（FUS-03 死锁实证，移出 problems）；degradeEconomyModule 共享降级尾巴（纯函数收回调）；ActionFusionOptions.version 注入 + assembly economy 块穿线（首个生产性 options）；obs hostExports 同语义；两条自禁用回归 pin（0.85→零注册+真 bus footer）+ pi-compat 3 新用例。三绿。
+- **B5（C2 obs 纯投影）✅ commit bf17a70**：projection.ts 纯投影步骤（store/appendLedger 两端口 + outcome 携带 failOpenReasons/sentinelWarning/counters）；handler 退 thin adapter；sentinel/noSession flags 移出 module scope（ProjectionState 单对象，factory 持有）；invariant 9 显式 pin（非候选引用透传 + 替换项仅 content 变）；6 条直驱 node:test（原需 ~286 行 FakeHost）；sentinel 触发路径勘误（ledger 抛，非 store 抛——store 抛时 eligible 不计数）。CON-03/04 零改动全绿。三绿。
 - B6（C7 fusion outcome 结构化）→ 待
 - B7（C3 goal monolith 拆分）→ 待
 - B8（C5 memory RecallSession）→ 待
