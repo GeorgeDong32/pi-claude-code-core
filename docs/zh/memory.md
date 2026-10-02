@@ -37,6 +37,12 @@ spec 2026-10-02-memory-recall-v2)、守卫记忆写入路径、自动整合
 - `recallWaitMs`(数字,默认 4000,钳制 0–15000):prompt 路径每消息的
   选择器等待预算;超时的选择结果挂起,在下一个继续中的 turn_end 投递。
 
+已知代价(spec D4 + handoff 陷阱,接受):`before_agent_start` 的 handler
+链是串行 await 的,等待(仅配置了选择器模型时)会推迟后续扩展的 handler
+与主模型请求,最多 `recallWaitMs`;子 agent 会话同样加载 core —— 每个
+child 的 dispatch prompt 触发一次选择器调用(token 费 + ≤waitMs 首 token
+延迟)。这是预期行为,不是需要特判的 bug。
+
 **总线**:`memory` 通道 —— `{ yielded, dir }`;索引预算经
 `contextBudget.memoryIndexMax` 发布(25K,`lib/context-budget.ts`)。
 

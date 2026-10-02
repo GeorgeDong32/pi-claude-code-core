@@ -39,6 +39,13 @@ of the 30× cache-miss cost and the frozen-selection re-injection (RC-1/RC-2).
   selector wait budget on the prompt path; a slow selector parks its result
   and delivers it at the next continuing turn_end.
 
+Known costs (accepted, spec D4 + handoff traps): the `before_agent_start`
+handler chain is serially awaited, so the wait (only when a selector model
+is configured) delays later extensions' handlers and the main model request
+by up to `recallWaitMs`; and subagent child sessions load core too — every
+child's dispatch prompt runs one selector call (token cost + ≤waitMs
+first-token latency). That is expected behavior, not a bug to special-case.
+
 **Bus**: `memory` channel — `{ yielded, dir }`; index budget published via
 `contextBudget.memoryIndexMax` (25K, `lib/context-budget.ts`).
 
