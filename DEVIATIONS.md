@@ -234,3 +234,5 @@
 
 81. **TR 实施与 spec v1.1 的两处偏差(2026-10-02-core-tool-renderers)**:① 结果头行弃用 spec 示例的 📎 emoji,纯文本 + muted 着色(用户视觉口味克制,spec 自审 R6 补录);② B 的 resultStatus 用「Container 包装 + 追加行」而非 spec v1 初稿的改写文本(v1 自审 R1 判定初稿无效,修订版即实施版——builtin 从 details 渲染 diff 时不读 content text)。零包装规则:无 then_run 的 write/edit 返回原组件引用。
 
+82. **goal notes 无 spec 直做(2026-10-02)**:resumeNote/userNote 为用户当日直接请求的小特性,无对应 spec 文件;按仓库纪律以测试+台账钉住。设计要点:resume note 为一次性内存态(不落盘,防重启后陈旧指示);user note 为 record 持久字段且仅用户可写(/goal-note)。ledger 未加事件类型(避免触碰 goal-ledger 三处 render switch;notify+持久化已可观察,后续需要再补)。
+

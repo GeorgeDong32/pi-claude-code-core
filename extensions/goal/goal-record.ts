@@ -26,6 +26,9 @@ export interface GoalRecord {
 	// Set by the agent's pause_goal tool. Cleared when the goal becomes active again.
 	pauseReason?: string;
 	pauseSuggestedAction?: string;
+	// Standing user note attached via /goal-note. Rides every goal prompt and
+	// checkpoint until cleared by the user; the agent never writes it.
+	userNote?: string;
 }
 
 /** B3: structured render classification for goal tool results. When
@@ -176,6 +179,7 @@ export function normalizeGoalRecord(value: unknown): GoalRecord | null {
 		stopReason: raw.stopReason === "agent" || raw.stopReason === "user" ? raw.stopReason : undefined,
 		pauseReason: typeof raw.pauseReason === "string" && raw.pauseReason.trim() ? raw.pauseReason : undefined,
 		pauseSuggestedAction: typeof raw.pauseSuggestedAction === "string" && raw.pauseSuggestedAction.trim() ? raw.pauseSuggestedAction : undefined,
+		userNote: typeof raw.userNote === "string" && raw.userNote.trim() ? raw.userNote : undefined,
 		...(typeof raw.auditAttempts === "number" && Number.isFinite(raw.auditAttempts) && raw.auditAttempts > 0
 			? { auditAttempts: Math.floor(raw.auditAttempts) }
 			: {}),

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added (goal notes — direct user request 2026-10-02, no spec)
+- **`/goal-resume <text>` no longer drops the trailing message**: the text rides the FIRST checkpoint after resume as a one-shot `<resume_note>` block (user-provided data) and is consumed on send — in-memory by design so stale guidance can never survive a restart.
+- **`/goal-note`**: attach a standing user note to the active goal (`/goal-note <text>`, `/goal-note clear` clears) — persists in the goal record, rides every goal prompt AND checkpoint as a `<user_note>` block, shows in `get_goal`/detailed summaries. The agent never writes it.
+
 ### Added (core tool renderers — spec 2026-10-02-core-tool-renderers)
 - **`obs_recall` gets a human view**: one-line call row (`Recall Observation obs_4b1d7b39 · +15.5KB`) and a paged result view (size · lines · offset range + 5-line content preview, `end ✓`/`more ▸`, expanded shows all) built from `details`; the two model-protocol header lines are stripped from the display (the provider text is untouched). Component reuse via lastComponent per bash-renderer discipline.
 - **`then_run` badges (action-fusion)**: fused write/edit calls render a dim `↳ then_run: <command>` row under the built-in call line; results gain a colored status row (`✓ ok` / `✗ failed` / `⊘ skipped`) scanned read-only from the existing markers. Plain write/edit render identically (zero-wrap rule; built-in payload never rewritten).

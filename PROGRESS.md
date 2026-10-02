@@ -16,6 +16,14 @@
 - **R0 执行记录**:worklist 12 项呈报两轮 + pause/resume 后用户明示批准。错层诊断剩余 5 条均为启发式误报(通用尾段键 "review"/"test"/"gd32" 撞词)或用户拍板保留的全局记忆(work-style 提及 CherryDev)——真阳性 0;该启发式的噪音profile 已知,属 advisory 工具非 gate。
 - **剩余**:R2 跑标注(需用户提供标注集,属 spec 后续非本 goal 范围);真实运行时冒烟(用户侧,配置 memory.recallModel 后验证)。
 
+## goal notes 批(2026-10-02,用户直接请求,无 spec)
+
+**状态:实现完成,三门全绿(check / vitest 735 / 契约 27 / goal-notes 5 用例)。**
+
+- `/goal-resume <text>` 尾注不再被丢弃:一次性 `<resume_note>` 随 resume 后首条 checkpoint 带出,sendFollowUp 消费(goal.ts pendingResumeNote 内存态——one-shot 不落盘)。
+- 新命令 `/goal-note`(贴/清 standing note):GoalRecord.userNote 持久字段(normalizeGoalRecord 解析),`<user_note>` 随 goalPrompt + continuationPrompt 带出,get_goal/detailedSummary 展示;agent 不可写。
+- 测试:extensions/goal/tests/goal-notes.test.ts(5 用例,纯 seam:record 往返 + prompt 注入)。
+
 ## core 工具渲染器批(2026-10-02,spec 2026-10-02-core-tool-renderers)
 
 **状态:实现完成,三门全绿(check / 47 文件 735 用例 / 契约 27 / 渲染器 14);cctui 侧接手(typecheck + 90 用例全绿,各自单独提交)。**

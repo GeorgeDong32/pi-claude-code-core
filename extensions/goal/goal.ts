@@ -174,6 +174,7 @@ function detailedSummary(goal: GoalRecord | null): string {
 	if (goal.stopReason) lines.push(`Stop reason: ${goal.stopReason}`);
 	if (goal.pauseReason) lines.push(`Agent pause reason: ${goal.pauseReason}`);
 	if (goal.pauseSuggestedAction) lines.push(`Agent suggests: ${goal.pauseSuggestedAction}`);
+	if (goal.userNote) lines.push(`User note: ${truncateText(goal.userNote, 80)}`);
 	return lines.join("\n");
 }
 
@@ -532,6 +533,11 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		} catch {}
 	}
 
+	// goal-notes: one-shot note attached via /goal-resume <text>; rides the
+	// FIRST checkpoint after resume, then consumed. In-memory by design —
+	// one-shot semantics must never survive a restart as stale guidance.
+	let pendingResumeNote: string | null = null;
+
 	// B7 step 1: the continuation loop lives in goal-continuation.ts (no pi
 	// events — probe + emit seams injected). The three wrappers below keep
 	// every call site in this file unchanged.
@@ -539,7 +545,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		getGoal: () => state.goal,
 		isDrafting: () => confirmationIntent !== null || tweakDraftingFor !== null,
 		isSubagentChild: isSubagentChildProcess,
-		promptFor: continuationPrompt,
+		promptFor: (goal) => continuationPrompt(goal, pendingResumeNote ?? undefined),
 		sendFollowUp: (prompt, goal) => {
 			pi.sendMessage<GoalEventDetails>(
 				{
@@ -556,6 +562,8 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				},
 				{ triggerTurn: true, deliverAs: "followUp" },
 			);
+			// one-shot consumption: the note rode THIS checkpoint (goal-notes)
+			pendingResumeNote = null;
 		},
 		onDispatch: syncGoalTools,
 	});
@@ -1232,7 +1240,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		pauseActiveGoal(ctx);
 	}
 
-	async function handleGoalResume(ctx: ExtensionContext): Promise<void> {
+	async function handleGoalResume(ctx: ExtensionContext, rawNote?: string): Promise<void> {
 		reconcileFocusedGoalFromDisk(ctx);
 		if (!state.goal && openGoals().length > 0) {
 			const selected = await chooseOpenGoal(ctx, "Resume or focus open goal");
@@ -1263,7 +1271,9 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		);
 		beginAccounting();
 		resetGetGoalNudgeState(state.goal.id);
-		uiNotify(ctx, "Goal resumed.", "info");
+		const note = rawNote?.trim() || null;
+		pendingResumeNote = note;
+		uiNotify(ctx, note ? "Goal resumed (note attached to the next checkpoint)." : "Goal resumed.", "info");
 		queueContinuation(ctx, true);
 		// Append ledger event for resumption
 		try {
@@ -1514,8 +1524,34 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	// /goal-resume: resume a paused goal.
 	pi.registerCommand("goal-resume", {
 		description: "Resume a paused goal.",
-		handler: async (_rawArgs, ctx) => {
-			await handleGoalResume(ctx);
+		handler: async (rawArgs, ctx) => {
+				await handleGoalResume(ctx, typeof rawArgs === "string" ? rawArgs : undefined);
+		},
+	});
+
+	// /goal-note: attach or clear a STANDING user note that rides every goal
+	// and checkpoint prompt (goal-notes; consumed by prompts, never written
+	// by the agent). `/goal-note clear` (or empty on an existing note) clears.
+	pi.registerCommand("goal-note", {
+		description: "Attach a standing user note to the active goal (/goal-note <text>) or clear it (/goal-note clear).",
+		handler: async (rawArgs, ctx) => {
+			reconcileFocusedGoalFromDisk(ctx);
+			if (!state.goal || state.goal.status === "complete") {
+				uiNotify(ctx, "No active goal to attach a note to.", "warning");
+				return;
+			}
+			const arg = (typeof rawArgs === "string" ? rawArgs : "").trim();
+			if (!arg || arg === "clear" || arg === "off") {
+				if (!state.goal.userNote) {
+					uiNotify(ctx, "No user note set.", "info");
+					return;
+				}
+				setGoal({ ...state.goal, userNote: undefined }, ctx);
+				uiNotify(ctx, "User note cleared.", "info");
+				return;
+			}
+			setGoal({ ...state.goal, userNote: arg }, ctx);
+			uiNotify(ctx, `User note set: ${truncateText(arg, 80)}`, "info");
 		},
 	});
 
