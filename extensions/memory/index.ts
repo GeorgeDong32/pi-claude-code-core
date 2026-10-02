@@ -31,7 +31,7 @@
  * Injection failures NEVER block a turn (P3-ME-09): every hook body is
  * try/catch-wrapped at the boundary.
  */
-import { accessSync, constants as fsConstants, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { accessSync, constants as fsConstants, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -40,7 +40,8 @@ import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-
 
 import { coreBus } from "../bus.ts";
 import { eligibleMemories, reconcileMemoryIndex, scanMemoryDir, scanMemoryDirCached } from "./memdir.ts";
-import { resolveMemoryPaths, sessionsDirFor } from "./paths.ts";
+import { resolveMemoryPaths, sessionsDirFor, gitCanonicalRoot } from "./paths.ts";
+import { scopeMatches } from "./memdir.ts";
 import { buildPolicyInjection, POLICY_COMPACT } from "./policy.ts";
 import { renderMemoryDiagnostics } from "./diagnostics.ts";
 import { byteLength, createRecall, deriveHistory, freshnessHeader, type RecallBlock, type RecallMachine } from "./recall.ts";
@@ -68,7 +69,7 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 	let degradedNotified = false;
 	let memoryDirWritable = true;
 	let memorySettings: MemorySettings = { automation: true };
-	const automationState: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0 };
+	const automationState: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0, routed: 0 };
 	// RV: the recall machine (recall.ts deep module) — ALL session state
 	// derives from the projection history on every call (D9); the wiring
 	// only routes events. The machine exists only while memory.recallModel
@@ -119,11 +120,40 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 			recallMachine = createRecall({
 				selector: (extensionDeps.selectorFactory ?? llmSelector)({ model: () => model, registry: () => ctx.modelRegistry as never }),
 				modelLabel: label,
-				files: () => eligibleMemories(userMemoryDir(ctx), memoryDir(ctx)),
+				files: () => eligibleMemories(userMemoryDir(ctx), memoryDir(ctx), gitCanonicalRoot(ctx.cwd ?? process.cwd()) ?? undefined),
 				cwd: ctx.cwd ?? process.cwd(),
 			});
 		}
 		return recallMachine;
+	}
+
+	/** RV-16: user-layer files that mention a known project key (from
+	 * ~/.pi/agent/projects/*) and carry no `paths:` scoping — surfaced by
+	 * /memory as misplaced candidates. */
+	function misplacedUserFiles(udir: string): Array<{ file: string; key: string }> {
+		try {
+			const projectsRoot = join(process.env.HOME ?? home, ".pi", "agent", "projects");
+			if (!existsSync(projectsRoot)) return [];
+			const keys = new Set(
+				readdirSync(projectsRoot)
+					.map((d) => (d.replace(/^-+/, "").split("-").pop() ?? ""))
+					.filter((k) => k.length >= 4),
+			);
+			const out: Array<{ file: string; key: string }> = [];
+			for (const f of scanMemoryDirCached(udir).files) {
+				if (f.entry.paths) continue;
+				const haystack = `${f.entry.title} ${f.entry.description} ${f.body}`.toLowerCase();
+				for (const key of keys) {
+					if (haystack.includes(key.toLowerCase())) {
+						out.push({ file: f.entry.file, key });
+						break;
+					}
+				}
+			}
+			return out;
+		} catch {
+			return [];
+		}
 	}
 
 	/** Resolve settings → model → machine, then run one selection. Null when
@@ -218,8 +248,13 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 			const userScan = scanMemoryDirCached(udir);
 			const projectScan = scanMemoryDirCached(dir);
 			const skippedTotal = userScan.skipped + projectScan.skipped;
+			// RV-14: user-layer entries with `paths:` only render their index
+			// rows (and pinned bodies) when the session's git canonical root
+			// matches — scoped memories stay invisible elsewhere.
+			const root = gitCanonicalRoot(ctx.cwd ?? process.cwd()) ?? undefined;
+			const scopedUserFiles = userScan.files.filter((f) => !f.entry.paths || scopeMatches(root, f.entry.paths));
 			const injection = buildPolicyInjection(
-				{ entries: userScan.files.map((f) => ({ ...f.entry })), files: userScan.files.map((f) => ({ entry: f.entry, body: f.body })) },
+				{ entries: scopedUserFiles.map((f) => ({ ...f.entry })), files: scopedUserFiles.map((f) => ({ entry: f.entry, body: f.body })) },
 				projectScan.files.map((f) => ({ ...f.entry })),
 			) + (skippedTotal > 0 ? `\n<!-- memory: ${skippedTotal} file(s) skipped (invalid frontmatter) -->` : "");
 			const systemPrompt = `${event.systemPrompt ?? ""}\n\n${injection}`;
@@ -448,6 +483,7 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 					sessionBytes: derived.bytesUsed,
 					stats: recallMachine?.stats ?? { selections: 0, empties: 0, failures: 0, lastReason: null, deliveries: 0 },
 				},
+				misplaced: misplacedUserFiles(udir),
 				hermesDataFound:
 					existsSync(join(process.env.HOME ?? home, ".pi", "agent", "pi-hermes-memory", "MEMORY.md")) ||
 					existsSync(join(process.env.HOME ?? home, ".pi", "agent", "pi-hermes-memory", "USER.md")),

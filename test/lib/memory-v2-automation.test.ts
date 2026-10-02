@@ -154,7 +154,7 @@ interface Harness {
 
 function harness(llmText: string, opts: { yielded?: boolean; sessionEntries?: unknown[]; complete?: () => Promise<unknown> } = {}): Harness {
 	const host = new FakeHost();
-	const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0 };
+	const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0, routed: 0 };
 	const calls: string[] = [];
 	const trigger = new ConsolidationTrigger({ sendDirective: () => {} });
 	const complete = opts.complete ?? (async () => ({ stopReason: "stop", errorMessage: undefined, content: [{ type: "text", text: llmText }] }));
@@ -266,7 +266,7 @@ describe("V2-A background review", () => {
 		// rewire: easiest is a second harness whose dirs match and a shared trigger —
 		// instead verify via the real wiring: memoryExtension sets this on send.
 		const host = new FakeHost();
-		const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0 };
+		const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0, routed: 0 };
 		const sharedTrigger = new ConsolidationTrigger({ sendDirective: () => {} });
 		sharedTrigger.directiveTurnActive = true;
 		const calls: string[] = [];
@@ -334,7 +334,7 @@ describe("V2-A settings", () => {
 
 	it("automation:false disables every hook path", async () => {
 		const host = new FakeHost();
-		const state: AutomationState = { enabled: false, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0 };
+		const state: AutomationState = { enabled: false, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0, routed: 0 };
 		const calls: string[] = [];
 		setupAutomation(host.asPi(), {
 			gate: { state: { yielded: false } },
@@ -370,7 +370,7 @@ describe("V2-A prompt guardrails", () => {
 		// indirect: fire a correction and capture the systemPrompt handed to the fake
 		let seenSystem = "";
 		const host = new FakeHost();
-		const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0 };
+		const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0, routed: 0 };
 		setupAutomation(host.asPi(), {
 			gate: { state: { yielded: false } },
 			dirs: () => ({ project: dir, user: udir }),
@@ -460,7 +460,7 @@ describe("V2 Phase 3 (AD5) — extraction cursor + model-wrote mutex", () => {
 			}));
 		const prompts: string[] = [];
 		const host = new FakeHost();
-		const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0 };
+		const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0, routed: 0 };
 		setupAutomation(host.asPi(), {
 			gate: { state: { yielded: false } },
 			dirs: () => ({ project: dir, user: udir }),
@@ -498,7 +498,7 @@ describe("V2 Phase 3 (AD5) — extraction cursor + model-wrote mutex", () => {
 	it("model writing a memory file suppresses the review LLM pass (cursor still advances)", async () => {
 		const calls: string[] = [];
 		const host = new FakeHost();
-		const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0 };
+		const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0, routed: 0 };
 		setupAutomation(host.asPi(), {
 			gate: { state: { yielded: false } },
 			dirs: () => ({ project: dir, user: udir }),

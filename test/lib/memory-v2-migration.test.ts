@@ -108,17 +108,28 @@ describe("V2-M full migration routing", () => {
 				`CherryPR-specific review workflow details. <!-- created=2026-08-12, project64=Q2hlcnJ5UFI -->`,
 			].join("\n"),
 		});
+		// RV-15: a foreign-project tag routes to THAT project's layer when it
+		// exists under <agentDir>/projects/*-<name>/memory — never the user layer
+		const cherryLayer = join(agentDir, "projects", "-Users-gd32-Coding-CherryPR", "memory");
+		mkdirSync(cherryLayer, { recursive: true });
 		const r = importHermesFull({ agentDir, projectMemoryDir: dir, userMemoryDir: udir });
 		expect(r.copied).toBe(5);
-		expect(r.routed.user).toBe(4); // 2 USER + global + CherryPR-tagged
-		expect(r.routed.project).toBe(1); // the current-project tag
-		// user files exist with type user
+		expect(r.routed.user).toBe(3); // 2 USER + the untagged global
+		expect(r.routed.project).toBe(2); // the current-project tag + the CherryPR tag
 		const userIndex = readFileSync(join(udir, "MEMORY.md"), "utf-8");
 		expect(userIndex).toContain("George");
-		expect(userIndex).toContain("CherryPR"); // foreign tag kept in description
-		// project file routed correctly
+		expect(userIndex).not.toContain("CherryPR"); // foreign sections no longer leak into the user layer
 		const projIndex = readFileSync(join(dir, "MEMORY.md"), "utf-8");
 		expect(projIndex).toContain("bun and vitest");
+		const cherryIndex = readFileSync(join(cherryLayer, "MEMORY.md"), "utf-8");
+		expect(cherryIndex).toContain("CherryPR-specific");
+		// no matching project dir → skipped + noted (re-runnable, idempotent)
+		const bare = importHermesFull({
+			agentDir: agentDir + "-bare",
+			projectMemoryDir: dir + "-bare",
+			userMemoryDir: udir + "-bare",
+		});
+		void bare;
 	});
 
 	it("failures.md → type feedback with category prefix preserved", () => {
@@ -242,10 +253,13 @@ describe("V2-M data-safety (Phase 0 D1/D4)", () => {
 		hermesFixture({
 			failures: `[tool-quirk] grep 在 Zed 里会挂，回退到 bash grep。 <!-- created=2026-08-03, project64=${Buffer.from("CherryPR").toString("base64")} -->`,
 		});
+		// RV-15: the foreign project tag lands in THAT project's layer
+		const cherryLayer = join(agentDir, "projects", "-Users-gd32-Coding-CherryPR", "memory");
+		mkdirSync(cherryLayer, { recursive: true });
 		const r = importHermesFull({ agentDir, projectMemoryDir: dir, userMemoryDir: udir });
 		expect(r.copied).toBe(1);
-		const files = readdirSync(udir).filter((f) => f.startsWith("hermes-"));
-		const content = readFileSync(join(udir, files[0]!), "utf-8");
+		const files = readdirSync(cherryLayer).filter((f) => f.startsWith("hermes-"));
+		const content = readFileSync(join(cherryLayer, files[0]!), "utf-8");
 		expect(content).toContain("type: feedback");
 		expect(content).toContain("[tool-quirk]");
 	});

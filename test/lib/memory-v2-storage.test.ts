@@ -353,3 +353,44 @@ describe("V2 Phase 3 (AD1/AD3/AD4) — injection dedupe + policy text", () => {
 		expect(r?.content?.at(-1)?.text).toContain("30 days ago");
 	});
 });
+
+/* ── R3 layering (spec 2026-10-02-memory-recall-v2 RV-14/15) ── */
+
+import { parsePathsValue, scopeMatches, eligibleMemories } from "../../extensions/memory/memdir.ts";
+
+describe("R3 paths scoping (RV-14)", () => {
+	it("parsePathsValue: inline JSON array, comma form, single glob, ~ untouched for later expansion; junk → undefined", () => {
+		expect(parsePathsValue('["~/Coding/**", "~/Other"]')).toEqual(["~/Coding/**", "~/Other"]);
+		expect(parsePathsValue("~/Coding/**, ~/Other")).toEqual(["~/Coding/**", "~/Other"]);
+		expect(parsePathsValue("~/Coding/**")).toEqual(["~/Coding/**"]);
+		expect(parsePathsValue('["a", 1]')).toEqual(['["a"', '1]']); // invalid JSON array → comma-split fallback keeps the literals
+		expect(parsePathsValue("")).toBeUndefined();
+		expect(parsePathsValue(undefined)).toBeUndefined();
+	});
+
+	it("scopeMatches: ~ expansion + glob match against the canonical root", () => {
+		expect(scopeMatches("/Users/gd32/Coding/CherryDev", ["~/Coding/CherryDev/**"])).toBe(true);
+		expect(scopeMatches("/Users/gd32/Coding/CherryDev", ["~/Coding/**"])).toBe(true);
+		expect(scopeMatches("/Users/gd32/Coding/CherryDev", ["~/Coding/CherryPR/**"])).toBe(false);
+		expect(scopeMatches(undefined, ["~/x/**"])).toBe(false); // no root → scoped entries hide
+	});
+
+	it("eligibleMemories: user entries scoped away are filtered; unscoped stay global; project layer untouched", () => {
+		const { dir, udir } = dirs();
+		writeMemory("user", "scoped.md", "scoped", "cherry only", "user", `---\nbody\npaths: ["~/Coding/CherryPR/**"]`);
+		// writeMemory doesn't support paths — hand-write the file instead
+		writeFileSync(
+			join(udir, "scoped.md"),
+			`---\nname: scoped\ndescription: cherry only\nmetadata:\n  type: user\npaths: ["~/Coding/CherryPR/**"]\n---\n\nscoped body`,
+		);
+		writeMemory("user", "global.md", "global", "global fact", "user", "global body");
+		writeMemory("project", "local.md", "local", "local fact", "project", "local body");
+		const inCherryPR = eligibleMemories(udir, dir, "/Users/gd32/Coding/CherryPR").map((f) => f.key);
+		const inCherryDev = eligibleMemories(udir, dir, "/Users/gd32/Coding/CherryDev").map((f) => f.key);
+		expect(inCherryPR).toContain("user-memory/scoped.md");
+		expect(inCherryDev).not.toContain("user-memory/scoped.md");
+		expect(inCherryDev).toContain("user-memory/global.md");
+		expect(inCherryDev).toContain("memory/local.md");
+		expect(eligibleMemories(udir, dir, undefined).map((f) => f.key)).not.toContain("user-memory/scoped.md");
+	});
+});

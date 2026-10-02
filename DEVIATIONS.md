@@ -228,3 +228,7 @@
 
 78. **附记 A.1 ③ 顺手修复（评审增量）**：automation 写入路径对「body 自带完整 frontmatter 的 op」叠双 frontmatter，correction 的 description 对索引不可见（实证：project 层 `pi-memory-recall-reinject-symptom.md`）。修法：`store.ts` `hoistLeadingFrontmatter`——前导 frontmatter 块的字段提升、body 取其 body-part；红绿钉住（memory-v2-consolidate 新 describe）。
 
+79. **R3 实现范围与 spec 行完全对齐（2026-10-02-memory-recall-v2 R3）**：glob 上提（lib/glob.ts，rules re-export）、paths: 解析与作用域过滤（splitFrontmatter 仅内联列表——块列表行本就整文件判无效，属解析器现状而非新限制）、policy user 索引过滤、automation 三提示词路由指引 + store apply 层 user→project 重路由（projectKey 为 sanitized 目录尾段启发式，worktree 目录会露出 worktree 名——可接受，已注释）、importer 外项目条目改路由（找不到项目层 = skip+注明，替代旧「进 user 层加前缀」——migration 两条用例随之改写）、/memory 错层诊断。**无偏差**；migration 断言改写按 spec §7 R3 行明示登记。
+
+80. **scopeMatches 的目录本体匹配（RV-14 实现细节）**：rules glob 引擎按语义不把 `dir/**` 匹配到 `dir` 本身（激活语义是文件）；召回作用域要「该项目含根目录」。修法：scopeMatches 对每个模式同时尝试 root 与合成子路径 `root/__scope_child__` ——不改 glob 引擎（rules 语义零影响），语义差异收在唯一消费点。
+

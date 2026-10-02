@@ -4,14 +4,15 @@
 
 ## memory 召回 v2 批(2026-10-02,spec 2026-10-02-memory-recall-v2 R1 + 附记 A.1)
 
-**状态:R1 实现完成,三门全绿(check/test/contracts);R3/R2/R0 待做。**
+**状态:R1 + R3 实现完成,R1 已单独提交;R3 三门全绿(46 文件 721 用例 + 契约 27)。R2/R0 待做。**
 
 - **R1 投递重构(D1/D9)**:context 钩子删除;召回 = 每条真实用户消息至多一次,持久化为 `pi-memory-recall` custom message。prompt 路径(before_agent_start 返回 message)+ steer 路径(message_end → 挂起 → 首个 continues=true turn_end 经 sendMessage triggerTurn:false 投递)+ agent_end 中止/清理。全部会话态从 buildSessionProjection 历史推导(硬判重 RV-06 / 已读 RV-07 / 字节预算 RV-08 / recentTools RV-13)。
 - **R1 选择器(D3/D6)**:`selector.ts` LLM 清单判断(新→旧 ≤200 行,recentTools 反噪音,宁空勿滥);`memory.recallModel` 必须显式配置,未配置/无法解析 = 不召回(无词法回退);`recallWaitMs` 默认 4000 钳 0-15000。
 - **删除**:selection.ts / recall-session.ts / context 钩子 / tool_call markRead 分支;新增 recall.ts(深模块三入口)+ selector.ts;llm.ts 抽出 completeText 共享车道;`RECALL_*` 常量入 lib/context-budget.ts(不发布上 bus,DEVIATIONS #77)。
 - **附记 A.1 评审增量全落**:① host-semantics ⑥ 钉真实包 buildSessionProjection 的 custom_message details 存活;② RecallDetailsV1 加 elapsedMs;③ automation 双 frontmatter bug 修复(hoistLeadingFrontmatter,红绿钉住,DEVIATIONS #78);④ docs 两句已知代价(before_agent_start 串行等待、子进程每 dispatch prompt 一次选择器调用)。
 - **测试(replace, don't layer)**:新增 recall.test.ts 11 用例 + memory-llm-selector.test.ts 4 组 + memory.test.ts RV wiring 5 用例;契约登记 P0-CT-08 `pi-memory-recall` 行(先登记后写测试)+ status-entries 冻结 pin;FakeHost FAKEHOST-02(projectionMessages + hasPendingMessages)。删除/改写清单见 DEVIATIONS #74-75。
-- **剩余**:R3 分层治理(paths: 作用域/写侧路由/importer 修正)→ R2 评测工具(只准备)→ R0 存量迁移(逐文件确认);R0 决策已由用户拍板(handoff 附记 A.2)。
+- **R3 分层治理(RV-14/15/16)**:lib/glob.ts 上提(rules re-export);paths: 内联列表解析 + eligibleMemories/policy 索引按 git canonical root 过滤(scopeMatches 含目录本体匹配,DEVIATIONS #80);automation 三提示词注入当前项目名 + 路由规则 + WHAT_NOT_TO_SAVE;store apply 层 user→project 重路由(projectKey 启发式)+ AutomationState.routed;/memory 错层诊断(misplacedUserFiles);importer 外项目条目改路由到对应项目层(缺失 = skip+注明,migration 两用例改写,DEVIATIONS #79)。
+- **剩余**:R2 评测工具(只准备,不跑标注)→ R0 存量迁移(逐文件确认);R0 决策已由用户拍板(handoff 附记 A.2)。
 
 ## goal-hijack 修复批(2026-10-01,spec 2026-10-01-goal-hijack-fix)
 

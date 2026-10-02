@@ -21,6 +21,8 @@
  */
 import { INCLUDE_DEPTH_LIMIT, extractIncludes, parseFrontmatter, type IncludeRef } from "./scan.ts";
 import { RULES_MAX } from "../../lib/context-budget.js";
+export { globToRegExp } from "../../lib/glob.ts";
+import { globMatches } from "../../lib/glob.ts";
 
 export type RuleScope = "builtin" | "global" | "compat" | "project";
 
@@ -186,55 +188,6 @@ export function setRulesHome(home: string): void {
 	globalHome = home;
 }
 
-function matchesGlobs(path: string, globs: string[]): boolean {
-	for (const g of globs) {
-		if (globToRegExp(g).test(path)) return true;
-	}
-	return false;
-}
-
-/** Minimal glob → RegExp (**, *, ?, {a,b}, and plain substrings). */
-export function globToRegExp(glob: string): RegExp {
-	let re = "";
-	for (let i = 0; i < glob.length; i++) {
-		const c = glob[i];
-		if (c === "*") {
-			if (glob[i + 1] === "*") {
-				re += ".*";
-				i++;
-				if (glob[i + 1] === "/") i++;
-			} else {
-				re += "[^/]*";
-			}
-		} else if (c === "?") re += "[^/]";
-		else if (c === "{") {
-			re += "(?:";
-			// consume to matching }
-			let depth = 1;
-			let j = i + 1;
-			let buf = "";
-			for (; j < glob.length && depth > 0; j++) {
-				const d = glob[j];
-				if (d === "{") depth++;
-				else if (d === "}") {
-					depth--;
-					if (depth === 0) break;
-				} else if (d === "," && depth === 1) {
-					re += buf + "|";
-					buf = "";
-				} else buf += escapeRe(d);
-			}
-			re += buf + ")";
-			i = j;
-		} else re += escapeRe(c);
-	}
-	return new RegExp(`(?:^|/|\\\\)${re}(?:$|/|\\\\)`);
-}
-
-function escapeRe(c: string): string {
-	return /[.*+?^${}()|[\]\\]/.test(c) ? `\\${c}` : c;
-}
-
 export interface RenderResult {
 	output: string;
 	/** Rules whose globs matched touchedPaths (activation fold-ins). */
@@ -259,7 +212,7 @@ export function renderRules(input: RenderRulesInput): RenderResult {
 
 	for (const rule of rules) {
 		if (rule.content.length > budget) continue; // >40K → drop entirely
-		const touchedHit = rule.globs !== undefined && touched.some((p) => matchesGlobs(p, rule.globs!));
+		const touchedHit = rule.globs !== undefined && touched.some((p) => globMatches(p, rule.globs!));
 		const inline = rule.always || touchedHit;
 		if (touchedHit) activated.push(rule.name);
 		const size = rule.content.length + rule.name.length + 16;

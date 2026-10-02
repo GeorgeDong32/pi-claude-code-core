@@ -13,6 +13,8 @@ import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { MEMORY_INDEX_MAX } from "../../lib/context-budget.ts";
+import { globMatches } from "../../lib/glob.ts";
+import { homedir } from "node:os";
 
 export interface MemoryEntry {
 	file: string;
@@ -21,6 +23,9 @@ export interface MemoryEntry {
 	type: string;
 	/** frontmatter metadata.pinned — always-on injection (V2-D5 pin downgrade) */
 	pinned?: boolean;
+	/** RV-14: user-layer scoping globs (inline list or comma-separated,
+	 * `~` expanded at match time). Absent = global (visible everywhere). */
+	paths?: string[];
 }
 
 export interface ReconcileResult {
@@ -59,7 +64,7 @@ export function slugify(name: string): string {
 
 /** Split into frontmatter fields + body with ONE close-marker scan (K6);
  * null when the frontmatter is absent or invalid for indexing. */
-export function splitFrontmatter(content: string): { title: string; description: string; type: string; pinned: boolean; body: string } | null {
+export function splitFrontmatter(content: string): { title: string; description: string; type: string; pinned: boolean; paths?: string[]; body: string } | null {
 	if (!content.startsWith("---")) return null;
 	const lines = content.split("\n");
 	let close = -1;
@@ -84,15 +89,36 @@ export function splitFrontmatter(content: string): { title: string; description:
 		description: fm.description,
 		type: fm.type,
 		pinned: fm.pinned === "true",
+		paths: parsePathsValue(fm.paths),
 		body: lines.slice(close + 1).join("\n").replace(/^\n+/, ""),
 	};
 }
 
+/** RV-14: parse a `paths:` frontmatter value — inline JSON array
+ * (`paths: ["~/A/**", "~/B"]`), comma-separated (`paths: ~/A/**, ~/B`) or a
+ * single glob. Empty/unparsable → undefined (treated as global). NOTE:
+ * block-list lines (`  - foo`) never reach here — the strict key:value scan
+ * rejects them whole-file, which is why ONLY the inline forms are legal. */
+export function parsePathsValue(raw: string | undefined): string[] | undefined {
+	if (!raw || !raw.trim()) return undefined;
+	const text = raw.trim();
+	if (text.startsWith("[")) {
+		try {
+			const parsed: unknown = JSON.parse(text);
+			if (Array.isArray(parsed) && parsed.every((v) => typeof v === "string") && parsed.length > 0) return parsed as string[];
+		} catch {
+			/* fall through to comma form */
+		}
+	}
+	const items = text.split(",").map((s) => s.trim().replace(/^(["'])(.*)\1$/, "$2")).filter(Boolean);
+	return items.length > 0 ? items : undefined;
+}
+
 /** Parse a memory file's frontmatter; null when invalid for indexing. */
-export function parseMemoryFrontmatter(content: string): { title: string; description: string; type: string; pinned?: boolean } | null {
+export function parseMemoryFrontmatter(content: string): { title: string; description: string; type: string; pinned?: boolean; paths?: string[] } | null {
 	const split = splitFrontmatter(content);
 	if (!split) return null;
-	return { title: split.title, description: split.description, type: split.type, pinned: split.pinned };
+	return { title: split.title, description: split.description, type: split.type, pinned: split.pinned, paths: split.paths };
 }
 
 /** Scan the memory dir and classify files (valid entries + skipped count). */
@@ -108,7 +134,7 @@ export function scanMemoryDir(memoryDir: string): { entries: MemoryEntry[]; skip
 				skipped++;
 				continue;
 			}
-			entries.push({ file, title: fm.title, description: fm.description, type: fm.type, pinned: fm.pinned });
+			entries.push({ file, title: fm.title, description: fm.description, type: fm.type, pinned: fm.pinned, ...(fm.paths ? { paths: fm.paths } : {}) });
 		} catch {
 			skipped++;
 		}
@@ -171,7 +197,7 @@ export function scanMemoryDirCached(memoryDir: string): { files: MemoryFile[]; s
 				continue;
 			}
 			files.push({
-				entry: { file, title: fm.title, description: fm.description, type: fm.type, pinned: fm.pinned },
+				entry: { file, title: fm.title, description: fm.description, type: fm.type, pinned: fm.pinned, ...(fm.paths ? { paths: fm.paths } : {}) },
 				body: content,
 				mtimeMs: st.mtimeMs,
 			});
@@ -270,10 +296,13 @@ export function memoryKey(layer: "user" | "project", file: string): string {
  * Newest-first so manifest rows front-load fresh memories (RV-12 ordering
  * happens here once; the selector just renders). R3 will layer `paths:`
  * scoping on top of this seam. */
-export function eligibleMemories(userDir: string, projectDir: string): Array<import("./recall.ts").RecallFile> {
+export function eligibleMemories(userDir: string, projectDir: string, projectRoot?: string): Array<import("./recall.ts").RecallFile> {
 	const out: Array<import("./recall.ts").RecallFile> = [];
 	for (const [layer, dir] of [["user", userDir], ["project", projectDir]] as const) {
 		for (const f of scanMemoryDirCached(dir).files) {
+			// RV-14: user-layer entries with `paths:` only surface when the
+			// session's git canonical root matches (no paths = global)
+			if (layer === "user" && f.entry.paths && !scopeMatches(projectRoot, f.entry.paths)) continue;
 			out.push({
 				key: memoryKey(layer, f.entry.file),
 				file: f.entry.file,
@@ -289,4 +318,15 @@ export function eligibleMemories(userDir: string, projectDir: string): Array<imp
 	}
 	out.sort((a, b) => b.mtimeMs - a.mtimeMs);
 	return out;
+}
+
+/** RV-14: does the session root match any scoping glob (~ expanded)? A
+ * missing root never matches a scoped entry (conservative: hide). Each
+ * pattern is tried against the root AND a synthetic child path — the rules
+ * glob engine (deliberately) does not match a directory against its own
+ * `dir/**` pattern, but scoping means "this project", root included. */
+export function scopeMatches(projectRoot: string | undefined, patterns: readonly string[]): boolean {
+	if (!projectRoot) return false;
+	const expanded = patterns.map((p) => (p.startsWith("~/") ? p.replace(/^~/, homedir()) : p));
+	return globMatches(projectRoot, expanded) || globMatches(`${projectRoot}/__scope_child__`, expanded);
 }

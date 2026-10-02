@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Added (memory layering governance — spec 2026-10-02-memory-recall-v2 R3)
+- **`paths:` scoping for user-layer memories (RV-14)**: a user memory may carry `paths: ["~/Coding/SomeRepo/**"]` (inline JSON list or comma-separated; `~` expands at read time) — it then surfaces (recall manifest, system-prompt index, pinned bodies) ONLY in sessions whose git canonical root matches. Absent `paths:` = global, as before. The write policy now teaches this.
+- **Write-side routing guard (RV-15)**: automation ops targeting the user layer that are anchored to the CURRENT project (mention its key, no `paths:`) are re-routed to the project layer at apply time, with the reroute surfaced in `/memory`; automation prompts now carry current-repository routing rules + a WHAT-NOT-TO-SAVE list (no task progress, nothing derivable from code/git, no one-off debugging recipes).
+- **Hermes importer no longer leaks foreign projects into the user layer (RV-15)**: sections tagged with another project now route to `~/.pi/agent/projects/*-<name>/memory` (index reconciled); no matching project dir → skipped and noted instead of silently entering the global layer.
+- **`/memory` misplaced-file diagnostics (RV-16)**: lists user-layer files that mention a known project key and carry no `paths:` — the R0 migration worklist.
+- `lib/glob.ts`: the glob engine uprooted from rules/render (one engine for rule activation + memory scoping); rules re-exports from lib.
+
 ### Changed (memory recall v2 — BEHAVIOR CHANGE, spec 2026-10-02-memory-recall-v2 R1)
 - **Recall now requires explicit configuration**: with no `memory.recallModel` in `~/.pi/agent/settings.json` there is NO automatic recall at all (previously lexical recall ran by default). Configured: recall = at most once per real user message, persisted into the transcript as a `pi-memory-recall` custom message — the request-level context projection (which re-injected one frozen selection on every request: ~30× cache-miss bytes, the "same five memories every turn" failure) is gone. Session-scoped hard dedup (one file surfaces at most once per compaction window), history-derived read suppression and byte budget, per-file truncation with a read-the-full-file path note instead of silent >4KB skips.
 - **LLM manifest selector** (CC-style mechanism, own wording): reads `[layer][type] key (age): description` rows (newest first, ≤200), "empty list is a good answer" posture, recentTools anti-noise (usage docs for tools already in use are not recalled; gotchas still are). `memory.recallWaitMs` (default 4000ms, clamp 0–15000) bounds the prompt-path wait; a slow selector parks its result and delivers it at the next continuing turn_end.

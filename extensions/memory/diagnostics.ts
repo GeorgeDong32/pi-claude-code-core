@@ -28,6 +28,9 @@ export interface MemoryDiagnosticsInput {
 	readonly consolidation: { inFlight: boolean; attempts: number; lastReason?: string | null };
 	readonly yielded: { yielded: boolean; detectedBy?: string | null };
 	readonly hermesDataFound: boolean;
+	/** RV-16: user-layer files that mention a known project key and carry no
+	 * `paths:` scoping — misplaced candidates for R0 migration. */
+	readonly misplaced: Array<{ file: string; key: string }>;
 	/** RV: recall lane status — off when memory.recallModel is unset or
 	 * unresolvable (D3); session counts derive from the projection history. */
 	readonly recall: {
@@ -54,6 +57,12 @@ export function renderMemoryDiagnostics(input: MemoryDiagnosticsInput): string {
 			? `recall: on (${input.recall.model}, wait ${input.recall.waitMs}ms) — session ${input.recall.sessionFiles} file(s) ${input.recall.sessionBytes}B; selections ${input.recall.stats.selections} / empty ${input.recall.stats.empties} / failures ${input.recall.stats.failures}${input.recall.stats.lastReason ? ` (last: ${input.recall.stats.lastReason})` : ""}, deliveries ${input.recall.stats.deliveries}`
 			: `recall: off${input.recall.reason ? ` (${input.recall.reason})` : ""} — set memory.recallModel in ~/.pi/agent/settings.json to enable`,
 		...(input.hermesDataFound ? ["hermes data found — run /memory-import-hermes to migrate it, then uninstall hermes"] : []),
+		...(input.misplaced.length > 0
+			? [
+					`--- misplaced user-layer files (${input.misplaced.length}; add paths: or move to the project layer) ---`,
+					...input.misplaced.map((m) => `- ${m.file} (mentions project "${m.key}")`),
+				]
+			: []),
 		`--- user memories ---`,
 		...input.userScan.entries.map((e) => `- [${e.title}](${e.file}) — ${e.description} [${e.type}]`),
 		`--- project memories ---`,

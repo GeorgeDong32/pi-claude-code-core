@@ -254,13 +254,33 @@ export function importHermesFull(args: {
 	};
 
 	// route a tagged/untagged section from a global store
+	// RV-15 (spec 2026-10-02-memory-recall-v2): sections tagged with ANOTHER
+	// project go to THAT project's layer under ~/.pi/agent/projects/*-<name>/
+	// memory — never the user layer (the old [name]-prefix routing was the
+	// measured cross-project leakage source, RC-4). No matching project dir →
+	// skipped and noted (re-run import after opening that project once).
+	const foreignProjectDir = (name: string): string | null => {
+		const projectsRoot = join(args.agentDir, "projects");
+		if (!existsSync(projectsRoot)) return null;
+		const sanitized = name.replace(/[\\/]/g, "-");
+		const dirs = readdirSync(projectsRoot).filter((d) => d === sanitized || d.endsWith(`-${sanitized}`)).sort((a, b) => b.length - a.length);
+		return dirs.length > 0 ? join(projectsRoot, dirs[0]!, "memory") : null;
+	};
+	const foreignDirs = new Set<string>();
 	const routeGlobal = (section: HermesSection, type: string, categoryPrefix: string): void => {
 		if (section.project64) {
 			const name = decodeProject64(section.project64);
 			if (name && projectMatchesCurrent(name, args.projectMemoryDir)) {
 				count(importSection(section, args.projectMemoryDir, type, categoryPrefix, seen), "project");
 			} else if (name) {
-				count(importSection(section, args.userMemoryDir, type === "user" ? "user" : type === "project" ? "reference" : type, `[${name}] `, seen), "user");
+				const foreign = foreignProjectDir(name);
+				if (foreign) {
+					count(importSection(section, foreign, type === "user" ? "user" : type === "project" ? "reference" : type, "", seen), "project");
+					foreignDirs.add(foreign);
+				} else {
+					report.skipped++;
+					report.notes.push(`[${name}] section skipped — no project layer under ~/.pi/agent/projects matches (open that project once, then re-run; idempotent)`);
+				}
 			} else {
 				count(importSection(section, args.userMemoryDir, type, categoryPrefix, seen), "user");
 			}
@@ -319,6 +339,13 @@ export function importHermesFull(args: {
 	}
 	if (report.otherProjects.length > 0) {
 		report.notes.push(`other hermes projects not migrated (run the command inside them): ${report.otherProjects.join(", ")}`);
+	}
+	for (const d of foreignDirs) {
+		try {
+			reconcileMemoryIndex(d);
+		} catch {
+			/* foreign index converges when that project next opens */
+		}
 	}
 	return report;
 }

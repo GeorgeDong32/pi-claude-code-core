@@ -153,6 +153,24 @@ Respond with JSON only, no markdown fences: a single object whose operations fie
 const FLUSH_SYSTEM = `The session is being compressed or closed and is about to lose context. Save anything worth remembering — prioritize user preferences, corrections, and recurring patterns over task-specific detail.
 Respond with JSON only, no markdown fences: a single object whose operations field is an array (add, replace or remove; layer user or project; add carries name, description, type, body; replace carries file, body and an exact old_text quote from the current file; remove carries file). If nothing is durable, return an empty operations array.`;
 
+/** RV-15: derive a friendly project key from the project memory dir
+ * (~/.pi/agent/projects/-Users-gd32-Coding-CherryDev/memory → "CherryDev").
+ * Heuristic tail-segment — good enough to anchor write-side routing and
+ * prompt guidance; worktree dirs surface the worktree name (acceptable). */
+export function projectKeyForDir(projectDir: string): string | undefined {
+	const base = projectDir.replace(/\/memory$/, "").split("/").pop() ?? "";
+	const key = base.replace(/^-+/, "").split("-").pop() ?? "";
+	return key.length >= 3 ? key : undefined;
+}
+
+/** RV-15: write-side routing + WHAT-NOT-TO-SAVE guidance appended to every
+ * automation system prompt (own wording; the current project anchors the
+ * layer decision). */
+function routingGuidance(projectKey: string | undefined): string {
+	const repo = projectKey ? `Current repository: ${projectKey}.` : "";
+	return `\n\n${repo} Routing rules: a memory that only applies to THIS repository (its workflows, conventions, failures, tool quirks met inside it) goes to layer "project" — never "user". Layer "user" is only for what holds in EVERY project (identity, communication style, machine-level facts, behavior of cross-project tools). A preference that would contradict another project's workflow is project-scoped, not global; if a user-layer file must stay out of most projects, add a paths: ["~/some/dir/**"] line to its frontmatter. WHAT NOT TO SAVE: task progress or transient state; anything derivable from the code or git history; step-by-step debugging recipes for one-off incidents; secrets.`;
+}
+
 // ─── state surfaced to /memory ───
 
 export interface AutomationState {
@@ -161,6 +179,9 @@ export interface AutomationState {
 	corrections: number;
 	flushes: number;
 	opsApplied: number;
+	/** RV-15: user→project routed writes (write-side guard). */
+	routed: number;
+	lastRouted?: string;
 	lastReview?: string;
 	lastCorrection?: string;
 	lastFlush?: string;
@@ -294,8 +315,10 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): void {
 		extraSignal?: AbortSignal,
 	): Promise<number> {
 		const model = sideChannelModel(ctx);
+		const projectKey = projectKeyForDir(dirs(ctx).project);
+		const routedNotes: string[] = [];
 		const request = {
-			systemPrompt,
+			systemPrompt: systemPrompt + routingGuidance(projectKey),
 			userPrompt: [
 				memoryDigest(dirs(ctx)),
 				"",
@@ -317,7 +340,11 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): void {
 			return 0;
 		}
 		if (completion.ops.length === 0) return 0;
-		const outcome = applyMemoryOps(completion.ops as MemoryOp[], dirs(ctx));
+		const outcome = applyMemoryOps(completion.ops as MemoryOp[], dirs(ctx), { projectKey, routedNotes });
+		if (routedNotes.length > 0) {
+			state.routed += routedNotes.length;
+			state.lastRouted = routedNotes.join("; ");
+		}
 		state.opsApplied += outcome.applied;
 		if (outcome.error) state.lastError = `${kind}: ${outcome.error}`;
 		return outcome.applied;

@@ -123,12 +123,29 @@ function splitContent(content: string): { name: string; description: string; typ
 export function applyMemoryOps(
 	ops: MemoryOp[],
 	dirs: { user: string; project: string },
+	opts: { projectKey?: string; routedNotes?: string[] } = {},
 ): OpsOutcome {
 	const outcome: OpsOutcome = { applied: 0, skipped: [] };
 	if (ops.length === 0) return outcome;
 	if (ops.length > 200) return { applied: 0, skipped: [], error: "batch too large (>200 ops)" };
 
 	const dirFor = (layer: MemoryLayer): string => (layer === "user" ? dirs.user : dirs.project);
+
+	// RV-15: user-layer writes that are anchored to the CURRENT project and
+	// carry no `paths:` scoping are routed to the project layer (write-side
+	// guard against cross-project leakage — the R0 archaeology found 12/17
+	// user-layer files were project-anchored).
+	const routeLayer = (op: MemoryOp): MemoryLayer => {
+		const key = opts.projectKey;
+		if (!key || op.layer !== "user") return op.layer;
+		const haystack = `${op.name ?? ""} ${op.description ?? ""} ${op.body ?? ""}`;
+		const scoped = /(^|\n)paths:\s*/.test(op.body ?? "");
+		if (!scoped && key.length >= 3 && haystack.toLowerCase().includes(key.toLowerCase())) {
+			opts.routedNotes?.push(`${op.file ?? op.name ?? "(unnamed)"}: user → project (anchored to ${key})`);
+			return "project";
+		}
+		return op.layer;
+	};
 
 	// ---- preflight: validate every op, collect planned writes/deletes ----
 	type Planned = { kind: "write"; file: string; dir: string; content: string } | { kind: "delete"; file: string; dir: string };
@@ -145,7 +162,7 @@ export function applyMemoryOps(
 
 	for (const rawOp of ops) {
 		const op = hoistLeadingFrontmatter(rawOp);
-		const dir = dirFor(op.layer);
+		const dir = dirFor(routeLayer(op));
 		const existing = listMemoryFiles(dir);
 
 		if (op.action === "add") {

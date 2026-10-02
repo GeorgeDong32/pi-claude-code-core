@@ -366,3 +366,40 @@ describe("store op-body frontmatter hoist (spec 2026-10-02-memory-recall-v2)", (
 		expect(parseMemoryFrontmatter(written)?.description).toBe("[correction] new description line");
 	});
 });
+
+/* ── R3 write-side routing (RV-15): user-layer ops anchored to the current
+ * project land in the PROJECT layer — the measured cross-project leakage
+ * guard (12/17 user-layer files were project-anchored). ── */
+describe("store user→project routing (RV-15)", () => {
+	it("a user-layer add mentioning the project key routes to the project layer; scoped (paths:) and clean ops stay user", () => {
+		const target = resolveMemoryPaths(project, home);
+		const tdir = target.memoryDir;
+		const tudir = target.userMemoryDir;
+		mkdirSync(tdir, { recursive: true });
+		const notes: string[] = [];
+		const out = applyMemoryOps(
+			[
+				{ action: "add", layer: "user", name: "cherrydev-workflow", description: "CherryDev repo conventions", type: "project", body: "CherryDev specific workflow facts" },
+				{ action: "add", layer: "user", name: "global-style", description: "communication style", type: "user", body: "reply in chinese" },
+			],
+			{ user: tudir, project: tdir },
+			{ projectKey: "CherryDev", routedNotes: notes },
+		);
+		expect(out.applied).toBe(2);
+		expect(notes).toHaveLength(1);
+		expect(notes[0]).toContain("cherrydev-workflow");
+		expect(existsSync(join(tdir, "cherrydev-workflow.md"))).toBe(true);
+		expect(existsSync(join(tudir, "global-style.md"))).toBe(true);
+		expect(existsSync(join(tudir, "cherrydev-workflow.md"))).toBe(false);
+		// a paths-scoped body is an explicit scoping decision — not routed
+		const notes2: string[] = [];
+		const out2 = applyMemoryOps(
+			[{ action: "add", layer: "user", name: "scoped-pref", description: "solo repos preference", type: "user", body: '---\nname: scoped-pref\ndescription: d\npaths: ["~/Coding/CodeIsland/**"]\n---\n\nprefers minimal git flow' }],
+			{ user: tudir, project: tdir },
+			{ projectKey: "CherryDev", routedNotes: notes2 },
+		);
+		expect(out2.applied).toBe(1);
+		expect(notes2).toHaveLength(0);
+		expect(existsSync(join(tudir, "scoped-pref.md"))).toBe(true);
+	});
+});

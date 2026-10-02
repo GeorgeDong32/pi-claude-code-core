@@ -58,6 +58,10 @@ related memories with [[their-slug]].
 Both memory directories already exist — write files directly, no ls/mkdir
 needed. The MEMORY.md index in each layer is derived automatically; do not
 edit it by hand.
+Scope: THIS repository's facts belong in PROJECT memory; only what holds in
+every project belongs in USER memory. A user-layer file that should stay out
+of most projects may carry a scoping line in its frontmatter —
+paths: ["~/Coding/SomeRepo/**"] (inline list; ~ expands at read time).
 Write memories proactively when the user states a durable preference, a
 correction, or a project fact that is not derivable from the repo. Never
 store secrets or credentials.
