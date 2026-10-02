@@ -35,14 +35,29 @@ export interface MemorySettings {
 	automation: boolean;
 	/** side-channel model override "provider/id" (default: session model) */
 	model?: string;
+	/** RV-18/D3: recall selector model "provider/id" — REQUIRED for recall;
+	 * unset / unresolvable = recall stays off (no lexical fallback). */
+	recallModel?: string;
+	/** RV-18/D4: per-message selector wait budget in ms (default 4000). */
+	recallWaitMs?: number;
 }
+
+/** The default wait budget for the prompt-path selector race (D4). */
+export const DEFAULT_RECALL_WAIT_MS = 4_000;
+
+/** Clamp bounds for memory.recallWaitMs (RV-18). */
+export const RECALL_WAIT_MIN_MS = 0;
+export const RECALL_WAIT_MAX_MS = 15_000;
 
 export function loadMemorySettings(agentDir: string): MemorySettings {
 	try {
-		const raw = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8")) as { memory?: { automation?: unknown; model?: unknown } };
+		const raw = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8")) as { memory?: { automation?: unknown; model?: unknown; recallModel?: unknown; recallWaitMs?: unknown } };
+		const wait = typeof raw.memory?.recallWaitMs === "number" ? raw.memory.recallWaitMs : undefined;
 		return {
 			automation: raw.memory?.automation !== false,
 			model: typeof raw.memory?.model === "string" ? raw.memory.model : undefined,
+			recallModel: typeof raw.memory?.recallModel === "string" ? raw.memory.recallModel : undefined,
+			recallWaitMs: wait === undefined ? undefined : Math.min(RECALL_WAIT_MAX_MS, Math.max(RECALL_WAIT_MIN_MS, wait)),
 		};
 	} catch {
 		return { automation: true };

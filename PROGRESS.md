@@ -2,6 +2,17 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## memory 召回 v2 批(2026-10-02,spec 2026-10-02-memory-recall-v2 R1 + 附记 A.1)
+
+**状态:R1 实现完成,三门全绿(check/test/contracts);R3/R2/R0 待做。**
+
+- **R1 投递重构(D1/D9)**:context 钩子删除;召回 = 每条真实用户消息至多一次,持久化为 `pi-memory-recall` custom message。prompt 路径(before_agent_start 返回 message)+ steer 路径(message_end → 挂起 → 首个 continues=true turn_end 经 sendMessage triggerTurn:false 投递)+ agent_end 中止/清理。全部会话态从 buildSessionProjection 历史推导(硬判重 RV-06 / 已读 RV-07 / 字节预算 RV-08 / recentTools RV-13)。
+- **R1 选择器(D3/D6)**:`selector.ts` LLM 清单判断(新→旧 ≤200 行,recentTools 反噪音,宁空勿滥);`memory.recallModel` 必须显式配置,未配置/无法解析 = 不召回(无词法回退);`recallWaitMs` 默认 4000 钳 0-15000。
+- **删除**:selection.ts / recall-session.ts / context 钩子 / tool_call markRead 分支;新增 recall.ts(深模块三入口)+ selector.ts;llm.ts 抽出 completeText 共享车道;`RECALL_*` 常量入 lib/context-budget.ts(不发布上 bus,DEVIATIONS #77)。
+- **附记 A.1 评审增量全落**:① host-semantics ⑥ 钉真实包 buildSessionProjection 的 custom_message details 存活;② RecallDetailsV1 加 elapsedMs;③ automation 双 frontmatter bug 修复(hoistLeadingFrontmatter,红绿钉住,DEVIATIONS #78);④ docs 两句已知代价(before_agent_start 串行等待、子进程每 dispatch prompt 一次选择器调用)。
+- **测试(replace, don't layer)**:新增 recall.test.ts 11 用例 + memory-llm-selector.test.ts 4 组 + memory.test.ts RV wiring 5 用例;契约登记 P0-CT-08 `pi-memory-recall` 行(先登记后写测试)+ status-entries 冻结 pin;FakeHost FAKEHOST-02(projectionMessages + hasPendingMessages)。删除/改写清单见 DEVIATIONS #74-75。
+- **剩余**:R3 分层治理(paths: 作用域/写侧路由/importer 修正)→ R2 评测工具(只准备)→ R0 存量迁移(逐文件确认);R0 决策已由用户拍板(handoff 附记 A.2)。
+
 ## goal-hijack 修复批(2026-10-01,spec 2026-10-01-goal-hijack-fix)
 
 **状态:实现完成 + 对抗 review 通过折入(v1.2,F1-F9 全处置:runner env 纪律/GH-04 断言/台账同步),三门全绿(常规与模拟子代理 env 双复验)。**

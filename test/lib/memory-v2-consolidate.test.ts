@@ -16,6 +16,7 @@ import { FakeHost, clearCoreGlobals, snapshotCoreGlobals } from "../contracts/fa
 import { resetCoreBusForTests } from "../../extensions/bus.ts";
 import memoryExtension from "../../extensions/memory/index.ts";
 import { applyMemoryOps, acquireLayerLock, layerStats, type MemoryOp } from "../../extensions/memory/store.ts";
+import { parseMemoryFrontmatter } from "../../extensions/memory/memdir.ts";
 import {
 	runConsolidation,
 	buildConsolidationDirective,
@@ -338,5 +339,30 @@ describe("V2 Phase 2 (B4) — same-batch duplicate adds", () => {
 		);
 		expect(out.applied).toBe(1);
 		expect(out.skipped.some((sk) => sk.reason!.includes("not found"))).toBe(true);
+	});
+});
+
+/* ── 附记 A.1 ③: LLM ops returning a FULL file in body must not stack two
+ * frontmatter blocks (live regression: pi-memory-recall-reinject-symptom,
+ * 2026-10-02 — a correction's description was invisible to the index). ── */
+describe("store op-body frontmatter hoist (spec 2026-10-02-memory-recall-v2)", () => {
+	it("a replace op whose body is a full file renders ONE frontmatter block with the NEW fields", () => {
+		const target = resolveMemoryPaths(project, home);
+		const tdir = target.memoryDir;
+		const tudir = target.userMemoryDir;
+		mkdirSync(tdir, { recursive: true });
+		writeFileSync(join(tdir, "symptom.md"), `---\nname: symptom\ndescription: "[insight] old description line"\nmetadata:\n  type: project\n---\n\nold body\n`);
+		const fullFileBody = `---\nname: symptom\ndescription: "[correction] new description line"\nmetadata:\n  type: project\n---\n\ncorrected body text`;
+		const out = applyMemoryOps(
+			[{ action: "replace", layer: "project", file: "symptom.md", body: fullFileBody, old_text: "old body" }],
+			{ user: tudir, project: tdir },
+		);
+		expect(out.applied).toBe(1);
+		const written = readFileSync(join(tdir, "symptom.md"), "utf-8");
+		expect(written.match(/^---$/gm)?.length).toBe(2); // exactly one frontmatter block
+		expect(written).toContain("[correction] new description line");
+		expect(written).not.toContain("[insight] old description line");
+		// the index (splitFrontmatter view) now sees the corrected description
+		expect(parseMemoryFrontmatter(written)?.description).toBe("[correction] new description line");
 	});
 });

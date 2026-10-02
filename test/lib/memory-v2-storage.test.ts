@@ -14,7 +14,8 @@ import { resetCoreBusForTests } from "../../extensions/bus.ts";
 import memoryExtension from "../../extensions/memory/index.ts";
 import { parseMemoryFrontmatter, scanMemoryDir, reconcileMemoryIndex } from "../../extensions/memory/memdir.ts";
 import { resolveMemoryPaths, isMemoryWritePath } from "../../extensions/memory/paths.ts";
-import { freshnessHeader } from "../../extensions/memory/selection.ts";
+import { freshnessHeader } from "../../extensions/memory/recall.ts";
+import type { Selector, SelectorOutcome } from "../../extensions/memory/selector.ts";
 import { userLayerSection, projectLayerSection, buildPolicyInjection, POLICY_COMPACT } from "../../extensions/memory/policy.ts";
 import { guardMemoryWrites } from "../../extensions/memory/guard.ts";
 import { USER_INDEX_MAX, PINNED_TOTAL_MAX } from "../../extensions/memory/policy.ts";
@@ -36,6 +37,28 @@ function setup(): FakeHost {
 	const host = new FakeHost();
 	memoryExtension(host.asPi());
 	return host;
+}
+
+/** RV wiring helper: settings with recallModel + a recording fake selector. */
+function setupWithSelector(keys: string[], log: Array<{ query: string; candidates: string[] }> = []): FakeHost {
+	mkdirSync(join(home, ".pi", "agent"), { recursive: true });
+	writeFileSync(join(home, ".pi", "agent", "settings.json"), JSON.stringify({ memory: { recallModel: "test/selector-1" } }));
+	const factory = (): Selector => ({
+		async select(req): Promise<SelectorOutcome> {
+			log.push({ query: req.query, candidates: req.candidates.map((c) => c.key) });
+			return { kind: "selected", keys, elapsedMs: 1 };
+		},
+	});
+	const host = new FakeHost();
+	memoryExtension(host.asPi(), { selectorFactory: factory });
+	return host;
+}
+
+/** A ctx whose modelRegistry resolves the configured recallModel. */
+function recallCtx(host: FakeHost, opts: { cwd: string; projectionMessages?: unknown[] }): Record<string, unknown> {
+	const ctx = host.makeCtx({ cwd: opts.cwd, ui: true, projectionMessages: opts.projectionMessages ?? [] });
+	ctx.modelRegistry = { getAll: () => [{ provider: "test", id: "selector-1" }] };
+	return ctx;
 }
 
 function writeMemory(layer: "user" | "project", name: string, title: string, description: string, type = "project", body = "body text", pinned = false): void {
@@ -148,21 +171,24 @@ describe("V2-M1 two-layer injection", () => {
 	});
 });
 
-describe("V2-M1 selection pooling", () => {
-	it("context hook injects user-layer files with the user-memory/ header", async () => {
+describe("V2-M1 selection pooling (RV semantics)", () => {
+	it("before_agent_start delivers user-layer files with the user-memory/ header as a persisted message", async () => {
 		writeMemory("user", "lang.md", "language", "replies language chinese", "user", "所有回复默认中文");
 		writeMemory("project", "build.md", "build", "build command", "project", "bun run check");
-		const host = setup();
-		const ctx = host.makeCtx({ cwd: project, ui: true });
+		const log: Array<{ query: string; candidates: string[] }> = [];
+		const host = setupWithSelector(["user-memory/lang.md"], log);
+		const ctx = recallCtx(host, { cwd: project });
 		await host.fire("session_start", {}, ctx);
-		const handler = host.handlers.get("context")![0] as (e: unknown, c: unknown) => Promise<{ messages?: Array<Record<string, unknown>> } | undefined>;
-		const r = (await handler(
-			{ messages: [{ role: "user", content: [{ type: "text", text: "回复语言偏好是什么 language preference" }] }] },
-			ctx,
-		))!;
-		const injection = r.messages!.at(-1) as { customType: string; content: Array<{ text: string }> };
-		expect(injection.customType).toBe("pi-memory-recall");
-		expect(injection.content[0].text).toContain("(user-memory/lang.md)");
+		const r = (await host.fire("before_agent_start", { systemPrompt: "BASE", prompt: "回复语言偏好是什么 language preference" }, ctx)) as {
+			message?: { customType: string; content: Array<{ text: string }>; display: boolean; details: { v: number; delivery: string } };
+		};
+		expect(r?.message?.customType).toBe("pi-memory-recall");
+		expect(r.message!.content[0].text).toContain("(user-memory/lang.md)");
+		expect(r.message!.display).toBe(false);
+		expect(r.message!.details.v).toBe(1);
+		expect(r.message!.details.delivery).toBe("immediate");
+		expect(log[0]!.candidates).toContain("user-memory/lang.md");
+		expect(log[0]!.candidates).toContain("memory/build.md");
 	});
 });
 
@@ -270,40 +296,40 @@ describe("V2 Phase 2 (B5) — exact lane accounting", () => {
 });
 
 describe("V2 Phase 3 (AD1/AD3/AD4) — injection dedupe + policy text", () => {
-	it("AD1 (v2 re-scoped, MR-05): a prior recall block in the list neither becomes the prompt nor suppresses re-injection", async () => {
+	it("RV-06: a prior recall entry in the history never re-enters the manifest (hard dedup, replaces billing-only MR-05)", async () => {
 		writeMemory("user", "lang.md", "language", "replies language chinese", "user", "所有回复默认中文");
-		const host = setup();
-		const ctx = host.makeCtx({ cwd: project, ui: true });
+		const log: Array<{ query: string; candidates: string[] }> = [];
+		const host = setupWithSelector(["user-memory/lang.md"], log);
+		const priorRecall = {
+			role: "custom",
+			customType: "pi-memory-recall",
+			details: { v: 1, delivery: "immediate", model: "test/selector-1", files: [{ key: "user-memory/lang.md", bytes: 120, truncated: false }], bytes: 200, elapsedMs: 1 },
+		};
+		const ctx = recallCtx(host, { cwd: project, projectionMessages: [priorRecall] });
 		await host.fire("session_start", {}, ctx);
-		const handler = host.handlers.get("context")![0] as (e: unknown, c: unknown) => Promise<{ messages?: Array<Record<string, unknown>> } | undefined>;
-		const userMsg = { role: "user", content: [{ type: "text", text: "回复语言偏好是什么 language preference" }] };
-		const first = (await handler({ messages: [userMsg] }, ctx))!;
-		const recall = first.messages!.at(-1) as { customType: string; content: Array<{ text: string }> };
-		expect(recall.customType).toBe("pi-memory-recall");
-		expect(recall.content[0].text).toContain("(user-memory/lang.md)");
-		// new turn (pin cleared); the prior recall block sits in the message
-		// list — v2 semantics: surfaced files are NOT suppressed (billing-only
-		// dedup); the block itself (customType) can never become the query
-		await host.fire("before_agent_start", { systemPrompt: "BASE" }, ctx);
-		const second = (await handler({ messages: [userMsg, recall] }, ctx))!;
-		const again = second.messages!.at(-1) as { customType: string; content: Array<{ text: string }> };
-		expect(again.customType).toBe("pi-memory-recall");
-		expect(again.content[0].text).toContain("(user-memory/lang.md)");
+		const r = (await host.fire("before_agent_start", { systemPrompt: "BASE", prompt: "回复语言偏好是什么 language preference" }, ctx)) as { message?: unknown };
+		expect(r?.message).toBeUndefined(); // the only candidate is deduped → nothing eligible
+		expect(log.length).toBe(0); // RV-06: dedup happens BEFORE the selector is paid for
 	});
 
-	it("AD1: a memory file the model read is filtered from selection until compact clears it", async () => {
+	it("RV-07: a read toolCall in the history excludes the file; without it the file is selectable", async () => {
 		writeMemory("user", "lang2.md", "language2", "replies language chinese", "user", "所有回复默认中文");
-		const host = setup();
-		const ctx = host.makeCtx({ cwd: project, ui: true });
-		await host.fire("session_start", {}, ctx);
-		await host.fire("tool_call", { toolName: "read", input: { path: join(dirs().udir, "lang2.md") } }, ctx);
-		const handler = host.handlers.get("context")![0] as (e: unknown, c: unknown) => Promise<{ messages?: Array<Record<string, unknown>> } | undefined>;
-		const r = (await handler({ messages: [{ role: "user", content: [{ type: "text", text: "回复语言偏好是什么 language preference" }] }] }, ctx))!;
-		expect(r?.messages?.some((m) => m.customType === "pi-memory-recall")).toBeFalsy();
-		// compact resets the read set
-		await host.fire("session_compact", {}, ctx);
-		const r2 = (await handler({ messages: [{ role: "user", content: [{ type: "text", text: "回复语言偏好是什么 language preference" }] }] }, ctx))!;
-		expect(r2?.messages?.some((m) => m.customType === "pi-memory-recall")).toBeTruthy();
+		const { udir } = dirs();
+		const log: Array<{ query: string; candidates: string[] }> = [];
+		const host = setupWithSelector(["user-memory/lang2.md"], log);
+		const readHistory = [
+			{ role: "user", content: [{ type: "text", text: "上一条消息" }] },
+			{ role: "assistant", content: [{ type: "toolCall", name: "read", arguments: { path: join(udir, "lang2.md") } }] },
+		];
+		const ctxRead = recallCtx(host, { cwd: project, projectionMessages: readHistory });
+		await host.fire("session_start", {}, ctxRead);
+		const r1 = (await host.fire("before_agent_start", { systemPrompt: "BASE", prompt: "回复语言偏好是什么 language preference" }, ctxRead)) as { message?: unknown };
+		expect(r1?.message).toBeUndefined();
+		expect(log.length).toBe(0); // read suppression empties the candidate set → no selector call
+		// history without the read (post-compaction rebuild) → selectable again
+		const ctxClean = recallCtx(host, { cwd: project, projectionMessages: [] });
+		const r2 = (await host.fire("before_agent_start", { systemPrompt: "BASE", prompt: "回复语言偏好是什么 language preference" }, ctxClean)) as { message?: unknown };
+		expect((r2?.message as { content: Array<{ text: string }> } | undefined)?.content?.[0]?.text).toContain("(user-memory/lang2.md)");
 	});
 
 	it("AD2/AD3/AD4: graded age header; policy no longer teaches manual index edits and points at direct writes", async () => {

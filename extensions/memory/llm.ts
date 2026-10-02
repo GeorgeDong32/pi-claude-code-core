@@ -38,7 +38,7 @@ export interface CompletionRequest {
 
 export const OPS_TIMEOUT_MS = 60_000;
 
-type RegistryLike = {
+export type RegistryLike = {
 	getApiKeyAndHeaders: (model: Model<Api>) => Promise<
 		| { ok: true; apiKey?: string; headers?: Record<string, string>; env?: Record<string, string> }
 		| { ok: false; error: string }
@@ -57,20 +57,32 @@ function textFromContent(content: unknown): string {
 	return texts.join("\n");
 }
 
-/** Run one side-channel completion and parse it into memory ops. */
-export async function completeMemoryOps(
+/** Raw-text side-channel outcome (RV: the recall selector rides the same
+ * lane — same failure vocabulary as the ops engine). */
+export interface TextCompletion {
+	ok: boolean;
+	text: string;
+	reason?: OpsFailure;
+	error?: string;
+}
+
+/** One side-channel completion returning raw TEXT (RV — extracted from
+ * completeMemoryOps: same auth resolution, credential-rotation retry,
+ * timeout and abort discipline; completeMemoryOps now delegates here so
+ * both consumers cannot drift). */
+export async function completeText(
 	model: Model<Api> | undefined,
 	registry: RegistryLike | undefined,
 	request: CompletionRequest,
 	deps: { complete?: LlmComplete } = {},
-): Promise<OpsCompletion> {
+): Promise<TextCompletion> {
 	const complete = deps.complete ?? completeSimple;
-	if (!model || !registry?.getApiKeyAndHeaders) return { ok: false, ops: [], reason: "no_model" };
+	if (!model || !registry?.getApiKeyAndHeaders) return { ok: false, text: "", reason: "no_model" };
 
 	const auth = await registry.getApiKeyAndHeaders(model).catch(() => undefined);
-	if (!auth || !auth.ok) return { ok: false, ops: [], reason: "no_auth", error: auth && !auth.ok ? auth.error : "no auth" };
+	if (!auth || !auth.ok) return { ok: false, text: "", reason: "no_auth", error: auth && !auth.ok ? auth.error : "no auth" };
 	const hasCredential = Boolean(auth.apiKey) || Object.entries(auth.headers ?? {}).some(([k, v]) => /^(authorization|x-api-key)$/i.test(k) && v);
-	if (!hasCredential) return { ok: false, ops: [], reason: "no_auth" };
+	if (!hasCredential) return { ok: false, text: "", reason: "no_auth" };
 
 	const controller = new AbortController();
 	const timeoutMs = request.timeoutMs ?? OPS_TIMEOUT_MS;
@@ -110,24 +122,36 @@ export async function completeMemoryOps(
 			if (!response) throw err;
 		}
 
-		if (request.signal?.aborted || controller.signal.aborted) return { ok: false, ops: [], reason: "aborted" };
+		if (request.signal?.aborted || controller.signal.aborted) return { ok: false, text: "", reason: "aborted" };
 		if (response.stopReason === "error") {
-			return { ok: false, ops: [], reason: "provider_error", error: response.errorMessage };
+			return { ok: false, text: "", reason: "provider_error", error: response.errorMessage };
 		}
 
 		const text = textFromContent((response as { content?: unknown }).content).trim();
-		if (!text) return { ok: false, ops: [], reason: "empty_response" };
-		const ops = parseOperations(text);
-		if (ops === null) return { ok: false, ops: [], reason: "parse_error" };
-		if (ops.length === 0) return { ok: true, ops: [], reason: "empty" };
-		return { ok: true, ops };
+		if (!text) return { ok: false, text: "", reason: "empty_response" };
+		return { ok: true, text };
 	} catch (err) {
-		if (controller.signal.aborted) return { ok: false, ops: [], reason: "aborted" };
-		return { ok: false, ops: [], reason: "provider_error", error: err instanceof Error ? err.message : String(err) };
+		if (controller.signal.aborted) return { ok: false, text: "", reason: "aborted" };
+		return { ok: false, text: "", reason: "provider_error", error: err instanceof Error ? err.message : String(err) };
 	} finally {
 		clearTimeout(timer);
 		request.signal?.removeEventListener("abort", onExternalAbort);
 	}
+}
+
+/** Run one side-channel completion and parse it into memory ops. */
+export async function completeMemoryOps(
+	model: Model<Api> | undefined,
+	registry: RegistryLike | undefined,
+	request: CompletionRequest,
+	deps: { complete?: LlmComplete } = {},
+): Promise<OpsCompletion> {
+	const done = await completeText(model, registry, request, deps);
+	if (!done.ok) return { ok: false, ops: [], reason: done.reason, error: done.error };
+	const ops = parseOperations(done.text);
+	if (ops === null) return { ok: false, ops: [], reason: "parse_error" };
+	if (ops.length === 0) return { ok: true, ops: [], reason: "empty" };
+	return { ok: true, ops };
 }
 
 // ─── strict-JSON extraction (no thinking-channel recovery) ───

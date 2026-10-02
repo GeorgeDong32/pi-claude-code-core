@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { clearCoreGlobals, restoreCoreGlobals, snapshotCoreGlobals, snapshotEnv, restoreEnv } from "./fake-host.ts";
 import { setupTarget } from "./helpers.ts";
 import { targets } from "./targets.ts";
+import { RECALL_CUSTOM_TYPE, RECALL_DETAILS_FIELDS, renderRecallBlock } from "../../extensions/memory/recall.ts";
 
 const ALLOWED_STATUS_SLOTS = new Set(["modes", "pi-effort-thinking", "pi-effort-fast", "goal"]);
 const ALLOWED_CLEANUP_SLOTS = new Set(["effort"]); // pi-effort clears the legacy aggregate slot with undefined
@@ -110,5 +111,30 @@ describe("P0-CT §4.3 status slots + §4.4 session entry types", () => {
 		// P2 migration suites, pinned here only as "nothing outside the
 		// whitelist at instantiation + session_start".)
 		expect(seen.has("modes")).toBe(true);
+	});
+});
+
+describe("P0-CT-08 (RV): pi-memory-recall frozen shape", () => {
+	it("customType string + details v1 field set are frozen (spec 2026-10-02-memory-recall-v2)", () => {
+		expect(RECALL_CUSTOM_TYPE).toBe("pi-memory-recall");
+		expect([...RECALL_DETAILS_FIELDS]).toEqual(["v", "delivery", "model", "files", "bytes", "elapsedMs"]);
+		const block = renderRecallBlock(
+			[
+				{
+					key: "memory/a.md",
+					file: "a.md",
+					title: "a",
+					description: "d",
+					type: "project",
+					layer: "project",
+					mtimeMs: Date.now() - 47 * 86_400_000,
+					absPath: "/tmp/mem/a.md",
+					body: "b",
+				},
+			],
+			{ delivery: "immediate", model: "test/selector-1", elapsedMs: 3, remainingSessionBytes: 60_000 },
+		);
+		expect(block).not.toBeNull();
+		expect(Object.keys(block!.details).sort()).toEqual([...RECALL_DETAILS_FIELDS].sort());
 	});
 });

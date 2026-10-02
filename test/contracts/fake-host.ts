@@ -41,6 +41,13 @@ export interface FakeCtxOptions {
 	/** Session dir/id served by the fake ctx.sessionManager (FAKEHOST-01). */
 	sessionDir?: string;
 	sessionId?: string;
+	/** Messages served by ctx.sessionManager.buildSessionProjection()
+	 * (FAKEHOST-02: memory recall v2 derives session state from the
+	 * projection — history-thunk tests inject synthetic transcripts here). */
+	projectionMessages?: unknown[];
+	/** Overrides ctx.hasPendingMessages() (FAKEHOST-02: recall v2 delivery
+	 * treats steer/followUp text queue as "turn continues"). Default false. */
+	hasPendingMessages?: boolean;
 	/** Overrides ctx.isIdle() (default false). GH-03: goal continuations send
 	 * immediately only when idle — the hijack repro needs an idle ctx. */
 	idle?: boolean;
@@ -147,7 +154,7 @@ export class FakeHost {
 			modelRegistry: host.piObject().modelRegistry,
 			getContextUsage: () => undefined,
 			isIdle: () => opts.idle ?? false,
-			hasPendingMessages: () => false,
+			hasPendingMessages: () => opts.hasPendingMessages ?? false,
 			isProjectTrusted: () => true,
 			sessionManager: {
 				getBranch: () => opts.sessionEntries ?? [],
@@ -156,6 +163,9 @@ export class FakeHost {
 				// FAKEHOST-01: observation-pack derives its store root from these.
 				getSessionDir: () => opts.sessionDir ?? "",
 				getSessionId: () => opts.sessionId ?? "",
+				// FAKEHOST-02: recall v2 derives dedup/budget/read state from the
+				// projection's message list.
+				buildSessionProjection: () => ({ messages: opts.projectionMessages ?? [] }),
 			},
 		};
 	}

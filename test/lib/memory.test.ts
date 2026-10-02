@@ -14,7 +14,6 @@ import { resetCoreBusForTests } from "../../extensions/bus.ts";
 import memoryExtension from "../../extensions/memory/index.ts";
 import { scanMemoryDir, reconcileMemoryIndex } from "../../extensions/memory/memdir.ts";
 import { sessionRecall, readLines, READ_CHUNK } from "../../extensions/memory/session-recall.ts";
-import { selectForTurn, tokenize } from "../../extensions/memory/selection.ts";
 import { guardMemoryWrites } from "../../extensions/memory/guard.ts";
 import { importFromClaude, importFromHermes } from "../../extensions/memory/importers.ts";
 import { resolveMemoryPaths } from "../../extensions/memory/paths.ts";
@@ -113,66 +112,6 @@ describe("P3-ME-03 policy injection", () => {
 		// exactly one memory-policy block, plus the index
 		expect(prompt.split("<memory-policy>").length - 1).toBe(1);
 		expect(prompt).toContain("[alpha](a.md) — first");
-	});
-});
-
-describe("P3-ME-04 per-turn lexical injection", () => {
-	it("injects at most 5 files, skips >4KB bodies; the pin re-projects the same set for every request in the turn", async () => {
-		for (let i = 0; i < 6; i++) {
-			writeMemory(`f${i}.md`, `release flow number ${i}`, `about release flow step ${i}`, "project", `release flow detail ${i}`);
-		}
-		writeMemory("big.md", "huge doc", "very large file", "reference", `H`.repeat(5 * 1024));
-		const host = setup();
-		const ctx = host.makeCtx({ cwd: project, ui: true });
-		await host.fire("session_start", {}, ctx);
-
-		const fireContext = async (): Promise<Array<Record<string, unknown>>> => {
-			let out: Array<Record<string, unknown>> = [];
-			for (const h of host.handlers.get("context") ?? []) {
-				const r = (await (h as (e: unknown, c: unknown) => Promise<{ messages?: Array<Record<string, unknown>> } | undefined>)(
-					{ messages: [{ role: "user", content: [{ type: "text", text: "how does the release flow work?" }] }] },
-					ctx,
-				)) as { messages?: Array<Record<string, unknown>> } | undefined;
-				if (r?.messages) out = r.messages;
-			}
-			return out;
-		};
-
-		const first = await fireContext();
-		const recall = first.find((m) => m.customType === "pi-memory-recall") as
-			| { content: Array<{ text: string }> }
-			| undefined;
-		expect(recall).toBeDefined();
-		const text = recall!.content[0].text;
-		const blocks = text.split("## ").length - 1;
-		expect(blocks).toBeLessThanOrEqual(5);
-		expect(text).not.toContain("HHHH"); // oversized body skipped, not truncated
-
-		// (v3.2 redesign, review F3): under per-turn pin & re-project, repeated
-		// requests in the SAME turn re-project the pinned block byte-identically.
-		// Budget-gate coverage moved to the MR-05 direct tests below — per-request
-		// hammering no longer exercises any budget path here.
-		const later = await fireContext();
-		const recall2 = later.find((m) => m.customType === "pi-memory-recall") as
-			| { content: Array<{ text: string }> }
-			| undefined;
-		expect(recall2?.content[0]?.text).toBe(text);
-	});
-});
-
-describe("P3-ME-04 lexical selection determinism", () => {
-	it("tokenize + selectForTurn are deterministic and threshold-gated", () => {
-		expect(tokenize("the release flow").has("release")).toBe(true);
-		const mems = [
-			{ file: "a.md", title: "release flow", description: "deploy steps", type: "project", body: "release flow details", mtimeMs: 1 },
-			{ file: "b.md", title: "unrelated", description: "nothing shared", type: "reference", body: "cat facts", mtimeMs: 2 },
-		];
-		const first = selectForTurn("explain the release flow", mems, 0);
-		const second = selectForTurn("explain the release flow", mems, 0);
-		expect(first.files.map((f) => f.file)).toEqual(["a.md"]);
-		expect(second.files.map((f) => f.file)).toEqual(first.files.map((f) => f.file));
-		// weak overlap → nothing
-		expect(selectForTurn("cat", mems, 0).files).toHaveLength(0);
 	});
 });
 
@@ -357,52 +296,29 @@ describe("P3-ME-08 importers", () => {
 });
 
 describe("P3-ME-09 resilience", () => {
-	it("a throwing context handler never blocks the turn; degrade notice is one-shot", async () => {
+	it("a throwing recall path never blocks the turn (before_agent_start / message_end / turn_end all fail-open)", async () => {
 		const host = setup();
 		const ctx = host.makeCtx({ cwd: project, ui: true });
 		await host.fire("session_start", {}, ctx);
-		// memory dir made unwritable is hard to simulate portably; the
-		// policy-only degradation path is exercised via the notice flag:
-		// fire context with a HOME pointing at an unwritable-ish location
-		const result = await (host.handlers.get("context")?.[0] as (e: unknown, c: unknown) => Promise<unknown>)({
-			messages: [{ role: "user", content: [{ type: "text", text: "hi there friend" }] }],
-		}, ctx);
-
-		expect(result === undefined || typeof result === "object").toBe(true);
+		// historyFor throws → caught inside; a selector factory that THROWS at
+		// construction would be caught by recallBlockFor's caller try/catch.
+		// Simulate the hostile shape: projection that explodes on access.
+		const hostile = host.makeCtx({ cwd: project, ui: true }) as Record<string, unknown>;
+		hostile.sessionManager = {
+			get buildSessionProjection() {
+				throw new Error("projection exploded");
+			},
+		};
+		const r1 = await host.fire("before_agent_start", { systemPrompt: "BASE", prompt: "hello memory recall test" }, hostile);
+		expect(typeof r1 === "object" || r1 === undefined).toBe(true);
+		const r2 = await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: "steer text here" }] } }, hostile);
+		expect(r2).toBeUndefined();
+		const r3 = await host.fire("turn_end", { toolResults: [{ toolCallId: "t", toolName: "bash" }] }, hostile);
+		expect(r3).toBeUndefined();
 	});
 });
 
 describe("review-2026-09-22-II fixes", () => {
-	it("C1: CJK prompts tokenize into bigrams and recall Chinese memories", () => {
-		const tokens = tokenize("修复登录页面的样式");
-		expect(tokens.has("修复")).toBe(true);
-		expect(tokens.has("登录")).toBe(true);
-		// a differently-phrased Chinese memory still overlaps
-		const hit = selectForTurn("修复登录页面的样式", [
-			{
-				file: "a.md", title: "login-fix", description: "登录页面修复流程", type: "project",
-				body: "修复登录页面时先看 auth 模块的测试", mtimeMs: Date.now(),
-			},
-		], 0);
-		expect(hit.files.map((f) => f.title)).toContain("login-fix");
-		// unrelated Chinese prompt does not recall it
-		const miss = selectForTurn("帮我写一份周报", [
-			{
-				file: "a.md", title: "login-fix", description: "登录页面修复流程", type: "project",
-				body: "修复登录页面时先看 auth 模块的测试", mtimeMs: Date.now(),
-			},
-		], 0);
-		expect(miss.files).toHaveLength(0);
-	});
-
-	it("C7: budgets count bytes, not UTF-16 units (CJK body of 1400 chars = 4200 bytes > 4KB)", () => {
-		const body = "测".repeat(1400); // 1400 chars, 4200 bytes
-		const result = selectForTurn("test overlap token", [
-			{ file: "a.md", title: "test overlap token", description: "", type: "project", body, mtimeMs: Date.now() },
-		], 0);
-		expect(result.files).toHaveLength(0); // oversized by BYTES — skipped
-	});
-
 	it("A4: reconciler cache is keyed per dir and invalidated by deletion", () => {
 		const dirA = join(home, "proj-a-mem");
 		const dirB = join(home, "proj-b-mem");
@@ -512,251 +428,119 @@ describe("adversarial-audit fixes (2026-09-22)", () => {
 		expect(existsSync(join(dir, "hermes-deploy-flow-646570.md"))).toBe(true);
 	});
 
-	it("C1b: function-word bigrams alone do not satisfy the overlap threshold", () => {
-		const tokens = tokenize("我们需要整理一个计划");
-		// the two bigrams that fired the audit's false-positive case are
-		// stopwords now; the query must not recall an unrelated memory
-		expect(tokens.has("我们")).toBe(false);
-		expect(tokens.has("一个")).toBe(false);
-		const miss = selectForTurn("我们需要整理一个计划", [
-			{
-				file: "a.md", title: "team-news", description: "我们团队的一个新项目", type: "project",
-				body: "我们团队的一个新项目开始了", mtimeMs: Date.now(),
-			},
-		], 0);
-		expect(miss.files).toHaveLength(0);
-	});
 });
 
-describe("MR memory-recall fix v3.1 (2026-10-01, spec 2026-10-01-memory-recall-fix)", () => {
-	const userMsg = (text: string) => ({ role: "user", content: [{ type: "text", text }] });
 
-	function makeHarness() {
+/* ── RV wiring (spec 2026-10-02-memory-recall-v2 §8 cases 16–20) ── */
+
+import type { Selector, SelectorOutcome } from "../../extensions/memory/selector.ts";
+
+function writeSettings(recallModel: string): void {
+	mkdirSync(join(home, ".pi", "agent"), { recursive: true });
+	writeFileSync(join(home, ".pi", "agent", "settings.json"), JSON.stringify({ memory: { recallModel } }));
+}
+
+function setupWithSelector(keys: string[], log: Array<{ query: string; count: number }> = []): FakeHost {
+	writeSettings("test/selector-1");
+	const factory = (): Selector => ({
+		async select(req): Promise<SelectorOutcome> {
+			log.push({ query: req.query, count: req.candidates.length });
+			return { kind: "selected", keys, elapsedMs: 1 };
+		},
+	});
+	const host = new FakeHost();
+	memoryExtension(host.asPi(), { selectorFactory: factory });
+	return host;
+}
+
+function recallCtx(host: FakeHost, opts: { projectionMessages?: unknown[] } = {}): Record<string, unknown> {
+	const ctx = host.makeCtx({ cwd: project, ui: true, projectionMessages: opts.projectionMessages ?? [] });
+	ctx.modelRegistry = { getAll: () => [{ provider: "test", id: "selector-1" }] };
+	return ctx;
+}
+
+describe("RV wiring (spec 2026-10-02-memory-recall-v2)", () => {
+	it("16: no memory.recallModel — before_agent_start returns only systemPrompt; steer/turn_end never sendMessage", async () => {
+		writeMemory("a.md", "convention", "repo convention");
 		const host = setup();
-		const ctx = host.makeCtx({ cwd: project, ui: true });
-		const fireContext = async (messages: Array<Record<string, unknown>>) => {
-			let out: Array<Record<string, unknown>> | undefined;
-			for (const h of host.handlers.get("context") ?? []) {
-				const r = (await (h as (e: unknown, c: unknown) => Promise<{ messages?: Array<Record<string, unknown>> } | undefined>)(
-					{ messages },
-					ctx,
-				)) as { messages?: Array<Record<string, unknown>> } | undefined;
-				if (r?.messages) out = r.messages;
-			}
-			return out;
-		};
-		const fireTurnStart = async () => {
-			for (const h of host.handlers.get("before_agent_start") ?? []) {
-				await (h as (e: unknown, c: unknown) => Promise<unknown>)({ systemPrompt: "BASE" }, ctx);
-			}
-		};
-		const fire = (event: string, payload: unknown) => host.fire(event, payload, ctx);
-		const recallText = (messages: Array<Record<string, unknown>> | undefined) => {
-			const inj = messages?.find((m) => m.customType === "pi-memory-recall") as { content: Array<{ text: string }> } | undefined;
-			return inj?.content[0]?.text;
-		};
-		return { host, ctx, fireContext, fireTurnStart, fire, recallText };
-	}
-
-	it("MR-04: body-only overlap never qualifies (two-domain gate)", () => {
-		const mem = {
-			file: "x.md", title: "unrelated", description: "completely different topic", type: "project",
-			body: "release flow details inside body", mtimeMs: Date.now(),
-		};
-		// query shares ZERO tokens with title/description, TWO with the body
-		expect(selectForTurn("how does the release flow work", [mem], 0).files).toHaveLength(0);
-	});
-
-	it("MR-04 secondary: 1 primary + ≥2 body hits qualifies; 1+1 does not (npm-publishing anchor)", () => {
-		const anchor = {
-			file: "npm.md", title: "npm-publishing", description: "发版与 NPM Trusted Publishing", type: "reference",
-			body: "发版流程习惯：常用 npm version 手动发版，流程走 CI 验证", mtimeMs: Date.now(),
-		};
-		// 「发版流程」= 3 bigrams; primary=1 (发版), body=3 (发版/版流/流程) → secondary path
-		expect(selectForTurn("发版流程", [anchor], 0).files.map((f) => f.file)).toContain("npm.md");
-		const weak = { ...anchor, body: "发版 note only" };
-		// primary=1, body=1 → below SECONDARY_BODY_MIN → excluded
-		expect(selectForTurn("发版流程", [weak], 0).files).toHaveLength(0);
-	});
-
-	it("MR-01/03/09: pinned re-projection is byte-identical, drift-immune, tail-append only", async () => {
-		writeMemory("alpha.md", "alpha topic", "alpha description");
-		writeMemory("beta.md", "beta topic", "beta description");
-		const h = makeHarness();
-		await h.fire("session_start", {});
-
-		const original = [userMsg("tell me about alpha topic")];
-		const first = await h.fireContext(original);
-		const t1 = h.recallText(first);
-		expect(t1).toContain("alpha topic");
-
-		// MR-09 cache guard ①: original elements preserved by reference, the
-		// injection is the ONLY addition and sits at the tail
-		expect(first).toBeDefined();
-		expect(first!.length).toBe(original.length + 1);
-		for (let i = 0; i < original.length; i++) expect(first![i]).toBe(original[i]);
-		expect((first![first!.length - 1] as { customType?: string }).customType).toBe("pi-memory-recall");
-
-		// drift: same turn, a later request whose trailing "user" text matches
-		// beta (tool-output-shaped garbage) — the pin must win, byte-identically
-		const second = await h.fireContext([
-			userMsg("tell me about alpha topic"),
-			{ role: "user", content: [{ type: "text", text: "beta topic beta topic grep output" }] },
-		]);
-		const t2 = h.recallText(second);
-		expect(t2).toBe(t1); // MR-09 ②: byte-identical re-projection within the turn
-		expect(t2).not.toContain("beta topic");
-	});
-
-	it("MR-01: before_agent_start clears the pin — the new turn re-selects", async () => {
-		writeMemory("alpha.md", "alpha topic", "alpha description");
-		writeMemory("beta.md", "beta topic", "beta description");
-		const h = makeHarness();
-		await h.fire("session_start", {});
-
-		const first = await h.fireContext([userMsg("tell me about alpha topic")]);
-		expect(h.recallText(first)).toContain("alpha topic");
-
-		await h.fireTurnStart();
-		const second = await h.fireContext([userMsg("now about beta topic")]);
-		expect(h.recallText(second)).toContain("beta topic");
-		expect(h.recallText(second)).not.toContain("alpha topic");
-	});
-
-	it("MR-01: an empty selection is pinned for the rest of the turn", async () => {
-		writeMemory("alpha.md", "alpha topic", "alpha description");
-		const h = makeHarness();
-		await h.fire("session_start", {});
-
-		expect(await h.fireContext([userMsg("completely unrelated question xyzzy")])).toBeUndefined();
-		// a later request in the SAME turn that would match must NOT re-select
-		expect(await h.fireContext([userMsg("tell me about alpha topic")])).toBeUndefined();
-		// a new turn selects fresh
-		await h.fireTurnStart();
-		const fresh = await h.fireContext([userMsg("tell me about alpha topic")]);
-		expect(h.recallText(fresh)).toContain("alpha topic");
-	});
-
-	it("MR-05: a paid file stays re-projectable in later turns (billing-only dedup)", async () => {
-		writeMemory("alpha.md", "alpha topic", "alpha description");
-		const h = makeHarness();
-		await h.fire("session_start", {});
-
-		const t1 = await h.fireContext([userMsg("tell me about alpha topic")]);
-		expect(h.recallText(t1)).toContain("alpha topic");
-		await h.fireTurnStart();
-		const t2 = await h.fireContext([userMsg("tell me about alpha topic")]);
-		expect(h.recallText(t2)).toContain("alpha topic"); // NOT suppressed by surfacedKeys
-	});
-
-	it("MR-05: pre-paid files don't consume remaining budget (isPrePaid)", () => {
-		const paid = { file: "paid.md", title: "alpha topic", description: "alpha", type: "project", body: "x".repeat(3000), mtimeMs: 1 };
-		const other = { file: "other.md", title: "alpha topic two", description: "alpha", type: "project", body: "y".repeat(3000), mtimeMs: 2 };
-		const budget = { maxFiles: 5, perFileBytes: 4096, sessionBytes: 4000 };
-		// remaining = 500: an unpaid 3000-byte file does not fit…
-		expect(selectForTurn("alpha topic", [other], 3500, budget).files).toHaveLength(0);
-		// …but the same file pre-paid is selected without consuming remaining
-		expect(selectForTurn("alpha topic", [paid], 3500, budget, (m) => m.file === "paid.md").files.map((f) => f.file)).toEqual(["paid.md"]);
-	});
-
-	it("MR-05 billing guard: cross-turn re-injection never re-charges the budget", async () => {
-		// ~2KB block × 40 turns: a per-request-billing regression would exhaust
-		// the 60KB cap after ~30 turns and stop injecting; once-per-file billing
-		// (surfacedKeys) keeps the block visible in EVERY turn
-		writeMemory("paid.md", "alpha topic", "alpha description", "project", "x".repeat(2000));
-		const h = makeHarness();
-		await h.fire("session_start", {});
-		const ask = () => h.fireContext([userMsg("tell me about alpha topic")]);
-		expect(h.recallText(await ask())).toContain("alpha topic");
-		for (let i = 0; i < 39; i++) {
-			await h.fireTurnStart();
-			await ask();
-		}
-		await h.fireTurnStart();
-		expect(h.recallText(await ask())).toContain("alpha topic");
-	});
-
-	it("MR-05: budget exhaustion blocks NEW files but never blinds a paid file (review F4)", async () => {
-		// one paid file + 20 fillers (~3.6KB each) written UPFRONT (the scan
-		// cache is only exercised for pre-existing files here); each filler is
-		// reached by a query unique to it, so the 60KB distinct-file budget
-		// fills turn by turn until a NEW file can no longer enter — while the
-		// already-paid file must stay selectable (v3.2 removed the exhausted
-		// early-return that blinded exactly the pre-paid files)
-		writeMemory("paid0.md", "alpha zero topic", "paid description", "project", "p".repeat(3600));
-		for (let i = 1; i <= 20; i++) {
-			// unique per-file tokens (filler${i}/mark${i}) — a shared word would
-			// qualify five files per query via maxFiles and never fill the budget
-			writeMemory(`fill${i}.md`, `filler${i} mark${i}`, `filler${i} description`, "project", "f".repeat(3600));
-		}
-		const h = makeHarness();
-		await h.fire("session_start", {});
-		const t0 = await h.fireContext([userMsg("alpha zero topic please")]);
-		expect(h.recallText(t0)).toContain("alpha zero topic");
-
-		let blockedAt = -1;
-		for (let i = 1; i <= 20; i++) {
-			await h.fireTurnStart();
-			const out = await h.fireContext([userMsg(`filler${i} mark${i} please`)]);
-			if (out === undefined) { blockedAt = i; break; }
-		}
-		expect(blockedAt).toBeGreaterThan(0); // budget full — a NEW file can no longer enter
-		await h.fireTurnStart();
-		const again = await h.fireContext([userMsg("alpha zero topic please")]);
-		expect(h.recallText(again)).toContain("alpha zero topic"); // paid file unaffected
-	});
-
-	it("MR-08/MR-02: read files are excluded until session_compact resets", async () => {
-		writeMemory("alpha.md", "alpha topic", "alpha description");
-		const h = makeHarness();
-		await h.fire("session_start", {});
-
-		const t1 = await h.fireContext([userMsg("tell me about alpha topic")]);
-		expect(h.recallText(t1)).toContain("alpha topic");
-
-		await h.fire("tool_call", { toolName: "read", input: { path: join(memoryDir(), "alpha.md") } });
-		await h.fireTurnStart();
-		expect(await h.fireContext([userMsg("tell me about alpha topic")])).toBeUndefined();
-
-		await h.fire("session_compact", {});
-		await h.fireTurnStart();
-		const t3 = await h.fireContext([userMsg("tell me about alpha topic")]);
-		expect(h.recallText(t3)).toContain("alpha topic");
-	});
-
-	it("MR-09: systemPrompt index injection is byte-stable while the dir is unchanged", async () => {
-		writeMemory("alpha.md", "alpha topic", "alpha description");
-		const h = makeHarness();
-		await h.fire("session_start", {});
-
-		const run = async (): Promise<string | undefined> => {
-			let out: string | undefined;
-			for (const handler of h.host.handlers.get("before_agent_start") ?? []) {
-				const r = (await (handler as (e: unknown, c: unknown) => Promise<{ systemPrompt?: string } | undefined>)({ systemPrompt: "BASE" }, h.ctx)) ?? {};
-				out = r.systemPrompt;
-			}
-			return out;
-		};
-		const a = await run();
-		const b = await run();
-		expect(a).toContain("alpha topic");
-		expect(a).toBe(b); // byte-identical across turns → cache-safe prefix
-	});
-});
-
-describe("MR v3.2 review follow-ups", () => {
-	it("F5: a turn whose first request has no real user text pins the empty decision (image-only turn)", async () => {
-		writeMemory("alpha.md", "alpha topic", "alpha description");
-		const host = setup();
-		const ctx = host.makeCtx({ cwd: project, ui: true });
+		const ctx = host.makeCtx({ cwd: project, ui: true, projectionMessages: [] });
 		await host.fire("session_start", {}, ctx);
-		const handler = host.handlers.get("context")![0] as (e: unknown, c: unknown) => Promise<{ messages?: Array<Record<string, unknown>> } | undefined>;
-		// image-only user turn: no text blocks → no prompt
-		const first = await handler({ messages: [{ role: "user", content: [{ type: "image", data: "x" }] }] }, ctx);
-		expect(first).toBeUndefined();
-		// later request in the SAME turn now carries matching text — the empty
-		// decision is pinned, selection must NOT run (F5 symmetry)
-		const later = await handler({ messages: [{ role: "user", content: [{ type: "text", text: "tell me about alpha topic" }] }] }, ctx);
-		expect(later).toBeUndefined();
+		const r = (await host.fire("before_agent_start", { systemPrompt: "BASE", prompt: "repo convention question" }, ctx)) as { message?: unknown; systemPrompt?: string };
+		expect(r?.message).toBeUndefined();
+		expect(r?.systemPrompt).toContain("<memory-policy");
+		await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: "steer mid run text" }] } }, ctx);
+		await host.fire("turn_end", { toolResults: [{ toolCallId: "t", toolName: "bash" }] }, ctx);
+		expect(host.sentMessages.filter((m) => m.message.customType === "pi-memory-recall")).toHaveLength(0);
+	});
+
+	it("17: configured — before_agent_start returns { systemPrompt, message } with customType pi-memory-recall, display false", async () => {
+		writeMemory("a.md", "convention", "repo convention");
+		const log: Array<{ query: string; count: number }> = [];
+		const host = setupWithSelector(["memory/a.md"], log);
+		const ctx = recallCtx(host);
+		await host.fire("session_start", {}, ctx);
+		const r = (await host.fire("before_agent_start", { systemPrompt: "BASE", prompt: "what is the repo convention" }, ctx)) as {
+			message?: { customType: string; content: Array<{ text: string }>; display: boolean; details: { v: number; delivery: string; elapsedMs: number } };
+			systemPrompt?: string;
+		};
+		expect(r?.systemPrompt).toContain("<memory-policy");
+		expect(r?.message?.customType).toBe("pi-memory-recall");
+		expect(r!.message!.display).toBe(false);
+		expect(r!.message!.content[0]!.text).toContain("(memory/a.md)");
+		expect(r!.message!.details.v).toBe(1);
+		expect(r!.message!.details.delivery).toBe("immediate");
+		expect(typeof r!.message!.details.elapsedMs).toBe("number");
+	});
+
+	it("18: steer path — message_end(user) parks, turn_end(toolResults) delivers via sendMessage(triggerTurn:false)", async () => {
+		writeMemory("a.md", "convention", "repo convention");
+		const host = setupWithSelector(["memory/a.md"]);
+		const ctx = recallCtx(host);
+		await host.fire("session_start", {}, ctx);
+		// steer: no before_agent_start ran → prompt flag false → mid-run path
+		await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: "mid-run steer message about convention" }] } }, ctx);
+		await new Promise((r) => setTimeout(r, 5)); // let the parked selection settle
+		expect(host.sentMessages).toHaveLength(0); // nothing before the turn continues
+		await host.fire("turn_end", { toolResults: [{ toolCallId: "t", toolName: "bash" }] }, ctx);
+		const sent = host.sentMessages.filter((m) => m.message.customType === "pi-memory-recall");
+		expect(sent).toHaveLength(1);
+		expect((sent[0]!.opts as { triggerTurn?: boolean }).triggerTurn).toBe(false);
+		expect((sent[0]!.message as { details?: { delivery?: string } }).details?.delivery).toBe("deferred");
+	});
+
+	it("19: RV-01 — the prompt message's message_end never double-selects; custom/toolResult messages never select; agent_end clears the prompt flag", async () => {
+		writeMemory("a.md", "convention", "repo convention");
+		const log: Array<{ query: string; count: number }> = [];
+		const host = setupWithSelector(["memory/a.md"], log);
+		const ctx = recallCtx(host);
+		await host.fire("session_start", {}, ctx);
+		await host.fire("before_agent_start", { systemPrompt: "BASE", prompt: "the repo convention prompt" }, ctx);
+		expect(log).toHaveLength(1); // selected once at before_agent_start
+		// the persisted user message's own message_end: flag clears, NO second selection
+		await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: "the repo convention prompt" }] } }, ctx);
+		expect(log).toHaveLength(1);
+		// custom + toolResult messages never trigger
+		await host.fire("message_end", { message: { role: "user", customType: "pi-memory-recall", content: [{ type: "text", text: "whatever" }] } }, ctx);
+		await host.fire("message_end", { message: { role: "toolResult", toolName: "bash", isError: false, content: [] } }, ctx);
+		expect(log).toHaveLength(1);
+		// agent_end clears the prompt flag → the NEXT plain user message_end selects (steer)
+		await host.fire("agent_end", {}, ctx);
+		await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: "a fresh steer message after run end" }] } }, ctx);
+		expect(log).toHaveLength(2);
+	});
+
+	it("20: no context handler is registered; yield short-circuits recall entirely", async () => {
+		writeMemory("a.md", "convention", "repo convention");
+		const log: Array<{ query: string; count: number }> = [];
+		const host = setupWithSelector(["memory/a.md"], log);
+		expect(host.handlers.has("context")).toBe(false); // RV: the projection hook is gone
+		const ctx = recallCtx(host);
+		await host.fire("session_start", {}, ctx);
+		// dynamic yield: the incoming system prompt already carries another
+		// memory policy → the module defers entirely (no message, no selector)
+		const r = await host.fire("before_agent_start", { systemPrompt: `BASE\n\n<memory-policy>\nforeign policy\n</memory-policy>`, prompt: "repo convention question here" }, ctx);
+		expect((r as { message?: unknown })?.message).toBeUndefined();
+		expect(log).toHaveLength(0);
+		expect(host.sentMessages.filter((m) => m.message.customType === "pi-memory-recall")).toHaveLength(0);
 	});
 });

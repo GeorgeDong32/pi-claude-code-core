@@ -71,6 +71,27 @@ function renderFile(op: MemoryOp): string {
 	return `---\nname: ${op.name}\ndescription: ${op.description}\nmetadata:\n  type: ${type}\n---\n\n${op.body}\n`;
 }
 
+/** 附记 A.1 ③ (spec 2026-10-02-memory-recall-v2): LLM ops sometimes return
+ * a FULL file (frontmatter + body) in op.body. renderFile would then wrap
+ * the model's own frontmatter inside a fresh one — splitFrontmatter only
+ * ever parses the OUTER block, so a correction's new description never
+ * reaches the index (observed live: pi-memory-recall-reinject-symptom
+ * carried two stacked frontmatter blocks, 2026-10-02). Hoist the leading
+ * block's fields (they are the freshest statement of intent) and use its
+ * body-part; unparseable leading blocks fall through unchanged. */
+function hoistLeadingFrontmatter(op: MemoryOp): MemoryOp {
+	if (!op.body || !op.body.startsWith("---\n")) return op;
+	const parsed = splitFrontmatter(`${op.body}\n`);
+	if (!parsed || parsed.body.trim().length === 0) return op;
+	return {
+		...op,
+		name: parsed.title || op.name,
+		description: parsed.description || op.description,
+		type: parsed.type || op.type,
+		body: parsed.body,
+	};
+}
+
 /** File size in bytes (total: missing → 0). */
 export function fileBytes(path: string): number {
 	try {
@@ -122,7 +143,8 @@ export function applyMemoryOps(
 		plannedAdds.set(d, new Set());
 	}
 
-	for (const op of ops) {
+	for (const rawOp of ops) {
+		const op = hoistLeadingFrontmatter(rawOp);
 		const dir = dirFor(op.layer);
 		const existing = listMemoryFiles(dir);
 

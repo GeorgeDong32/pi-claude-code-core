@@ -6,27 +6,38 @@
 
 ## What it does
 
-A two-layer (user + project) memory system: scans memory directories, injects
-a capped lexical index into context, guards memory-write paths, runs
-auto-consolidation, and imports from Claude / Hermes formats. Zero runtime
-dependencies, one LLM lane.
+A two-layer (user + project) memory system: injects a capped index into the
+system prompt, recalls memory files as **persisted once-per-user-message
+blocks chosen by an LLM manifest selector** (RV, spec 2026-10-02-memory-recall-v2),
+guards memory-write paths, runs auto-consolidation, and imports from Claude /
+Hermes formats. Zero runtime dependencies, one LLM lane.
 
 ## Key surfaces
 
-**Wiring — 2 tools + 4 commands + 9 hooks** (from `index.ts` header):
+**Wiring — 2 tools + 4 commands + 8 hooks** (from `index.ts` header):
 
 | Hook | Behavior |
 |---|---|
-| `session_start` | Reconcile both layers + budget reset + static yield probe |
-| `session_compact` | Per-turn budget reset |
-| `before_agent_start` | Dynamic yield probe → policy + two-layer capped index |
-| `context` | Lexical `selectForTurn` injection (both layers pooled) |
-| `tool_call` | `guardMemoryWrites` secret interceptor (both layers) |
-| `turn_end` | Auto-consolidation trigger (V2-C) + P3 automation |
-| `tool_result` | `memory_consolidate` settle |
+| `session_start` | Reconcile both layers + settings load + static yield probe |
+| `before_agent_start` | Dynamic yield probe → policy + two-layer capped index; **RV prompt path** — one selection per user message bounded by `recallWaitMs`, the block persists as a custom message right after the user message |
+| `message_end` | **RV steer path** — mid-run user messages select with wait 0 (parked for turn_end); custom blocks never trigger (RV-01) |
+| `turn_end` | **RV deferred delivery** (first continues=true turn_end, `sendMessage` `triggerTurn:false` — pi flushes pending custom messages right after handler dispatch) + auto-consolidation trigger (V2-C) + P3 automation |
+| `agent_end` | **RV run boundary** — abort in-flight selection, drop the held block, clear run dedup |
+| `tool_call` | `guardMemoryWrites` secret interceptor (both layers); read suppression is history-derived now (RV-07) |
+| `tool_result` | `memory_consolidate` settle + stale-read staleness note |
 | `agent_settled` | Consolidation in-flight clear |
 | `registerTool` | `session_recall`, `memory_consolidate` |
-| `registerCommand` | `/memory`, `/memory-consolidate`, `/memory-import-claude`, `/memory-import-hermes` |
+| `registerCommand` | `/memory` (incl. recall status), `/memory-consolidate`, `/memory-import-claude`, `/memory-import-hermes` |
+
+**No `context` hook anymore** — request-level projection was the root cause
+of the 30× cache-miss cost and the frozen-selection re-injection (RC-1/RC-2).
+
+**Configuration** (`~/.pi/agent/settings.json`, `memory` key):
+- `recallModel` (string, `"provider/id"`): the selector model. **Required for
+  recall — unset or unresolvable means NO recall** (D3, no lexical fallback).
+- `recallWaitMs` (number, default 4000, clamped to 0–15000): per-message
+  selector wait budget on the prompt path; a slow selector parks its result
+  and delivers it at the next continuing turn_end.
 
 **Bus**: `memory` channel — `{ yielded, dir }`; index budget published via
 `contextBudget.memoryIndexMax` (25K, `lib/context-budget.ts`).
@@ -35,9 +46,10 @@ dependencies, one LLM lane.
 
 | File | Notes |
 |---|---|
-| `index.ts` | Assembly; injection hook bodies are try/catch-wrapped at the boundary. Context hook = **per-turn pin & re-project** (MR-01, spec 2026-10-01): select once on the turn's first request, re-project the byte-identical block for every remaining request; `surfacedKeys` = billing-only dedup; tail-append-only + systemPrompt byte-stability (MR-09 cache discipline) |
-| `memdir.ts` | Directory scan/reconcile; `scanMemoryDirCached` fingerprint cache + git-root memo (a cached turn does zero content reads) |
-| `selection.ts` | `selectForTurn` two-domain qualification (MR-04): primary = title+description ≥2 hits, OR secondary = ≥1 primary + ≥2 body hits; body-only never qualifies, body hits act as same-score tiebreaker; `isPrePaid` predicate keeps paid files from re-consuming budget (MR-05). CJK bigram tokenization; byte-based sizing everywhere (`byteLength`) |
+| `index.ts` | Assembly; hook bodies try/catch-wrapped at the boundary. Event routing only — every recall decision lives in `recall.ts` |
+| `memdir.ts` | Directory scan/reconcile; `scanMemoryDirCached` fingerprint cache + git-root memo; `eligibleMemories` = the recall candidate set (both layers, newest-first, absolute paths); `memoryKey` = the canonical `user-memory/<file>` / `memory/<file>` key |
+| `recall.ts` | **The RV deep module** (three entries: `onUserMessage` / `onTurnEnd` / `abort`). All session state derives from the projection history on every call (D9): hard dedup since the last `compactionSummary` (RV-06), read suppression from read toolCalls resolved against cwd (RV-07), byte budget from past `details.bytes` (RV-08), recentTools = succeeded-never-failed since the last user message (RV-13). Skill-wrapper stripping + length hygiene (RV-02); latest-wins supersede (RV-05); render with byte-safe truncation + path note; `RecallDetailsV1` (frozen, contract-pinned) |
+| `selector.ts` | `llmSelector` over the shared llm.ts lane: manifest = `[layer][type] key (age): description` newest-first capped at 200; precision-first prompt (empty list is a good answer); recentTools anti-noise rule; `resolveRecallModel` = exact provider/id → unique bare id → OFF (no session-model fallback, D3) |
 | `policy.ts` | Policy injection block (`POLICY_COMPACT`) |
 | `guard.ts` | Secret interceptor on memory-write paths (secret regexes incl. unquoted values / base64 padding) |
 | `yield.ts` | `InjectionGate` — static + dynamic yield probes (fail-open: injection failures never block a turn, P3-ME-09) |
@@ -50,14 +62,27 @@ dependencies, one LLM lane.
 
 - **Fail-open**: any injection failure is swallowed at the boundary — a turn
   must never die because memory hiccuped.
-- CJK text needs the bigram path — don't "simplify" tokenization back to
-  whitespace.
+- **Persisted-once delivery (D1)**: a recall block enters the transcript as a
+  `pi-memory-recall` custom message at most once per real user message —
+  custom blocks themselves never trigger recall (RV-01), and history-derived
+  hard dedup means one file surfaces at most once per compaction window
+  (RV-06).
+- **No model, no recall (D3)**: `memory.recallModel` unset/unresolvable →
+  recall is entirely off. Never add a lexical or session-model fallback.
+- **State from history only (D9)**: no closure state in the wiring — dedup /
+  read / budget / recentTools all re-derive from
+  `buildSessionProjection().messages` (details survival is contract-pinned).
 - The importer treats local files as authoritative: imports never clobber
   local edits.
-- Budget constants come from `lib/context-budget.ts`.
+- Budget constants come from `lib/context-budget.ts` (`RECALL_*` are
+  deliberately NOT on the published `CONTEXT_BUDGET` object — no consumer).
 
 ## Tests
 
-`test/lib/memory*.test.ts` (vitest: core, V2 storage/automation/consolidate/
-migration, carveout) — memory kept its suites in `test/lib` rather than a
-colocated directory.
+`test/lib/memory*.test.ts` + `recall.test.ts` + `memory-llm-selector.test.ts`
+(vitest: core wiring, RV machine, RV selector, V2 storage/automation/
+consolidate/migration, carveout) — memory kept its suites in `test/lib`
+rather than a colocated directory. The `pi-memory-recall` customType +
+details-v1 field set are pinned in the contract suite (P0-CT-08), and the
+real-package `buildSessionProjection` details-survival is pinned in
+`pi-host-semantics.test.ts` ⑥.

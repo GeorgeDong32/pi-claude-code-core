@@ -257,3 +257,36 @@ export function reconcileMemoryIndex(memoryDir: string): ReconcileResult {
 	}
 	return { entries, skipped, rewrote: true };
 }
+
+/** Canonical recall-block key for a memory file (RV; the whereKey successor
+ * from the deleted recall-session.ts — one home, next to the storage
+ * engine, so wiring + diagnostics cannot drift on the format). */
+export function memoryKey(layer: "user" | "project", file: string): string {
+	return layer === "user" ? `user-memory/${file}` : `memory/${file}`;
+}
+
+/** The recall candidate set (RV-14): both layers, body-loaded via the
+ * fingerprint cache, mapped onto selector candidates with absolute paths.
+ * Newest-first so manifest rows front-load fresh memories (RV-12 ordering
+ * happens here once; the selector just renders). R3 will layer `paths:`
+ * scoping on top of this seam. */
+export function eligibleMemories(userDir: string, projectDir: string): Array<import("./recall.ts").RecallFile> {
+	const out: Array<import("./recall.ts").RecallFile> = [];
+	for (const [layer, dir] of [["user", userDir], ["project", projectDir]] as const) {
+		for (const f of scanMemoryDirCached(dir).files) {
+			out.push({
+				key: memoryKey(layer, f.entry.file),
+				file: f.entry.file,
+				title: f.entry.title,
+				description: f.entry.description,
+				type: f.entry.type,
+				layer,
+				mtimeMs: f.mtimeMs,
+				absPath: join(dir, f.entry.file),
+				body: f.body,
+			});
+		}
+	}
+	out.sort((a, b) => b.mtimeMs - a.mtimeMs);
+	return out;
+}

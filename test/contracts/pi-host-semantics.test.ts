@@ -186,3 +186,55 @@ describe("assembly order (CON-04)", () => {
 		expect(names).toContain("obs_recall");
 	});
 });
+
+/*
+ * ⑥ (附记 A.1 ①, spec 2026-10-02-memory-recall-v2): RV-06 dedup + /memory
+ * diagnostics derive recall state from ctx.sessionManager.buildSessionProjection()
+ * reading details.files[].key / details.bytes. If a pi upgrade ever strips or
+ * reshapes `details` on custom messages in the projection, recall silently
+ * degrades to duplicate injections with no error anywhere — this pin turns
+ * that red at the contract gate instead. Asserted against the REAL installed
+ * pi package export.
+ */
+import { buildSessionProjection } from "@earendil-works/pi-coding-agent";
+
+describe("RV host semantics (2026-10-02-memory-recall-v2)", () => {
+	it("⑥ buildSessionProjection preserves custom_message customType + details", () => {
+		const now = Date.now();
+		const entries = [
+			{ id: "e1", parentId: null, type: "session", version: 1, cwd: "/tmp", timestamp: now },
+			{
+				id: "e2",
+				parentId: "e1",
+				type: "message",
+				message: { role: "user", content: [{ type: "text", text: "hello recall" }], timestamp: now },
+				timestamp: now,
+			},
+			{
+				id: "e3",
+				parentId: "e2",
+				type: "custom_message",
+				customType: "pi-memory-recall",
+				content: [{ type: "text", text: "<memory-recall>\n\n## t (memory/a.md)\n\nbody\n\n</memory-recall>" }],
+				display: false,
+				details: {
+					v: 1,
+					delivery: "immediate",
+					model: "test/selector-1",
+					files: [{ key: "memory/a.md", bytes: 120, truncated: false }],
+					bytes: 200,
+					elapsedMs: 3,
+				},
+				timestamp: now,
+			},
+		] as never[];
+		const projection = buildSessionProjection(entries, "e3");
+		const recall = (projection.messages as Array<Record<string, unknown>>).find(
+			(m) => m.customType === "pi-memory-recall",
+		) as { customType?: string; details?: { v?: number; files?: Array<{ key?: string }> } } | undefined;
+		expect(recall).toBeDefined();
+		expect(recall!.customType).toBe("pi-memory-recall");
+		expect(recall!.details!.v).toBe(1);
+		expect(recall!.details!.files![0]!.key).toBe("memory/a.md");
+	});
+});

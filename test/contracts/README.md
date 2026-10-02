@@ -13,6 +13,7 @@
 | pm 不设置 `PI_SUBAGENT_PARENT_SESSION`(只消费) | P0-CT-06 | pi-subagents(生产方) | 不移除(职责边界钉住) |
 | status 槽 `modes` / `pi-effort-thinking` / `pi-effort-fast` / `goal`;widget `plan-todos` / `goal`;容忍 `effort` 槽 undefined 清理写 | P0-CT-07 | pi TUI footer / panel | 槽位语义变更 = 升 bus version 议题 |
 | session entry 类型 `modes` / `pi-goal-{state,focus,event,audit-event}` / `pi-review{,-directive}` | P0-CT-08 | 旧 session 回放兼容 | 磁盘/session 格式永不静默破坏 |
+| custom message `pi-memory-recall`（details v1：`{ v:1, delivery:"immediate"\|"deferred", model, files:[{key,bytes,truncated}], bytes, elapsedMs }`，customType 字符串与字段集冻结） | P0-CT-08（RV，spec 2026-10-02-memory-recall-v2） | core 自身（RV-06 去重、`/memory` 诊断） | 召回机制整体下线时移除 |
 | 磁盘布局(pm permissions/plan/profiles/config、effort settings 键、goal `.pi/goals`、review `pi-review.json`+runs) | P0-CT-09 | 全部既有用户数据 | 不移除(冻结) |
 | (P1 起)`__piClaudeCodeCore` 快照 + 2 个 core 可写 legacy key 同步 | P1-BUS-05 | CCTUI ≥1.5.0、panel | 各自独立撤除,互不阻塞(P1-BUS-09) |
 | 注：快照的 memory 可选通道（`MemoryPatch`，P3-ME-06）由 memory 模块发布，当前零外部消费方——不独立登记，俟有真实消费方时按本表规约补行（B2 处置） | —（附注 P1-BUS-05） | 无 | 有消费方时补登记 |
