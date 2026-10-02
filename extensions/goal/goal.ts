@@ -444,6 +444,16 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		getOtherOpenGoalCount: () => otherOpenGoalCount(goalsById, focusedGoalId),
 		isGoalActive: () => state.goal?.status === "active",
 		shouldPauseOnEscape: () => state.goal?.status === "active" && !!state.goal.autoContinue,
+		// INTERRUPT SAFETY (fix): Escape only pauses while the agent is idle;
+		// while busy it belongs to the interrupt path and passes through.
+		isAgentIdle: (ctx) => {
+			try {
+				return ctx.isIdle() && !ctx.hasPendingMessages();
+			} catch {
+				// probe failure = treat as busy: never claim Escape then
+				return false;
+			}
+		},
 		pauseActiveGoal,
 	});
 	let runningGoalId: string | null = null;

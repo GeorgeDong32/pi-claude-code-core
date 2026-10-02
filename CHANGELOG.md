@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed (goal, interrupt safety)
+- **Escape can always interrupt again while a goal is active**: the goal module's Esc-to-pause raw-input listener ran the FULL pause flow (disk writes, UI updates) synchronously inside the TUI's input-dispatch loop — when the agent was stuck (e.g. a hung audit), that synchronous side-effect chain could break the dispatch before the focused component ever saw Escape, leaving no way to interrupt. The listener now (a) never claims Escape while the agent is busy — busy Escape belongs to the interrupt path and passes through untouched, (b) dispatches the pause on the microtask queue wrapped in try/catch (the raw-input channel is observation-only; nothing in it can disturb the input chain), and (c) pauses only while the agent is idle (the convenience binding survives for idle sessions). Pinned by 5 direct cases (busy pass-through / async idle dispatch / throwing pause contained / non-Escape keys ignored / headless no-subscription).
+
 ### Fixed (plan-gate MCP shape leak, arch batch B1)
 - **plan mode now recognizes every MCP call shape**: the read-only plan gate used a private double-underscore-only regex that had drifted from the rule-family authority — single-underscore native names (`mcp_exa_search`), proxy-shaped calls (tool `mcp` with `input.tool`), direct-named tools on `PI_CORE_MCP_DIRECT_SERVERS`, and bare `mcp_*` names all slipped past it (every MCP tool is a potential mutation, so plan denies them outright). The pure shape core now lives in `lib/mcp-shape.ts` and is shared verbatim by the authority (`canonicalizeMcpTool`) and the plan gate, so the two consumers cannot drift again (4 new shape pins + the p4-families authority pins stay green).
 

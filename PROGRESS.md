@@ -400,3 +400,9 @@ spec `../specs/design/DESIGN-MEMORY-V2.md`，报告 `../MEMORY-V2-REPORT.md`（�
 - Residual risks 由主会话闭合：三绿复跑（check OK / vitest 720 / contracts 25）；git diff --stat 证实 goal-statemachine.test.ts / test/lib/memory.test.ts / pi-host-semantics.test.ts 整批（12 commits）零改动；legacy 白名单 git show 与 pre-B3 逐字等价。
 - 设计维度判定：mcp-shape / projection / recall-session / goal-continuation 真加深（deletion test 全过）；goal-audit-flow 诚实搬家+seam（auditor 注入 + emit seam）；diagnostics 合适的浅 formatter——无「搬家不加深」失败案例。
 - 全批终态：12 commits（2a8da74^..HEAD），方案 v2 定稿 2 轮 + 终审 2 轮对抗，全部 glm-5.3-flash。
+
+### Esc 劫持修复（用户报告 bug，2026-10-02，goal 批后独立修复）
+
+- **现象**：goal 活跃 + agent 卡住（如 update_goal audit 挂起）时按 Esc 无法打断模型——Esc 被 goal 的 Esc-to-pause 绑定吃掉。
+- **根因**（证据链：goal/ui.ts:149 → pi-tui tui.js:681-698）：onTerminalInput listener 同步执行完整 pauseActiveGoal 业务流（写盘/UI 更新），在 TUI 输入分发循环内造成副作用链断裂 → focusedComponent（打断处理）永远收不到 Esc。onTerminalInput 是观察通道，被当成了按键处理通道。
+- **修法**：三重守卫——busy agent 时 Esc 不认领（打断优先，probe 失败按 busy）；pause 分发移 queueMicrotask + try/catch（listener 零副作用）；仅 idle 时保留 Esc-pause 便利绑定。goal-ui-escape.test.ts 5 条直测 pin（busy 放行 / idle 异步分发 / pause 抛错不炸输入链 / 非 Esc 键忽略 / headless 零订阅）。三绿。
