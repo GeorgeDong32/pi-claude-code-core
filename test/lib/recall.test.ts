@@ -13,6 +13,7 @@ import {
 	recallQuery,
 	stripSkillWrapper,
 	truncateUtf8,
+	type RecallBlock,
 	type RecallFile,
 } from "../../extensions/memory/recall.ts";
 import type { Selector, SelectorRequest, SelectorOutcome } from "../../extensions/memory/selector.ts";
@@ -50,14 +51,17 @@ function fakeSelector(
 const instant = (keys: string[]): ((req: SelectorRequest) => Promise<SelectorOutcome>) =>
 	async () => ({ kind: "selected", keys, elapsedMs: 3 });
 
-function machine(selector: Selector, files: RecallFile[], cwd = "/w") {
-	return createRecall({ selector, modelLabel: "test/selector-1", files: () => files, cwd });
+function machine(selector: Selector, files: RecallFile[], cwd = "/w", delivered: RecallBlock[] = []) {
+	return {
+		m: createRecall({ selector, modelLabel: "test/selector-1", files: () => files, cwd, deliver: (b) => delivered.push(b) }),
+		delivered,
+	};
 }
 
 describe("RV recall machine (spec §8)", () => {
 	it("1 RV-02: skill wrapper stripped; skill-only and <6 chars skip; >4000 chars truncated", async () => {
 		const log: SelectorRequest[] = [];
-		const m = machine(fakeSelector(instant(["memory/a.md"]), log), [file("memory/a.md")]);
+		const { m } = machine(fakeSelector(instant(["memory/a.md"]), log), [file("memory/a.md")]);
 		const skill = `<skill name="diagnosing-bugs" location="/x">\nSkill body with lots of tokens test session bash grep\n</skill>\n\nFix the login bug`;
 		const block = await m.onUserMessage(skill, () => [], 50);
 		expect(block).not.toBeNull();
@@ -69,7 +73,7 @@ describe("RV recall machine (spec §8)", () => {
 		expect(log.length).toBe(1); // <6 chars → skip
 
 		const longLog: SelectorRequest[] = [];
-		const mLong = machine(fakeSelector(instant(["memory/a.md"]), longLog), [file("memory/a.md")]);
+		const { m: mLong } = machine(fakeSelector(instant(["memory/a.md"]), longLog), [file("memory/a.md")]);
 		await mLong.onUserMessage("x".repeat(5000), () => [], 50);
 		expect(longLog[0]!.query.length).toBe(4000);
 		expect(stripSkillWrapper("  plain  ")).toBe("plain");
@@ -77,7 +81,7 @@ describe("RV recall machine (spec §8)", () => {
 	});
 
 	it("2 RV-03: instant selector → immediate block with correct details", async () => {
-		const m = machine(fakeSelector(instant(["user-memory/u.md", "memory/p.md"])), [file("user-memory/u.md"), file("memory/p.md")]);
+		const { m } = machine(fakeSelector(instant(["user-memory/u.md", "memory/p.md"])), [file("user-memory/u.md"), file("memory/p.md")]);
 		const block = await m.onUserMessage("告诉我用户偏好和项目约定", () => [], 100);
 		expect(block).not.toBeNull();
 		expect(block!.customType).toBe("pi-memory-recall");
@@ -91,7 +95,7 @@ describe("RV recall machine (spec §8)", () => {
 		expect(block!.text.startsWith("<memory-recall>")).toBe(true);
 	});
 
-	it("3 RV-04: slow selector → deferred delivery at first continues=true turn_end, once only", async () => {
+	it("3 spec v1.2: parked selection DELIVERS the moment it completes (no turn_end gate, never discarded)", async () => {
 		let release: (() => void) | null = null;
 		const slow = fakeSelector(async () => {
 			await new Promise<void>((r) => {
@@ -99,29 +103,25 @@ describe("RV recall machine (spec §8)", () => {
 			});
 			return { kind: "selected", keys: ["memory/a.md"], elapsedMs: 9 };
 		});
-		const m = machine(slow, [file("memory/a.md")]);
+		const { m, delivered } = machine(slow, [file("memory/a.md")]);
 		const immediate = await m.onUserMessage("show me the convention", () => [], 10);
-		expect(immediate).toBeNull(); // timed out, parked
-		expect(m.onTurnEnd(true, () => [])).toBeNull(); // selection still pending
+		expect(immediate).toBeNull(); // timed out \u2192 parks
+		expect(delivered).toHaveLength(0); // not yet
 		release!();
 		await new Promise((r) => setTimeout(r, 5));
-		const deferred = m.onTurnEnd(true, () => []);
-		expect(deferred).not.toBeNull();
-		expect(deferred!.details.delivery).toBe("deferred");
-		expect(m.onTurnEnd(true, () => [])).toBeNull(); // consumed exactly once
-		// nothing held → history thunk untouched
-		let calls = 0;
-		expect(m.onTurnEnd(true, () => (calls++, []))).toBeNull();
-		expect(calls).toBe(0);
-		// run over without a continuing turn_end → discarded
-		const m2 = machine(slow, [file("memory/a.md")]);
-		await m2.onUserMessage("show me the convention", () => [], 10);
+		expect(delivered).toHaveLength(1);
+		expect(delivered[0]!.details.delivery).toBe("deferred");
+		expect(m.stats.deliveries).toBe(1);
+		// zero-wait path parks too \u2014 and still delivers on completion
+		const { m: m0, delivered: d0 } = machine(slow, [file("memory/a.md")]);
+		const zero = await m0.onUserMessage("zero wait parks as well", () => [], 0);
+		expect(zero).toBeNull();
 		release!();
 		await new Promise((r) => setTimeout(r, 5));
-		expect(m2.onTurnEnd(false, () => [])).toBeNull();
+		expect(d0).toHaveLength(1);
 	});
 
-	it("4 RV-04 re-filter: files read after selection drop out of the deferred block; all read → null", async () => {
+	it("4 delivery-time re-filter: files read during the selection drop out (mutable history thunk)", async () => {
 		let release: (() => void) | null = null;
 		const slow = fakeSelector(async () => {
 			await new Promise<void>((r) => {
@@ -131,27 +131,29 @@ describe("RV recall machine (spec §8)", () => {
 		});
 		const a = file("memory/a.md");
 		const b = file("memory/b.md");
-		const m = machine(slow, [a, b]);
-		await m.onUserMessage("conventions please", () => [], 10);
+		let history: unknown[] = [];
+		const { m, delivered } = machine(slow, [a, b]);
+		await m.onUserMessage("conventions please", () => history, 10);
+		// the model reads file A while the selection is still running
+		history = [{ role: "assistant", content: [{ type: "toolCall", name: "read", arguments: { path: a.absPath } }] }];
 		release!();
 		await new Promise((r) => setTimeout(r, 5));
-		const readA = [{ role: "assistant", content: [{ type: "toolCall", name: "read", arguments: { path: a.absPath } }] }];
-		const block = m.onTurnEnd(true, () => readA);
-		expect(block).not.toBeNull();
-		expect(block!.details.files.map((f) => f.key)).toEqual(["memory/b.md"]);
-
-		const m2 = machine(slow, [a, b]);
-		await m2.onUserMessage("conventions please", () => [], 10);
-		release!();
-		await new Promise((r) => setTimeout(r, 5));
-		const readBoth = [
+		expect(delivered).toHaveLength(1);
+		expect(delivered[0]!.details.files.map((f: { key: string }) => f.key)).toEqual(["memory/b.md"]);
+		// all selected files read during selection \u2192 nothing deliverable, no send
+		const { m: m2, delivered: d2 } = machine(slow, [a, b]);
+		let history2: unknown[] = [];
+		await m2.onUserMessage("conventions again", () => history2, 10);
+		history2 = [
 			{ role: "assistant", content: [{ type: "toolCall", name: "read", arguments: { path: a.absPath } }] },
 			{ role: "assistant", content: [{ type: "toolCall", name: "read", arguments: { path: b.absPath } }] },
 		];
-		expect(m2.onTurnEnd(true, () => readBoth)).toBeNull();
+		release!();
+		await new Promise((r) => setTimeout(r, 5));
+		expect(d2).toHaveLength(0);
 	});
 
-	it("5 RV-04/05: abort() kills the pending deferred block and aborts the in-flight signal; waitMs 0 never returns immediately", async () => {
+	it("5 abort() kills the in-flight selection (signal aborted, nothing delivered)", async () => {
 		const log: SelectorRequest[] = [];
 		let release: (() => void) | null = null;
 		const slow = fakeSelector(
@@ -163,15 +165,15 @@ describe("RV recall machine (spec §8)", () => {
 			},
 			log,
 		);
-		const m = machine(slow, [file("memory/a.md")]);
+		const { m, delivered } = machine(slow, [file("memory/a.md")]);
 		const zero = await m.onUserMessage("zero wait path", () => [], 0);
-		expect(zero).toBeNull(); // waitMs 0 always parks, never immediate
+		expect(zero).toBeNull();
 		const aborted = new Promise<boolean>((r) => log[0]!.signal!.addEventListener("abort", () => r(true)));
-		m.abort();
+		m.abort(); // a newer user message supersedes
 		release!();
 		await new Promise((r) => setTimeout(r, 5));
-		expect(await aborted).toBe(true); // in-flight selection aborted
-		expect(m.onTurnEnd(true, () => [])).toBeNull(); // parked result discarded (signal aborted)
+		expect(await aborted).toBe(true);
+		expect(delivered).toHaveLength(0); // aborted \u2192 no delivery
 	});
 
 	it("6 RV-05: a newer user message supersedes the older selection and aborts its signal", async () => {
@@ -187,7 +189,7 @@ describe("RV recall machine (spec §8)", () => {
 			},
 			log,
 		);
-		const m = machine(slow, [file("memory/a.md")]);
+		const { m } = machine(slow, [file("memory/a.md")]);
 		void m.onUserMessage("first message", () => [], 5);
 		const s1 = log[0]!.signal!;
 		const abortedPromise = new Promise<boolean>((r) => s1.addEventListener("abort", () => r(true)));
@@ -200,7 +202,7 @@ describe("RV recall machine (spec §8)", () => {
 	it("7 RV-06: surfaced keys (history + this run) never re-enter the manifest", async () => {
 		const log: SelectorRequest[] = [];
 		const echoFirst = fakeSelector(async (req) => ({ kind: "selected", keys: [req.candidates[0]!.key], elapsedMs: 3 }), log);
-		const m = machine(echoFirst, [file("memory/a.md"), file("memory/b.md")]);
+		const { m } = machine(echoFirst, [file("memory/a.md"), file("memory/b.md")]);
 		const prior = [
 			{ role: "custom", customType: "pi-memory-recall", details: { v: 1, delivery: "immediate", model: "x", files: [{ key: "memory/a.md", bytes: 10, truncated: false }], bytes: 20, elapsedMs: 1 } },
 		];
@@ -218,7 +220,7 @@ describe("RV recall machine (spec §8)", () => {
 	it("8 RV-07: read toolCalls exclude candidates (absolute AND cwd-relative paths)", async () => {
 		const a = file("memory/a.md");
 		const log: SelectorRequest[] = [];
-		const m = machine(fakeSelector(instant(["memory/b.md"]), log), [a, file("memory/b.md")]);
+		const { m } = machine(fakeSelector(instant(["memory/b.md"]), log), [a, file("memory/b.md")]);
 		const history = [
 			{ role: "assistant", content: [{ type: "toolCall", name: "read", arguments: { path: a.absPath } }] },
 			{ role: "assistant", content: [{ type: "toolCall", name: "read", arguments: { path: `.${a.absPath}` } }] },
@@ -227,7 +229,7 @@ describe("RV recall machine (spec §8)", () => {
 		const relHistory = [
 			{ role: "assistant", content: [{ type: "toolCall", name: "read", arguments: { path: a.absPath.replace("/tmp/mem", "rel/sub") } }] },
 		];
-		const m2 = machine(fakeSelector(instant(["memory/b.md"]), log), [a, file("memory/b.md")], "/tmp/mem");
+		const { m: m2 } = machine(fakeSelector(instant(["memory/b.md"]), log), [a, file("memory/b.md")], "/tmp/mem");
 		await m.onUserMessage("message long enough here", () => history, 50);
 		expect(log[0]!.candidates.map((c) => c.key)).toEqual(["memory/b.md"]);
 		// relative resolution: cwd /tmp/mem + rel/sub/project/a.md == /tmp/mem/rel/sub/... — no match for this layout,
@@ -243,7 +245,7 @@ describe("RV recall machine (spec §8)", () => {
 
 	it("9 RV-08: truncation + path note; CJK byte-safe; budget skip; >5 keys capped; unknown keys dropped", async () => {
 		const big = file("memory/big.md", { body: "汉".repeat(3000) }); // 9000 bytes > 4KB
-		const m = machine(fakeSelector(instant(["memory/big.md"])), [big]);
+		const { m } = machine(fakeSelector(instant(["memory/big.md"])), [big]);
 		const block = await m.onUserMessage("give me the big file", () => [], 50);
 		expect(block).not.toBeNull();
 		const bodyStart = block!.text.indexOf("body of");
@@ -257,7 +259,7 @@ describe("RV recall machine (spec §8)", () => {
 
 		// session budget exhausted → selector never called
 		const log: SelectorRequest[] = [];
-		const m2 = machine(fakeSelector(instant(["memory/a.md"]), log), [file("memory/a.md")]);
+		const { m: m2 } = machine(fakeSelector(instant(["memory/a.md"]), log), [file("memory/a.md")]);
 		const spent = [
 			{ role: "custom", customType: "pi-memory-recall", details: { v: 1, delivery: "immediate", model: "x", files: [], bytes: RECALL_SESSION_MAX_BYTES, elapsedMs: 1 } },
 		];
@@ -266,7 +268,7 @@ describe("RV recall machine (spec §8)", () => {
 
 		// >5 keys capped; unknown keys dropped
 		const files = Array.from({ length: 7 }, (_, i) => file(`memory/f${i}.md`));
-		const m3 = machine(fakeSelector(instant(files.map((f) => f.key).concat("memory/ghost.md"))), files);
+		const { m: m3 } = machine(fakeSelector(instant(files.map((f) => f.key).concat("memory/ghost.md"))), files);
 		const b3 = await m3.onUserMessage("many files selected here", () => [], 50);
 		expect(b3!.details.files.length).toBe(5);
 		expect(b3!.details.files.some((f) => f.key === "memory/ghost.md")).toBe(false);
@@ -277,14 +279,14 @@ describe("RV recall machine (spec §8)", () => {
 		const bomb = fakeSelector(async () => {
 			throw new Error("selector exploded");
 		});
-		const m = machine(bomb, [file("memory/a.md")]);
+		const { m } = machine(bomb, [file("memory/a.md")]);
 		await expect(m.onUserMessage("make it explode please", () => [], 50)).resolves.toBeNull();
 		expect(m.stats.failures).toBe(1);
 	});
 
 	it("11 RV-13: recentTools = tools succeeded since the last user message, failures excluded", async () => {
 		const log: SelectorRequest[] = [];
-		const m = machine(fakeSelector(instant(["memory/a.md"]), log), [file("memory/a.md")]);
+		const { m } = machine(fakeSelector(instant(["memory/a.md"]), log), [file("memory/a.md")]);
 		const history = [
 			{ role: "user", content: [{ type: "text", text: "previous turn message" }] },
 			{ role: "toolResult", toolName: "bash", isError: false },

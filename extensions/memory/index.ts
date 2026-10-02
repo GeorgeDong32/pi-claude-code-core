@@ -124,6 +124,13 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 				modelLabel: label,
 				files: () => eligibleMemories(userMemoryDir(ctx), memoryDir(ctx), gitCanonicalRoot(ctx.cwd ?? process.cwd()) ?? undefined),
 				cwd: ctx.cwd ?? process.cwd(),
+				// spec v1.2: immediate delivery the moment a parked selection
+				// completes — pi queues it as a pending custom message and flushes
+				// at the next turn_end (request #2 within the run, next turn's
+				// request #1 otherwise). Never blocks the screen.
+				deliver: (block) => {
+					pi.sendMessage(makeRecallMessage(block), { triggerTurn: false });
+				},
 			});
 		}
 		return recallMachine;
@@ -308,25 +315,16 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 		try {
 			if (gate.state.yielded) return; // hermes owns memory while present
 			consolidation.onTurnEnd(memoryDir(ctx), userMemoryDir(ctx));
-			// RV-03/04 deferred delivery: the first turn_end that continues the
-			// run (tool results pending or steer/followUp text queued — S1/S5)
-			// re-filters the held block against the LATEST history and persists
-			// it via sendMessage(triggerTurn:false); pi flushes pending custom
-			// messages right after this dispatch — the next request sees it.
-			if (recallMachine) {
-				const continues = (((event as { toolResults?: unknown[] }).toolResults ?? []).length > 0) || ctx.hasPendingMessages?.() === true;
-				const block = recallMachine.onTurnEnd(continues, () => historyFor(ctx));
-				if (block) pi.sendMessage(makeRecallMessage(block), { triggerTurn: false });
-			}
 		} catch {
 			/* never block the turn */
 		}
 	});
 	pi.on("agent_end", () => {
 		try {
-			// RV-05: run over — abort in-flight selection, drop the held block,
-			// clear run-scoped dedup; unconsumed deliveries never leak.
-			recallMachine?.abort();
+			// spec v1.2: NO abort here — an in-flight selection for this run may
+			// still complete and deliver (appends when not streaming → next
+			// turn's request #1 sees it). Latest-wins supersede happens at the
+			// NEXT user message (before_agent_start abort), not at run end.
 			promptMessagePending = false;
 		} catch {
 			/* never block */

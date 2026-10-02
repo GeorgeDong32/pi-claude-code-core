@@ -437,7 +437,7 @@ import type { Selector, SelectorOutcome } from "../../extensions/memory/selector
 
 function writeSettings(recallModel: string): void {
 	mkdirSync(join(home, ".pi", "agent"), { recursive: true });
-	writeFileSync(join(home, ".pi", "agent", "settings.json"), JSON.stringify({ memory: { recallModel } }));
+	writeFileSync(join(home, ".pi", "agent", "settings.json"), JSON.stringify({ memory: { recallModel, recallWaitMs: 5000 } }));
 }
 
 function setupWithSelector(keys: string[], log: Array<{ query: string; count: number }> = []): FakeHost {
@@ -492,19 +492,18 @@ describe("RV wiring (spec 2026-10-02-memory-recall-v2)", () => {
 		expect(typeof r!.message!.details.elapsedMs).toBe("number");
 	});
 
-	it("18: steer path — message_end(user) parks, turn_end(toolResults) delivers via sendMessage(triggerTurn:false)", async () => {
+	it("18 spec v1.2: steer path — message_end(user) parks, delivery fires the moment selection completes (no turn_end gate)", async () => {
 		writeMemory("a.md", "convention", "repo convention");
 		const host = setupWithSelector(["memory/a.md"]);
 		const ctx = recallCtx(host);
 		await host.fire("session_start", {}, ctx);
-		// steer: no before_agent_start ran → prompt flag false → mid-run path
 		await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: "mid-run steer message about convention" }] } }, ctx);
+		// NOTE: no turn_end is fired at all — delivery is completion-driven.
 		await new Promise((r) => setTimeout(r, 5)); // let the parked selection settle
-		expect(host.sentMessages).toHaveLength(0); // nothing before the turn continues
-		await host.fire("turn_end", { toolResults: [{ toolCallId: "t", toolName: "bash" }] }, ctx);
 		const sent = host.sentMessages.filter((m) => m.message.customType === "pi-memory-recall");
-		expect(sent).toHaveLength(1);
+		expect(sent).toHaveLength(1); // delivered immediately on completion — pi queues + flushes at the next turn_end
 		expect((sent[0]!.opts as { triggerTurn?: boolean }).triggerTurn).toBe(false);
+		expect((sent[0]!.message as { display?: boolean }).display).toBe(false); // implicit: never rendered
 		expect((sent[0]!.message as { details?: { delivery?: string } }).details?.delivery).toBe("deferred");
 	});
 
@@ -523,9 +522,15 @@ describe("RV wiring (spec 2026-10-02-memory-recall-v2)", () => {
 		await host.fire("message_end", { message: { role: "user", customType: "pi-memory-recall", content: [{ type: "text", text: "whatever" }] } }, ctx);
 		await host.fire("message_end", { message: { role: "toolResult", toolName: "bash", isError: false, content: [] } }, ctx);
 		expect(log).toHaveLength(1);
-		// agent_end clears the prompt flag → the NEXT plain user message_end selects (steer)
+		// agent_end clears the prompt flag; a fresh idle message in real pi goes
+		// through a NEW before_agent_start (clears run-scoped dedup) — simulate
+		// that flow, then a mid-run steer in the new run selects again.
 		await host.fire("agent_end", {}, ctx);
-		await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: "a fresh steer message after run end" }] } }, ctx);
+		await host.fire("before_agent_start", { systemPrompt: "BASE", prompt: "second run prompt about convention" }, ctx); // waitMs>0 + instant fake → immediate
+		expect(log).toHaveLength(2);
+		await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: "the second run prompt about convention" }] } }, ctx); // prompt msg — no select
+		await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: "a mid-run steer in run two" }] } }, ctx);
+		// run-two dedup already covers a.md (delivered at before_agent_start) → no selector call
 		expect(log).toHaveLength(2);
 	});
 

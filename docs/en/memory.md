@@ -20,7 +20,7 @@ Hermes formats. Zero runtime dependencies, one LLM lane.
 |---|---|
 | `session_start` | Reconcile both layers + settings load + static yield probe |
 | `before_agent_start` | Dynamic yield probe → policy + two-layer capped index; **RV prompt path** — one selection per user message bounded by `recallWaitMs`, the block persists as a custom message right after the user message |
-| `message_end` | **RV steer path** — mid-run user messages select with wait 0 (parked for turn_end); custom blocks never trigger (RV-01) |
+| `message_end` | **RV steer path** — mid-run user messages select with wait 0; custom blocks never trigger (RV-01). Spec v1.2: a parked selection DELIVERS THE MOMENT it completes via `sendMessage(triggerTurn:false)` — pi queues it as a pending custom message and flushes at the next turn_end (the first assistant message's end at the earliest): request #2 sees it within the run, the next turn's request #1 otherwise. Nothing is discarded; `display:false` keeps it invisible in both TUIs |
 | `turn_end` | **RV deferred delivery** (first continues=true turn_end, `sendMessage` `triggerTurn:false` — pi flushes pending custom messages right after handler dispatch) + auto-consolidation trigger (V2-C) + P3 automation |
 | `agent_end` | **RV run boundary** — abort in-flight selection, drop the held block, clear run dedup |
 | `tool_call` | `guardMemoryWrites` secret interceptor (both layers); read suppression is history-derived now (RV-07) |
@@ -35,14 +35,16 @@ of the 30× cache-miss cost and the frozen-selection re-injection (RC-1/RC-2).
 **Configuration** (`~/.pi/agent/settings.json`, `memory` key):
 - `recallModel` (string, `"provider/id"`): the selector model. **Required for
   recall — unset or unresolvable means NO recall** (D3, no lexical fallback).
-- `recallWaitMs` (number, default 4000, clamped to 0–15000): per-message
-  selector wait budget on the prompt path; a slow selector parks its result
-  and delivers it at the next continuing turn_end.
+- `recallWaitMs` (number, default **0** since spec v1.2, clamped to 0–15000): per-message
+  selector wait budget on the prompt path. 0 = never block the screen on the
+  selector — the block arrives via the completion-driven pending-message
+  flush instead. A positive value trades screen delay for request-#1 recall.
 
 Known costs (accepted, spec D4 + handoff traps): the `before_agent_start`
-handler chain is serially awaited, so the wait (only when a selector model
-is configured) delays later extensions' handlers and the main model request
-by up to `recallWaitMs`; and subagent child sessions load core too — every
+handler chain is serially awaited, so a positive `recallWaitMs`
+(only when a selector model is configured) delays later extensions' handlers
+and the main model request by up to that budget — the v1.2 default of 0
+removes this cost entirely; and subagent child sessions load core too — every
 child's dispatch prompt runs one selector call (token cost + ≤waitMs
 first-token latency). That is expected behavior, not a bug to special-case.
 

@@ -3,15 +3,12 @@
  * (spec 2026-10-02-memory-recall-v2, R1; replaces selection.ts +
  * recall-session.ts wholesale).
  *
- * THREE entries (the only ways in):
+ * TWO entries (the only ways in):
  *   onUserMessage(text, history, waitMs) — per real user message. Hygiene,
  *     history-derived exclusions, selector race against waitMs. Returns the
  *     block when the selector answers in time (prompt path returns it from
  *     before_agent_start as a persisted custom message), else null and the
  *     result parks in a held slot.
- *   onTurnEnd(continues, history) — first continues=true turn_end re-filters
- *     the held block against the LATEST history and returns it for
- *     sendMessage(triggerTurn:false) delivery; continues=false discards.
  *   abort() — run boundary (agent_end): abort in-flight, discard held,
  *     clear run-scoped dedup.
  *
@@ -80,7 +77,6 @@ export interface RecallMachine {
 	/** history is a THUNK: the machine calls it only when it actually needs
 	 * a snapshot (onTurnEnd with nothing held never touches it). */
 	onUserMessage(text: string, history: () => readonly unknown[], waitMs: number): Promise<RecallBlock | null>;
-	onTurnEnd(continues: boolean, history: () => readonly unknown[]): RecallBlock | null;
 	abort(): void;
 	readonly stats: RecallStats;
 }
@@ -261,11 +257,11 @@ export function createRecall(deps: {
 	modelLabel: string;
 	files: () => RecallFile[];
 	cwd: string;
+	deliver: (block: RecallBlock) => void;
 }): RecallMachine {
 	const stats: RecallStats = { selections: 0, empties: 0, failures: 0, lastReason: null, deliveries: 0 };
 	const runDelivered = new Set<string>();
 	let inFlight: AbortController | null = null;
-	let held: { keys: string[]; elapsedMs: number } | null = null;
 
 	function eligible(history: DerivedHistory): RecallFile[] {
 		return deps
@@ -312,7 +308,6 @@ export function createRecall(deps: {
 		async onUserMessage(text, history, waitMs) {
 			// RV-05/D8: a newer user message always wins
 			abortInFlight();
-			held = null;
 
 			const query = recallQuery(text);
 			if (query === null) {
@@ -352,12 +347,19 @@ export function createRecall(deps: {
 				: Promise.race([selection, timeoutNow]));
 
 			if (bounded === "timeout" && timedOut) {
-				// selection keeps running in the background; park it for the
-				// next continues=true turn_end (RV-03 deferred path)
+				// spec v1.2: the selection keeps running and DELIVERS THE MOMENT IT
+				// COMPLETES — the wiring's sendMessage(triggerTurn:false) rides pi's
+				// pending-custom-message queue, flushed at the next turn_end (the
+				// first assistant message's end at the earliest). Never parked, never
+				// discarded; a newer user message aborts it (latest-wins).
 				void selection.then((outcome) => {
 					if (controller.signal.aborted) return;
-					if (outcome.kind === "selected") held = { keys: outcome.keys, elapsedMs: outcome.elapsedMs };
-					else if (outcome.kind === "empty") stats.empties++;
+					if (outcome.kind === "selected") {
+						stats.selections++;
+						const block = assemble(outcome, deriveHistory(history(), deps.cwd), "deferred");
+						if (block) deps.deliver(block);
+						else stats.empties++;
+					} else if (outcome.kind === "empty") stats.empties++;
 					else {
 						stats.failures++;
 						stats.lastReason = outcome.reason;
@@ -381,20 +383,8 @@ export function createRecall(deps: {
 			return assemble(outcome, derived, "immediate");
 		},
 
-		onTurnEnd(continues, history) {
-			if (!continues || !held) {
-				held = null; // run over → RV-03: unconsumed deliveries are dropped
-				return null;
-			}
-			const parked = held;
-			held = null;
-			const derived = deriveHistory(history(), deps.cwd); // re-filter against the LATEST history (RV-06)
-			return assemble({ kind: "selected", keys: parked.keys, elapsedMs: parked.elapsedMs }, derived, "deferred");
-		},
-
 		abort() {
 			abortInFlight();
-			held = null;
 			runDelivered.clear();
 		},
 

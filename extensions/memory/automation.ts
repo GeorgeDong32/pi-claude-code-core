@@ -42,8 +42,11 @@ export interface MemorySettings {
 	recallWaitMs?: number;
 }
 
-/** The default wait budget for the prompt-path selector race (D4). */
-export const DEFAULT_RECALL_WAIT_MS = 4_000;
+/** The default wait budget for the prompt-path selector race (D4, v1.2:
+ * 0 — never block the screen on the selector; blocks deliver via pi's
+ * pending-custom-message flush at the first turn_end instead. Users who
+ * want request-#1 recall can still configure a positive budget). */
+export const DEFAULT_RECALL_WAIT_MS = 0;
 
 /** Clamp bounds for memory.recallWaitMs (RV-18). */
 export const RECALL_WAIT_MIN_MS = 0;

@@ -25,6 +25,12 @@
 - **批 2(同日)**:pause/abort/clear 尾注 — pause 注 → `pauseReason`(user: 前缀,paused 提示向模型展示,honor 措辞;pauseReasonLabel 单一标签权威);abort/clear 注 → `goal_aborted` ledger 事件(user aborted:/user cleared: + archivePath,补齐用户终止路径的审计空白);/goal-focus 按用户决定保持纯选择器(禁参数直选)。
 - 测试:extensions/goal/tests/goal-notes.test.ts(6 用例,纯 seam:record 往返 + prompt 注入 + 标签)。
 
+## recall v1.2 零阻塞投递批(2026-10-03,cctui handoff §3 诊断驱动)
+
+**状态:实现完成,三门全绿;DEVIATIONS #83。**
+
+- 默认 recallWaitMs 4000→0(prompt 路径永不阻塞上屏);挂起选择完成即投递(deliver 端口 → sendMessage triggerTurn:false → pi pending 队列 → 下一个 turn_end 落盘);onTurnEnd 删除;agent_end 不再 abort。display:false 隐式性经 vanilla(interactive-mode live+resume)+ cctui(不碰 custom message 通路)双源核证。
+
 ## core 工具渲染器批(2026-10-02,spec 2026-10-02-core-tool-renderers)
 
 **状态:实现完成,三门全绿(check / 47 文件 735 用例 / 契约 27 / 渲染器 14);cctui 侧接手(typecheck + 90 用例全绿,各自单独提交)。**

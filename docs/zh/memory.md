@@ -19,9 +19,9 @@ spec 2026-10-02-memory-recall-v2)、守卫记忆写入路径、自动整合
 |---|---|
 | `session_start` | 双层 reconcile + 设置加载 + 静态 yield 探测 |
 | `before_agent_start` | 动态 yield 探测 → policy + 双层带帽索引;**RV prompt 路径** —— 每条用户消息一次选择(受 `recallWaitMs` 限时),块作为 custom message 持久化在用户消息之后 |
-| `message_end` | **RV steer 路径** —— run 中途到达的用户消息以等待 0 选择(挂起);custom 块永不触发(RV-01) |
-| `turn_end` | **RV 延迟投递**(首个 continues=true 的 turn_end;`sendMessage` `triggerTurn:false` —— pi 在 handler dispatch 之后 flush pending custom message)+ 自动整合触发(V2-C)+ P3 automation |
-| `agent_end` | **RV run 边界** —— 中止在途选择、丢弃挂起块、清空 run 级判重 |
+| `message_end` | **RV steer 路径** —— run 中途到达的用户消息以等待 0 选择;custom 块永不触发(RV-01)。spec v1.2:挂起的选择**一完成即投递**(`sendMessage` `triggerTurn:false` 入 pi 的 pending 队列,下一个 turn_end 落盘 —— 最早 = 首条模型消息结束):run 内 request #2 起可见,run 结束则下一轮 request #1 可见。永不丢弃;`display:false` 保证两个 TUI 都不渲染 |
+| `turn_end` | 自动整合触发(V2-C)+ P3 automation(spec v1.2:召回投递不再按 turn 门控 —— 见 `message_end`) |
+| `agent_end` | spec v1.2:仅清 prompt 标记 —— 在途选择仍可完成后投递(下一轮可见);最新者胜的取代发生在下一条用户消息 |
 | `tool_call` | `guardMemoryWrites` 秘密拦截器(双层);已读抑制改为从历史推导(RV-07) |
 | `tool_result` | `memory_consolidate` settle + 陈旧读 staleness 标注 |
 | `agent_settled` | 清除整合进行中标记 |
@@ -34,8 +34,7 @@ spec 2026-10-02-memory-recall-v2)、守卫记忆写入路径、自动整合
 **配置**(`~/.pi/agent/settings.json`,`memory` 键):
 - `recallModel`(字符串,`"provider/id"`):选择器模型。**召回必须显式配置
   —— 未设置或无法解析 = 不召回**(D3,无词法回退)。
-- `recallWaitMs`(数字,默认 4000,钳制 0–15000):prompt 路径每消息的
-  选择器等待预算;超时的选择结果挂起,在下一个继续中的 turn_end 投递。
+- `recallWaitMs`(数字,spec v1.2 起**默认 0**,钳制 0–15000):prompt 路径每消息的选择器等待预算。0 = 永不因选择器阻塞上屏 —— 块经完成驱动的 pending 落盘到达;正值 = 用上屏延迟换 request-#1 召回。
 
 已知代价(spec D4 + handoff 陷阱,接受):`before_agent_start` 的 handler
 链是串行 await 的,等待(仅配置了选择器模型时)会推迟后续扩展的 handler

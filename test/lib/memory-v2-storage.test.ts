@@ -42,7 +42,7 @@ function setup(): FakeHost {
 /** RV wiring helper: settings with recallModel + a recording fake selector. */
 function setupWithSelector(keys: string[], log: Array<{ query: string; candidates: string[] }> = []): FakeHost {
 	mkdirSync(join(home, ".pi", "agent"), { recursive: true });
-	writeFileSync(join(home, ".pi", "agent", "settings.json"), JSON.stringify({ memory: { recallModel: "test/selector-1" } }));
+	writeFileSync(join(home, ".pi", "agent", "settings.json"), JSON.stringify({ memory: { recallModel: "test/selector-1", recallWaitMs: 5000 } }));
 	const factory = (): Selector => ({
 		async select(req): Promise<SelectorOutcome> {
 			log.push({ query: req.query, candidates: req.candidates.map((c) => c.key) });

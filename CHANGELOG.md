@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Changed (recall delivery v1.2 — zero screen blocking, spec amendment)
+- **`recallWaitMs` default 4000 → 0**: the prompt path never blocks the screen on the selector. A parked selection **delivers the moment it completes** via `sendMessage(triggerTurn:false)` — pi queues it as a pending custom message and flushes at the next turn_end (the first assistant message's end at the earliest): request #2 sees it within the run, the next turn's request #1 otherwise. The turn_end-gated deferred path and its discard-at-run-end semantics are gone (`onTurnEnd` removed; `agent_end` no longer aborts in-flight selections — latest-wins supersede happens at the next user message). `display:false` keeps the block invisible in both TUIs (vanilla filters live+resume; cctui doesn't touch the custom-message path).
+
 ### Added (goal notes — direct user request 2026-10-02, no spec)
 - **`/goal-resume <text>` no longer drops the trailing message**: the text rides the FIRST checkpoint after resume as a one-shot `<resume_note>` block (user-provided data) and is consumed on send — in-memory by design so stale guidance can never survive a restart.
 - **`/goal-pause <reason>` / `/goal-abort <reason>` / `/goal-clear <note>` no longer drop trailing text**: a pause reason becomes the user-labeled `pauseReason` (`user: …`) shown to the agent in the paused system prompt (labeled distinctly from agent pause_goal reasons via one labeling authority, cleared on resume); abort/clear reasons ride a `goal_aborted` ledger event (`user aborted: …` / `user cleared: …`) — the user-initiated termination paths had no audit trail before. `/goal-focus` stays picker-only by explicit user decision (no argument shortcut).

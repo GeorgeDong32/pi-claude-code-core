@@ -236,3 +236,5 @@
 
 82. **goal notes 无 spec 直做(2026-10-02)**:resumeNote/userNote 为用户当日直接请求的小特性,无对应 spec 文件;按仓库纪律以测试+台账钉住。设计要点:resume note 为一次性内存态(不落盘,防重启后陈旧指示);user note 为 record 持久字段且仅用户可写(/goal-note)。ledger 未加事件类型(避免触碰 goal-ledger 三处 render switch;notify+持久化已可观察,后续需要再补)。
 
+83. **recall v1.2 修订(2026-10-03,用户实机体验驱动,cctui handoff §3 诊断材料,取代 spec v1.1 三处)**:① D4 默认 waitMs 4000→0 —— 实测阻塞 before_agent_start 串行链导致 Enter→上屏延迟;② RV-03/04 投递改完成驱动:挂起选择一完成即 sendMessage(triggerTurn:false) 入 pi pending custom 队列,宿主在下一个 turn_end(最早=首条模型消息结束)落盘 —— run 内 request #2 可见、run 结束下一轮 request #1 可见,取消「continues=true 门控 + run 结束丢弃」(onTurnEnd 入口删除);③ agent_end 不再 abort 在途选择(晚到照样投递),latest-wins 改由下一条用户消息的 before_agent_start abort 承担。投递时重滤用消息时快照的惰性 thunk(选择期间新读文件仍排除)。display:false 隐式性双 TUI 源码核证。测试:recall.test.ts 3/4/5 重写、wiring 18 改完成驱动断言 + display 隐式断言。
+
