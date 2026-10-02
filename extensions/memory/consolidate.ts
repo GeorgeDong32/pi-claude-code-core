@@ -33,6 +33,8 @@ import {
 	type LayerStats,
 } from "./store.ts";
 import { USER_INDEX_MAX } from "./policy.ts";
+import { consolidateResultRows, renderConsolidateCall, type ConsolidateArgs } from "./renderers.ts";
+import { renderRows } from "../../lib/tool-render.ts";
 import { MEMORY_INDEX_MAX } from "../../lib/context-budget.ts";
 
 export const CONSOLIDATE_DIRECTIVE_TYPE = "pi-memory-consolidate";
@@ -272,6 +274,10 @@ export function registerConsolidation(
 					details: { ok: true, written: result.written, deleted: result.deleted },
 				};
 			},
+			// TR C: one row per outcome — the batch manifest stays in the text.
+			renderCall: (args, theme) => renderConsolidateCall(args as ConsolidateArgs, theme as never),
+			renderResult: (result, _options, theme) =>
+				renderRows(consolidateResultRows(result), theme as never),
 		}),
 	);
 

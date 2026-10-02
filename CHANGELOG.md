@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added (core tool renderers — spec 2026-10-02-core-tool-renderers)
+- **`obs_recall` gets a human view**: one-line call row (`Recall Observation obs_4b1d7b39 · +15.5KB`) and a paged result view (size · lines · offset range + 5-line content preview, `end ✓`/`more ▸`, expanded shows all) built from `details`; the two model-protocol header lines are stripped from the display (the provider text is untouched). Component reuse via lastComponent per bash-renderer discipline.
+- **`then_run` badges (action-fusion)**: fused write/edit calls render a dim `↳ then_run: <command>` row under the built-in call line; results gain a colored status row (`✓ ok` / `✗ failed` / `⊘ skipped`) scanned read-only from the existing markers. Plain write/edit render identically (zero-wrap rule; built-in payload never rewritten).
+- **Compact rows for core tools**: `session_recall` (clipped query + hit-count header + first pointer) and `memory_consolidate` (`layer · nW/mD` call, applied-counts result).
+- Shared helpers in `lib/tool-render.ts` (ThemeLike structural, humanBytes, renderRows). 14 new unit cases; cctui side: force-mode exempts obs_recall's dense result view, short obs_recall args in CC rows, then_run badge re-stated in force mode (that repo's own commit).
+
 ### Added (recall evaluation spike — spec 2026-10-02-memory-recall-v2 R2)
 - `test/spikes/recall-eval.ts` (NOT in CI): offline precision/recall/latency harness for the recall selector over a private annotation file kept outside the repo (`{"cwd","text","expected"}` JSONL; `--model provider/id` or `memory.recallModel`; provider credentials via the usual env vars). Reports precision / recall / empty-selection correctness / p50·p90 latency — the R2 inputs for calibrating `recallWaitMs` and iterating the selector prompt. Baseline to beat: lexical ~38% precision.
 

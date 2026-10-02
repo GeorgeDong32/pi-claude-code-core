@@ -16,6 +16,16 @@
 - **R0 执行记录**:worklist 12 项呈报两轮 + pause/resume 后用户明示批准。错层诊断剩余 5 条均为启发式误报(通用尾段键 "review"/"test"/"gd32" 撞词)或用户拍板保留的全局记忆(work-style 提及 CherryDev)——真阳性 0;该启发式的噪音profile 已知,属 advisory 工具非 gate。
 - **剩余**:R2 跑标注(需用户提供标注集,属 spec 后续非本 goal 范围);真实运行时冒烟(用户侧,配置 memory.recallModel 后验证)。
 
+## core 工具渲染器批(2026-10-02,spec 2026-10-02-core-tool-renderers)
+
+**状态:实现完成,三门全绿(check / 47 文件 735 用例 / 契约 27 / 渲染器 14);cctui 侧接手(typecheck + 90 用例全绿,各自单独提交)。**
+
+- **A obs_recall**:`observation-pack/renderers.ts` + registerCall/Result 接线——短 id/人读 offset 调用行、分页头(size·lines·range)、协议头剥离(details 在场才剥)、5 行预览/expanded 全量、lastComponent 复用。
+- **B then_run 徽标**:`action-fusion/renderers.ts` —— Container 包装追加 `↳ then_run: cmd` 调用行 + marker 只读扫描的着色状态行;零包装规则。
+- **C core 工具**:`memory/renderers.ts`(session_recall 摘要行 + 首条指针;memory_consolidate applied 行);`lib/tool-render.ts` 共享 helper(ThemeLike 结构化,humanBytes,renderRows)。
+- **D cctui 接手**(pi-claude-code-tui 仓库):FORCE_RESULT_EXEMPT += obs_recall;force 调用行 obs_recall args 短化;then_run 徽标在 force 模式重述(包装 ccCall 组件 render 追加行)。
+- 偏差台账:#81(emoji 弃用、包装式实现)。
+
 ## goal-hijack 修复批(2026-10-01,spec 2026-10-01-goal-hijack-fix)
 
 **状态:实现完成 + 对抗 review 通过折入(v1.2,F1-F9 全处置:runner env 纪律/GH-04 断言/台账同步),三门全绿(常规与模拟子代理 env 双复验)。**

@@ -19,7 +19,7 @@ built-in implementation, then runs the command through the built-in bash tool
   `then_run` output; mutation failure or nonzero exit routes to
   `[then_run:failed]` / `skipped` shapes.
 - Guidance is dual-channel: the `then_run` schema + a tool-description tail.
-- Renderers pass through the built-in renderers — zero new rendering surface.
+- Renderers pass through the built-in renderers — zero new rendering surface (CMP-03). TR badges ADD only: a wrapped row `↳ then_run: <command>` under fused calls and a colored status row (`✓ ok` / `✗ failed` / `⊘ skipped`, scanned read-only from the result markers); plain write/edit render byte-identically (zero-wrap rule).
 
 ## The queue rule (important)
 

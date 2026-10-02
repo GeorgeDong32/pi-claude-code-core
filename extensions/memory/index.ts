@@ -49,6 +49,8 @@ import { llmSelector, resolveRecallModel } from "./selector.ts";
 import { guardMemoryWrites } from "./guard.ts";
 import { InjectionGate } from "./yield.ts";
 import { sessionRecall } from "./session-recall.ts";
+import { renderSessionRecallCall, sessionRecallResultRows, type SessionRecallArgs } from "./renderers.ts";
+import { renderRows } from "../../lib/tool-render.ts";
 import { MEMORY_INDEX_MAX } from "../../lib/context-budget.ts";
 import { USER_INDEX_MAX } from "./policy.ts";
 import { ConsolidationTrigger, CONSOLIDATE_DIRECTIVE_TYPE, registerConsolidation } from "./consolidate.ts";
@@ -441,6 +443,11 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 				details: { hits: result.hits.length, skippedLines: result.skippedLines },
 			};
 		},
+		// TR C: compact rows — hit count + first pointer instead of the wall
+		// of excerpts (the full text still reaches the model untouched).
+		renderCall: (args, theme) => renderSessionRecallCall(args as SessionRecallArgs, theme as never),
+		renderResult: (result, _options, theme) =>
+			renderRows(sessionRecallResultRows(result), theme as never),
 	}));
 
 	pi.registerCommand("memory", {

@@ -14,6 +14,14 @@ replaces it with a short stable placeholder (~1 KiB, complete lines). The
 original bytes live in a per-session store and the agent pages them back with
 the **`obs_recall`** tool (paging header included in the model-visible text).
 
+**Presentation (TR, spec 2026-10-02-core-tool-renderers)**: `obs_recall`
+ships its own renderCall/renderResult (`renderers.ts`) — one short call row
+(`Recall Observation obs_4b1d7b39 · +15.5KB`) and a paged result view
+(size · lines · range, content preview capped at 5 lines, `end ✓`/`more ▸`)
+built from `details`; the two model-protocol header lines are stripped from
+what the user sees (kept for the provider, read-only here). cctui auto mode
+respects the renderer; force mode exempts it (`FORCE_RESULT_EXEMPT`).
+
 ## The one rule that matters
 
 **It never edits history.** The mechanism rewrites only the projection layer

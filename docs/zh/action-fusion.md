@@ -16,7 +16,7 @@ NVlabs/SoL-Pi(MIT),SPEC FUS-01..11(0.2.0 吸收)
 - 标记语义保持完全一致:后续命令成功则附加 `then_run` 输出;变更失败或
   非零退出路由到 `[then_run:failed]` / `skipped` 形状。
 - 指引双通道:`then_run` schema + 工具描述尾部。
-- 渲染直通内置渲染器——零新增渲染表面。
+- 渲染直通内置渲染器——零新增渲染表面(CMP-03)。TR 徽标只做加法:融合调用下方包一行 `↳ then_run: <command>`,结果按 marker 只读扫描出着色状态行(`✓ ok` / `✗ failed` / `⊘ skipped`);普通 write/edit 渲染逐字节不变(零包装规则)。
 
 ## 队列规则(重要)
 

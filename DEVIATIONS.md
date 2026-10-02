@@ -232,3 +232,5 @@
 
 80. **scopeMatches 的目录本体匹配（RV-14 实现细节）**：rules glob 引擎按语义不把 `dir/**` 匹配到 `dir` 本身（激活语义是文件）；召回作用域要「该项目含根目录」。修法：scopeMatches 对每个模式同时尝试 root 与合成子路径 `root/__scope_child__` ——不改 glob 引擎（rules 语义零影响），语义差异收在唯一消费点。
 
+81. **TR 实施与 spec v1.1 的两处偏差(2026-10-02-core-tool-renderers)**:① 结果头行弃用 spec 示例的 📎 emoji,纯文本 + muted 着色(用户视觉口味克制,spec 自审 R6 补录);② B 的 resultStatus 用「Container 包装 + 追加行」而非 spec v1 初稿的改写文本(v1 自审 R1 判定初稿无效,修订版即实施版——builtin 从 details 渲染 diff 时不读 content text)。零包装规则:无 then_run 的 write/edit 返回原组件引用。
+

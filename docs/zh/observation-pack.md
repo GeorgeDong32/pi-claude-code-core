@@ -12,6 +12,13 @@ NVlabs/SoL-Pi(MIT),SPEC OBS-01..10(0.2.0 吸收)
 `context` 投影替换为短而稳定的占位符(约 1 KiB,完整行)。原文存于每会话
 存储,agent 用 **`obs_recall`** 工具按页取回(模型可见文本含翻页头)。
 
+**呈现(TR,spec 2026-10-02-core-tool-renderers)**:`obs_recall` 自带
+renderCall/renderResult(`renderers.ts`)——短调用行(`Recall Observation
+obs_4b1d7b39 · +15.5KB`)+ 分页结果视图(大小 · 行数 · 范围,内容预览
+≤5 行,`end ✓`/`more ▸`),数据来自 `details`;两行模型协议头对人剥离
+(给模型的文本原样,渲染层只读)。cctui auto 模式尊重自带渲染器;force
+模式豁免(`FORCE_RESULT_EXEMPT`)。
+
 ## 唯一要紧的规则
 
 **绝不改历史。** 机制只重写投影层(`pi.on("context")`),transcript、TUI

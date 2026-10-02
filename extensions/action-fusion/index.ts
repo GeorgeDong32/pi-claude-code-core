@@ -30,6 +30,7 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { degradeEconomyModule, probePiCompat } from "../../lib/pi-compat.ts";
 import { coreBus } from "../bus.ts";
 import { withFusedFileQueue } from "./file-queue.ts";
+import { withThenRunBadge, withThenRunStatus, type ThenRunArgs } from "./renderers.ts";
 import { resolveToolPath } from "./tool-path.ts";
 import {
 	createThenRunSchema,
@@ -187,9 +188,11 @@ export function createActionFusionExtension(options: ActionFusionOptions = {}): 
 					mutate: () => baseEdit(ctx.cwd).execute(toolCallId, editInput, signal, onUpdate, ctx),
 				});
 			},
-			// FUS-06: pass the built-in renderers through untouched.
-			renderCall: (args, theme, context) => baseEdit(context.cwd).renderCall!(args, theme, context),
-			renderResult: (result, resultOptions, theme, context) => baseEdit(context.cwd).renderResult!(result, resultOptions, theme, context),
+			// FUS-06: pass the built-in renderers through — TR B adds ONLY a
+			// wrapper row (↳ then_run badge / status), the builtin payload is
+			// untouched and plain write/edit render identically (zero-wrap rule).
+			renderCall: (args, theme, context) => withThenRunBadge(baseEdit(context.cwd).renderCall!(args, theme, context), args as ThenRunArgs, theme),
+			renderResult: (result, resultOptions, theme, context) => withThenRunStatus(baseEdit(context.cwd).renderResult!(result, resultOptions, theme, context), result, theme),
 		});
 
 		pi.registerTool<typeof writeParameters, undefined>({
@@ -207,8 +210,8 @@ export function createActionFusionExtension(options: ActionFusionOptions = {}): 
 					mutate: () => baseWrite(ctx.cwd).execute(toolCallId, writeInput, signal, onUpdate, ctx),
 				});
 			},
-			renderCall: (args, theme, context) => baseWrite(context.cwd).renderCall!(args, theme, context),
-			renderResult: (result, resultOptions, theme, context) => baseWrite(context.cwd).renderResult!(result, resultOptions, theme, context),
+			renderCall: (args, theme, context) => withThenRunBadge(baseWrite(context.cwd).renderCall!(args, theme, context), args as ThenRunArgs, theme),
+			renderResult: (result, resultOptions, theme, context) => withThenRunStatus(baseWrite(context.cwd).renderResult!(result, resultOptions, theme, context), result, theme),
 		});
 
 		selfCheck();

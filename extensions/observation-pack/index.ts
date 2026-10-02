@@ -37,6 +37,7 @@ import {
 	THRESHOLD_BYTES,
 } from "./observation.ts";
 import { createProjectionState, projectContext } from "./projection.ts";
+import { renderRecallCall, renderRecallResult, type RecallCallArgs } from "./renderers.ts";
 
 const RECALL_MAX_BYTES = 16 * 1024;
 const RECALL_MAX_LINES = 400;
@@ -132,6 +133,12 @@ export function createObservationPackExtension(hostExports: {
 					return { content: [{ type: "text", text: `Unknown observation id: ${id} (${reason})` }], details: { id } };
 				}
 			},
+			// TR A: human-shaped rows — the model protocol (paging header,
+			// retrieve instruction) is stripped from what the user sees; the
+			// preview budget goes to the CONTENT. Read-only over details+text.
+			renderCall: (args, theme) => renderRecallCall(args as RecallCallArgs, theme as never),
+			renderResult: (result, options, theme, context) =>
+				renderRecallResult(result, options as { isError?: boolean; isPartial?: boolean; expanded?: boolean }, theme as never, (context as { lastComponent?: unknown }).lastComponent),
 		});
 
 		pi.on("context", async (event, ctx) => {
