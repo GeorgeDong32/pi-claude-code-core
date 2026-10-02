@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Added (recall evaluation spike — spec 2026-10-02-memory-recall-v2 R2)
+- `test/spikes/recall-eval.ts` (NOT in CI): offline precision/recall/latency harness for the recall selector over a private annotation file kept outside the repo (`{"cwd","text","expected"}` JSONL; `--model provider/id` or `memory.recallModel`; provider credentials via the usual env vars). Reports precision / recall / empty-selection correctness / p50·p90 latency — the R2 inputs for calibrating `recallWaitMs` and iterating the selector prompt. Baseline to beat: lexical ~38% precision.
+
 ### Added (memory layering governance — spec 2026-10-02-memory-recall-v2 R3)
 - **`paths:` scoping for user-layer memories (RV-14)**: a user memory may carry `paths: ["~/Coding/SomeRepo/**"]` (inline JSON list or comma-separated; `~` expands at read time) — it then surfaces (recall manifest, system-prompt index, pinned bodies) ONLY in sessions whose git canonical root matches. Absent `paths:` = global, as before. The write policy now teaches this.
 - **Write-side routing guard (RV-15)**: automation ops targeting the user layer that are anchored to the CURRENT project (mention its key, no `paths:`) are re-routed to the project layer at apply time, with the reroute surfaced in `/memory`; automation prompts now carry current-repository routing rules + a WHAT-NOT-TO-SAVE list (no task progress, nothing derivable from code/git, no one-off debugging recipes).
