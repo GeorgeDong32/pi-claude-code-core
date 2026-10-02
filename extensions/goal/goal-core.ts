@@ -88,3 +88,13 @@ export function footerStatus(goal: GoalDisplayRecordLike): string {
 	const prefix = goal.sisyphus ? "goal✊" : "goal";
 	return `${prefix}: ${statusLabel(goal)}${usage} - ${truncateText(goal.objective, 60)}`;
 }
+
+/** goal-notes: pause reasons are prefixed "user: " when set via /goal-pause
+ * (agent pause_goal reasons are unprefixed). One labeling authority for the
+ * summary line and the paused system prompt. */
+export function pauseReasonLabel(pauseReason: string): { label: string; text: string } {
+	if (pauseReason.startsWith("user: ")) {
+		return { label: "User pause note", text: pauseReason.slice("user: ".length) };
+	}
+	return { label: "Agent pause reason", text: pauseReason };
+}

@@ -11,6 +11,7 @@ import {
 	statusLabel,
 	truncateText,
 	displayObjectiveTitle,
+	pauseReasonLabel,
 } from "./goal-core.ts";
 import {
 	buildDraftConfirmationText,
@@ -172,7 +173,10 @@ function detailedSummary(goal: GoalRecord | null): string {
 	if (goal.activePath) lines.push(`File: ${goal.activePath}`);
 	if (goal.archivedPath) lines.push(`Archive: ${goal.archivedPath}`);
 	if (goal.stopReason) lines.push(`Stop reason: ${goal.stopReason}`);
-	if (goal.pauseReason) lines.push(`Agent pause reason: ${goal.pauseReason}`);
+	if (goal.pauseReason) {
+		const { label, text } = pauseReasonLabel(goal.pauseReason);
+		lines.push(`${label}: ${text}`);
+	}
 	if (goal.pauseSuggestedAction) lines.push(`Agent suggests: ${goal.pauseSuggestedAction}`);
 	if (goal.userNote) lines.push(`User note: ${truncateText(goal.userNote, 80)}`);
 	return lines.join("\n");
@@ -982,14 +986,17 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		}
 	}
 
-	function pauseActiveGoal(ctx: ExtensionContext): void {
+	function pauseActiveGoal(ctx: ExtensionContext, note?: string): void {
 		if (!state.goal || state.goal.status !== "active") return;
 		const pausedGoalId = state.goal.id;
-		// User-initiated pause (Esc / aborted turn). Clear any stale agent pause reason.
-		state.goal = { ...state.goal, autoContinue: false, pauseReason: undefined, pauseSuggestedAction: undefined };
+		// User-initiated pause (Esc / aborted turn). Clear any stale AGENT pause
+		// reason; a /goal-pause note becomes the user-labeled pause reason
+		// (shown to the agent in the paused system prompt, cleared on resume).
+		const userNote = note?.trim();
+		state.goal = { ...state.goal, autoContinue: false, pauseReason: userNote ? `user: ${userNote}` : undefined, pauseSuggestedAction: undefined };
 		stopActiveGoal("paused", "user", ctx);
 		resetGetGoalNudgeState(pausedGoalId);
-		uiNotify(ctx, "Goal paused.", "info");
+		uiNotify(ctx, userNote ? "Goal paused (note attached)." : "Goal paused.", "info");
 	}
 
 	function queueContinuation(ctx: ExtensionContext, force = false): void {
@@ -1216,7 +1223,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		updateUI(ctx);
 	}
 
-	async function handleGoalPause(ctx: ExtensionContext): Promise<void> {
+	async function handleGoalPause(ctx: ExtensionContext, rawNote?: string): Promise<void> {
 		reconcileFocusedGoalFromDisk(ctx);
 		if (!state.goal) {
 			if (openGoals().length > 0) {
@@ -1237,7 +1244,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			uiNotify(ctx, "Goal is already paused. Use /goal-resume to continue.", "info");
 			return;
 		}
-		pauseActiveGoal(ctx);
+		pauseActiveGoal(ctx, rawNote);
 	}
 
 	async function handleGoalResume(ctx: ExtensionContext, rawNote?: string): Promise<void> {
@@ -1349,7 +1356,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		if (selected === "auditor") await handleGoalAuditorSettings(ctx);
 	}
 
-	async function handleGoalClear(ctx: ExtensionContext): Promise<void> {
+	async function handleGoalClear(ctx: ExtensionContext, rawNote?: string): Promise<void> {
 		if (confirmationIntent !== null || tweakDraftingFor !== null) {
 			confirmationIntent = null;
 			tweakDraftingFor = null;
@@ -1365,6 +1372,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		}
 		const archived = archiveCurrentGoal(ctx, "user");
 		const didArchive = !!archived;
+		appendUserTerminationEvent(ctx, "cleared", archived, rawNote);
 		resetGetGoalNudgeState(state.goal?.id);
 		setGoal(null, ctx, true, "cleared");
 		// Phase 5 D: also abort any in-flight drafting so the agent's next turn
@@ -1376,7 +1384,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		uiNotify(ctx, msg, didArchive || wasDrafting ? "info" : "warning");
 	}
 
-	async function handleGoalAbort(ctx: ExtensionContext): Promise<void> {
+	async function handleGoalAbort(ctx: ExtensionContext, rawNote?: string): Promise<void> {
 		if (confirmationIntent !== null || tweakDraftingFor !== null) {
 			confirmationIntent = null;
 			tweakDraftingFor = null;
@@ -1392,6 +1400,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		}
 		const archived = archiveCurrentGoal(ctx, "user");
 		const didArchive = !!archived;
+		appendUserTerminationEvent(ctx, "aborted", archived, rawNote);
 		resetGetGoalNudgeState(state.goal?.id);
 		setGoal(null, ctx, true, "aborted");
 		const wasDrafting = confirmationIntent !== null;
@@ -1500,24 +1509,24 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	// /goal-clear: archive the current goal.
 	pi.registerCommand("goal-clear", {
 		description: "Archive the current goal.",
-		handler: async (_rawArgs, ctx) => {
-			await handleGoalClear(ctx);
+		handler: async (rawArgs, ctx) => {
+			await handleGoalClear(ctx, typeof rawArgs === "string" ? rawArgs : undefined);
 		},
 	});
 
 	// /goal-abort: abandon and archive the current goal, or cancel drafting.
 	pi.registerCommand("goal-abort", {
 		description: "Abort the current goal and archive it, or cancel an in-progress drafting flow.",
-		handler: async (_rawArgs, ctx) => {
-			await handleGoalAbort(ctx);
+		handler: async (rawArgs, ctx) => {
+			await handleGoalAbort(ctx, typeof rawArgs === "string" ? rawArgs : undefined);
 		},
 	});
 
 	// /goal-pause: pause the currently running goal.
 	pi.registerCommand("goal-pause", {
 		description: "Pause the currently running goal. Esc also pauses while a goal is running.",
-		handler: async (_rawArgs, ctx) => {
-			await handleGoalPause(ctx);
+		handler: async (rawArgs, ctx) => {
+			await handleGoalPause(ctx, typeof rawArgs === "string" ? rawArgs : undefined);
 		},
 	});
 
@@ -1528,6 +1537,23 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				await handleGoalResume(ctx, typeof rawArgs === "string" ? rawArgs : undefined);
 		},
 	});
+
+	// goal-notes: audit trail for USER-initiated termination — the agent's
+	// abort tool already ledgers; the /goal-abort and /goal-clear paths did
+	// not. The trailing note (if any) rides the reason.
+	function appendUserTerminationEvent(ctx: ExtensionContext, kind: "aborted" | "cleared", archived: { id: string; archivedPath?: string } | null, note?: string): void {
+		try {
+			appendGoalEvent(ctx, {
+				type: "goal_aborted",
+				goalId: archived?.id ?? state.goal?.id ?? "unknown",
+				reason: note?.trim() ? `user ${kind}: ${note.trim()}` : `user ${kind}`,
+				archivePath: archived?.archivedPath,
+				at: nowIso(),
+			});
+		} catch {
+			// Ledger append failure should not crash termination
+		}
+	}
 
 	// /goal-note: attach or clear a STANDING user note that rides every goal
 	// and checkpoint prompt (goal-notes; consumed by prompts, never written
@@ -2378,6 +2404,10 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				pauseExtras.push("");
 				pauseExtras.push(`Pause reason (you set this in a prior turn via pause_goal): ${current.pauseReason ?? "(unknown)"}`);
 				if (current.pauseSuggestedAction) pauseExtras.push(`You suggested: ${current.pauseSuggestedAction}`);
+			} else if (current.pauseReason) {
+				const { label, text } = pauseReasonLabel(current.pauseReason);
+				pauseExtras.push("");
+				pauseExtras.push(`${label} (the user set this via /goal-pause; honor it when work resumes): ${text}`);
 			}
 			// Inject durable auditor feedback if available
 			let auditorExtra = "";

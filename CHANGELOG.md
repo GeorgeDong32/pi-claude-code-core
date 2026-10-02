@@ -4,6 +4,7 @@
 
 ### Added (goal notes — direct user request 2026-10-02, no spec)
 - **`/goal-resume <text>` no longer drops the trailing message**: the text rides the FIRST checkpoint after resume as a one-shot `<resume_note>` block (user-provided data) and is consumed on send — in-memory by design so stale guidance can never survive a restart.
+- **`/goal-pause <reason>` / `/goal-abort <reason>` / `/goal-clear <note>` no longer drop trailing text**: a pause reason becomes the user-labeled `pauseReason` (`user: …`) shown to the agent in the paused system prompt (labeled distinctly from agent pause_goal reasons via one labeling authority, cleared on resume); abort/clear reasons ride a `goal_aborted` ledger event (`user aborted: …` / `user cleared: …`) — the user-initiated termination paths had no audit trail before. `/goal-focus` stays picker-only by explicit user decision (no argument shortcut).
 - **`/goal-note`**: attach a standing user note to the active goal (`/goal-note <text>`, `/goal-note clear` clears) — persists in the goal record, rides every goal prompt AND checkpoint as a `<user_note>` block, shows in `get_goal`/detailed summaries. The agent never writes it.
 
 ### Added (core tool renderers — spec 2026-10-02-core-tool-renderers)

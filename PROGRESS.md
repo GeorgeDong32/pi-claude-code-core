@@ -22,7 +22,8 @@
 
 - `/goal-resume <text>` 尾注不再被丢弃:一次性 `<resume_note>` 随 resume 后首条 checkpoint 带出,sendFollowUp 消费(goal.ts pendingResumeNote 内存态——one-shot 不落盘)。
 - 新命令 `/goal-note`(贴/清 standing note):GoalRecord.userNote 持久字段(normalizeGoalRecord 解析),`<user_note>` 随 goalPrompt + continuationPrompt 带出,get_goal/detailedSummary 展示;agent 不可写。
-- 测试:extensions/goal/tests/goal-notes.test.ts(5 用例,纯 seam:record 往返 + prompt 注入)。
+- **批 2(同日)**:pause/abort/clear 尾注 — pause 注 → `pauseReason`(user: 前缀,paused 提示向模型展示,honor 措辞;pauseReasonLabel 单一标签权威);abort/clear 注 → `goal_aborted` ledger 事件(user aborted:/user cleared: + archivePath,补齐用户终止路径的审计空白);/goal-focus 按用户决定保持纯选择器(禁参数直选)。
+- 测试:extensions/goal/tests/goal-notes.test.ts(6 用例,纯 seam:record 往返 + prompt 注入 + 标签)。
 
 ## core 工具渲染器批(2026-10-02,spec 2026-10-02-core-tool-renderers)
 

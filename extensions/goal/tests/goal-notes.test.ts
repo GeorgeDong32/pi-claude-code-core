@@ -64,3 +64,11 @@ test("goalPrompt: standing note rides the initial goal prompt", () => {
 	assert.doesNotMatch(goalPrompt(goal()), /<user_note>/);
 	assert.match(goalPrompt(goal({ userNote: "note A" })), /<user_note>\nnote A/);
 });
+
+/* ── pause/abort/clear trailing notes (goal-notes batch 2) ── */
+import { pauseReasonLabel } from "../goal-core.ts";
+
+test("pauseReasonLabel: user-prefixed vs agent reasons", () => {
+	assert.deepEqual(pauseReasonLabel("user: 太慢了，先停下"), { label: "User pause note", text: "太慢了，先停下" });
+	assert.deepEqual(pauseReasonLabel("missing credentials"), { label: "Agent pause reason", text: "missing credentials" });
+});
