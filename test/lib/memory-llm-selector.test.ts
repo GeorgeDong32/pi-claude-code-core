@@ -68,6 +68,13 @@ describe("RV llmSelector (spec §8)", () => {
 		expect(parseSelection("total garbage", valid)).toBeNull();
 	});
 
+	it("13b: braces inside string values no longer break the span (C4 string-awareness)", async () => {
+		const valid = new Set(["memory/a.md"]);
+		// The old local scanner was not string-aware: the `}` inside the value
+		// ended the span early → parse failure → silent stats.failures bump.
+		expect(parseSelection('{"selected":["memory/a}b","memory/a.md"]}', valid)).toEqual(["memory/a.md"]);
+	});
+
 	it("14: provider error / parse failure surface as failure outcomes (empty answers stay empty)", async () => {
 		const failing: LlmComplete = async () => ({ stopReason: "error", errorMessage: "boom" }) as never;
 		const out1 = await withComplete(failing).select({ query: "q text here", candidates: [candidate("memory/a.md")], recentTools: [] });

@@ -10,6 +10,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { enforceGateOutput, type VerdictPolicy } from "./gate-enforce.js";
+import { liftJson } from "../../../lib/json-lift.ts";
 import { buildReportFromWorkflow, renderReport } from "./report.js";
 import { readManifest, RunManifest } from "./review-report.js";
 import { removeWorkspaceRoot } from "./target-workspace.js";
@@ -320,31 +321,15 @@ export function runReportTool(input: ReportToolInput): ReportToolResult {
 	};
 }
 
-function safeJsonParse(text?: string): unknown {
-	if (!text) return undefined;
-	try {
-		return JSON.parse(text);
-	} catch {
-		// The model often wraps the JSON in prose or a fence — try to lift the
-		// outermost {...} block out before giving up.
-		const start = text.indexOf("{");
-		const end = text.lastIndexOf("}");
-		if (start >= 0 && end > start) {
-			try {
-				const lifted = JSON.parse(text.slice(start, end + 1));
-				if (lifted && typeof lifted === "object") return lifted;
-			} catch {
-				/* not JSON after all */
-			}
-		}
-		return undefined;
-	}
-}
-
 /**
  * Extract the verdict JSON block from a gate / lite-reviewer Markdown
- * report (v0.8). The report ends with exactly one fenced ```json block;
- * extraction prefers fenced blocks and falls back to brace-lifting.
+ * report (v0.8). The report ends with exactly one fenced ```json block.
+ * C4 (2026-10-03): extraction (fences / string-aware spans / outermost
+ * lift / repair) is shared through lib/json-lift — candidates come
+ * best-first with fences LAST-first, so the first well-shaped object is
+ * the trailing verdict block. Unlike the old copy, the brace-lift
+ * fallback now also applies when fenced blocks parse but are not
+ * verdict-shaped (previously it only fired when no fence parsed at all).
  * Returns undefined when nothing shaped like { verdict?, issues[] } is
  * found — callers treat that as "no verdict data" (no-gate path).
  */
@@ -360,26 +345,22 @@ export function extractVerdictBlock(md?: string):
 		}
 	| undefined {
 	if (!md) return undefined;
-	const candidates: unknown[] = [];
-	const fence = /```(?:json|JSON)?\s*\n([\s\S]*?)```/g;
-	let m: RegExpExecArray | null;
-	while ((m = fence.exec(md)) !== null) {
-		const parsed = safeJsonParse(m[1]!);
-		if (parsed && typeof parsed === "object") candidates.push(parsed);
-	}
-	if (candidates.length === 0) {
-		const lifted = safeJsonParse(md);
-		if (lifted && typeof lifted === "object") candidates.push(lifted);
-	}
-	// Prefer the LAST well-shaped block (the verdict block comes at the end;
-	// earlier fences may be acceptance reports or examples).
-	for (let i = candidates.length - 1; i >= 0; i--) {
-		const c = candidates[i] as { issues?: unknown; verdict?: unknown };
-		if (Array.isArray(c.issues) || typeof c.verdict === "string") {
-			return c as ReturnType<typeof extractVerdictBlock>;
-		}
-	}
-	return undefined;
+	return (
+		liftJson(md, (value) => {
+			if (typeof value !== "object" || value === null) return null;
+			const c = value as { issues?: unknown; verdict?: unknown };
+			if (!Array.isArray(c.issues) && typeof c.verdict !== "string") return null;
+			return value as {
+				status?: string;
+				verdict?: string;
+				reason?: string;
+				issues?: unknown[];
+				dispositions?: GateDisposition[];
+				summary?: string;
+				coverage?: unknown;
+			};
+		}) ?? undefined
+	);
 }
 
 function loadManifestSafe(runId: string, cwd?: string): RunManifest | null {

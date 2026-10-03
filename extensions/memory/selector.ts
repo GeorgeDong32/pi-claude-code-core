@@ -24,6 +24,7 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 
 import { RECALL_MANIFEST_MAX } from "../../lib/context-budget.ts";
+import { liftJson } from "../../lib/json-lift.ts";
 import { completeText, resolveModelRef, type LlmComplete, type RegistryLike } from "./llm.ts";
 
 /** Selector-side hard timeout — longer than any configured waitMs so a
@@ -91,41 +92,20 @@ Rules:
 
 /** Parse the selector's reply into known keys; null = unparsable. */
 export function parseSelection(text: string, valid: ReadonlySet<string>): string[] | null {
-	const trimmed = text.trim();
-	const attempts: string[] = [];
-	for (const m of trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)) attempts.push(m[1]!.trim());
-	attempts.push(trimmed);
-	// first balanced {...} span as the last resort
-	const start = trimmed.indexOf("{");
-	if (start >= 0) {
-		let depth = 0;
-		for (let i = start; i < trimmed.length; i++) {
-			if (trimmed[i] === "{") depth++;
-			else if (trimmed[i] === "}") {
-				depth--;
-				if (depth === 0) {
-					attempts.push(trimmed.slice(start, i + 1));
-					break;
-				}
-			}
+	// C4 (2026-10-03): extraction shared through lib/json-lift. This fixes the
+	// old local span scanner, which was NOT string-aware — a `}` inside a
+	// string value broke the span and silently counted a selector failure.
+	// Payload validation (selected array + key filtering) stays here.
+	return liftJson(text, (value) => {
+		if (typeof value !== "object" || value === null) return null;
+		const selected = (value as { selected?: unknown }).selected;
+		if (!Array.isArray(selected)) return null;
+		const out: string[] = [];
+		for (const key of selected) {
+			if (typeof key === "string" && valid.has(key) && !out.includes(key)) out.push(key);
 		}
-	}
-	for (const attempt of attempts) {
-		try {
-			const parsed: unknown = JSON.parse(attempt);
-			if (typeof parsed !== "object" || parsed === null) continue;
-			const selected = (parsed as { selected?: unknown }).selected;
-			if (!Array.isArray(selected)) continue;
-			const out: string[] = [];
-			for (const key of selected) {
-				if (typeof key === "string" && valid.has(key) && !out.includes(key)) out.push(key);
-			}
-			return out;
-		} catch {
-			/* keep scanning */
-		}
-	}
-	return null;
+		return out;
+	});
 }
 
 /** Build the real selector over the shared side-channel lane. */

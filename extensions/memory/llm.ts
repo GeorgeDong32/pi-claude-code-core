@@ -18,6 +18,7 @@
 
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { completeSimple } from "@earendil-works/pi-ai/compat";
+import { liftJson } from "../../lib/json-lift.ts";
 import type { MemoryOp } from "./store.ts";
 
 export type LlmComplete = typeof completeSimple;
@@ -176,33 +177,9 @@ export async function completeMemoryOps(
 }
 
 // ─── strict-JSON extraction (no thinking-channel recovery) ───
-
-/** String- and escape-aware balanced {...} spans, innermost-last usable. */
-function balancedObjectSpans(text: string): Array<[number, number]> {
-	const spans: Array<[number, number]> = [];
-	const open: number[] = [];
-	let inString = false;
-	let escaped = false;
-	for (let i = 0; i < text.length; i++) {
-		const ch = text[i];
-		if (escaped) {
-			escaped = false;
-			continue;
-		}
-		if (inString) {
-			if (ch === "\\") escaped = true;
-			else if (ch === '"') inString = false;
-			continue;
-		}
-		if (ch === '"') inString = true;
-		else if (ch === "{") open.push(i);
-		else if (ch === "}") {
-			const start = open.pop();
-			if (start !== undefined) spans.push([start, i]);
-		}
-	}
-	return spans;
-}
+// C4 (2026-10-03): candidate extraction (fences / string-aware balanced
+// spans / repair) is shared through lib/json-lift; this module owns only
+// the memory-ops payload shape (opsFromPayload).
 
 const VALID_ACTIONS = new Set(["add", "replace", "remove"]);
 const VALID_LAYERS = new Set(["user", "project"]);
@@ -226,38 +203,7 @@ function normalizeOp(raw: unknown): MemoryOp | null {
 /** Parse model text into ops. null = unparsable (parse_error); [] = parsed,
  * nothing to do (a normal outcome, not an error). */
 export function parseOperations(text: string): MemoryOp[] | null {
-	const trimmed = text.trim();
-	if (!trimmed) return null;
-
-	// 1. fenced ```json blocks (last first — the answer trails any preamble)
-	const fences = [...trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)].map((m) => m[1]!.trim());
-	for (let i = fences.length - 1; i >= 0; i--) {
-		try {
-			const parsed: unknown = JSON.parse(fences[i]!);
-			const ops = opsFromPayload(parsed);
-			if (ops !== null) return ops;
-		} catch {
-			/* keep scanning */
-		}
-	}
-	// 2. whole-text parse
-	try {
-		const ops = opsFromPayload(JSON.parse(trimmed));
-		if (ops !== null) return ops;
-	} catch {
-		/* fall through */
-	}
-	// 3. trailing balanced object containing an operations array
-	for (const [start, end] of balancedObjectSpans(trimmed).reverse()) {
-		try {
-			const parsed: unknown = JSON.parse(trimmed.slice(start, end + 1));
-			const ops = opsFromPayload(parsed);
-			if (ops !== null) return ops;
-		} catch {
-			/* keep scanning */
-		}
-	}
-	return null;
+	return liftJson(text, opsFromPayload);
 }
 
 function opsFromPayload(parsed: unknown): MemoryOp[] | null {
