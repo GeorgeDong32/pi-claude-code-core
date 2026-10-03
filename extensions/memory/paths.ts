@@ -85,7 +85,12 @@ export function isMemoryWritePath(path: string, cwd: string, home = process.env.
 	return memoryWriteRoots(cwd, home).some((root) => isInsideDir(path, root));
 }
 
-/** The sessions dir for a cwd (session_recall scans here; shared sanitizer). */
+/** The sessions dir for a cwd (session_recall scans here; shared sanitizer).
+ * C8/R2-P1 fix (2026-10-03): pi names the sessions dir with WRAPPING
+ * dashes — `-${sanitizePath(cwd)}-` (verified against the live
+ * ~/.pi/agent/sessions layout; the projects layer is the bare-sanitized
+ * one). The old bare form pointed at a directory pi never writes, so
+ * session_recall always returned empty on a real machine. */
 export function sessionsDirFor(cwd: string, home = homedir()): string {
-	return join(home, ".pi", "agent", "sessions", sanitizePath(cwd));
+	return join(home, ".pi", "agent", "sessions", `-${sanitizePath(cwd)}-`);
 }

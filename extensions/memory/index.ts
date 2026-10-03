@@ -49,7 +49,7 @@ import { byteLength, createRecall, deriveHistory, freshnessHeader, type RecallBl
 import { llmSelector, resolveRecallModel } from "./selector.ts";
 import { guardMemoryWrites } from "./guard.ts";
 import { InjectionGate } from "./yield.ts";
-import { sessionRecall } from "./session-recall.ts";
+import { recallTransparencyLine, sessionRecall } from "./session-recall.ts";
 import { renderSessionRecallCall, sessionRecallResultRows, type SessionRecallArgs } from "./renderers.ts";
 import { renderRows } from "../../lib/tool-render.ts";
 import { MEMORY_INDEX_MAX } from "../../lib/context-budget.ts";
@@ -423,7 +423,7 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 		async execute(_id, params, _signal, _onUpdate, ctx: ExtensionContext) {
 			const p = params as { query: string; project?: string; since?: string; until?: string; limit?: number };
 			const effectiveCwd = p.project ?? ctx.cwd ?? process.cwd();
-			const result = sessionRecall({
+			const result = await sessionRecall({
 				query: p.query,
 				project: effectiveCwd,
 				since: p.since,
@@ -431,10 +431,11 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 				limit: p.limit,
 				home,
 			});
+			const footer = `\n\n${recallTransparencyLine(result)}`;
 			if (result.hits.length === 0) {
 				const dir = sessionsDirFor(effectiveCwd, home);
 				const text = existsSync(dir)
-					? `session_recall: no matches for "${p.query}" (${result.scannedFiles} files scanned${result.skippedLines ? `, ${result.skippedLines} malformed lines skipped` : ""})`
+					? `session_recall: no matches for "${p.query}" (${result.scannedFiles} files scanned${result.skippedLines ? `, ${result.skippedLines} malformed lines skipped` : ""})${footer}`
 					: `session_recall: no sessions found for ${dir}`;
 				return { content: [{ type: "text", text }], details: { hits: 0, skippedLines: 0 } };
 			}
@@ -445,11 +446,11 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 				)
 				.join("\n\n");
 			return {
-				content: [{ type: "text", text: `session_recall: ${result.hits.length} hit(s)\n\n${text}` }],
+				content: [{ type: "text", text: `session_recall: ${result.hits.length} hit(s)\n\n${text}${footer}` }],
 				details: { hits: result.hits.length, skippedLines: result.skippedLines },
 			};
 		},
-		// TR C: compact rows — hit count + first pointer instead of the wall
+// TR C: compact rows — hit count + first pointer instead of the wall
 		// of excerpts (the full text still reaches the model untouched).
 		renderCall: (args, theme) => renderSessionRecallCall(args as SessionRecallArgs, theme as never),
 		renderResult: (result, _options, theme) =>
