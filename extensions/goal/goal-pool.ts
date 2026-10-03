@@ -2,6 +2,7 @@ import {
 	displayObjectiveTitle,
 	formatDuration,
 	formatTokenValue,
+	formatCostValue,
 	statusLabel,
 	truncateText,
 } from "./goal-core.ts";
@@ -70,8 +71,8 @@ export function buildGoalListText(pool: Map<string, GoalRecord>, focusedGoalId: 
 	for (const goal of open) {
 		const focused = goal.id === focusedGoalId ? "*" : " ";
 		const mode = goal.sisyphus ? "sisyphus" : "goal";
-		const usage = goal.usage.tokensUsed > 0 || goal.usage.activeSeconds > 0
-			? ` · ${formatDuration(goal.usage.activeSeconds)} · ${formatTokenValue(goal.usage.tokensUsed).split(" ")[0]}`
+		const usage = goal.usage.tokensUsed > 0 || goal.usage.activeSeconds > 0 || goal.usage.costUsed > 0
+			? ` · ${formatDuration(goal.usage.activeSeconds)} · ${formatTokenValue(goal.usage.tokensUsed).split(" ")[0]}${goal.usage.costUsed > 0 ? ` · ${formatCostValue(goal.usage.costUsed)}` : ""}`
 			: "";
 		lines.push(`${focused} ${goal.id} — ${statusLabel(goal)} · ${mode}${usage}`);
 		lines.push(`  ${displayObjectiveTitle(goal.objective)}`);
@@ -87,8 +88,10 @@ export function buildUnfocusedOpenGoalsSummary(openGoalCount: number): string {
 export function mergeFocusedGoalWithDisk(args: { memoryGoal: GoalRecord; diskGoal: GoalRecord }): GoalRecord {
 	const tokensUsed = Math.max(args.memoryGoal.usage.tokensUsed, args.diskGoal.usage.tokensUsed);
 	const activeSeconds = Math.max(args.memoryGoal.usage.activeSeconds, args.diskGoal.usage.activeSeconds);
+	// costUsed merges with the same max rule as tokens — no new merge semantics.
+	const costUsed = Math.max(args.memoryGoal.usage.costUsed ?? 0, args.diskGoal.usage.costUsed ?? 0);
 	return {
 		...args.diskGoal,
-		usage: { tokensUsed, activeSeconds },
+		usage: { tokensUsed, activeSeconds, costUsed },
 	};
 }

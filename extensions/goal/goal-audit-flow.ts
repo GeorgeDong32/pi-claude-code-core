@@ -66,6 +66,7 @@ export interface PendingAchievement {
 		achievedAt?: number;
 		activeSeconds?: number;
 		tokensUsed?: number;
+		costUsed?: number;
 		auditAttempts?: number;
 	};
 }

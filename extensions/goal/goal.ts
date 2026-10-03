@@ -8,6 +8,7 @@ import {
 	footerStatus,
 	formatDuration,
 	formatTokenValue,
+	formatCostValue,
 	statusLabel,
 	truncateText,
 	displayObjectiveTitle,
@@ -159,6 +160,7 @@ function usageLines(goal: GoalRecord): string[] {
 	return [
 		`Time spent: ${formatDuration(goal.usage.activeSeconds)}`,
 		`Tokens used: ${formatTokenValue(goal.usage.tokensUsed)}`,
+		`Cost: ${formatCostValue(goal.usage.costUsed)}`,
 	];
 }
 
@@ -257,6 +259,43 @@ function assistantTurnTokens(message: unknown): number {
 		usageChannelTokens(usage.cacheRead) +
 		usageChannelTokens(usage.cacheWrite)
 	);
+}
+
+/** Provider-reported USD cost of a usage object (usage.cost.total).
+ * Missing cost objects read as 0 — tokens still count. */
+function usageCostTotal(usage: Record<string, unknown>): number {
+	const cost = asRecord(usage.cost);
+	const total = cost ? cost.total : undefined;
+	if (typeof total !== "number" || !Number.isFinite(total)) return 0;
+	return Math.max(0, total);
+}
+
+/** USD cost of an assistant message's single API request. */
+function assistantTurnCost(message: unknown): number {
+	const raw = asRecord(message);
+	if (!raw || raw.role !== "assistant") return 0;
+	const usage = asRecord(raw.usage);
+	if (!usage) return 0;
+	return usageCostTotal(usage);
+}
+
+/** Four-channel token sum + cost of a tool_result event's reported usage
+ * ("usage from the tool execution itself": subagent runs, codemode
+ * models.classify/generateImages, future LLM-backed tools). Tools that
+ * report no usage contribute nothing. */
+function toolExecutionUsage(event: unknown): { tokens: number; cost: number } | null {
+	const raw = asRecord(event);
+	if (!raw) return null;
+	const usage = asRecord(raw.usage);
+	if (!usage) return null;
+	const tokens =
+		usageChannelTokens(usage.input) +
+		usageChannelTokens(usage.output) +
+		usageChannelTokens(usage.cacheRead) +
+		usageChannelTokens(usage.cacheWrite);
+	const cost = usageCostTotal(usage);
+	if (tokens === 0 && cost === 0) return null;
+	return { tokens, cost };
 }
 
 function isMeaningfulProgressToolCall(toolName: string, args: unknown): boolean {
@@ -589,7 +628,13 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		return live;
 	}
 
-	function accountProgress(ctx: ExtensionContext, opts: { completedTurnTokens?: number } = {}): void {
+	/** Accounted progress: parent assistant requests (turn_end) plus
+	 * tool_result-reported execution usage (subagents, codemode model calls).
+	 * Accepted residuals, verified 2026-10-03 by transcript forensics: a ~1%
+	 * event-timing gap between turn_end accounting and session-recorded usage
+	 * (74,482 of 6.55M on the pi-1.0 goal), and any consumption after the
+	 * goal archives (auditor runs, post-completion turns). Neither is fixed. */
+	function accountProgress(ctx: ExtensionContext, opts: { completedTurnTokens?: number; completedTurnCost?: number } = {}): void {
 		if (confirmationIntent !== null || tweakDraftingFor !== null) {
 			clearActiveAccounting();
 			return;
@@ -605,10 +650,12 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		accounting.lastAccountedAt = now;
 
 		const tokens = Math.max(0, Math.trunc(opts.completedTurnTokens ?? 0));
-		if (tokens === 0 && elapsedSeconds === 0) return;
+		const cost = Math.max(0, opts.completedTurnCost ?? 0);
+		if (tokens === 0 && cost === 0 && elapsedSeconds === 0) return;
 
 		const next = cloneGoal(state.goal);
 		next.usage.tokensUsed += tokens;
+		next.usage.costUsed += cost;
 		next.usage.activeSeconds += elapsedSeconds;
 		next.updatedAt = nowIso();
 		state.goal = next;
@@ -672,7 +719,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	function widgetGoalProjection(goal: NonNullable<ReturnType<typeof goalForDisplay>>): {
 		objective: string; status: string; sisyphus: boolean;
 		stopReason?: string; pauseReason?: string; pauseSuggestedAction?: string;
-		activePath?: string; archivedPath?: string; tokensUsed: number; activeSeconds: number;
+		activePath?: string; archivedPath?: string; tokensUsed: number; activeSeconds: number; costUsed: number;
 	} {
 		return {
 			objective: goal.objective,
@@ -685,6 +732,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			...(goal.archivedPath !== undefined ? { archivedPath: goal.archivedPath } : {}),
 			tokensUsed: goal.usage.tokensUsed,
 			activeSeconds: goal.usage.activeSeconds,
+			costUsed: goal.usage.costUsed,
 		};
 	}
 
@@ -1706,7 +1754,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 					goalId: outcome.goalId,
 					auditor: outcome.auditorModel,
 					...(finalUsage
-						? { achievedAt: Date.now(), activeSeconds: finalUsage.activeSeconds, tokensUsed: finalUsage.tokensUsed, auditAttempts: auditAttemptNo }
+						? { achievedAt: Date.now(), activeSeconds: finalUsage.activeSeconds, tokensUsed: finalUsage.tokensUsed, costUsed: finalUsage.costUsed, auditAttempts: auditAttemptNo }
 						: {}),
 				},
 			});
@@ -2107,11 +2155,25 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		accountProgress(ctx);
 	});
 
+	// Execution-reported usage (goal-cost spec 2026-10-04): tool_result events
+	// carry "usage from the tool execution itself" when the tool spent model
+	// budget — subagent runs (pi-subagents reports the child session's totals)
+	// and codemode's models.classify/generateImages. Without this hook those
+	// costs never reach the goal ledger (verified 2026-10-03: three reviewers,
+	// 1.94M tokens / $0.49, silently absent). No toolName filter — any
+	// usage-reporting tool counts; tools without usage contribute nothing.
+	pi.on("tool_result", async (event, ctx) => {
+		const usage = toolExecutionUsage(event);
+		if (!usage) return;
+		accountProgress(ctx, { completedTurnTokens: usage.tokens, completedTurnCost: usage.cost });
+	});
+
 	pi.on("turn_end", async (event, ctx) => {
 		const message = event.message as AssistantMessageLike;
 		if (confirmationIntent !== null || tweakDraftingFor !== null) return;
 		const tokens = assistantTurnTokens(message);
-		accountProgress(ctx, { completedTurnTokens: tokens });
+		const cost = assistantTurnCost(message);
+		accountProgress(ctx, { completedTurnTokens: tokens, completedTurnCost: cost });
 
 		if (isAbortedAssistantMessage(message)) {
 			pauseActiveGoal(ctx);
@@ -2321,11 +2383,17 @@ export default function goalExtension(pi: ExtensionAPI): void {
 
 		// Account for any tokens from aborted in-flight assistant messages so
 		// they are not silently lost (but charge them to the original goal).
-		const abortedTokens = event.messages
+		const aborted = event.messages
 			.filter(isAbortedAssistantMessage)
-			.reduce((sum, message) => sum + assistantTurnTokens(message), 0);
-		if (abortedTokens > 0 && endedGoalId && state.goal?.id === endedGoalId) {
-			accountProgress(ctx, { completedTurnTokens: abortedTokens });
+			.reduce(
+				(sum, message) => ({
+					tokens: sum.tokens + assistantTurnTokens(message),
+					cost: sum.cost + assistantTurnCost(message),
+				}),
+				{ tokens: 0, cost: 0 },
+			);
+		if ((aborted.tokens > 0 || aborted.cost > 0) && endedGoalId && state.goal?.id === endedGoalId) {
+			accountProgress(ctx, { completedTurnTokens: aborted.tokens, completedTurnCost: aborted.cost });
 		}
 
 		continuationLoop.clearQueued();

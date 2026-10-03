@@ -7,6 +7,10 @@ export type GoalFocusReason = "created" | "selected" | "resumed" | "completed" |
 export interface GoalUsage {
 	tokensUsed: number;
 	activeSeconds: number;
+	/** USD spent on model requests attributed to this goal (parent turns +
+	 * tool_result-reported execution usage). Fractional by nature — never
+	 * floored. Records written before this field existed read back as 0. */
+	costUsed: number;
 }
 
 export interface GoalRecord {
@@ -98,7 +102,7 @@ export function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 export function emptyUsage(): GoalUsage {
-	return { tokensUsed: 0, activeSeconds: 0 };
+	return { tokensUsed: 0, activeSeconds: 0, costUsed: 0 };
 }
 
 export function cloneGoal(goal: GoalRecord): GoalRecord {
@@ -145,7 +149,10 @@ export function normalizeUsage(value: unknown): GoalUsage {
 	if (!raw) return emptyUsage();
 	const tokensUsed = typeof raw.tokensUsed === "number" && Number.isFinite(raw.tokensUsed) ? Math.max(0, Math.floor(raw.tokensUsed)) : 0;
 	const activeSeconds = typeof raw.activeSeconds === "number" && Number.isFinite(raw.activeSeconds) ? Math.max(0, Math.floor(raw.activeSeconds)) : 0;
-	return { tokensUsed, activeSeconds };
+	// costUsed: fractional USD — no flooring; pre-cost records simply have no
+	// field and read back as 0 (upgrade-safe).
+	const costUsed = typeof raw.costUsed === "number" && Number.isFinite(raw.costUsed) ? Math.max(0, raw.costUsed) : 0;
+	return { tokensUsed, activeSeconds, costUsed };
 }
 
 export function normalizeGoalRecord(value: unknown): GoalRecord | null {
