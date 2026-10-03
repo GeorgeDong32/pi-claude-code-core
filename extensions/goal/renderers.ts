@@ -11,7 +11,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 
-import { formatDuration, formatTokenValue, oneLineSummary, truncateText } from "./goal-core.ts";
+import { formatDuration, formatTokenValue, formatCostValue, oneLineSummary, truncateText } from "./goal-core.ts";
 import { asRecord, type DraftingFocus, type GoalEventDetails, type GoalEventKind, type GoalRecord, type GoalStateEntry, type GoalStatus } from "./goal-record.ts";
 
 /** Exported for tests (same pattern as renderGoalEvent/renderGoalAuditEvent). */
@@ -76,6 +76,7 @@ export interface GoalAuditEventDetails {
 	achievedAt?: number;
 	activeSeconds?: number;
 	tokensUsed?: number;
+	costUsed?: number;
 	/** Which audit attempt finally approved the goal (1 = first try). */
 	auditAttempts?: number;
 }
@@ -121,13 +122,16 @@ export function renderGoalAuditEvent(message: { content?: unknown; details?: Goa
 			const at = typeof details?.achievedAt === "number" ? details.achievedAt : undefined;
 			const seconds = typeof details?.activeSeconds === "number" ? details.activeSeconds : undefined;
 			const tokens = typeof details?.tokensUsed === "number" ? details.tokensUsed : undefined;
+			const cost = typeof details?.costUsed === "number" ? details.costUsed : undefined;
 			if (at !== undefined && seconds !== undefined && tokens !== undefined) {
 				const hhmm = new Date(at).toTimeString().slice(0, 5);
-				// "Goal achieved at 14:32 (23s · 1 attempt · 566 tokens)" —
-				// attempts omitted for legacy entries without the count.
+				// "Goal achieved at 14:32 (23s · 1 attempt · 566 tokens · $0.031)" —
+				// attempts omitted for legacy entries without the count; cost
+				// omitted for pre-cost records (undefined → 0 stays hidden).
 				const stats = [formatDuration(seconds)];
 				if (typeof details?.auditAttempts === "number") stats.push(`${details.auditAttempts} attempt${details.auditAttempts === 1 ? "" : "s"}`);
 				stats.push(`${formatTokenValue(tokens).split(" ")[0]} tokens`);
+				if (cost !== undefined && cost > 0) stats.push(formatCostValue(cost));
 				return new Text(
 					theme.fg("customMessageLabel", `\uf4de  Goal achieved at ${hhmm} (${stats.join(" · ")})`),
 					0,

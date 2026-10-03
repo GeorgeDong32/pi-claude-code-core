@@ -4,6 +4,7 @@ import * as path from "node:path";
 import {
 	formatDuration,
 	formatTokenValue,
+	formatCostValue,
 	statusLabel,
 } from "../goal-core.ts";
 import {
@@ -133,7 +134,8 @@ ${goal.objective.trim()}
 - Auto-continue: ${goal.autoContinue ? "on" : "off"}
 - Sisyphus mode: ${goal.sisyphus ? "yes (prompt/criteria style)" : "no"}
 - Time spent: ${formatDuration(goal.usage.activeSeconds)}
-- Tokens used: ${formatTokenValue(goal.usage.tokensUsed)}${pauseBlock}
+- Tokens used: ${formatTokenValue(goal.usage.tokensUsed)}
+- Cost: ${formatCostValue(goal.usage.costUsed)}${pauseBlock}
 `;
 }
 

@@ -5,6 +5,7 @@ import {
 	displayObjectiveTitle,
 	formatDuration,
 	formatTokenValue,
+	formatCostValue,
 	truncateText,
 	type GoalDisplayRecordLike,
 } from "../goal-core.ts";
@@ -58,6 +59,10 @@ function headingMeta(goal: GoalWidgetRecord, otherOpenGoalCount = 0): string {
 	if (goal.status === "active" && goal.autoContinue) bits.push("auto");
 	if (goal.usage.activeSeconds > 0) bits.push(formatDuration(goal.usage.activeSeconds));
 	if (goal.usage.tokensUsed > 0) bits.push(formatTokenValue(goal.usage.tokensUsed));
+	// cost bit (review r1 MINOR-1): tokens are cross-model incomparable — the
+	// persistent widget line needs the USD figure next to them. Hidden at 0
+	// so pre-cost records render exactly as before.
+	if (goal.usage.costUsed > 0) bits.push(formatCostValue(goal.usage.costUsed));
 	if (otherOpenGoalCount > 0) bits.push(`+${otherOpenGoalCount} open`);
 	return bits.join(" · ");
 }

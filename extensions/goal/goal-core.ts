@@ -1,6 +1,8 @@
 export interface GoalUsageLike {
 	tokensUsed: number;
 	activeSeconds: number;
+	/** USD spent (fractional, never floored). Missing on pre-cost records → 0. */
+	costUsed: number;
 }
 
 export interface GoalDisplayRecordLike {
@@ -31,6 +33,17 @@ export function displayObjectiveTitle(objective: string): string {
 		return line;
 	}
 	return truncateText(objective);
+}
+
+/** USD rendering for goal usage: two decimals at $1 and above, THREE below
+ * (flash-tier subagent rounds cost $0.023 — two decimals would read $0.02
+ * and drift 9%). Tier is decided on the ROUNDED value so 0.9995 reads
+ * $1.00 (not "$1.000") and 0.0004 reads $0 (not "$0.000"). */
+export function formatCostValue(value: number): string {
+	const safe = typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : 0;
+	const rounded = Math.round(safe * 1000) / 1000;
+	if (rounded === 0) return "$0";
+	return rounded >= 1 ? `$${rounded.toFixed(2)}` : `$${rounded.toFixed(3)}`;
 }
 
 export function formatTokenValue(value: number): string {
@@ -84,6 +97,7 @@ export function footerStatus(goal: GoalDisplayRecordLike): string {
 	const usageBits: string[] = [];
 	if (goal.usage.activeSeconds > 0) usageBits.push(formatDuration(goal.usage.activeSeconds));
 	if (goal.usage.tokensUsed > 0) usageBits.push(formatTokenValue(goal.usage.tokensUsed).split(" ")[0]);
+	if (goal.usage.costUsed > 0) usageBits.push(formatCostValue(goal.usage.costUsed));
 	const usage = usageBits.length > 0 ? ` [${usageBits.join(" ")}]` : "";
 	const prefix = goal.sisyphus ? "goal✊" : "goal";
 	return `${prefix}: ${statusLabel(goal)}${usage} - ${truncateText(goal.objective, 60)}`;
@@ -104,6 +118,9 @@ export function pauseReasonLabel(pauseReason: string): { label: string; text: st
  * with status/objective/usage satisfies it. */
 export function oneLineSummary(goal: GoalDisplayRecordLike | null): string {
 	if (!goal) return "No goal is set.";
-	const tail = goal.usage.tokensUsed > 0 ? ` [${formatTokenValue(goal.usage.tokensUsed).split(" ")[0]}]` : "";
+	const bits: string[] = [];
+	if (goal.usage.tokensUsed > 0) bits.push(formatTokenValue(goal.usage.tokensUsed).split(" ")[0]);
+	if (goal.usage.costUsed > 0) bits.push(formatCostValue(goal.usage.costUsed));
+	const tail = bits.length > 0 ? ` [${bits.join(" ")}]` : "";
 	return `${statusLabel(goal)}${tail} - ${truncateText(goal.objective)}`;
 }

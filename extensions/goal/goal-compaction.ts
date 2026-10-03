@@ -1,6 +1,7 @@
 import {
   formatDuration,
   formatTokenValue,
+  formatCostValue,
   statusLabel,
   truncateText,
 } from "./goal-core.ts";
@@ -17,7 +18,7 @@ export function buildGoalCompactSummary(goal: GoalRecord, events: GoalLedgerEven
   lines.push(`Goal ${goal.id} — ${statusLabel(goal)}`);
   lines.push(`  Objective: ${truncateText(goal.objective, 200)}`);
   if (goal.usage.tokensUsed > 0) {
-    lines.push(`  Usage: ${formatTokenValue(goal.usage.tokensUsed)}`);
+    lines.push(`  Usage: ${formatTokenValue(goal.usage.tokensUsed)} · ${formatCostValue(goal.usage.costUsed)}`);
   }
   if (goal.usage.activeSeconds > 0) {
     lines.push(`  Time: ${formatDuration(goal.usage.activeSeconds)}`);
