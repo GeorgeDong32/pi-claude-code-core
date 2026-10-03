@@ -50,6 +50,21 @@ export function sisyphusDisciplineBlock(goal: GoalRecord): string {
 	].join("\n");
 }
 
+/** C6 (arch review 2026-10-03): durable auditor objection — the latest
+ * completion audit was disapproved. Spliced into the paused and active goal
+ * prompts by the before_agent_start handler after a fail-open ledger read;
+ * superseded by any newer audit result. The old two inline copies drifted
+ * (different headers, one carried a redundant completion_requested gate that
+ * is unreachable under the writer invariant — audit_result's only writer
+ * always appends completion_requested first); this builder is the ONE copy. */
+export function auditorRejectionBlock(report: string, goalId: string): string {
+	return [
+		`[AUDITOR REJECTION goalId=${goalId}]`,
+		`An independent auditor previously rejected a completion request for this goal. Reason: ${report.slice(0, 300)}`,
+		"Address the auditor's objections before requesting completion again.",
+	].join("\n");
+}
+
 export function goalPrompt(goal: GoalRecord): string {
 	return `[PI GOAL ACTIVE goalId=${goal.id}]
 Status: ${statusLabel(goal)}

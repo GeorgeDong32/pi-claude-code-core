@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { renderGoalEvent } from "../goal.ts";
+import { renderGoalEvent } from "../renderers.ts";
 import type { GoalEventDetails } from "../goal-record.ts";
 
 const theme = {
@@ -51,8 +51,8 @@ test("expanded drafting still exposes the objective and ids", () => {
 
 // --- pi-goal-audit-event compact rendering ---
 
-import { renderGoalAuditEvent } from "../goal.ts";
-import type { GoalAuditEventDetails } from "../goal.ts";
+import { renderGoalAuditEvent } from "../renderers.ts";
+import type { GoalAuditEventDetails } from "../renderers.ts";
 
 function auditDetails(overrides: Partial<GoalAuditEventDetails>): { content?: unknown; details: GoalAuditEventDetails } {
 	return { details: { phase: "started", goalId: "g1", ...overrides } };
@@ -110,7 +110,7 @@ test("collapsed passed renders the in-place pass marker", () => {
 
 // ---------- renderGoalResult (B3 structured kind) ----------
 
-import { renderGoalResult } from "../goal.ts";
+import { renderGoalResult } from "../renderers.ts";
 import type { GoalRecord, GoalStateEntry } from "../goal-record.ts";
 
 function stateDetails(kind: GoalStateEntry["kind"], goal: GoalRecord | null): { details: GoalStateEntry; content: Array<{ type: string; text: string }> } {

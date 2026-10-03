@@ -33,7 +33,8 @@
 | 文件 | 说明 |
 |---|---|
 | `goal.ts` | 主装配:工具、命令、widget、stop-hook 续跑循环。用量记帐对全部四个 token 通道求和(`input`/`output`/`cacheRead`/`cacheWrite`——cache-inclusive,DEVIATIONS #69) |
-| `goal-core.ts` | 渲染/状态助手(footer 状态、时长/token 格式化) |
+| `goal-core.ts` | 渲染/状态助手(footer 状态、时长/token 格式化、单行摘要) |
+| `renderers.ts` | 消息渲染器(result / event / audit-event)——自 wiring 拆出(arch review C6),不经工厂即可测 |
 | `goal-record.ts`、`goal-pool.ts`、`goal-ledger.ts` | 状态模型:active/paused 记录、开放目标池、用量台账 |
 | `goal-policy.ts` | 各 goal 状态下允许哪些工具(`ACTIVE_GOAL_TOOL_NAMES`、`POST_STOP_ALLOWED_TOOLS` 等) |
 | `goal-draft.ts`、`goal-questionnaire.ts` | /goals 式意图讨论 → `propose_goal_draft` → Confirm/Continue 对话框 |

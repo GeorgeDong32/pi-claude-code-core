@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { createGoal } from "../goal-record.ts";
 import {
+	auditorRejectionBlock,
 	continuationPrompt,
 	goalPrompt,
 	goalTweakDraftingPrompt,
@@ -62,4 +63,17 @@ test("unfocused prompt keeps multi-goal focus human-owned", () => {
 	assert.match(prompt, /3 open pi goals/);
 	assert.match(prompt, /Do not choose or switch focus autonomously/);
 	assert.match(prompt, /\/goal-focus/);
+});
+
+// C6 (arch review 2026-10-03): the unified durable-objection block — the
+// paused/active prompt injections previously had ZERO test coverage and had
+// already drifted (header format + one redundant unreachable gate).
+test("auditorRejectionBlock: goalId header, 300-char clamp, fixed copy", () => {
+	const block = auditorRejectionBlock("objection text", "g-123");
+	assert.match(block, /^\[AUDITOR REJECTION goalId=g-123\]/);
+	assert.ok(block.includes("An independent auditor previously rejected"));
+	assert.ok(block.endsWith("Address the auditor's objections before requesting completion again."));
+	const long = "x".repeat(500);
+	const clamped = auditorRejectionBlock(long, "g-1");
+	assert.ok(clamped.includes("x".repeat(300)) && !clamped.includes("x".repeat(301)), "report clamped to 300 chars");
 });

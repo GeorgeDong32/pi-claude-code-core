@@ -98,3 +98,12 @@ export function pauseReasonLabel(pauseReason: string): { label: string; text: st
 	}
 	return { label: "Agent pause reason", text: pauseReason };
 }
+
+/** C6 (arch review 2026-10-03): moved from goal.ts — shared by the wiring's
+ * uiNotify calls and renderers.ts. Structural type: any goal record shape
+ * with status/objective/usage satisfies it. */
+export function oneLineSummary(goal: GoalDisplayRecordLike | null): string {
+	if (!goal) return "No goal is set.";
+	const tail = goal.usage.tokensUsed > 0 ? ` [${formatTokenValue(goal.usage.tokensUsed).split(" ")[0]}]` : "";
+	return `${statusLabel(goal)}${tail} - ${truncateText(goal.objective)}`;
+}
