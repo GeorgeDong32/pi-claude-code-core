@@ -11,8 +11,23 @@ import { dirname } from "node:path";
 export type Ledger = (entry: Record<string, unknown>) => Promise<void>;
 
 export function createLedger(path: string): Ledger {
+	// C1 (arch review 2026-10-03): mkdir once per path instead of on every
+	// append — the audit trail stays per-event (upstream shape, accepted);
+	// only the redundant directory syscall is dropped. ENOENT (dir removed
+	// mid-session) re-arms the flag and retries once.
+	let dirEnsured = false;
 	return async (entry) => {
-		await mkdir(dirname(path), { recursive: true });
-		await appendFile(path, `${JSON.stringify({ timestamp: new Date().toISOString(), ...entry })}\n`, "utf8");
+		const line = `${JSON.stringify({ timestamp: new Date().toISOString(), ...entry })}\n`;
+		if (!dirEnsured) {
+			await mkdir(dirname(path), { recursive: true });
+			dirEnsured = true;
+		}
+		try {
+			await appendFile(path, line, "utf8");
+		} catch (error) {
+			if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			await mkdir(dirname(path), { recursive: true });
+			await appendFile(path, line, "utf8");
+		}
 	};
 }

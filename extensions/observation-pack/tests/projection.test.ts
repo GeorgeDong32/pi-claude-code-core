@@ -158,3 +158,84 @@ test("sentinel trips after the streak limit and never repeats", async () => {
 	assert.equal(warned, 1, "warns exactly once, then stays quiet");
 	assert.equal(state.sentinelWarned, true);
 });
+
+// ── C1 (arch review 2026-10-03): identity memo + stored set ──
+
+test("C1: a repeated message is analyzed and stored exactly once (steady-state requests cost one Map.get)", async () => {
+	const state = createProjectionState();
+	let storeCalls = 0;
+	const ports: ProjectionPorts = {
+		store: async () => {
+			storeCalls += 1;
+		},
+		appendLedger: async () => {},
+	};
+	const message = bigResult(BIG);
+	for (let i = 0; i < FULL_SENDS + 3; i += 1) {
+		await projectContext({ messages: [message], root: "/t", state, ports });
+	}
+	assert.equal(storeCalls, 1, "ports.store fires once for the process, not once per request");
+	assert.equal(state.identity.size, 1);
+	assert.ok(state.stored.size === 1);
+});
+
+test("C1: ineligible candidates are memoized as null and never re-analyzed", async () => {
+	const state = createProjectionState();
+	const { ports } = fakePorts();
+	const small = { ...bigResult("tiny"), toolCallId: "tc-small" } as ToolResultMessage;
+	for (let i = 0; i < 3; i += 1) {
+		const outcome = await projectContext({ messages: [small], root: "/t", state, ports });
+		assert.equal(outcome.messages[0], small, "passes through by reference every time");
+	}
+	assert.equal(state.identity.size, 1, "one memo entry");
+	assert.equal(state.identity.get("/t\0bash\0tc-small"), null, "memoized as ineligible");
+});
+
+test("C1: a failed store is not memoized — the next request retries (OBS-08 fail-open preserved)", async () => {
+	const state = createProjectionState();
+	let failFirst = true;
+	let storeCalls = 0;
+	const ports: ProjectionPorts = {
+		store: async () => {
+			storeCalls += 1;
+			if (failFirst) {
+				failFirst = false;
+				throw new Error("disk full");
+			}
+		},
+		appendLedger: async () => {},
+	};
+	const message = bigResult(BIG);
+	const first = await projectContext({ messages: [message], root: "/t", state, ports });
+	assert.equal(first.failOpenReasons.length, 1);
+	assert.equal(first.messages[0], message, "fail-open keeps the original bytes");
+	assert.equal(state.stored.size, 0, "a failed store is not recorded");
+	const second = await projectContext({ messages: [message], root: "/t", state, ports });
+	assert.equal(second.failOpenReasons.length, 0);
+	assert.equal(storeCalls, 2, "the retry actually reached ports.store");
+	assert.equal(state.stored.size, 1);
+});
+
+test("C1: cold start (new state) recomputes once — per-process memo, not per-request", async () => {
+	let storeCalls = 0;
+	const ports: ProjectionPorts = {
+		store: async () => {
+			storeCalls += 1;
+		},
+		appendLedger: async () => {},
+	};
+	const message = bigResult(BIG);
+	await projectContext({ messages: [message], root: "/t", state: createProjectionState(), ports });
+	await projectContext({ messages: [message], root: "/t", state: createProjectionState(), ports });
+	assert.equal(storeCalls, 2, "each fresh state pays the one-time analysis again (restart semantics)");
+});
+
+test("C1: same toolCallId under different toolNames keeps separate identities", async () => {
+	const state = createProjectionState();
+	const { ports, stored } = fakePorts();
+	const a = bigResult(BIG, "bash");
+	const b = bigResult(BIG, "grep"); // same fixed toolCallId "tc-1", different toolName
+	await projectContext({ messages: [a, b], root: "/t", state, ports });
+	assert.equal(state.identity.size, 2, "the memo key includes toolName — no collision");
+	assert.equal(stored.length, 2);
+});

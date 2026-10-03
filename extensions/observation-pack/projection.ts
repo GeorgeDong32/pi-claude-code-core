@@ -44,6 +44,24 @@ export interface ProjectionPorts {
 export interface ProjectionState {
 	/** Requests each `${root}\0${id}` has been part of — the send authority. */
 	readonly sentCounts: Map<string, number>;
+	/** C1 (arch review 2026-10-03): candidate identity memo, key
+	 * `${root}\0${toolName}\0${toolCallId}` (toolCallId alone is NOT unique —
+	 * different tools can share call ids across messages). value = the
+	 * memoized Observation, or null = already judged ineligible
+	 * (<THRESHOLD_BYTES / reducer receipt) — never re-analyzed. Premise:
+	 * a tool result is immutable once in the transcript (append-only
+	 * history; invariant 9 only ever rewrites the projection copy), so the
+	 * per-request join/byteLength/2×sha256/countLines work is pure waste
+	 * after the first request. */
+	readonly identity: Map<string, Observation | null>;
+	/** C1: observation ids already stored through ports.store. Skips the
+	 * EEXIST full-read + re-hash verification on every later request.
+	 * Disclosure: after the first successful store, an object file corrupted
+	 * externally mid-session no longer surfaces via that verification —
+	 * accepted (content-addressed, write-once objects). A FAILED store is
+	 * not memoized here, so the per-message fail-open retry semantics
+	 * (OBS-08) are unchanged. */
+	readonly stored: Set<string>;
 	sentinelWarned: boolean;
 	sentinelStreak: number;
 	placeholderCount: number;
@@ -53,6 +71,8 @@ export interface ProjectionState {
 export function createProjectionState(): ProjectionState {
 	return {
 		sentCounts: new Map<string, number>(),
+		identity: new Map<string, Observation | null>(),
+		stored: new Set<string>(),
 		sentinelWarned: false,
 		sentinelStreak: 0,
 		placeholderCount: 0,
@@ -100,9 +120,20 @@ export async function projectContext(args: {
 		if (!message || !isPureTextResult(message)) continue;
 
 		try {
-			const observation = createObservation(message, args.root);
+			// C1: analyze each candidate ONCE per process — the transcript is
+			// append-only, so the same (root, toolName, toolCallId) re-appears
+			// with identical bytes on every later request.
+			const memoKey = `${args.root}\0${message.toolName}\0${message.toolCallId}`;
+			let observation = args.state.identity.get(memoKey);
+			if (observation === undefined) {
+				observation = createObservation(message, args.root) ?? null;
+				args.state.identity.set(memoKey, observation);
+			}
 			if (!observation) continue;
-			await args.ports.store(observation);
+			if (!args.state.stored.has(observation.id)) {
+				await args.ports.store(observation);
+				args.state.stored.add(observation.id);
+			}
 
 			const sendCountKey = `${args.root}\0${observation.id}`;
 			const previousSends = args.state.sentCounts.get(sendCountKey) ?? priorAssistantCounts[index] ?? 0;
