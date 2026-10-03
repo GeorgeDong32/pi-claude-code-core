@@ -1,12 +1,14 @@
 /**
- * memory/llm.ts — the side-channel completion lane (V2-A, DESIGN-MEMORY-V2 §4).
+ * memory/llm.ts — the side-channel completion lane (V2-A §4; model-ref
+ * resolution + the queue-drain lane added by spec 2026-10-03-memory-exit-flush).
  *
  * ONE independent completeSimple() call per automation tick (review /
- * correction / flush): invisible to the conversation, never triggers an
- * agent turn, never blocks a hook (callers fire-and-forget or bound the
- * wait). No subprocess fallback — a failed call is skipped silently and the
- * next hook retries (deliberate downgrade vs hermes, documented in the V2
- * report).
+ * correction / flush / queue drain): invisible to the conversation, never
+ * triggers an agent turn, never blocks a hook (callers fire-and-forget or
+ * bound the wait). No subprocess fallback — a failed call is skipped silently
+ * and the next hook retries (deliberate downgrade vs hermes, documented in
+ * the V2 report). The shutdown path itself stages a queue record and runs
+ * ZERO LLM here (queue.ts); this lane drains it at the next session_start.
  *
  * Response contract: strict JSON in the TEXT channel —
  *   an object whose "operations" field is an array of memory ops.

@@ -157,6 +157,32 @@ export function removeRecord(agentDir: string, file: string): void {
 	removeQuiet(queueDir(agentDir), file);
 }
 
+/** Read-only inventory for the /memory panel: record count + bytes +
+ * oldest age (no JSON parsing — the panel must stay cheap). Null when the
+ * queue dir does not exist yet. */
+export function queueInventory(agentDir: string): { records: number; bytes: number; oldestSavedAt?: number } | null {
+	try {
+		const dir = queueDir(agentDir);
+		const files = readdirSync(dir).filter((f) => f.endsWith(".json"));
+		if (files.length === 0) return null;
+		let bytes = 0;
+		let oldest: number | undefined;
+		for (const f of files) {
+			try {
+				const st = statSync(join(dir, f));
+				bytes += st.size;
+				const savedAt = Number(f.match(/-(\d+)\.json$/)?.[1]);
+				if (savedAt > 0 && (oldest === undefined || savedAt < oldest)) oldest = savedAt;
+			} catch {
+				/* raced away — skip */
+			}
+		}
+		return { records: files.length, bytes, oldestSavedAt: oldest };
+	} catch {
+		return null;
+	}
+}
+
 /** Cap the directory at QUEUE_DIR_MAX_BYTES by evicting oldest-mtime
  * files (records and .tmp orphans alike). */
 function enforceBudget(dir: string): void {

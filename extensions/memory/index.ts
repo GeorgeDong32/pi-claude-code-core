@@ -44,6 +44,7 @@ import { resolveMemoryPaths, sessionsDirFor, gitCanonicalRoot } from "./paths.ts
 import { scopeMatches } from "./memdir.ts";
 import { buildPolicyInjection, POLICY_COMPACT } from "./policy.ts";
 import { renderMemoryDiagnostics } from "./diagnostics.ts";
+import { queueInventory } from "./queue.ts";
 import { byteLength, createRecall, deriveHistory, freshnessHeader, type RecallBlock, type RecallMachine } from "./recall.ts";
 import { llmSelector, resolveRecallModel } from "./selector.ts";
 import { guardMemoryWrites } from "./guard.ts";
@@ -496,6 +497,7 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 					stats: recallMachine?.stats ?? { selections: 0, empties: 0, failures: 0, lastReason: null, deliveries: 0 },
 				},
 				misplaced: misplacedUserFiles(udir),
+				queue: queueInventory(resolveMemoryPaths(cctx.cwd ?? process.cwd(), process.env.HOME ?? home).agentDir),
 				hermesDataFound:
 					existsSync(join(process.env.HOME ?? home, ".pi", "agent", "pi-hermes-memory", "MEMORY.md")) ||
 					existsSync(join(process.env.HOME ?? home, ".pi", "agent", "pi-hermes-memory", "USER.md")),
