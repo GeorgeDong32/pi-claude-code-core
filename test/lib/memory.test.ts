@@ -122,6 +122,10 @@ describe("P3-ME-03 policy injection", () => {
 		// exactly one memory-policy block, plus the index
 		expect(prompt.split("<memory-policy>").length - 1).toBe(1);
 		expect(prompt).toContain("[alpha](a.md) — first");
+		// path-mismatch fix (2026-10-03): the injected policy names the REAL
+		// project-layer directory, never the literal `<project>/memory/`
+		expect(prompt).toMatch(/PROJECT memory \(\/.*\/memory\)/);
+		expect(prompt).not.toContain("<project>/memory/");
 	});
 });
 

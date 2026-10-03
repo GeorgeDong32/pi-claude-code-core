@@ -42,7 +42,7 @@ import { coreBus } from "../bus.ts";
 import { eligibleMemories, reconcileMemoryIndex, scanMemoryDir, scanMemoryDirCached } from "./memdir.ts";
 import { resolveMemoryPaths, sessionsDirFor, gitCanonicalRoot } from "./paths.ts";
 import { scopeMatches } from "./memdir.ts";
-import { buildPolicyInjection, POLICY_COMPACT } from "./policy.ts";
+import { buildPolicyInjection, policyCompact } from "./policy.ts";
 import { renderMemoryDiagnostics } from "./diagnostics.ts";
 import { queueInventory } from "./queue.ts";
 import { byteLength, createRecall, deriveHistory, freshnessHeader, type RecallBlock, type RecallMachine } from "./recall.ts";
@@ -253,8 +253,8 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 				// yields no candidates).
 				const degradedBlock = await recallBlockFor(event.prompt ?? "", ctx, waitMs);
 				return degradedBlock
-					? { systemPrompt: `${event.systemPrompt ?? ""}\n\n${POLICY_COMPACT}`, message: makeRecallMessage(degradedBlock) }
-					: { systemPrompt: `${event.systemPrompt ?? ""}\n\n${POLICY_COMPACT}` };
+					? { systemPrompt: `${event.systemPrompt ?? ""}\n\n${policyCompact(dir)}`, message: makeRecallMessage(degradedBlock) }
+					: { systemPrompt: `${event.systemPrompt ?? ""}\n\n${policyCompact(dir)}` };
 			}
 			const userScan = scanMemoryDirCached(udir);
 			const projectScan = scanMemoryDirCached(dir);
@@ -267,6 +267,7 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 			const injection = buildPolicyInjection(
 				{ entries: scopedUserFiles.map((f) => ({ ...f.entry })), files: scopedUserFiles.map((f) => ({ entry: f.entry, body: f.body })) },
 				projectScan.files.map((f) => ({ ...f.entry })),
+				dir,
 			) + (skippedTotal > 0 ? `\n<!-- memory: ${skippedTotal} file(s) skipped (invalid frontmatter) -->` : "");
 			const systemPrompt = `${event.systemPrompt ?? ""}\n\n${injection}`;
 			// RV-01/03 prompt path: one selection per real user message, bounded

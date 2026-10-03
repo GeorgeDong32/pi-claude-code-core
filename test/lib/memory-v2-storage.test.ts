@@ -16,7 +16,7 @@ import { invalidateMemDirCache, parseMemoryFrontmatter, scanMemoryDir, reconcile
 import { resolveMemoryPaths, isMemoryWritePath } from "../../extensions/memory/paths.ts";
 import { freshnessHeader } from "../../extensions/memory/recall.ts";
 import type { Selector, SelectorOutcome } from "../../extensions/memory/selector.ts";
-import { userLayerSection, projectLayerSection, buildPolicyInjection, POLICY_COMPACT } from "../../extensions/memory/policy.ts";
+import { userLayerSection, projectLayerSection, buildPolicyInjection, policyCompact } from "../../extensions/memory/policy.ts";
 import { guardMemoryWrites } from "../../extensions/memory/guard.ts";
 import { USER_INDEX_MAX, PINNED_TOTAL_MAX } from "../../extensions/memory/policy.ts";
 import { layerStats } from "../../extensions/memory/store.ts";
@@ -245,6 +245,7 @@ describe("V2-M1 regression — single-layer behaviors", () => {
 		const injection = buildPolicyInjection(
 			{ entries: [{ title: "u", description: "d", file: "u.md" }] },
 			[{ title: "p", description: "d", file: "p.md" }],
+			"/t/canonical/memory",
 		);
 		expect(injection.split("<memory-policy>").length - 1).toBe(1);
 	});
@@ -340,8 +341,14 @@ describe("V2 Phase 3 (AD1/AD3/AD4) — injection dedupe + policy text", () => {
 		expect(freshnessHeader(now - 2 * 60 * 60 * 1000, now)).toBeNull();
 		expect(freshnessHeader(now - 3 * 24 * 60 * 60 * 1000, now)).toBe("[3 days ago]");
 		expect(freshnessHeader(now - 47 * 24 * 60 * 60 * 1000, now)).toContain("47 days ago");
-		expect(POLICY_COMPACT).not.toContain("Update MEMORY.md");
-		expect(POLICY_COMPACT).toContain("already exist — write files directly");
+		const policy = policyCompact("/home/u/.pi/agent/projects/-Users-x-Coding-repo/memory");
+		expect(policy).not.toContain("Update MEMORY.md");
+		expect(policy).toContain("already exist — write files directly");
+		// path-mismatch regression pin (2026-10-03): the project line must carry
+		// the REAL interpolated dir, never the literal `<project>/memory/`
+		expect(policy).toContain("PROJECT memory (/home/u/.pi/agent/projects/-Users-x-Coding-repo/memory)");
+		expect(policy).not.toContain("<project>/memory/");
+		expect(policy).toContain("NOT in a memory/");
 	});
 
 	it("AD2: reading a stale memory file gets a staleness note appended to the tool result", async () => {

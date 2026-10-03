@@ -29,15 +29,28 @@ export const PINNED_MAX_FILES = 5;
  * prompt — one constant, both sides, a rename is a compile error. */
 export const POLICY_MARKER = "<memory-policy";
 
-export const POLICY_COMPACT = `${POLICY_MARKER}>
+/** The policy block with the REAL project-layer directory interpolated.
+ *
+ * Path-mismatch fix (2026-10-03, project memory
+ * core-memory-policy-path-mismatch): the old static text said
+ * `<project>/memory/` (a literal directory inside the repo) while the
+ * implementation reads/writes ~/.pi/agent/projects/<git-root>/memory/ — a
+ * session followed the literal text and wrote memories into the repo root
+ * (untracked, never indexed, never recalled). The model now sees the
+ * actual absolute path; the explicit "NOT inside the repository" clause
+ * guards the residual habit. */
+export function policyCompact(projectMemoryDir: string): string {
+	return `${POLICY_MARKER}>
 You have persistent memory in TWO layers. Before answering, scan the memory
 indexes below; when a listed memory is relevant, read the file (its path is
 in the index line) before relying on assumptions.
 
 - USER memory (~/.pi/agent/memory/): who the user is, cross-project
   preferences, communication style — true in every project.
-- PROJECT memory (<project>/memory/): facts about this repository — paths,
-  workflows, conventions, lessons that only apply here.
+- PROJECT memory (${projectMemoryDir}): facts about this repository —
+  paths, workflows, conventions, lessons that only apply here. Write
+  project memories HERE, exactly at this path — NOT in a memory/
+  directory inside the repository (that location is never read).
 
 Writing memories: create plain markdown files in the RIGHT layer with a
 frontmatter block:
@@ -66,6 +79,7 @@ Write memories proactively when the user states a durable preference, a
 correction, or a project fact that is not derivable from the repo. Never
 store secrets or credentials.
 </memory-policy>`;
+}
 
 /** Rows of a capped index; returns [rows, bytesUsed]. */
 function cappedRows(
@@ -164,10 +178,10 @@ export function projectLayerSection(
 }
 
 /** Full injection block for before_agent_start (V2 two-layer shape). */
-export function buildPolicyInjection(user: LayerInput, project: Array<{ title: string; description: string; file: string }>): string {
+export function buildPolicyInjection(user: LayerInput, project: Array<{ title: string; description: string; file: string }>, projectMemoryDir: string): string {
 	const userLayer = userLayerSection(user);
 	const projectLayer = projectLayerSection(project, userLayer.bytes);
-	return `${POLICY_COMPACT}\n\n${userLayer.text}\n\n${projectLayer.text}`;
+	return `${policyCompact(projectMemoryDir)}\n\n${userLayer.text}\n\n${projectLayer.text}`;
 }
 
 
