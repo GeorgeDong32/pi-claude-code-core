@@ -503,6 +503,43 @@ describe("permission-modes extension: tool_call gate", () => {
 			expect(result).not.toBeUndefined()
 		})
 
+		// pi 1.0 adaptation pin (spec 2026-10-03-pi-1.0-adaptation Step 2 ③):
+		// the ask branch is an explicit tool list (read/grep/find/ls, edit/write,
+		// bash/powershell) with a fall-through `return undefined` — codemode's
+		// body passes silently. That is design, not an oversight: the security
+		// boundary is the per-tool gate on codemode's NESTED calls (upstream
+		// tool.js:5-9 / execute.js:304 — scripts go through the full agent tool
+		// pipeline, so plan/ask rules apply per tool). If ask should prompt for
+		// codemode itself, that is a product decision to be specced separately.
+		it("ask: codemode body passes through silently (nested calls stay per-tool gated)", async () => {
+			await switchMode("ask")
+			const result = await callToolCall("codemode", { script: "return 1" }, {
+				select: async () => "Block",
+			})
+			expect(result).toBeUndefined()
+		})
+
+		// pi 1.0 adaptation pin (spec Step 2 ④): plan snapshot/restore must keep
+		// codemode in the active list. PLAN_DISABLED is empty, so during plan the
+		// tool stays ACTIVE and the :1524 gate alone denies it — activity and
+		// gating are orthogonal. Two-step construction per review r2 (1.7): the
+		// default active list has no codemode, so push it FIRST or these
+		// assertions would pass vacuously against an untouched list.
+		it("plan: snapshot/restore keeps codemode active while the gate denies it", async () => {
+			pi.activeTools.push("codemode")
+			const snapshot = [...pi.activeTools]
+			await switchMode("plan")
+			// codemode remains in the active list during plan…
+			expect(pi.activeTools).toContain("codemode")
+			// …but the gate denies its body (orthogonal to activity)
+			const result = await callToolCall("codemode", { script: "return 1" })
+			expect(result).toMatchObject({ block: true })
+			await switchMode("ask")
+			// restore returns the exact pre-plan snapshot — codemode still active
+			expect(pi.activeTools).toEqual(snapshot)
+			expect(pi.activeTools).toContain("codemode")
+		})
+
 		it("auto: mcp__ tools fall through to the tiered gate (not auto-allowed)", async () => {
 			await switchMode("auto")
 			const result = await callToolCall("mcp__exa__search", { query: "x" }, {
