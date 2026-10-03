@@ -17,7 +17,7 @@ spec 2026-10-02-memory-recall-v2)、守卫记忆写入路径、自动整合
 
 | 钩子 | 行为 |
 |---|---|
-| `session_start` | 双层 reconcile + 设置加载 + 静态 yield 探测 |
+| `session_start` | 双层 reconcile + 设置加载 + 静态 yield 探测；**queue drain**（spec 2026-10-03）在设置就绪后后台触发（不占启动路径、按项目路由、永不 await）；automation 自身的 `session_start` 重置全部每会话闭包态（A1 —— 宿主在进程内 `/new`、`/resume`、`/fork` 后复用同一批 handler 闭包，不重置则已死的 AbortController 会在首次切换后静默杀死全部 automation） |
 | `before_agent_start` | 动态 yield 探测 → policy + 双层带帽索引;**RV prompt 路径** —— 每条用户消息一次选择(受 `recallWaitMs` 限时),块作为 custom message 持久化在用户消息之后 |
 | `message_end` | **RV steer 路径** —— run 中途到达的用户消息以等待 0 选择;custom 块永不触发(RV-01)。spec v1.2:挂起的选择**一完成即投递**(`sendMessage` `triggerTurn:false` 入 pi 的 pending 队列,下一个 turn_end 落盘 —— 最早 = 首条模型消息结束):run 内 request #2 起可见,run 结束则下一轮 request #1 可见。永不丢弃;`display:false` 保证两个 TUI 都不渲染 |
 | `turn_end` | 自动整合触发(V2-C)+ P3 automation(spec v1.2:召回投递不再按 turn 门控 —— 见 `message_end`) |
@@ -32,6 +32,7 @@ spec 2026-10-02-memory-recall-v2)、守卫记忆写入路径、自动整合
 「冻结选集反复重投」两大病灶的根因(RC-1/RC-2)。
 
 **配置**(`~/.pi/agent/settings.json`,`memory` 键):
+- `model`(字符串,`"provider/id"`):ops 侧通道模型(review/correction/compact flush/queue drain)。回退链(spec 2026-10-03):`model` → `recallModel` → 会话模型 —— 无法解析的 ref 会继续尝试下一候选，绝不直接甩回慢的会话模型。与 D3 的不对称是刻意的：recall 把 `recallModel` 当**必备质量门**（未配 = 不召回），ops 把它当**廉价通道偏好**（解析不到 → 会话模型，不算失败）；因此 ops 的输出质量随所配 `recallModel` 的模型而定（已披露）。
 - `recallModel`(字符串,`"provider/id"`):选择器模型。**召回必须显式配置
   —— 未设置或无法解析 = 不召回**(D3,无词法回退)。
 - `recallWaitMs`(数字,spec v1.2 起**默认 0**,钳制 0–15000):prompt 路径每消息的选择器等待预算。0 = 永不因选择器阻塞上屏 —— 块经完成驱动的 pending 落盘到达;正值 = 用上屏延迟换 request-#1 召回。
@@ -57,13 +58,17 @@ child 的 dispatch prompt 触发一次选择器调用(token 费 + ≤waitMs 首 
 | `guard.ts` | 记忆写路径的秘密拦截器(secret regex,含无引号值 / base64 padding) |
 | `yield.ts` | `InjectionGate` —— 静态 + 动态 yield 探测(fail-open:注入失败绝不阻塞 turn,P3-ME-09) |
 | `consolidate.ts` | 整合触发/工具/命令;写入走 `memory_consolidate`(批次必须减少字节或文件数) |
-| `automation.ts` | P3 automation 状态 + 设置 |
+| `automation.ts` | P3 automation 状态 + 设置;`session_start` 每会话态重置(A1) |
+| `queue.ts` | 待提取队列(spec 2026-10-03):shutdown 路径把未提取尾窗（cursor 相对的后缀 60 条）原子落盘为 `~/.pi/agent/memory-queue/` 下的一条 JSON 记录；下一个同项目 `session_start` 后台 drain（≤5 条、≤3 次尝试、`projectsDir` 精确路由、年龄/体积 GC）。shutdown handler 本体**零 LLM** —— 宿主串行 await 全部 shutdown handler 且无超时兑底，旧的 await 10s flush 实测让每次长会话退出必卡满 10s。记录是会话尾窗的明文第二副本（≤7 天、总量 ≤2MB），在此披露 |
 | `importers.ts` | Claude / Hermes 导入;绝不覆写本地编辑 |
 | `store.ts`、`llm.ts`、`session-recall.ts`、`paths.ts` | V2 存储、唯一 LLM 通道、跨会话回溯(`session_recall` 工具)、路径解析 |
 
 ## 不变量与坑
 
 - **Fail-open**:任何注入失败都在边界吞掉——turn 绝不能因 memory 打嗝而死。
+- **零 LLM 退出（spec 2026-10-03）**:`session_shutdown` 只同步落盘一条队列
+  记录（原子写，≤120KB）；提取延后到 drain 通道。绝不在 `session_shutdown`
+  handler 里重新引入 await 的 LLM 调用。
 - **持久化一次投递(D1)**:召回块以 `pi-memory-recall` custom message
   进入 transcript,每条真实用户消息至多一次 —— custom 块自身永不触发召回
   (RV-01);历史推导的硬判重保证一个文件在一个 compaction 窗口内至多浮出

@@ -45,6 +45,25 @@ export type RegistryLike = {
 	>;
 };
 
+/** Single authority for model-ref resolution (spec 2026-10-03 — shared by
+ * the recall selector's D3 gate and the ops side-channel chain, so a third
+ * copy of the matching logic can never drift in): canonical "provider/id"
+ * single exact match, then a unique bare-id match. Empty / ambiguous /
+ * unmatched → undefined. */
+export function resolveModelRef(
+	ref: string | undefined,
+	registry: { getAll?: () => unknown[] } | undefined,
+): Model<Api> | undefined {
+	const key = ref?.trim().toLowerCase();
+	if (!key || !registry?.getAll) return undefined;
+	const all = registry.getAll() as Model<Api>[];
+	const canonical = all.filter((m) => `${m.provider}/${m.id}`.toLowerCase() === key);
+	if (canonical.length === 1) return canonical[0];
+	const byId = all.filter((m) => m.id.toLowerCase() === key);
+	if (byId.length === 1) return byId[0];
+	return undefined;
+}
+
 const AUTH_REJECTION = /\b(401|403)\b|unauthorized|forbidden|invalid[\s_-]*api[\s_-]*key|(token|key|credential)[\s_-]*(is[\s_-]*)?(invalid|expired|revoked)/i;
 
 function textFromContent(content: unknown): string {

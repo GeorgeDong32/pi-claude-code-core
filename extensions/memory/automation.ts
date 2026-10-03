@@ -1,17 +1,37 @@
 /**
- * memory/automation.ts — the automatic maintenance hooks (V2-A, §4).
+ * memory/automation.ts — the automatic maintenance hooks (V2-A §4 + spec
+ * 2026-10-03-memory-exit-flush).
  *
  * Replaces hermes's correction-detector / background-review / session-flush
  * with the same cadence, one shared side-channel lane (llm.ts) and one
  * shared ops engine (store.ts):
  *
+ *   session_start        per-session state reset (A1 — the host reuses the
+ *                        factory's closures across /new,/resume,/fork;
+ *                        without the reset a dead AbortController would
+ *                        silently kill all automation after the first
+ *                        in-process session switch)
  *   message_end (user)   correction regex gate (EN + CJK) → pending flag
  *   turn_end             correction (≤1 per 3 turns) + review (≥10 turns or
  *                        ≥15 tool calls, ≥3 user turns warmup), both
  *                        fire-and-forget with in-flight guards; directive
  *                        turns are excluded from accounting
  *   session_before_compact  flush, awaited, 60s, follows event.signal
- *   session_shutdown     flush (reason≠reload), awaited, 10s, silent
+ *   session_shutdown     ZERO LLM — stages the unextracted tail as a queue
+ *                        record (queue.ts) instead of the old awaited 10s
+ *                        flush; the host awaits shutdown handlers
+ *                        serially with no timeout, and a real call on the
+ *                        session model measurably stalls every long-session
+ *                        exit for the full 10s budget
+ *
+ * The queue is drained at the NEXT session_start (background, per-project
+ * routing, ≤5 records, bounded attempts) — see queue.ts and the spec.
+ *
+ * Model policy: memory.model → memory.recallModel → session model. The
+ * recall asymmetry is deliberate: recall treats recallModel as a REQUIRED
+ * quality gate (unset = recall off, D3); ops treat it as a cheap-lane
+ * preference (unresolvable → session model, never a failure). Ops quality
+ * thus rides whatever recallModel was configured for (disclosed).
  *
  * Everything is silent-failure (P3-ME-09): a hook must never throw, and a
  * failed side-channel call is recorded for /memory diagnostics and retried
@@ -23,10 +43,11 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
 
-import { completeMemoryOps, type LlmComplete, type OpsCompletion } from "./llm.ts";
+import { completeMemoryOps, resolveModelRef, type LlmComplete, type OpsCompletion } from "./llm.ts";
 import { applyMemoryOps, type MemoryOp } from "./store.ts";
 import type { ConsolidationTrigger } from "./consolidate.ts";
 import { scanMemoryDirCached } from "./memdir.ts";
+import { bumpAttempts, clampQueueParts, loadQueue, QUEUE_V, removeRecord, writeQueueRecord } from "./queue.ts";
 
 // ─── settings (two knobs, DESIGN-MEMORY-V2 §4) ───
 
@@ -67,22 +88,15 @@ export function loadMemorySettings(agentDir: string): MemorySettings {
 	}
 }
 
-/** Resolve the side-channel model: settings override (single exact match)
- * falling back to the session model. */
+/** Resolve the side-channel model: memory.model → memory.recallModel →
+ * session model (spec 2026-10-03 — an unresolvable ref falls THROUGH to
+ * the next candidate, never straight back to the slow session model). */
 export function resolveSideChannelModel(
 	settings: MemorySettings,
 	ctxModel: Model<Api> | undefined,
 	registry: { getAll?: () => Model<Api>[] } | undefined,
 ): Model<Api> | undefined {
-	const ref = settings.model?.trim().toLowerCase();
-	if (ref && registry?.getAll) {
-		const all = registry.getAll();
-		const canonical = all.filter((m) => `${m.provider}/${m.id}`.toLowerCase() === ref);
-		if (canonical.length === 1) return canonical[0] as Model<Api>;
-		const byId = all.filter((m) => m.id.toLowerCase() === ref);
-		if (byId.length === 1) return byId[0] as Model<Api>;
-	}
-	return ctxModel;
+	return resolveModelRef(settings.model, registry) ?? resolveModelRef(settings.recallModel, registry) ?? ctxModel;
 }
 
 // ─── correction gate: EN strong/weak/negative (hermes-proven) + CJK ───
@@ -196,7 +210,7 @@ export interface AutomationDeps {
 	now?: () => number;
 }
 
-interface ConversationPart {
+export interface ConversationPart {
 	role: "user" | "assistant";
 	text: string;
 }
@@ -267,14 +281,14 @@ function memoryDigest(dirs: { user: string; project: string }): string {
 
 export interface AutomationArgs {
 	gate: { state: { yielded: boolean } };
-	dirs: (ctx?: { cwd?: string }) => { project: string; user: string };
+	dirs: (ctx?: { cwd?: string }) => { project: string; user: string; projectsDir: string; agentDir: string };
 	trigger: ConsolidationTrigger;
 	settings: () => MemorySettings;
 	state: AutomationState;
 	deps?: AutomationDeps;
 }
 
-export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): void {
+export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drainPending: (ctx: ExtensionContext) => void } {
 	const { gate, dirs, trigger, state } = args;
 	const deps = args.deps ?? {};
 
@@ -291,13 +305,25 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): void {
 	// AD5: the main model writing memory this window means it already
 	// captured what mattered — a second extraction pass would duplicate
 	let modelWroteMemory = false;
-	const sessionAbort = new AbortController();
+	// let (not const): the A1 session_start reset re-arms it per session.
+	// The host fires session_shutdown (whose finally aborts this controller)
+	// on every in-process /new,/resume,/fork and then KEEPS the same
+	// handler closures for the next session — a stale aborted controller
+	// would fail `!signal.aborted` gates and kill all automation silently.
+	let sessionAbort = new AbortController();
+	// B3: records whose bookkeeping writes failed this session — skipped,
+	// not retried into the ground (cleared on session_start).
+	const drainBlacklist = new Set<string>();
 
 	const REVIEW_TURNS = 10;
 	const REVIEW_TOOL_CALLS = 15;
 	const CORRECTION_COOLDOWN_TURNS = 3;
 	const FLUSH_COMPACT_MS = 60_000;
-	const FLUSH_SHUTDOWN_MS = 10_000;
+	// queue drain lane: offline (no user waiting), so the budget is looser
+	// than the old 10s shutdown cap
+	const FLUSH_QUEUE_MS = 20_000;
+	const QUEUE_DRAIN_MAX = 5;
+	const QUEUE_MAX_ATTEMPTS = 3;
 
 	const sideChannelModel = (ctx: ExtensionContext): Model<Api> | undefined =>
 		resolveSideChannelModel(args.settings(), ctx.model, ctx.modelRegistry as unknown as { getAll?: () => Model<Api>[] });
@@ -308,6 +334,15 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): void {
 		const any = (AbortSignal as unknown as { any?: (signals: AbortSignal[]) => AbortSignal }).any;
 		return any ? any([sessionAbort.signal, extra]) : sessionAbort.signal;
 	};
+
+	/** Shared prompt body for every ops call (review/correction/flush/drain). */
+	const buildOpsUserPrompt = (d: { project: string; user: string }, parts: ConversationPart[]): string =>
+		[
+			memoryDigest(d),
+			"",
+			"--- Conversation ---",
+			parts.map((p) => `[${p.role === "user" ? "USER" : "ASSISTANT"}]: ${p.text}`).join("\n\n") || "(empty)",
+		].join("\n");
 
 	async function runOps(
 		kind: "review" | "correction" | "flush",
@@ -322,12 +357,7 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): void {
 		const routedNotes: string[] = [];
 		const request = {
 			systemPrompt: systemPrompt + routingGuidance(projectKey),
-			userPrompt: [
-				memoryDigest(dirs(ctx)),
-				"",
-				"--- Conversation ---",
-				parts.map((p) => `[${p.role === "user" ? "USER" : "ASSISTANT"}]: ${p.text}`).join("\n\n") || "(empty)",
-			].join("\n"),
+			userPrompt: buildOpsUserPrompt(dirs(ctx), parts),
 			timeoutMs,
 			signal: linkedSignal(extraSignal),
 		};
@@ -470,22 +500,168 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): void {
 		}
 	});
 
-	pi.on("session_shutdown", async (event, ctx: ExtensionContext) => {
+	// A1 (spec 2026-10-03): reset every per-session closure state when a new
+	// session starts in THIS process (/new,/resume,/fork reuse the factory's
+	// handlers). Runs after index.ts's session_start (settings load) by
+	// registration order.
+	pi.on("session_start", () => {
+		try {
+			pendingCorrection = undefined;
+			turnsSinceCorrection = 3; // start at threshold → first correction can fire
+			correctionInFlight = false;
+			turnsSinceReview = 0;
+			toolCallsSinceReview = 0;
+			userTurnCount = 0;
+			reviewInFlight = false;
+			reviewCursorParts = 0;
+			modelWroteMemory = false;
+			drainBlacklist.clear();
+			if (!sessionAbort.signal.aborted) sessionAbort.abort();
+			sessionAbort = new AbortController();
+		} catch {
+			/* never block session start */
+		}
+	});
+
+	/** Fire-and-forget queue drain for THIS project (spec §2 drain). Called
+	 * by index.ts after settings load on session_start; never awaited. */
+	const drainPending = (ctx: ExtensionContext): void => {
+		try {
+			if (gate.state.yielded || !state.enabled) return;
+			// A3: capture synchronously — a /resume mid-drain invalidates the
+			// old runner and ctx getters start throwing; past this line the
+			// drain only touches captured values.
+			const cap = {
+				d: dirs(ctx),
+				model: sideChannelModel(ctx),
+				registry: ctx.modelRegistry as never,
+				projectKey: projectKeyForDir(dirs(ctx).project),
+				complete: deps.complete as LlmComplete | undefined,
+			};
+			void drainPendingRecords(cap);
+		} catch {
+			/* never block session start */
+		}
+	};
+
+	async function drainPendingRecords(cap: {
+		d: { project: string; user: string; projectsDir: string; agentDir: string };
+		model: Model<Api> | undefined;
+		registry: never;
+		projectKey: string | undefined;
+		complete: LlmComplete | undefined;
+	}): Promise<void> {
+		let processed = 0;
+		for (const staged of loadQueue(cap.d.agentDir)) {
+			if (processed >= QUEUE_DRAIN_MAX) break;
+			if (drainBlacklist.has(staged.file)) continue;
+			// B1 routing: this session only consumes records staged by sessions
+			// of the SAME project (exact projectsDir match — projectKey
+			// substring heuristics can cross-project collide).
+			if (staged.record.projectsDir !== cap.d.projectsDir) continue;
+			const record = staged.record;
+			// leftover edge: attempts already past the cap on disk — drop now
+			if (record.attempts >= QUEUE_MAX_ATTEMPTS) {
+				removeRecord(cap.d.agentDir, staged.file);
+				state.lastError = `flush-queued: dropped after ${record.attempts} attempts`;
+				continue;
+			}
+			processed++;
+			// B4: persist the attempt BEFORE the call — a SIGKILL mid-call counts
+			if (!bumpAttempts(cap.d.agentDir, staged)) {
+				drainBlacklist.add(staged.file);
+				continue;
+			}
+			let completion: OpsCompletion;
+			try {
+				completion = await completeMemoryOps(
+					cap.model,
+					cap.registry,
+					{
+						systemPrompt: FLUSH_SYSTEM + routingGuidance(cap.projectKey),
+						userPrompt: buildOpsUserPrompt(cap.d, clampQueueParts(record.parts)),
+						// independent lane: pure timeout, deliberately NOT linked to
+					// sessionAbort (the drain must survive /new mid-drain)
+						timeoutMs: FLUSH_QUEUE_MS,
+					},
+					{ complete: cap.complete },
+				);
+			} catch {
+				return; // infra failure — record retained (attempt already counted)
+			}
+			if (completion.ok) {
+				if (completion.ops.length > 0) {
+					const routedNotes: string[] = [];
+					const outcome = applyMemoryOps(completion.ops as MemoryOp[], cap.d, { projectKey: cap.projectKey, routedNotes });
+					if (routedNotes.length > 0) {
+						state.routed += routedNotes.length;
+						state.lastRouted = routedNotes.join("; ");
+					}
+					state.opsApplied += outcome.applied;
+					state.flushes++;
+					state.lastFlush = `flush-queued: ${outcome.applied} op(s)`;
+					if (outcome.error) {
+						// B2 apply-fatal: deterministic disk-layer error — retrying
+						// cannot fix it, so CONSUME (drop) with a diagnostic
+						removeRecord(cap.d.agentDir, staged.file);
+						state.lastError = `flush-queued: ${outcome.error}`;
+						continue;
+					}
+				}
+				removeRecord(cap.d.agentDir, staged.file);
+			} else if (record.attempts >= QUEUE_MAX_ATTEMPTS) {
+				removeRecord(cap.d.agentDir, staged.file);
+				state.lastError = `flush-queued: dropped after ${record.attempts} attempts (${completion.reason ?? "failed"})`;
+			}
+			// else: LLM failure with attempts left — retain for the next session
+		}
+	}
+
+	// ZERO-LLM shutdown (spec 2026-10-03): stage the unextracted tail as a
+	// queue record instead of an awaited side-channel call. The host awaits
+	// this handler serially — it must stay a bounded, synchronous disk write.
+	pi.on("session_shutdown", (event, ctx: ExtensionContext) => {
 		try {
 			const reason = (event as { reason?: string }).reason;
-			if (reason === "reload") return;
+			if (reason === "reload") return; // reload keeps the same conversation
 			if (gate.state.yielded || !state.enabled) return;
 			if (userTurnCount < 3) return;
-			const parts = conversationParts(ctx, 60);
+			const allParts = allConversationParts(ctx);
+			// shrink-guard (fork/branch retraction), then the SUFFIX window —
+			// the tail's LAST parts are the unextracted ones (A2)
+			const unextracted = reviewCursorParts > allParts.length ? allParts : allParts.slice(reviewCursorParts);
+			const parts = clampQueueParts(unextracted);
 			if (parts.length === 0) return;
-			// bounded silent flush — errors are diagnostics, never UI at shutdown
-			const applied = await runOps("flush", ctx, FLUSH_SYSTEM, parts, FLUSH_SHUTDOWN_MS);
+			const d = dirs(ctx);
+			writeQueueRecord(d.agentDir, {
+				v: QUEUE_V,
+				sessionId: sessionIdOf(ctx),
+				projectsDir: d.projectsDir,
+				projectKey: projectKeyForDir(d.project),
+				cwd: ctx.cwd ?? process.cwd(),
+				savedAt: Date.now(),
+				attempts: 0,
+				parts,
+			});
 			state.flushes++;
-			state.lastFlush = `shutdown: ${applied} op(s)`;
+			state.lastFlush = `queued: ${parts.length} part(s)`;
 		} catch {
 			/* never block shutdown */
 		} finally {
 			sessionAbort.abort(); // cancel any in-flight side-channel work
 		}
 	});
+
+	return { drainPending };
+}
+
+/** Best-effort session id for queue record naming/merging (the ctx shape
+ * is structural — ReadonlySessionManager exposes getSessionId()). */
+function sessionIdOf(ctx: ExtensionContext): string {
+	try {
+		const id = (ctx.sessionManager as { getSessionId?: () => string } | undefined)?.getSessionId?.();
+		return typeof id === "string" && id ? id : "unknown";
+	} catch {
+		return "unknown";
+	}
 }

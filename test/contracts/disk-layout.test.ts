@@ -17,6 +17,7 @@ import { modelsPath } from "../../extensions/modes/profiles.ts";
 import { GOALS_DIR, ARCHIVED_GOALS_DIR, makeActiveGoalPath } from "../../extensions/goal/storage/goal-files.ts";
 import { GOAL_LEDGER_FILE } from "../../extensions/goal/goal-ledger.ts";
 import { writeFastMode } from "../../extensions/effort/effort.js";
+import { loadQueue, queueDir, writeQueueRecord, type QueueRecord } from "../../extensions/memory/queue.ts";
 
 describe("P0-CT §4.5 frozen disk layout", () => {
 	it("P0-CT-09 (pm): project permissions files live at .pi/projects/<id>/permissions{,.local}.json", () => {
@@ -56,6 +57,32 @@ describe("P0-CT §4.5 frozen disk layout", () => {
 		writeFastMode(settingsPath, true);
 		const parsed = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
 		expect(parsed["pi-effort"]).toEqual({ fastMode: true });
+	});
+
+	it("P0-CT-09 (memory): pending-extraction queue lives under <agentDir>/memory-queue with atomic v1 records (spec 2026-10-03)", () => {
+		// default anchor: the frozen global location under ~/.pi/agent
+		expect(queueDir(join(homedir(), ".pi", "agent"))).toBe(join(homedir(), ".pi", "agent", "memory-queue"));
+		const agentDir = mkdtempSync(join(tmpdir(), "ct-mq-"));
+		const rec: QueueRecord = {
+			v: 1,
+			sessionId: "s1234567890abcdef",
+			projectsDir: "/proj/x",
+			cwd: "/proj/x",
+			savedAt: Date.now(),
+			attempts: 0,
+			parts: [{ role: "user", text: "tail" }],
+		};
+		writeQueueRecord(agentDir, rec);
+		const files = readdirSync(queueDir(agentDir));
+		expect(files).toHaveLength(1);
+		expect(files[0]).toMatch(/^s1234567-\d+\.json$/); // 8-char session prefix + epoch
+		expect(files.some((f) => f.endsWith(".tmp"))).toBe(false); // atomic write, no residue
+		const staged = loadQueue(agentDir);
+		expect(staged).toHaveLength(1);
+		expect(staged[0]!.record.sessionId).toBe("s1234567890abcdef");
+		// same-session merge: staging again replaces, never duplicates
+		writeQueueRecord(agentDir, { ...rec, savedAt: Date.now() + 1 });
+		expect(readdirSync(queueDir(agentDir))).toHaveLength(1);
 	});
 
 	it("P0-CT-09 (goal): goals dir, archive dir, active file naming, and ledger file are unchanged", () => {

@@ -25,6 +25,17 @@
 - **批 2(同日)**:pause/abort/clear 尾注 — pause 注 → `pauseReason`(user: 前缀,paused 提示向模型展示,honor 措辞;pauseReasonLabel 单一标签权威);abort/clear 注 → `goal_aborted` ledger 事件(user aborted:/user cleared: + archivePath,补齐用户终止路径的审计空白);/goal-focus 按用户决定保持纯选择器(禁参数直选)。
 - 测试:extensions/goal/tests/goal-notes.test.ts(6 用例,纯 seam:record 往返 + prompt 注入 + 标签)。
 
+## memory 退出零 LLM 批(2026-10-03,spec 2026-10-03-memory-exit-flush)
+
+**状态:实现完成,三门全绿(check / test 748 / contracts 28);DEVIATIONS #84;两轮 subagent 审查(classic REQUEST_CHANGES→全修 + 对抗 A1-A3/B1 击穿→全修,报告存 specs/REVIEW-2026-10-03-memory-exit-flush-{classic,adversarial}.md)。**
+
+- 根因:宿主串行 await 全部 session_shutdown handler 无超时兑底 + 主模型(glm-5.3)实测 11-12.4s(cache 命中仍 10.5s,瓶颈=生成)→ 每次长会话退出必卡满 10s。
+- shutdown 零 LLM:cursor 相对后缀 60 条原子落盘 `~/.pi/agent/memory-queue/`(queue.ts 新文件,P0-CT-09 登记行 + disk-layout 行为断言);下一同项目 session_start 后台 drain(≤5 条/次、≤3 次/条、attempts 前置持久化、projectsDir 精确路由、7 天/2MB GC、apply-fatal=消费、unparsable=删、写失败黑名单)。
+- A1 现存 bug 修复(对抗审查发现):session_start 重置全部每会话闭包态 + 换新 AbortController —— 原实现在进程内 /new,/resume,/fork 后 automation 全部静默死亡。
+- side-channel 模型链:model → recallModel → 会话模型(llm.ts resolveModelRef 单一实现,selector.ts 委托,D3 不动);本机 settings 已配 memory.model=CPA/model-fast。
+- compact flush 保留;queue 明文副本/跨项目驱逐/B5 重叠披露于 docs。
+- 方案 3(fork 重放)规划文档:specs/design/2026-10-03-memory-fork-replay-plan.md(不实现)。
+
 ## recall v1.2 零阻塞投递批(2026-10-03,cctui handoff §3 诊断驱动)
 
 **状态:实现完成,三门全绿;DEVIATIONS #83。**

@@ -141,6 +141,7 @@ Per-module docs live in [docs/en/](docs/en) / [docs/zh/](docs/zh) — start with
 | `~/.pi/agent/permission-modes.json` | modes permissions |
 | `~/.pi/agent/core-economy.json` | economy switches (`actionFusion` / `observationPack`) |
 | `~/.pi/agent/pi-core-web.json` | web-gov preapproved-domain override |
+| `~/.pi/agent/memory-queue/` | memory pending-extraction queue (shutdown 写 / session_start drain) |
 | `~/.pi/agent/sessions/permission-modes-forwarding/sessions/<id>/` | approval forwarding (pm ↔ pi-subagents) |
 | `<cwd>/.pi/goals/` | goal state |
 | `<cwd>/.pi/pi-review/` (+ `pi-review.json`, `runs/<runId>/`) | review |

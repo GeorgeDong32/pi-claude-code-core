@@ -219,6 +219,10 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 			coreBus().publish({
 				memory: { yielded: gate.state.yielded, ...(gate.state.yielded ? { dir: memoryDir(ctx) } : {}) },
 			});
+			// spec 2026-10-03 §2 drain: settings are loaded and the yield probe
+			// has settled at this point — fire the background queue drain for
+			// this project (never awaited on the startup path).
+			automation.drainPending(ctx);
 		} catch {
 			/* never block session start */
 		}
@@ -391,10 +395,13 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 		}
 	});
 
-	// ── V2-A automatic maintenance: correction / review / flush ──
-	setupAutomation(pi, {
+	// ── V2-A automatic maintenance: correction / review / flush + queue drain ──
+	const automation = setupAutomation(pi, {
 		gate,
-		dirs: (ctx) => ({ project: memoryDir(ctx), user: userMemoryDir(ctx) }),
+		dirs: (ctx) => {
+			const p = resolveMemoryPaths(ctx?.cwd ?? process.cwd(), process.env.HOME ?? home);
+			return { project: p.memoryDir, user: p.userMemoryDir, projectsDir: p.projectsDir, agentDir: p.agentDir };
+		},
 		trigger: consolidation,
 		settings: () => memorySettings,
 		state: automationState,

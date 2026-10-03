@@ -9,7 +9,7 @@
  * yielded silence. The LLM is always the injected fake — no network.
  */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -18,8 +18,10 @@ import { resetCoreBusForTests } from "../../extensions/bus.ts";
 import memoryExtension from "../../extensions/memory/index.ts";
 import { parseOperations, completeMemoryOps } from "../../extensions/memory/llm.ts";
 import { isCorrection, loadMemorySettings, resolveSideChannelModel, setupAutomation, type AutomationState } from "../../extensions/memory/automation.ts";
+import { resolveRecallModel } from "../../extensions/memory/selector.ts";
 import { ConsolidationTrigger } from "../../extensions/memory/consolidate.ts";
 import { resolveMemoryPaths } from "../../extensions/memory/paths.ts";
+import { queueDir, writeQueueRecord, type QueueRecord } from "../../extensions/memory/queue.ts";
 
 let globalsSnapshot: Record<string, unknown>;
 let home: string;
@@ -27,6 +29,8 @@ let project: string;
 let prevHome: string | undefined;
 let dir: string;
 let udir: string;
+let agentDir: string;
+let projectsDirStr: string;
 
 beforeEach(() => {
 	globalsSnapshot = snapshotCoreGlobals();
@@ -39,7 +43,14 @@ beforeEach(() => {
 	const p = resolveMemoryPaths(project, home);
 	dir = p.memoryDir;
 	udir = p.userMemoryDir;
+	agentDir = p.agentDir;
+	projectsDirStr = p.projectsDir;
 });
+
+/** Shared dirs lambda for every setupAutomation call site (spec
+ * 2026-10-03: the contract now carries projectsDir + agentDir for queue
+ * routing and queue writes). */
+const testDirs = () => ({ project: dir, user: udir, projectsDir: projectsDirStr, agentDir });
 
 afterEach(() => {
 	if (prevHome === undefined) delete process.env.HOME;
@@ -150,26 +161,27 @@ interface Harness {
 	ctx: Record<string, unknown>;
 	state: AutomationState;
 	calls: string[];
+	drainPending: (ctx: Record<string, unknown>) => void;
 }
 
-function harness(llmText: string, opts: { yielded?: boolean; sessionEntries?: unknown[]; complete?: () => Promise<unknown> } = {}): Harness {
+function harness(llmText: string, opts: { yielded?: boolean; sessionEntries?: unknown[]; complete?: () => Promise<unknown>; sessionId?: string } = {}): Harness {
 	const host = new FakeHost();
 	const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0, routed: 0 };
 	const calls: string[] = [];
 	const trigger = new ConsolidationTrigger({ sendDirective: () => {} });
 	const complete = opts.complete ?? (async () => ({ stopReason: "stop", errorMessage: undefined, content: [{ type: "text", text: llmText }] }));
-	setupAutomation(host.asPi(), {
+	const automation = setupAutomation(host.asPi(), {
 		gate: { state: { yielded: opts.yielded ?? false } },
-		dirs: () => ({ project: dir, user: udir }),
+		dirs: testDirs as never,
 		trigger,
 		settings: () => ({ automation: true }),
 		state,
 		deps: { complete: (() => { calls.push(llmText); return complete(); }) as never },
 	});
-	const ctx = host.makeCtx({ cwd: project, ui: true, sessionEntries: opts.sessionEntries ?? [] });
+	const ctx = host.makeCtx({ cwd: project, ui: true, sessionEntries: opts.sessionEntries ?? [], sessionId: opts.sessionId });
 	ctx.model = fakeModel;
 	ctx.modelRegistry = fakeRegistry;
-	return { host, ctx, state, calls };
+	return { host, ctx, state, calls, drainPending: (c: Record<string, unknown>) => automation.drainPending(c as never) };
 }
 
 async function until(cond: () => boolean, ms = 2000): Promise<void> {
@@ -272,7 +284,7 @@ describe("V2-A background review", () => {
 		const calls: string[] = [];
 		setupAutomation(host.asPi(), {
 			gate: { state: { yielded: false } },
-			dirs: () => ({ project: dir, user: udir }),
+			dirs: testDirs as never,
 			trigger: sharedTrigger,
 			settings: () => ({ automation: true }),
 			state,
@@ -301,16 +313,25 @@ describe("V2-A flush", () => {
 		expect(h.state.lastFlush).toContain("compact");
 	});
 
-	it("session_shutdown: reload skips, quit flushes", async () => {
-		const h = harness(OPS_JSON, { sessionEntries: [{ type: "message", message: { role: "user", content: "x" } }] });
+	it("session_shutdown: reload skips (no record), quit stages the queue with ZERO LLM calls", async () => {
+		const h = harness(OPS_JSON, { sessionEntries: [{ type: "message", message: { role: "user", content: "x" } }], sessionId: "sess-reload-1" });
 		for (let i = 0; i < 3; i++) await h.host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `w ${i}` }] } }, h.ctx);
 		await h.host.fire("session_shutdown", { reason: "reload" }, h.ctx);
-		expect(h.state.flushes).toBe(0);
-		const h2 = harness(OPS_JSON, { sessionEntries: [{ type: "message", message: { role: "user", content: "x" } }] });
+		expect(existsSync(queueDir(agentDir))).toBe(false);
+		const entries = Array.from({ length: 10 }, (_, i) => ({ type: "message", message: { role: i % 2 ? "assistant" : "user", content: [{ type: "text", text: `m${i}` }] } }));
+		const h2 = harness(OPS_JSON, { sessionEntries: entries, sessionId: "sess-quit-1" });
 		for (let i = 0; i < 3; i++) await h2.host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `w ${i}` }] } }, h2.ctx);
 		await h2.host.fire("session_shutdown", { reason: "quit" }, h2.ctx);
-		expect(h2.state.flushes).toBe(1);
-		expect(h2.state.lastFlush).toContain("shutdown");
+		expect(h2.calls.length).toBe(0); // ZERO side-channel LLM on the exit path
+		const files = existsSync(queueDir(agentDir)) ? readdirSync(queueDir(agentDir)).filter((f) => f.endsWith(".json")) : [];
+		expect(files).toHaveLength(1);
+		const rec = JSON.parse(readFileSync(join(queueDir(agentDir), files[0]!), "utf-8")) as QueueRecord;
+		expect(rec.sessionId).toBe("sess-quit-1");
+		expect(rec.projectsDir).toBe(projectsDirStr);
+		expect(rec.parts).toHaveLength(10); // cursor never advanced → whole window
+		expect(rec.parts[9]).toMatchObject({ role: "assistant", text: "m9" }); // suffix semantics
+		expect(h2.state.lastFlush).toContain("queued");
+		expect(existsSync(join(queueDir(agentDir), files[0]!.replace(/\.json$/, ".tmp")))).toBe(false); // no tmp residue
 	});
 
 	it("a failed flush never throws into the compact handler", async () => {
@@ -321,6 +342,163 @@ describe("V2-A flush", () => {
 		for (let i = 0; i < 3; i++) await h.host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `v ${i}` }] } }, h.ctx);
 		await expect(h.host.fire("session_before_compact", { reason: "manual", signal: new AbortController().signal }, h.ctx)).resolves.toBeUndefined();
 		expect(h.state.lastError).toContain("flush");
+	});
+});
+
+// ── spec 2026-10-03: model chain / queue write / drain / A1 reset ──
+
+describe("spec 2026-10-03 — side-channel model fallback chain", () => {
+	it("model → recallModel → session model; a typo'd ref falls through, not back", () => {
+		const registry = { getAll: () => [{ provider: "p1", id: "fast" }, { provider: "p2", id: "big" }] } as never;
+		const fast = resolveSideChannelModel({ automation: true, model: "p1/fast" }, undefined, registry);
+		expect((fast as { provider: string }).provider).toBe("p1");
+		const viaRecall = resolveSideChannelModel({ automation: true, recallModel: "p1/fast" }, undefined, registry);
+		expect((viaRecall as { provider: string }).provider).toBe("p1");
+		const typo = resolveSideChannelModel({ automation: true, model: "p1/typo", recallModel: "p1/fast" }, { id: "session" } as never, registry);
+		expect((typo as { provider: string }).provider).toBe("p1");
+		const fallback = { id: "session" } as never;
+		expect(resolveSideChannelModel({ automation: true }, fallback, undefined)).toBe(fallback);
+		// recall's D3 gate stays untouched: unresolvable recallModel = recall OFF
+		expect(resolveRecallModel("p1/typo", registry as never)).toBeUndefined();
+	});
+});
+
+describe("spec 2026-10-03 — queue write semantics", () => {
+	const qfiles = () => (existsSync(queueDir(agentDir)) ? readdirSync(queueDir(agentDir)).filter((f) => f.endsWith(".json")) : []);
+
+	it("<3 user turns → no record at all", async () => {
+		const h = harness(OPS_JSON, { sessionEntries: [{ type: "message", message: { role: "user", content: "x" } }] });
+		for (let i = 0; i < 2; i++) await h.host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `t ${i}` }] } }, h.ctx);
+		await h.host.fire("session_shutdown", { reason: "quit" }, h.ctx);
+		expect(qfiles()).toHaveLength(0);
+	});
+
+	it("cursor caught up (review consumed the window) → no record", async () => {
+		const entries = Array.from({ length: 4 }, (_, i) => ({ type: "message", message: { role: i % 2 ? "assistant" : "user", content: [{ type: "text", text: `m${i}` }] } }));
+		const h = harness(OPS_JSON, { sessionEntries: entries });
+		for (let i = 0; i < 3; i++) await h.host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `u ${i}` }] } }, h.ctx);
+		// fire a review so the cursor advances to the full branch length
+		for (let i = 0; i < 10; i++) await h.host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, h.ctx);
+		await until(() => h.state.reviews === 1);
+		await h.host.fire("session_shutdown", { reason: "quit" }, h.ctx);
+		expect(qfiles()).toHaveLength(0);
+	});
+
+	it("long session, cursor=0 → the record carries the LAST 60 parts (A2 suffix)", async () => {
+		const entries = Array.from({ length: 80 }, (_, i) => ({ type: "message", message: { role: i % 2 ? "assistant" : "user", content: [{ type: "text", text: `m${i}` }] } }));
+		const h = harness(OPS_JSON, { sessionEntries: entries, sessionId: "suffix-1" });
+		for (let i = 0; i < 3; i++) await h.host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `u ${i}` }] } }, h.ctx);
+		await h.host.fire("session_shutdown", { reason: "quit" }, h.ctx);
+		const files = qfiles();
+		expect(files).toHaveLength(1);
+		const rec = JSON.parse(readFileSync(join(queueDir(agentDir), files[0]!), "utf-8")) as QueueRecord;
+		expect(rec.parts).toHaveLength(60);
+		expect(rec.parts[0]).toMatchObject({ text: "m20" }); // first 20 dropped
+		expect(rec.parts[59]).toMatchObject({ text: "m79" }); // newest kept
+	});
+
+	it("same session staged twice → one record (exact sessionId merge)", () => {
+		const base = { v: 1, sessionId: "merge-1", projectsDir: projectsDirStr, cwd: project, attempts: 0, savedAt: Date.now() };
+		writeQueueRecord(agentDir, { ...base, parts: [{ role: "user", text: "a" }] } as QueueRecord);
+		writeQueueRecord(agentDir, { ...base, savedAt: Date.now() + 5, parts: [{ role: "user", text: "a" }, { role: "user", text: "b" }] } as QueueRecord);
+		const files = qfiles();
+		expect(files).toHaveLength(1);
+		const rec = JSON.parse(readFileSync(join(queueDir(agentDir), files[0]!), "utf-8")) as QueueRecord;
+		expect(rec.parts).toHaveLength(2); // newest tail survived
+	});
+});
+
+describe("spec 2026-10-03 — queue drain", () => {
+	const qfiles = () => (existsSync(queueDir(agentDir)) ? readdirSync(queueDir(agentDir)).filter((f) => f.endsWith(".json")) : []);
+	const stage = (over: Partial<QueueRecord> & { sessionId: string }) =>
+		writeQueueRecord(agentDir, { v: 1, projectsDir: projectsDirStr, cwd: project, savedAt: Date.now(), attempts: 0, parts: [{ role: "user", text: "tail content" }], ...over } as QueueRecord);
+
+	it("consumes a matching record: LLM → ops applied → record removed", async () => {
+		stage({ sessionId: "d1" });
+		const h = harness(OPS_JSON);
+		h.drainPending(h.ctx);
+		await until(() => qfiles().length === 0);
+		expect(h.calls.length).toBe(1);
+		expect(h.state.opsApplied).toBe(1);
+		expect(existsSync(join(dir, "correction-foo.md"))).toBe(true); // OPS_JSON applied
+		expect(h.state.lastFlush).toContain("flush-queued");
+	});
+
+	it("foreign-project records stay queued (exact projectsDir routing)", async () => {
+		stage({ sessionId: "d2", projectsDir: "/somewhere/else" });
+		const h = harness(OPS_JSON);
+		h.drainPending(h.ctx);
+		await new Promise((r) => setTimeout(r, 80));
+		expect(qfiles()).toHaveLength(1);
+		expect(h.calls.length).toBe(0);
+	});
+
+	it("LLM failure retains the record with a bumped attempt; 3 failures drop it with a diagnostic", async () => {
+		stage({ sessionId: "d3" });
+		const h = harness("", { complete: (async () => ({ stopReason: "error", errorMessage: "down", content: [] })) as never });
+		for (let round = 1; round <= 3; round++) {
+			h.drainPending(h.ctx);
+			await until(() => {
+				const f = qfiles();
+				return f.length === 0 || (JSON.parse(readFileSync(join(queueDir(agentDir), f[0]!), "utf-8")) as QueueRecord).attempts === round;
+			});
+			await new Promise((r) => setTimeout(r, 30));
+		}
+		await until(() => qfiles().length === 0);
+		expect(h.state.lastError).toContain("dropped after 3 attempts");
+	});
+
+	it("ok with empty ops consumes the record (confirmed nothing salvageable)", async () => {
+		stage({ sessionId: "d4" });
+		const h = harness('{"operations":[]}');
+		h.drainPending(h.ctx);
+		await until(() => qfiles().length === 0);
+		expect(h.calls.length).toBe(1);
+	});
+
+	it("expired and unparsable records are reaped on load", async () => {
+		stage({ sessionId: "d5", savedAt: Date.now() - 8 * 24 * 3600_000 });
+		mkdirSync(queueDir(agentDir), { recursive: true });
+		writeFileSync(join(queueDir(agentDir), "bad.json"), "not json");
+		const h = harness(OPS_JSON);
+		h.drainPending(h.ctx);
+		await until(() => qfiles().length === 0);
+		expect(h.calls.length).toBe(0);
+	});
+
+	it("caps one drain at 5 records (oldest first)", async () => {
+		for (let i = 0; i < 7; i++) stage({ sessionId: `cap-${i}`, savedAt: Date.now() + i });
+		const h = harness('{"operations":[]}');
+		h.drainPending(h.ctx);
+		await until(() => qfiles().length === 2);
+		expect(h.calls.length).toBe(5);
+	});
+
+	it("yielded / automation-off ⇒ drain is a no-op (no LLM, record kept)", async () => {
+		stage({ sessionId: "d6" });
+		const h = harness(OPS_JSON, { yielded: true });
+		h.drainPending(h.ctx);
+		await new Promise((r) => setTimeout(r, 60));
+		expect(h.calls.length).toBe(0);
+		expect(qfiles()).toHaveLength(1);
+	});
+});
+
+describe("spec 2026-10-03 — A1 per-session reset (in-process session switch)", () => {
+	it("automation survives session_shutdown(reason:new) + session_start on the SAME instance", async () => {
+		const h = harness(OPS_JSON, { sessionId: "a1" });
+		await h.host.fire("session_start", {}, h.ctx);
+		for (let i = 0; i < 3; i++) await h.host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `u ${i}` }] } }, h.ctx);
+		for (let i = 0; i < 10; i++) await h.host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, h.ctx);
+		await until(() => h.state.reviews === 1);
+		await h.host.fire("session_shutdown", { reason: "new" }, h.ctx); // kills the controller…
+		const ctx2 = h.host.makeCtx({ cwd: project, ui: true, sessionEntries: [], sessionId: "a1" });
+		ctx2.model = fakeModel;
+		ctx2.modelRegistry = fakeRegistry;
+		await h.host.fire("session_start", {}, ctx2); // …reset re-arms it
+		for (let i = 0; i < 3; i++) await h.host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `v ${i}` }] } }, ctx2);
+		for (let i = 0; i < 10; i++) await h.host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, ctx2);
+		await until(() => h.state.reviews === 2); // without the reset this times out
 	});
 });
 
@@ -338,7 +516,7 @@ describe("V2-A settings", () => {
 		const calls: string[] = [];
 		setupAutomation(host.asPi(), {
 			gate: { state: { yielded: false } },
-			dirs: () => ({ project: dir, user: udir }),
+			dirs: testDirs as never,
 			trigger: new ConsolidationTrigger({ sendDirective: () => {} }),
 			settings: () => ({ automation: false }),
 			state,
@@ -373,7 +551,7 @@ describe("V2-A prompt guardrails", () => {
 		const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0, routed: 0 };
 		setupAutomation(host.asPi(), {
 			gate: { state: { yielded: false } },
-			dirs: () => ({ project: dir, user: udir }),
+			dirs: testDirs as never,
 			trigger: new ConsolidationTrigger({ sendDirective: () => {} }),
 			settings: () => ({ automation: true }),
 			state,
@@ -463,7 +641,7 @@ describe("V2 Phase 3 (AD5) — extraction cursor + model-wrote mutex", () => {
 		const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0, routed: 0 };
 		setupAutomation(host.asPi(), {
 			gate: { state: { yielded: false } },
-			dirs: () => ({ project: dir, user: udir }),
+			dirs: testDirs as never,
 			trigger: new ConsolidationTrigger({ sendDirective: () => {} }),
 			settings: () => ({ automation: true }),
 			state,
@@ -501,7 +679,7 @@ describe("V2 Phase 3 (AD5) — extraction cursor + model-wrote mutex", () => {
 		const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0, routed: 0 };
 		setupAutomation(host.asPi(), {
 			gate: { state: { yielded: false } },
-			dirs: () => ({ project: dir, user: udir }),
+			dirs: testDirs as never,
 			trigger: new ConsolidationTrigger({ sendDirective: () => {} }),
 			settings: () => ({ automation: true }),
 			state,

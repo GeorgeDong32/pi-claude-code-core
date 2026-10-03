@@ -24,7 +24,7 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 
 import { RECALL_MANIFEST_MAX } from "../../lib/context-budget.ts";
-import { completeText, type LlmComplete, type RegistryLike } from "./llm.ts";
+import { completeText, resolveModelRef, type LlmComplete, type RegistryLike } from "./llm.ts";
 
 /** Selector-side hard timeout — longer than any configured waitMs so a
  * deferred (timed-out) selection can still land before run end. */
@@ -60,19 +60,13 @@ export interface Selector {
 }
 
 /** Resolve `memory.recallModel` per D3: exact provider/id, then unique
- * bare id; undefined/ambiguous/missing → undefined (recall OFF). */
+ * bare id; undefined/ambiguous/missing → undefined (recall OFF).
+ * Delegates to the single authority in llm.ts (spec 2026-10-03). */
 export function resolveRecallModel(
 	ref: string | undefined,
 	registry: { getAll?: () => unknown[] } | undefined,
 ): Model<Api> | undefined {
-	const key = ref?.trim().toLowerCase();
-	if (!key || !registry?.getAll) return undefined;
-	const all = registry.getAll() as Model<Api>[];
-	const canonical = all.filter((m) => `${m.provider}/${m.id}`.toLowerCase() === key);
-	if (canonical.length === 1) return canonical[0];
-	const byId = all.filter((m) => m.id.toLowerCase() === key);
-	if (byId.length === 1) return byId[0];
-	return undefined;
+	return resolveModelRef(ref, registry);
 }
 
 /** One manifest row (RV-12): `- [layer][type] key (age): description`. */
