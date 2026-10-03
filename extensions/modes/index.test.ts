@@ -207,6 +207,9 @@ function createFakePi(): FakePi {
 		) {
 			tools.set(def.name, def as unknown as StoredFakeTool)
 		},
+		// pi 1.0.1 ExtensionAPI addition; modes registers none — no-op keeps the
+		// structural fake complete (spec 2026-10-03-pi-1.0-adaptation Step 1).
+		registerToolRenderer(_resolver: unknown): void {},
 		registerFlag(name: string, def: { default?: unknown }) {
 			// Always record the flag so the extension can read it via getFlag.
 			// Default is honored when provided.
