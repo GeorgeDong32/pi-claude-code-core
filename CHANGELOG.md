@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.1 (2026-10-03)
 
 ### Changed (architecture review 2026-10-03 — C2/C3/C4)
 - **`/compact` no longer waits on a memory-flush LLM call (~10s typical, 60s cap)**: the awaited `session_before_compact` flush had relocated the old shutdown stall to every compaction. Compact now stages the unextracted tail as a queue record through the same zero-LLM seam as shutdown (one shared `stageUnextractedTail` — the two paths can no longer drift); the next same-project `session_start` drains it in the background.
