@@ -475,6 +475,11 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 				/* no index */
 			}
 			const cctx = ctx as ExtensionContext;
+			// Panel accuracy fix (2026-10-03): re-attempt machine creation before
+			// reporting — the panel used to read the last before_agent_start's
+			// result and label a fresh session (no agent turn yet) as
+		// "recallModel unresolvable" even when the ref resolves fine.
+			ensureRecallMachine(cctx);
 			const derived = deriveHistory(historyFor(cctx), cctx.cwd ?? process.cwd());
 			const content = renderMemoryDiagnostics({
 				userDir: udir,

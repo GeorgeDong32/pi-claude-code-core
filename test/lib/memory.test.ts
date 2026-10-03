@@ -106,6 +106,45 @@ describe("P3-ME-02 index reconciler", () => {
 	});
 });
 
+describe("/memory panel recall accuracy (2026-10-03 fix)", () => {
+	it("reports recall ON from the panel itself — no prior agent turn required (was mislabeled 'unresolvable')", async () => {
+		// settings with a resolvable recallModel under the fake home
+		const agentDir = join(home, ".pi", "agent");
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ memory: { recallModel: "test/model-1" } }));
+		writeMemory("a.md", "alpha", "first");
+
+		const host = setup();
+		const ctx = host.makeCtx({ cwd: project, ui: true });
+		ctx.modelRegistry = { getAll: () => [{ provider: "test", id: "model-1" }] } as never;
+		await host.fire("session_start", {}, ctx);
+
+		// NO before_agent_start fired — the panel must re-attempt resolution itself
+		await host.commands.get("memory")?.("", ctx);
+		const listed = host.sentMessages.find((m) => m.message.customType === "pi-memory-status");
+		const panel = (listed!.message as { content?: string }).content ?? "";
+		expect(panel).toContain("recall: on (test/model-1");
+		expect(panel).not.toContain("unresolvable");
+	});
+
+	it("still reports unresolvable when the ref genuinely does not resolve", async () => {
+		const agentDir = join(home, ".pi", "agent");
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ memory: { recallModel: "nope/no-model" } }));
+		writeMemory("a.md", "alpha", "first");
+
+		const host = setup();
+		const ctx = host.makeCtx({ cwd: project, ui: true });
+		ctx.modelRegistry = { getAll: () => [{ provider: "test", id: "model-1" }] } as never;
+		await host.fire("session_start", {}, ctx);
+
+		await host.commands.get("memory")?.("", ctx);
+		const listed = host.sentMessages.find((m) => m.message.customType === "pi-memory-status");
+		const panel = (listed!.message as { content?: string }).content ?? "";
+		expect(panel).toContain("recall: off (recallModel unresolvable)");
+	});
+});
+
 describe("P3-ME-03 policy injection", () => {
 	it("session_start + before_agent_start append policy + index as one block", async () => {
 		writeMemory("a.md", "alpha", "first");
