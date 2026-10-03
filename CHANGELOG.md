@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Changed (architecture review 2026-10-03 — C2/C3/C4)
+- **`/compact` no longer waits on a memory-flush LLM call (~10s typical, 60s cap)**: the awaited `session_before_compact` flush had relocated the old shutdown stall to every compaction. Compact now stages the unextracted tail as a queue record through the same zero-LLM seam as shutdown (one shared `stageUnextractedTail` — the two paths can no longer drift); the next same-project `session_start` drains it in the background.
+- **`modes/utils.ts` (1247-line nine-concept grab-bag) split into concept modules**: `bash-analysis.ts` (tiered bash adjudication), `path-safety.ts` (outside-cwd/sensitive paths + project identity), `outside-writes.ts` (snapshot engine), `plan.ts` (plan.md file + plan text grammar), `mode-prompt.ts` (anchored injection + skills filter), `auto-risk.ts`, `ui/format.ts`. Pure move — disk paths, behavior, and the contract-pinned `getPlanFilePath` layout unchanged.
+- **JSON-lift unified in `lib/json-lift.ts`**: one string-aware implementation replaces four drifted copies (modes classifier, memory ops, recall selector, review verdict). Fixes a real recall-selector bug — a `}` inside a string value broke span extraction and silently counted a parse failure. Trailing-comma/BOM repair now applies to all four consumers; review's brace-lift fallback now also fires when fenced blocks parse but are not verdict-shaped.
+
 ### Fixed (memory automation survived in-process session switches — spec 2026-10-03 A1)
 - **A dead AbortController no longer silently kills all memory automation after `/new` `/resume` `/fork`**: the host fires `session_shutdown` (whose cleanup aborts the shared controller) and then REUSES the same handler closures for the next session in the same process — the review gate `!signal.aborted` stayed false forever, the cursor froze, counters never reset. `setupAutomation` now resets every per-session closure state and re-arms the controller on `session_start`. Pre-existing bug found by adversarial review; the queue design depends on the fix.
 

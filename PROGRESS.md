@@ -2,6 +2,15 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## 架构巡查批(2026-10-03,双轴 arch+perf review,方案见 ../specs/design/2026-10-03-arch-review-followups.md)
+
+- **状态:已完成**(C2/C3/C4 落地;C1 判定为上游原设计非迁移 bug,修复待拍板;C5/C6/C7 探查结论已沉淀 spec 文档;C8 方案已规划待批)。
+- **C2 compact→queue seam**:automation.ts 抽出共享 `stageUnextractedTail`,compact/shutdown 同 seam 零 LLM;测试 2 重写 + 44 全绿;docs en/zh model 描述同步;DEVIATIONS #85。
+- **C3 utils 拆分**:modes/utils.ts(1247 行九概念)→ bash-analysis/path-safety/outside-writes/plan/mode-prompt/auto-risk/ui/format 七模块,utils.test.ts 按序 describe 同构拆七份;消费者 9 文件 import 改向;disk-layout 契约仅改 import 不改断言;docs en/zh modes 表更新。纯搬移零行为变化。
+- **C4 json-lift 归一**:lib/json-lift.ts(jsonCandidates/liftJson/repair/balancedObjectSpans)取代四套漂移实现(classifier-client 最强版为基底);修 selector 字符串感知 bug(回归测 13b);test/lib/json-lift.test.ts 13 测钉 canonical 顺序;DEVIATIONS #86。
+- **测试计数**:全仓 762(54 文件)+ contracts 28 全绿;check 双项目 tsc 通过。
+- **剩余风险**:C4 的 review 兑底行为放宽(见 #86 ③)无现测试钉 — review 25 测通过但未新增形状用例;C5 的 probe-write 污染 bug 仍在(修法已探明,待批执行)。
+
 ## memory 召回 v2 批(2026-10-02,spec 2026-10-02-memory-recall-v2 R1 + 附记 A.1)
 
 **状态:全部完成。R1/R3/R2 各自单独提交;R0 已按协议执行完毕(用户 2026-10-02 批准「可以执行了」):6 文件迁移(备份于 ~/.pi/agent/memory/.backup-2026-10-02/,逐文件复制+字节核对+删原件)+ 4 文件 paths: 作用域化(pi 生态)+ pi-subagents 项目层按建议新建;验收复算泄漏 17→0(replay v3,31 session 池);project 层 reinject-symptom 已改写为 RC-1×RC-2 结论并清双 frontmatter。**
