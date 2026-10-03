@@ -51,17 +51,18 @@ child 的 dispatch prompt 触发一次选择器调用(token 费 + ≤waitMs 首 
 | 文件 | 说明 |
 |---|---|
 | `index.ts` | 装配;hook 体在边界 try/catch 包裹。只做事件路由 —— 一切召回决策都在 `recall.ts` |
-| `memdir.ts` | 目录扫描/reconcile;`scanMemoryDirCached` 指纹缓存 + git root memo;`eligibleMemories` = 召回候选集(双层、新→旧、绝对路径);`memoryKey` = 规范键 `user-memory/<file>` / `memory/<file>` |
+| `memdir.ts` | 目录扫描/reconcile;`scanMemoryDirCached` 指纹缓存 + git root memo + 1s 新鲜窗口 TTL(arch review C7:同轮后续扫描免 readdir+stat 指纹趟;外部编辑最长 ~1s 可见 —— 全部内部写路径显式失效);`eligibleMemories` = 召回候选集(双层、新→旧、绝对路径);`memoryKey` = 规范键 `user-memory/<file>` / `memory/<file>` |
 | `recall.ts` | **RV 深模块**(三入口:`onUserMessage` / `onTurnEnd` / `abort`)。所有会话态每次调用都从投影历史推导(D9):自最近 `compactionSummary` 起的硬判重(RV-06)、read toolCall 按 cwd 解析的已读抑制(RV-07)、按历史 `details.bytes` 累计的字节预算(RV-08)、自最近用户消息起成功且从未失败的 recentTools(RV-13)。skill 包裹剥离 + 长度卫生(RV-02);最新者胜的取代(RV-05);字节安全截断 + 路径注记渲染;`RecallDetailsV1`(冻结,契约已钉) |
 | `selector.ts` | `llmSelector`(共享 llm.ts 通道):清单行 = `[layer][type] key (age): description` 新→旧、上限 200;精度优先提示词(空列表是合法答案);recentTools 反噪音规则;`resolveRecallModel` = 精确 provider/id → 唯一裸 id → 关闭(绝不回退会话模型,D3) |
 | `policy.ts` | policy 注入块(`POLICY_COMPACT`) |
 | `guard.ts` | 记忆写路径的秘密拦截器(secret regex,含无引号值 / base64 padding) |
 | `yield.ts` | `InjectionGate` —— 静态 + 动态 yield 探测(fail-open:注入失败绝不阻塞 turn,P3-ME-09) |
 | `consolidate.ts` | 整合触发/工具/命令;写入走 `memory_consolidate`(批次必须减少字节或文件数) |
-| `automation.ts` | P3 automation 状态 + 设置;`session_start` 每会话态重置(A1) |
+| `automation.ts` | P3 automation 状态 + 设置(经 `lib/settings` readJson 读取,不变量 10);`session_start` 每会话态重置(A1);queue drain 并行(`Promise.allSettled`,≤5 —— 最坏 5×20s 串行 → max(20s);诊断单点聚合写入) |
 | `queue.ts` | 待提取队列(spec 2026-10-03):shutdown 路径把未提取尾窗（cursor 相对的后缀 60 条）原子落盘为 `~/.pi/agent/memory-queue/` 下的一条 JSON 记录；下一个同项目 `session_start` 后台 drain（≤5 条、≤3 次尝试、`projectsDir` 精确路由、年龄/体积 GC）。shutdown handler 本体**零 LLM** —— 宿主串行 await 全部 shutdown handler 且无超时兑底，旧的 await 10s flush 实测让每次长会话退出必卡满 10s。记录是会话尾窗的明文第二副本（≤7 天、总量 ≤2MB），在此披露 |
 | `importers.ts` | Claude / Hermes 导入;绝不覆写本地编辑 |
-| `store.ts`、`llm.ts`、`session-recall.ts`、`paths.ts` | V2 存储、唯一 LLM 通道、跨会话回溯(`session_recall` 工具)、路径解析 |
+| `store.ts`、`llm.ts`、`paths.ts` | V2 存储(原子写原语顺带失效扫描缓存)、唯一 LLM 通道、路径解析(`sessionsDirFor` 用 pi 的包裹横杠 sessions 命名 `-${sanitize}-`) |
+| `session-recall.ts` | 跨会话回溯(`session_recall` 工具)。arch review C8:异步有界扫描(不卡事件循环)+ 三重上限 —— ≤200 文件(新→旧)、单文件 ≤1MB 有界部分读(从不整文件跳过:最新会话往往最大)、总预算 ≤8MB —— 加透明度尾部行(`scanned=… truncated_size=… budget=… bytes=…/…`;「收窄 query」提示只在预算耗尽时)。sessions 目录路径修复使该工具首次在真机可用(此前指向 pi 从不写入的目录) |
 
 ## 不变量与坑
 

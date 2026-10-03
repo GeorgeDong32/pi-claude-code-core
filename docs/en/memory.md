@@ -65,17 +65,18 @@ first-token latency). That is expected behavior, not a bug to special-case.
 | File | Notes |
 |---|---|
 | `index.ts` | Assembly; hook bodies try/catch-wrapped at the boundary. Event routing only — every recall decision lives in `recall.ts` |
-| `memdir.ts` | Directory scan/reconcile; `scanMemoryDirCached` fingerprint cache + git-root memo; `eligibleMemories` = the recall candidate set (both layers, newest-first, absolute paths); `memoryKey` = the canonical `user-memory/<file>` / `memory/<file>` key |
+| `memdir.ts` | Directory scan/reconcile; `scanMemoryDirCached` fingerprint cache + git-root memo + a 1s fresh-window TTL (arch review C7: later scans in a turn skip the readdir+stat fingerprint pass; external edits are visible within ~1s — every internal write path invalidates explicitly); `eligibleMemories` = the recall candidate set (both layers, newest-first, absolute paths); `memoryKey` = the canonical `user-memory/<file>` / `memory/<file>` key |
 | `recall.ts` | **The RV deep module** (three entries: `onUserMessage` / `onTurnEnd` / `abort`). All session state derives from the projection history on every call (D9): hard dedup since the last `compactionSummary` (RV-06), read suppression from read toolCalls resolved against cwd (RV-07), byte budget from past `details.bytes` (RV-08), recentTools = succeeded-never-failed since the last user message (RV-13). Skill-wrapper stripping + length hygiene (RV-02); latest-wins supersede (RV-05); render with byte-safe truncation + path note; `RecallDetailsV1` (frozen, contract-pinned) |
 | `selector.ts` | `llmSelector` over the shared llm.ts lane: manifest = `[layer][type] key (age): description` newest-first capped at 200; precision-first prompt (empty list is a good answer); recentTools anti-noise rule; `resolveRecallModel` = exact provider/id → unique bare id → OFF (no session-model fallback, D3) |
 | `policy.ts` | Policy injection block (`POLICY_COMPACT`) |
 | `guard.ts` | Secret interceptor on memory-write paths (secret regexes incl. unquoted values / base64 padding) |
 | `yield.ts` | `InjectionGate` — static + dynamic yield probes (fail-open: injection failures never block a turn, P3-ME-09) |
 | `consolidate.ts` | Consolidation trigger/tool/command; writes via `memory_consolidate` (batch must reduce bytes or file count) |
-| `automation.ts` | P3 automation state + settings; per-session state reset on `session_start` (A1) | 
+| `automation.ts` | P3 automation state + settings (reads via `lib/settings` readJson, invariant 10); per-session state reset on `session_start` (A1); queue drain runs records in PARALLEL (`Promise.allSettled`, ≤5 — worst case 5×20s serial → max(20s); diagnostics aggregated to single-point writes) | 
 | `queue.ts` | Pending-extraction queue (spec 2026-10-03): the shutdown path stages the unextracted tail (cursor-relative suffix-60) as ONE atomic JSON record under `~/.pi/agent/memory-queue/`; the next same-project `session_start` drains it in the background (≤5 records, ≤3 attempts, exact `projectsDir` routing, age/size GC). The shutdown handler itself runs ZERO LLM — the host awaits shutdown handlers serially with no timeout, and the old awaited 10s flush measurably stalled every long-session exit. Records are a plaintext second copy of the session tail (≤7 days, ≤2MB total), disclosed here |
 | `importers.ts` | Claude / Hermes import; never overwrites local edits |
-| `store.ts`, `llm.ts`, `session-recall.ts`, `paths.ts` | V2 storage, the single LLM lane, cross-session recall (`session_recall` tool), path resolution |
+| `store.ts`, `llm.ts`, `paths.ts` | V2 storage (atomic write primitive invalidates the scan cache), the single LLM lane, path resolution (`sessionsDirFor` uses pi's wrapping-dash sessions naming `-${sanitize}-`) |
+| `session-recall.ts` | Cross-session recall (`session_recall` tool). Arch review C8: ASYNC bounded scan (no event-loop blocking) with three caps — ≤200 files (newest first), ≤1MB per file as a BOUNDED PARTIAL READ (never a whole-file skip: the newest sessions are usually the largest), ≤8MB total budget — plus a transparency footer (`scanned=… truncated_size=… budget=… bytes=…/…`; the narrow-your-query advice rides budget exhaustion only). The sessions-dir path fix made the tool work on real machines for the first time (it previously pointed at a directory pi never writes) |
 
 ## Invariants & gotchas
 
