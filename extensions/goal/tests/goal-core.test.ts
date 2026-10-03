@@ -42,7 +42,7 @@ test("goal display helpers derive labels and footer", () => {
 		objective: "=== Goal ===\nObjective: Build test scaffolding and split helpers",
 		status: "active",
 		autoContinue: true,
-		usage: { activeSeconds: 125, tokensUsed: 4_500 },
+		usage: { activeSeconds: 125, tokensUsed: 4_500, costUsed: 0 },
 		sisyphus: false,
 	};
 	assert.equal(statusLabel(goal), "running");

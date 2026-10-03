@@ -38,13 +38,13 @@ test("goal pool helpers sort open goals and resolve focused records", () => {
 
 test("mergeFocusedGoalWithDisk uses disk lifecycle but preserves monotonic usage", () => {
 	const merged = mergeFocusedGoalWithDisk({
-		memoryGoal: goal("g1", { status: "active", autoContinue: true, usage: { tokensUsed: 80, activeSeconds: 10 } }),
-		diskGoal: goal("g1", { status: "paused", autoContinue: false, usage: { tokensUsed: 50, activeSeconds: 20 }, pauseReason: "paused elsewhere" }),
+		memoryGoal: goal("g1", { status: "active", autoContinue: true, usage: { tokensUsed: 80, activeSeconds: 10, costUsed: 0 } }),
+		diskGoal: goal("g1", { status: "paused", autoContinue: false, usage: { tokensUsed: 50, activeSeconds: 20, costUsed: 0 }, pauseReason: "paused elsewhere" }),
 	});
 	assert.equal(merged.status, "paused");
 	assert.equal(merged.autoContinue, false);
 	assert.equal(merged.pauseReason, "paused elsewhere");
-	assert.deepEqual(merged.usage, { tokensUsed: 80, activeSeconds: 20 });
+	assert.deepEqual(merged.usage, { tokensUsed: 80, activeSeconds: 20, costUsed: 0 });
 });
 
 test("resolveSessionFocus prefers valid branch focus, then legacy goal, then single open goal", () => {
@@ -58,7 +58,7 @@ test("resolveSessionFocus prefers valid branch focus, then legacy goal, then sin
 	const legacyPool = goalPoolFromGoals([goal("g1")]);
 	assert.equal(resolveSessionFocus({ pool: legacyPool, legacyGoal: goal("legacy") }), "legacy");
 	assert.equal(legacyPool.has("legacy"), true);
-	const diskWinsPool = goalPoolFromGoals([goal("g1", { objective: "disk wins", usage: { tokensUsed: 50, activeSeconds: 3 } })]);
+	const diskWinsPool = goalPoolFromGoals([goal("g1", { objective: "disk wins", usage: { tokensUsed: 50, activeSeconds: 3, costUsed: 0 } })]);
 	assert.equal(resolveSessionFocus({ pool: diskWinsPool, legacyGoal: goal("g1", { objective: "stale legacy" }) }), "g1");
 	assert.equal(diskWinsPool.get("g1")?.objective, "disk wins");
 	assert.equal(diskWinsPool.get("g1")?.usage.tokensUsed, 50);

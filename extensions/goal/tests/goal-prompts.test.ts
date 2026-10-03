@@ -18,7 +18,7 @@ function goal(overrides = {}) {
 			autoContinue: true,
 			sisyphus: true,
 		}, Date.UTC(2026, 0, 2, 3, 4, 5)),
-		usage: { tokensUsed: 40, activeSeconds: 12 },
+		usage: { tokensUsed: 40, activeSeconds: 12, costUsed: 0 },
 		...overrides,
 	};
 }

@@ -23,7 +23,7 @@ test("createGoal builds stable goal records with fresh usage and requested mode"
 	assert.equal(goal.status, "active");
 	assert.equal(goal.autoContinue, true);
 	assert.equal(goal.sisyphus, false);
-	assert.deepEqual(goal.usage, { tokensUsed: 0, activeSeconds: 0 });
+	assert.deepEqual(goal.usage, { tokensUsed: 0, activeSeconds: 0, costUsed: 0 });
 	assert.equal(goal.createdAt, "2026-01-02T03:04:05.000Z");
 	assert.equal(goal.updatedAt, "2026-01-02T03:04:05.000Z");
 	assert.match(goal.id, /^[a-z0-9]+-[a-z0-9]+$/);
@@ -38,7 +38,7 @@ test("normalizeGoalRecord preserves known fields while sanitizing unsafe or miss
 		pauseReason: "blocked",
 		pauseSuggestedAction: "ask user",
 		autoContinue: false,
-		usage: { tokensUsed: 12.9, activeSeconds: 7.2 },
+		usage: { tokensUsed: 12.9, activeSeconds: 7.2, costUsed: 0.023 },
 		sisyphus: true,
 		activePath: ".pi/goals/active.md",
 		archivedPath: ".pi/goals/archived/old.md",
@@ -54,7 +54,7 @@ test("normalizeGoalRecord preserves known fields while sanitizing unsafe or miss
 	assert.equal(normalized.pauseReason, "blocked");
 	assert.equal(normalized.pauseSuggestedAction, "ask user");
 	assert.equal(normalized.autoContinue, false);
-	assert.deepEqual(normalized.usage, { tokensUsed: 12, activeSeconds: 7 });
+	assert.deepEqual(normalized.usage, { tokensUsed: 12, activeSeconds: 7, costUsed: 0.023 });
 	assert.equal(normalized.sisyphus, true);
 	assert.equal(normalized.activePath, ".pi/goals/active.md");
 	assert.equal(normalized.archivedPath, ".pi/goals/archived/old.md");

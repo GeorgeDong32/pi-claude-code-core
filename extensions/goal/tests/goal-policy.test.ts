@@ -26,7 +26,7 @@ function goal(overrides: Partial<GoalPolicyRecordLike> = {}): GoalPolicyRecordLi
 		objective: "=== Goal ===\nObjective: test",
 		status: "active",
 		autoContinue: true,
-		usage: { tokensUsed: 0, activeSeconds: 0 },
+		usage: { tokensUsed: 0, activeSeconds: 0, costUsed: 0 },
 		sisyphus: false,
 		updatedAt: "2026-05-12T00:00:00.000Z",
 		...overrides,

@@ -14,7 +14,7 @@ function goal(overrides: Partial<GoalWidgetRecord> = {}): GoalWidgetRecord {
 		objective: "=== Goal ===\nObjective: Componentize the goal widget\nSuccess criteria: tests pass",
 		status: "active",
 		autoContinue: true,
-		usage: { activeSeconds: 65, tokensUsed: 2500 },
+		usage: { activeSeconds: 65, tokensUsed: 2500, costUsed: 0 },
 		sisyphus: true,
 		activePath: ".pi/goals/active_goal.md",
 		...overrides,

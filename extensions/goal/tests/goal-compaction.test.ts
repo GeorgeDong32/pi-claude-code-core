@@ -11,7 +11,7 @@ function goal(overrides: Partial<GoalRecord> = {}): GoalRecord {
     objective: "=== Goal ===\nObjective: Build tests",
     status: "active",
     autoContinue: true,
-    usage: { activeSeconds: 120, tokensUsed: 5000 },
+    usage: { activeSeconds: 120, tokensUsed: 5000, costUsed: 0 },
     sisyphus: false,
     createdAt: "2024-01-01T00:00:00.000Z",
     updatedAt: "2024-01-01T00:00:00.000Z",
