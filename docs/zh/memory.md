@@ -20,8 +20,8 @@ spec 2026-10-02-memory-recall-v2)、守卫记忆写入路径、自动整合
 | `session_start` | 双层 reconcile + 设置加载 + 静态 yield 探测；**queue drain**（spec 2026-10-03）在设置就绪后后台触发（不占启动路径、按项目路由、永不 await）；automation 自身的 `session_start` 重置全部每会话闭包态（A1 —— 宿主在进程内 `/new`、`/resume`、`/fork` 后复用同一批 handler 闭包，不重置则已死的 AbortController 会在首次切换后静默杀死全部 automation） |
 | `before_agent_start` | 动态 yield 探测 → policy + 双层带帽索引;**RV prompt 路径** —— 每条用户消息一次选择(受 `recallWaitMs` 限时),块作为 custom message 持久化在用户消息之后 |
 | `message_end` | **RV steer 路径** —— run 中途到达的用户消息以等待 0 选择;custom 块永不触发(RV-01)。spec v1.2:挂起的选择**一完成即投递**(`sendMessage` `triggerTurn:false` 入 pi 的 pending 队列,下一个 turn_end 落盘 —— 最早 = 首条模型消息结束):run 内 request #2 起可见,run 结束则下一轮 request #1 可见。永不丢弃;`display:false` 保证两个 TUI 都不渲染 |
-| `turn_end` | 自动整合触发(V2-C)+ P3 automation(spec v1.2:召回投递不再按 turn 门控 —— 见 `message_end`) |
-| `agent_end` | spec v1.2:仅清 prompt 标记 —— 在途选择仍可完成后投递(下一轮可见);最新者胜的取代发生在下一条用户消息 |
+| `turn_end` | P3 automation 计数 + correction 门(≤1/3 turn;review 提取已挪 `agent_end`,2026-10-03;spec v1.2:召回投递不再按 turn 门控 —— 见 `message_end`) |
+| `agent_end` | spec v1.2:仅清 prompt 标记 —— 在途选择仍可完成后投递(下一轮可见);最新者胜的取代发生在下一条用户消息 + 后台 review 提取(2026-10-03 自 turn_end 挪入:完整 run 快照,≥10 turn / ≥15 tool call 门槛,suffix-60 窗口上限,空窗口守卫 —— 不再 run 中途提取,单 run 至多一次 LLM) |
 | `tool_call` | `guardMemoryWrites` 秘密拦截器(双层);已读抑制改为从历史推导(RV-07) |
 | `tool_result` | `memory_consolidate` settle + 陈旧读 staleness 标注 |
 | `agent_settled` | 清除整合进行中标记 |

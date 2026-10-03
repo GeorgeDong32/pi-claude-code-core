@@ -12,9 +12,11 @@
  *                        silently kill all automation after the first
  *                        in-process session switch)
  *   message_end (user)   correction regex gate (EN + CJK) → pending flag
- *   turn_end             correction (≤1 per 3 turns) + review (≥10 turns or
- *                        ≥15 tool calls, ≥3 user turns warmup), both
- *                        fire-and-forget with in-flight guards; directive
+ *   turn_end             correction only (≤1 per 3 turns) — review moved
+ *                        to agent_end (completed-run snapshots)
+ *   agent_end            review extraction (≥10 turns or ≥15 tool calls,
+ *                        ≥3 user turns warmup; suffix-60 window cap),
+ *                        fire-and-forget with in-flight guard; directive
  *                        turns are excluded from accounting
  *   session_before_compact  ZERO LLM — stages the unextracted tail as a
  *                        queue record through the same seam as shutdown
@@ -345,6 +347,8 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 	const drainBlacklist = new Set<string>();
 
 	const REVIEW_TURNS = 10;
+	/** Suffix cap for one run-end extraction (queue-clamp parity, 2026-10-03). */
+	const REVIEW_MAX_PARTS = 60;
 	const REVIEW_TOOL_CALLS = 15;
 	const CORRECTION_COOLDOWN_TURNS = 3;
 	const FLUSH_QUEUE_MS = 20_000;
@@ -475,35 +479,10 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 				turnsSinceCorrection++;
 			}
 
-			// review: turn OR tool-call threshold, warmup, single in-flight
-			const reviewDue = turnsSinceReview >= REVIEW_TURNS || toolCallsSinceReview >= REVIEW_TOOL_CALLS;
-			if (reviewDue && userTurnCount >= 3 && !reviewInFlight && !sessionAbort.signal.aborted) {
-				turnsSinceReview = 0;
-				toolCallsSinceReview = 0;
-				// AD5 mutex: the model wrote memory itself this window — skip
-				// the extraction pass (advance the cursor so it never replays)
-				if (modelWroteMemory) {
-					modelWroteMemory = false;
-					reviewCursorParts = allConversationParts(ctx).length;
-					state.reviews++;
-					state.lastReview = "skipped — model wrote memory this window";
-					return;
-				}
-				reviewInFlight = true;
-				const allParts = allConversationParts(ctx);
-				const parts = reviewCursorParts > allParts.length ? allParts : allParts.slice(reviewCursorParts);
-				reviewCursorParts = allParts.length;
-				void runOps("review", ctx, REVIEW_SYSTEM, parts)
-					.then((applied) => {
-						state.reviews++;
-						state.lastReview = applied > 0 ? `saved ${applied} op(s)` : "nothing durable";
-						if (applied > 0) notify(ctx, `💾 memory auto-reviewed (${applied} op${applied === 1 ? "" : "s"})`);
-					})
-					.catch(() => { /* P3-ME-09: fire-and-forget capture must never block the turn */ })
-					.finally(() => {
-						reviewInFlight = false;
-					});
-			}
+			// review: MOVED to agent_end (2026-10-03, user design call) — bulk
+			// extraction runs on a COMPLETED run, at most once per run; turn_end
+			// only keeps the counters (correction stays here: its 6-part window
+			// needs freshness within 3 turns).
 		} catch {
 			/* never block the turn */
 		}
@@ -538,6 +517,53 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 		state.lastFlush = `${label}: ${parts.length} part(s)`;
 		return parts.length;
 	};
+
+	// review extraction at RUN end (moved from turn_end, 2026-10-03):
+	// a completed run is the right snapshot unit (no mid-run extraction),
+	// at most one LLM pass per run, and the advanced cursor shrinks the
+	// shutdown/compact stage tail. Suffix-60 cap (queue-clamp parity) keeps
+	// a monster run's prompt bounded; the prefix stays beyond the cursor.
+	pi.on("agent_end", (_event, ctx: ExtensionContext) => {
+		try {
+			if (gate.state.yielded || !state.enabled) return;
+			const reviewDue = turnsSinceReview >= REVIEW_TURNS || toolCallsSinceReview >= REVIEW_TOOL_CALLS;
+			if (!reviewDue || userTurnCount < 3 || reviewInFlight || sessionAbort.signal.aborted) return;
+			// AD5 mutex: the model wrote memory itself this window — skip the
+			// extraction pass (advance the cursor so it never replays)
+			if (modelWroteMemory) {
+				modelWroteMemory = false;
+				reviewCursorParts = allConversationParts(ctx).length;
+				state.reviews++;
+				state.lastReview = "skipped — model wrote memory this window";
+				return;
+			}
+			const allParts = allConversationParts(ctx);
+			const from = Math.max(reviewCursorParts, allParts.length - REVIEW_MAX_PARTS);
+			const parts = reviewCursorParts > allParts.length ? [] : allParts.slice(from);
+			// nothing new since the cursor — reset the counters without an LLM call
+			if (parts.length === 0) {
+				turnsSinceReview = 0;
+				toolCallsSinceReview = 0;
+				return;
+			}
+			turnsSinceReview = 0;
+			toolCallsSinceReview = 0;
+			reviewInFlight = true;
+			reviewCursorParts = Math.max(reviewCursorParts, allParts.length);
+			void runOps("review", ctx, REVIEW_SYSTEM, parts)
+				.then((applied) => {
+					state.reviews++;
+					state.lastReview = applied > 0 ? `saved ${applied} op(s)` : "nothing durable";
+					if (applied > 0) notify(ctx, `💾 memory auto-reviewed (${applied} op${applied === 1 ? "" : "s"})`);
+				})
+				.catch(() => { /* P3-ME-09: fire-and-forget capture must never block the run */ })
+				.finally(() => {
+					reviewInFlight = false;
+				});
+		} catch {
+			/* never block */
+		}
+	});
 
 	// ZERO-LLM compact (arch review C2, 2026-10-03): staging instead of the
 	// old awaited flush — /compact must never wait on a side-channel

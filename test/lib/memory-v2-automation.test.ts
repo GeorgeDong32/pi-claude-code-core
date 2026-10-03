@@ -274,20 +274,33 @@ describe("V2-A correction automation", () => {
 
 describe("V2-A background review", () => {
 	it("fires after 10 turns with ≥3 user turns; ops applied to the right layer", async () => {
-		const h = harness(JSON.stringify({ operations: [{ action: "add", layer: "user", name: "pref-language", description: "replies in chinese", type: "user", body: "所有回复默认中文" }] }));
+		const h = harness(JSON.stringify({ operations: [{ action: "add", layer: "user", name: "pref-language", description: "replies in chinese", type: "user", body: "所有回复默认中文" }] }), { sessionEntries: [{ type: "message", message: { role: "user", content: [{ type: "text", text: "conv one" }] } }, { type: "message", message: { role: "assistant", content: [{ type: "text", text: "conv two" }] } }] });
 		for (let i = 0; i < 3; i++) await h.host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `hello ${i}` }] } }, h.ctx);
 		for (let i = 0; i < 10; i++) await h.host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, h.ctx);
+		await h.host.fire("agent_end", {}, h.ctx);
 		await until(() => h.state.reviews === 1);
 		expect(existsSync(join(udir, "pref-language.md"))).toBe(true);
 	});
 
+	it("review does NOT fire at turn_end alone — the run must END (2026-10-03 cadence change)", async () => {
+		const h = harness(OPS_JSON, { sessionEntries: [{ type: "message", message: { role: "user", content: [{ type: "text", text: "mid-run" }] } }] });
+		for (let i = 0; i < 3; i++) await h.host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `t ${i}` }] } }, h.ctx);
+		for (let i = 0; i < 10; i++) await h.host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, h.ctx);
+		await new Promise((r) => setTimeout(r, 50));
+		expect(h.state.reviews).toBe(0); // threshold hit, but the run is still in flight
+		expect(h.calls.length).toBe(0);
+		await h.host.fire("agent_end", {}, h.ctx);
+		await until(() => h.state.reviews === 1); // completed run = extraction snapshot
+	});
+
 	it("tool-call threshold (15) fires before the turn threshold", async () => {
-		const h = harness(OPS_JSON);
+		const h = harness(OPS_JSON, { sessionEntries: [{ type: "message", message: { role: "user", content: [{ type: "text", text: "conv one" }] } }, { type: "message", message: { role: "assistant", content: [{ type: "text", text: "conv two" }] } }] });
 		for (let i = 0; i < 3; i++) await h.host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `hi ${i}` }] } }, h.ctx);
 		// 3 turns × 5 toolCall blocks = 15
 		for (let i = 0; i < 3; i++) {
 			await h.host.fire("turn_end", { turnIndex: i, message: { role: "assistant", content: [{ type: "text", text: "t" }, ...Array.from({ length: 5 }, () => ({ type: "toolCall", name: "read" }))] }, toolResults: [] }, h.ctx);
 		}
+		await h.host.fire("agent_end", {}, h.ctx);
 		await until(() => h.state.reviews === 1);
 		expect(h.state.reviews).toBe(1);
 	});
@@ -296,6 +309,7 @@ describe("V2-A background review", () => {
 		const h = harness(OPS_JSON);
 		for (let i = 0; i < 2; i++) await h.host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `x ${i}` }] } }, h.ctx);
 		for (let i = 0; i < 12; i++) await h.host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, h.ctx);
+		await h.host.fire("agent_end", {}, h.ctx);
 		await new Promise((r) => setTimeout(r, 50));
 		expect(h.state.reviews).toBe(0);
 	});
@@ -414,6 +428,7 @@ describe("spec 2026-10-03 — queue write semantics", () => {
 		for (let i = 0; i < 3; i++) await h.host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `u ${i}` }] } }, h.ctx);
 		// fire a review so the cursor advances to the full branch length
 		for (let i = 0; i < 10; i++) await h.host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, h.ctx);
+		await h.host.fire("agent_end", {}, h.ctx);
 		await until(() => h.state.reviews === 1);
 		await h.host.fire("session_shutdown", { reason: "quit" }, h.ctx);
 		expect(qfiles()).toHaveLength(0);
@@ -521,18 +536,20 @@ describe("spec 2026-10-03 — queue drain", () => {
 
 describe("spec 2026-10-03 — A1 per-session reset (in-process session switch)", () => {
 	it("automation survives session_shutdown(reason:new) + session_start on the SAME instance", async () => {
-		const h = harness(OPS_JSON, { sessionId: "a1" });
+		const h = harness(OPS_JSON, { sessionId: "a1", sessionEntries: [{ type: "message", message: { role: "user", content: [{ type: "text", text: "conv one" }] } }, { type: "message", message: { role: "assistant", content: [{ type: "text", text: "conv two" }] } }] });
 		await h.host.fire("session_start", {}, h.ctx);
 		for (let i = 0; i < 3; i++) await h.host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `u ${i}` }] } }, h.ctx);
 		for (let i = 0; i < 10; i++) await h.host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, h.ctx);
+		await h.host.fire("agent_end", {}, h.ctx);
 		await until(() => h.state.reviews === 1);
 		await h.host.fire("session_shutdown", { reason: "new" }, h.ctx); // kills the controller…
-		const ctx2 = h.host.makeCtx({ cwd: project, ui: true, sessionEntries: [], sessionId: "a1" });
+		const ctx2 = h.host.makeCtx({ cwd: project, ui: true, sessionEntries: [{ type: "message", message: { role: "user", content: [{ type: "text", text: "conv one" }] } }, { type: "message", message: { role: "assistant", content: [{ type: "text", text: "conv two" }] } }], sessionId: "a1" });
 		ctx2.model = fakeModel;
 		ctx2.modelRegistry = fakeRegistry;
 		await h.host.fire("session_start", {}, ctx2); // …reset re-arms it
 		for (let i = 0; i < 3; i++) await h.host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `v ${i}` }] } }, ctx2);
 		for (let i = 0; i < 10; i++) await h.host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, ctx2);
+		await h.host.fire("agent_end", {}, ctx2);
 		await until(() => h.state.reviews === 2); // without the reset this times out
 	});
 });
@@ -631,7 +648,7 @@ describe("V2 Phase 2 (B3) — settle timing", () => {
 	it("tool_result settle keeps the turn directive-owned (no review counting); agent_settled re-opens accounting", async () => {
 		const host = new FakeHost();
 		memoryExtension(host.asPi());
-		const ctx = host.makeCtx({ cwd: project, ui: true });
+		const ctx = host.makeCtx({ cwd: project, ui: true, sessionEntries: [{ type: "message", message: { role: "user", content: [{ type: "text", text: "conv one" }] } }, { type: "message", message: { role: "assistant", content: [{ type: "text", text: "conv two" }] } }] });
 		ctx.model = fakeModel;
 		ctx.modelRegistry = fakeRegistry;
 		await host.fire("session_start", {}, ctx);
@@ -659,6 +676,7 @@ describe("V2 Phase 2 (B3) — settle timing", () => {
 		// turn fully settles → accounting re-opens; 10 fresh turns → one review
 		await host.fire("agent_settled", {}, ctx);
 		for (let i = 12; i <= 21; i++) await host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, ctx);
+		await host.fire("agent_end", {}, ctx);
 		await new Promise((r) => setTimeout(r, 80));
 		expect(await reviewsOf()).toBe(1);
 	});
@@ -691,6 +709,7 @@ describe("V2 Phase 3 (AD5) — extraction cursor + model-wrote mutex", () => {
 		// first review: full window
 		for (let i = 0; i < 3; i++) await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `u${i}` }] } }, ctx);
 		for (let i = 0; i < 10; i++) await host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, ctx);
+		await host.fire("agent_end", {}, ctx);
 		await until(() => state.reviews === 1);
 		expect(prompts.length).toBe(1);
 		expect(prompts[0]).toContain("window-one message 0");
@@ -702,6 +721,7 @@ describe("V2 Phase 3 (AD5) — extraction cursor + model-wrote mutex", () => {
 			})),
 		);
 		for (let i = 10; i < 20; i++) await host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, ctx);
+		await host.fire("agent_end", {}, ctx);
 		await until(() => state.reviews === 2);
 		expect(prompts.length).toBe(2);
 		expect(prompts[1]).not.toContain("window-one message 0");
@@ -720,18 +740,29 @@ describe("V2 Phase 3 (AD5) — extraction cursor + model-wrote mutex", () => {
 			state,
 			deps: { complete: (() => { calls.push("x"); return Promise.resolve({ stopReason: "stop", content: [{ type: "text", text: '{"operations":[]}' }] }); }) as never },
 		});
-		const ctx = host.makeCtx({ cwd: project, ui: true, sessionEntries: [] });
+		const entries: Array<{ type: string; message: { role: string; content: Array<{ type: string; text: string }> } }> = [
+			{ type: "message", message: { role: "user", content: [{ type: "text", text: "conv one" }] } },
+			{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "conv two" }] } },
+		];
+		const ctx = host.makeCtx({ cwd: project, ui: true, sessionEntries: entries });
 		ctx.model = fakeModel;
 		ctx.modelRegistry = fakeRegistry;
 		for (let i = 0; i < 3; i++) await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `u${i}` }] } }, ctx);
 		// the model writes into a memory layer → mutex arms
 		await host.fire("tool_call", { toolName: "write", input: { path: join(udir, "self.md"), content: "---\nname: s\ndescription: d\nmetadata:\n  type: user\n---\n\nb" } }, ctx);
 		for (let i = 0; i < 10; i++) await host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, ctx);
+		await host.fire("agent_end", {}, ctx);
 		await until(() => state.reviews === 1);
 		expect(calls.length).toBe(0); // no LLM pass
 		expect(state.lastReview).toContain("model wrote memory");
-		// next window without writes resumes LLM reviews
+		// next window without writes resumes LLM reviews (branch grows first,
+		// so the second window is non-empty — run-end extraction skips empty windows)
+		entries.push(
+			{ type: "message", message: { role: "user", content: [{ type: "text", text: "window-two a" }] } },
+			{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "window-two b" }] } },
+		);
 		for (let i = 10; i < 20; i++) await host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, ctx);
+		await host.fire("agent_end", {}, ctx);
 		await until(() => calls.length === 1);
 	});
 });
