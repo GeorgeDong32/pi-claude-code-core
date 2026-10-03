@@ -338,6 +338,29 @@ describe("P3-ME-07 session_recall", () => {
 		expect(r3.scannedFiles).toBe(MAX_FILES_PER_QUERY);
 		expect(r3.budgetExhausted).toBe(true);
 	});
+
+	it("C8/code-R1: hitting the limit CLOSES the reader generator (no abandoned fd)", async () => {
+		let finallyRuns = 0;
+		const hitLine = JSON.stringify({ type: "message", message: { role: "user", content: "needle found here" } });
+		const lines = [hitLine, hitLine, hitLine]; // more hits than the limit
+		const reader = async function* (): AsyncGenerator<{ line: string; number: number }, { bytes: number; truncated: boolean }> {
+			try {
+				for (const [i, l] of lines.entries()) yield { line: l, number: i + 1 };
+				return { bytes: 42, truncated: false };
+			} finally {
+				finallyRuns++; // runs on natural completion AND on iterator.return()
+			}
+		};
+		const r = await sessionRecall({
+			query: "needle",
+			cwd: project,
+			home,
+			limit: 1,
+			deps: { listSessionFiles: async () => ["only.jsonl"], readLinesBounded: reader as never },
+		});
+		expect(r.hits).toHaveLength(1);
+		expect(finallyRuns).toBe(1); // the limit-break resumed + closed the generator
+	});
 });
 
 describe("P3-ME-09 chmod-verified writability", () => {

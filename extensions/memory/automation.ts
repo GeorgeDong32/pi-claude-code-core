@@ -610,11 +610,26 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 	 * concurrent applies cannot lost-update the corpus under the event
 	 * loop). The serial version's infra-failure `return` aborted the WHOLE
 	 * drain; in parallel mode each record now runs best-effort alone. */
-	async function drainOneRecord(cap: DrainCap, staged: StagedRecord): Promise<void> {
+	interface DrainRecordSummary {
+		applied: number;
+		routedNotes: string[];
+		lastFlush?: string;
+		lastError?: string;
+	}
+
+	/** One staged record, best-effort (quickwin-3, arch review 2026-10-03:
+	 * records are independent — applyMemoryOps is fully synchronous, so
+	 * concurrent applies cannot lost-update the corpus under the event
+	 * loop). Returns a summary; STATE writes are aggregated by the caller
+	 * after allSettled (code review R1 P3-1 — no last-writer-wins races on
+	 * diagnostics). The serial version's infra-failure `return` aborted the
+	 * WHOLE drain; in parallel mode each record runs best-effort alone. */
+	async function drainOneRecord(cap: DrainCap, staged: StagedRecord): Promise<DrainRecordSummary> {
+		const summary: DrainRecordSummary = { applied: 0, routedNotes: [] };
 		// B4: persist the attempt BEFORE the call — a SIGKILL mid-call counts
 		if (!bumpAttempts(cap.d.agentDir, staged)) {
 			drainBlacklist.add(staged.file);
-			return;
+			return summary;
 		}
 		let completion: OpsCompletion;
 		try {
@@ -631,33 +646,30 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 				{ complete: cap.complete },
 			);
 		} catch {
-			return; // infra failure — record retained (attempt already counted)
+			return summary; // infra failure — record retained (attempt already counted)
 		}
 		if (completion.ok) {
 			if (completion.ops.length > 0) {
 				const routedNotes: string[] = [];
 				const outcome = applyMemoryOps(completion.ops as MemoryOp[], cap.d, { projectKey: cap.projectKey, routedNotes });
-				if (routedNotes.length > 0) {
-					state.routed += routedNotes.length;
-					state.lastRouted = routedNotes.join("; ");
-				}
-				state.opsApplied += outcome.applied;
-				state.flushes++;
-				state.lastFlush = `flush-queued: ${outcome.applied} op(s)`;
+				summary.applied = outcome.applied;
+				summary.routedNotes = routedNotes;
+				summary.lastFlush = `flush-queued: ${outcome.applied} op(s)`;
 				if (outcome.error) {
 					// B2 apply-fatal: deterministic disk-layer error — retrying
 					// cannot fix it, so CONSUME (drop) with a diagnostic
 					removeRecord(cap.d.agentDir, staged.file);
-					state.lastError = `flush-queued: ${outcome.error}`;
-					return;
+					summary.lastError = `flush-queued: ${outcome.error}`;
+					return summary;
 				}
 			}
 			removeRecord(cap.d.agentDir, staged.file);
 		} else if (staged.record.attempts >= QUEUE_MAX_ATTEMPTS) {
 			removeRecord(cap.d.agentDir, staged.file);
-			state.lastError = `flush-queued: dropped after ${staged.record.attempts} attempts (${completion.reason ?? "failed"})`;
+			summary.lastError = `flush-queued: dropped after ${staged.record.attempts} attempts (${completion.reason ?? "failed"})`;
 		}
 		// else: LLM failure with attempts left — retain for the next session
+		return summary;
 	}
 
 	async function drainPendingRecords(cap: DrainCap): Promise<void> {
@@ -684,7 +696,23 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 		// 100s of background drain); Promise.allSettled runs them in parallel
 		// (worst case max(20s)). QUEUE_DRAIN_MAX still counts only eligible
 		// records — blacklist/projectsDir/attempts-cap skips never consume it.
-		await Promise.allSettled(eligible.map((staged) => drainOneRecord(cap, staged)));
+		const settled = await Promise.allSettled(eligible.map((staged) => drainOneRecord(cap, staged)));
+		// single-point state aggregation (code review R1 P3-1): diagnostics are
+		// written once, in record order — no last-writer-wins across awaits.
+		for (const outcome of settled) {
+			if (outcome.status !== "fulfilled") continue;
+			const summary = outcome.value;
+			if (summary.routedNotes.length > 0) {
+				state.routed += summary.routedNotes.length;
+				state.lastRouted = summary.routedNotes.join("; ");
+			}
+			if (summary.applied > 0) {
+				state.opsApplied += summary.applied;
+				state.flushes++;
+				state.lastFlush = summary.lastFlush;
+			}
+			if (summary.lastError) state.lastError = summary.lastError;
+		}
 	}
 
 	// ZERO-LLM shutdown (spec 2026-10-03): stage the unextracted tail as a
