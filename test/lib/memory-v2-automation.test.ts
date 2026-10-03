@@ -301,16 +301,22 @@ describe("V2-A background review", () => {
 });
 
 describe("V2-A flush", () => {
-	it("session_before_compact awaits a flush and records it", async () => {
+	it("session_before_compact stages the queue with ZERO LLM calls", async () => {
 		const entries = [
 			{ type: "message", message: { role: "user", content: "关于构建流程" } },
 			{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "bun run check" }] } },
 		];
-		const h = harness(OPS_JSON, { sessionEntries: entries });
+		const h = harness(OPS_JSON, { sessionEntries: entries, sessionId: "sess-compact-1" });
 		for (let i = 0; i < 3; i++) await h.host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `z ${i}` }] } }, h.ctx);
 		await h.host.fire("session_before_compact", { reason: "manual", signal: new AbortController().signal }, h.ctx);
+		expect(h.calls.length).toBe(0); // ZERO side-channel LLM on the compact path (C2)
 		expect(h.state.flushes).toBe(1);
-		expect(h.state.lastFlush).toContain("compact");
+		expect(h.state.lastFlush).toContain("compact-queued");
+		const files = existsSync(queueDir(agentDir)) ? readdirSync(queueDir(agentDir)).filter((f) => f.endsWith(".json")) : [];
+		expect(files).toHaveLength(1);
+		const rec = JSON.parse(readFileSync(join(queueDir(agentDir), files[0]!), "utf-8")) as QueueRecord;
+		expect(rec.sessionId).toBe("sess-compact-1");
+		expect(rec.parts).toHaveLength(2); // cursor never advanced → whole window
 	});
 
 	it("session_shutdown: reload skips (no record), quit stages the queue with ZERO LLM calls", async () => {
@@ -334,14 +340,13 @@ describe("V2-A flush", () => {
 		expect(existsSync(join(queueDir(agentDir), files[0]!.replace(/\.json$/, ".tmp")))).toBe(false); // no tmp residue
 	});
 
-	it("a failed flush never throws into the compact handler", async () => {
-		const h = harness("", {
-			complete: (async () => ({ stopReason: "error", errorMessage: "provider down", content: [] })) as never,
-			sessionEntries: [{ type: "message", message: { role: "user", content: "x" } }],
-		});
+	it("compact staging is fail-open: nothing to stage / aborted signal never throws", async () => {
+		const h = harness(OPS_JSON, { sessionEntries: [], sessionId: "sess-compact-2" });
 		for (let i = 0; i < 3; i++) await h.host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `v ${i}` }] } }, h.ctx);
 		await expect(h.host.fire("session_before_compact", { reason: "manual", signal: new AbortController().signal }, h.ctx)).resolves.toBeUndefined();
-		expect(h.state.lastError).toContain("flush");
+		await expect(h.host.fire("session_before_compact", { reason: "manual", signal: AbortSignal.abort() }, h.ctx)).resolves.toBeUndefined();
+		expect(h.state.flushes).toBe(0);
+		expect(existsSync(queueDir(agentDir))).toBe(false);
 	});
 });
 

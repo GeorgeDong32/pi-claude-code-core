@@ -16,7 +16,11 @@
  *                        ≥15 tool calls, ≥3 user turns warmup), both
  *                        fire-and-forget with in-flight guards; directive
  *                        turns are excluded from accounting
- *   session_before_compact  flush, awaited, 60s, follows event.signal
+ *   session_before_compact  ZERO LLM — stages the unextracted tail as a
+ *                        queue record through the same seam as shutdown
+ *                        (the old awaited 60s flush relocated the exit
+ *                        stall to every /compact; compaction does not need
+ *                        the extraction to complete synchronously)
  *   session_shutdown     ZERO LLM — stages the unextracted tail as a queue
  *                        record (queue.ts) instead of the old awaited 10s
  *                        flush; the host awaits shutdown handlers
@@ -318,9 +322,6 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 	const REVIEW_TURNS = 10;
 	const REVIEW_TOOL_CALLS = 15;
 	const CORRECTION_COOLDOWN_TURNS = 3;
-	const FLUSH_COMPACT_MS = 60_000;
-	// queue drain lane: offline (no user waiting), so the budget is looser
-	// than the old 10s shutdown cap
 	const FLUSH_QUEUE_MS = 20_000;
 	const QUEUE_DRAIN_MAX = 5;
 	const QUEUE_MAX_ATTEMPTS = 3;
@@ -345,7 +346,7 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 		].join("\n");
 
 	async function runOps(
-		kind: "review" | "correction" | "flush",
+		kind: "review" | "correction",
 		ctx: ExtensionContext,
 		systemPrompt: string,
 		parts: ConversationPart[],
@@ -483,20 +484,47 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 		}
 	});
 
-	pi.on("session_before_compact", async (event, ctx: ExtensionContext) => {
+	/** ZERO-LLM staging (spec 2026-10-03 seam): the unextracted tail
+	 * becomes ONE queue record — a bounded synchronous disk write, drained
+	 * at the next session_start. Shared by session_before_compact and
+	 * session_shutdown so the two paths can never drift. Returns the staged
+	 * part count (0 = nothing unextracted / gates refused). */
+	const stageUnextractedTail = (ctx: ExtensionContext, label: string): number => {
+		if (gate.state.yielded || !state.enabled) return 0;
+		if (userTurnCount < 3) return 0;
+		const allParts = allConversationParts(ctx);
+		// shrink-guard (fork/branch retraction), then the SUFFIX window —
+		// the tail's LAST parts are the unextracted ones (A2)
+		const unextracted = reviewCursorParts > allParts.length ? allParts : allParts.slice(reviewCursorParts);
+		const parts = clampQueueParts(unextracted);
+		if (parts.length === 0) return 0;
+		const d = dirs(ctx);
+		writeQueueRecord(d.agentDir, {
+			v: QUEUE_V,
+			sessionId: sessionIdOf(ctx),
+			projectsDir: d.projectsDir,
+			projectKey: projectKeyForDir(d.project),
+			cwd: ctx.cwd ?? process.cwd(),
+			savedAt: Date.now(),
+			attempts: 0,
+			parts,
+		});
+		state.flushes++;
+		state.lastFlush = `${label}: ${parts.length} part(s)`;
+		return parts.length;
+	};
+
+	// ZERO-LLM compact (arch review C2, 2026-10-03): staging instead of the
+	// old awaited flush — /compact must never wait on a side-channel
+	// generation (~10s typical) it does not need.
+	pi.on("session_before_compact", (event, ctx: ExtensionContext) => {
 		try {
-			if (gate.state.yielded || !state.enabled) return;
-			if (userTurnCount < 3) return;
 			const signal = (event as { signal?: AbortSignal }).signal;
 			if (signal?.aborted) return;
-			const parts = conversationParts(ctx, 60);
-			if (parts.length === 0) return;
-			const applied = await runOps("flush", ctx, FLUSH_SYSTEM, parts, FLUSH_COMPACT_MS, signal);
-			state.flushes++;
-			state.lastFlush = `compact: ${applied} op(s)`;
-			if (applied > 0) notify(ctx, `💾 memory flush before compact saved ${applied} op(s)`);
-		} catch {
-			/* compaction must never be blocked by a failed flush */
+			stageUnextractedTail(ctx, "compact-queued");
+		} catch (err) {
+			state.lastError = `compact-queued: ${err instanceof Error ? err.message : String(err)}`;
+			/* compaction must never be blocked by staging */
 		}
 	});
 
@@ -623,28 +651,9 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 	pi.on("session_shutdown", (event, ctx: ExtensionContext) => {
 		try {
 			const reason = (event as { reason?: string }).reason;
-			if (reason === "reload") return; // reload keeps the same conversation
-			if (gate.state.yielded || !state.enabled) return;
-			if (userTurnCount < 3) return;
-			const allParts = allConversationParts(ctx);
-			// shrink-guard (fork/branch retraction), then the SUFFIX window —
-			// the tail's LAST parts are the unextracted ones (A2)
-			const unextracted = reviewCursorParts > allParts.length ? allParts : allParts.slice(reviewCursorParts);
-			const parts = clampQueueParts(unextracted);
-			if (parts.length === 0) return;
-			const d = dirs(ctx);
-			writeQueueRecord(d.agentDir, {
-				v: QUEUE_V,
-				sessionId: sessionIdOf(ctx),
-				projectsDir: d.projectsDir,
-				projectKey: projectKeyForDir(d.project),
-				cwd: ctx.cwd ?? process.cwd(),
-				savedAt: Date.now(),
-				attempts: 0,
-				parts,
-			});
-			state.flushes++;
-			state.lastFlush = `queued: ${parts.length} part(s)`;
+			// reload keeps the same conversation — no record; every other exit
+			// stages through the shared seam (spec 2026-10-03)
+			if (reason !== "reload") stageUnextractedTail(ctx, "queued");
 		} catch {
 			/* never block shutdown */
 		} finally {

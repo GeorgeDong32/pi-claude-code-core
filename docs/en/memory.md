@@ -34,7 +34,8 @@ of the 30× cache-miss cost and the frozen-selection re-injection (RC-1/RC-2).
 
 **Configuration** (`~/.pi/agent/settings.json`, `memory` key):
 - `model` (string, `"provider/id"`): ops side-channel model (review /
-  correction / compact flush / queue drain). Fallback chain (spec
+  correction / queue drain — compact and shutdown only STAGE queue records,
+  zero LLM). Fallback chain (spec
   2026-10-03): `model` → `recallModel` → session model — an unresolvable
   ref falls through to the next candidate, never straight back to the slow
   session model. Deliberate asymmetry vs D3: recall treats `recallModel`

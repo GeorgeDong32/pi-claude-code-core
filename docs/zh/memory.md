@@ -32,7 +32,7 @@ spec 2026-10-02-memory-recall-v2)、守卫记忆写入路径、自动整合
 「冻结选集反复重投」两大病灶的根因(RC-1/RC-2)。
 
 **配置**(`~/.pi/agent/settings.json`,`memory` 键):
-- `model`(字符串,`"provider/id"`):ops 侧通道模型(review/correction/compact flush/queue drain)。回退链(spec 2026-10-03):`model` → `recallModel` → 会话模型 —— 无法解析的 ref 会继续尝试下一候选，绝不直接甩回慢的会话模型。与 D3 的不对称是刻意的：recall 把 `recallModel` 当**必备质量门**（未配 = 不召回），ops 把它当**廉价通道偏好**（解析不到 → 会话模型，不算失败）；因此 ops 的输出质量随所配 `recallModel` 的模型而定（已披露）。
+- `model`(字符串,`"provider/id"`):ops 侧通道模型(review/correction/queue drain —— compact 与 shutdown 只 stage 队列记录，零 LLM)。回退链(spec 2026-10-03):`model` → `recallModel` → 会话模型 —— 无法解析的 ref 会继续尝试下一候选，绝不直接甩回慢的会话模型。与 D3 的不对称是刻意的：recall 把 `recallModel` 当**必备质量门**（未配 = 不召回），ops 把它当**廉价通道偏好**（解析不到 → 会话模型，不算失败）；因此 ops 的输出质量随所配 `recallModel` 的模型而定（已披露）。
 - `recallModel`(字符串,`"provider/id"`):选择器模型。**召回必须显式配置
   —— 未设置或无法解析 = 不召回**(D3,无词法回退)。
 - `recallWaitMs`(数字,spec v1.2 起**默认 0**,钳制 0–15000):prompt 路径每消息的选择器等待预算。0 = 永不因选择器阻塞上屏 —— 块经完成驱动的 pending 落盘到达;正值 = 用上屏延迟换 request-#1 召回。
