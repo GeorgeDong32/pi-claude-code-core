@@ -388,6 +388,7 @@ describe("permission-modes extension: tool_call gate", () => {
 
 	beforeEach(async () => {
 		pi = createFakePi()
+
 		configTmp = mkdtempSync(join(tmpdir(), "pm-idx-cfg-"))
 		setConfigPath(join(configTmp, "permission-modes.json"))
 		writeFileSync(
@@ -418,6 +419,13 @@ describe("permission-modes extension: tool_call gate", () => {
 	}
 
 	describe("pi 0.99 meta tools and MCP shape (SPEC META-04)", () => {
+		it("registration surface: alt+t belongs to effort, NOT modes (C5); alt+i stays via profile-apply", () => {
+			// registerShortcut is a per-extension Map.set — a double registration
+			// would silently coexist, so this negative pin is the move's teeth.
+			expect(pi.shortcuts.has("alt+t")).toBe(false);
+			expect(pi.shortcuts.has("alt+i")).toBe(true);
+		});
+
 		it("plan: tool_search allowed (retrieval only)", async () => {
 			await switchMode("plan")
 			const result = await callToolCall("tool_search", { query: "jira" })
