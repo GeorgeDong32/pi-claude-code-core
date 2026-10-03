@@ -12,7 +12,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { writeProjectPermissionsFile } from "../../extensions/modes/permissions-loader.ts";
-import { getPlanFilePath } from "../../extensions/modes/utils.ts";
+import { getPlanFilePath } from "../../extensions/modes/plan.ts";
 import { modelsPath } from "../../extensions/modes/profiles.ts";
 import { GOALS_DIR, ARCHIVED_GOALS_DIR, makeActiveGoalPath } from "../../extensions/goal/storage/goal-files.ts";
 import { GOAL_LEDGER_FILE } from "../../extensions/goal/goal-ledger.ts";

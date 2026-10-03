@@ -27,11 +27,8 @@ import { coreBus } from "../../extensions/bus.ts";
 import { setConfigPath } from "./config.ts"
 import { writeProjectPermissionsFile } from "./permissions-loader.ts"
 import { setModelsPath } from "./profiles.ts"
-import {
-	listTrackedOutsideWrites,
-	type OutsideWriteSnapshot,
-} from "./utils.ts"
-import { writePlanFile } from "./utils.ts"
+import { OutsideWriteSnapshot, listTrackedOutsideWrites } from "./outside-writes.ts"
+import { writePlanFile } from "./plan.ts"
 import {
 	listPendingRequests,
 	setAgentDirForTests,

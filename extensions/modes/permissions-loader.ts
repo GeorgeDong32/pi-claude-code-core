@@ -11,7 +11,7 @@ import {
 	loadPermissionModesConfig,
 	type PermissionModesConfig,
 } from "./config.ts"
-import { getProjectId } from "./utils.ts"
+import { getProjectId } from "./path-safety.ts"
 import {
 	type PermissionBehavior,
 	type PermissionRule,

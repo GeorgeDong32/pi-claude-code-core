@@ -91,40 +91,13 @@ import {
   suggestAllowRuleForToolCall,
   type PermissionRule,
 } from "./permissions.ts";
-import {
-  checkAutoRisk,
-  commandReferencesSensitivePath,
-  ensurePlanFile,
-  extractPlanSection,
-  extractTodoItems,
-  filterSkillsFromPrompt,
-  filterSubstantivePlanItems,
-  findProjectRoot,
-  formatCount,
-  getPlanFilePath,
-  hashPlan,
-  injectModePrompt,
-  isAutoFallbackBash,
-  classifyBashTiers,
-  isOutsideCwd,
-  isPlanFilePath,
-  isSafeCommand,
-  isSensitivePath,
-  listTrackedOutsideWrites,
-  markCompletedSteps,
-  popTrackedOutsideWrite,
-  readPlanFile,
-  resolveModePrompt,
-  resolveWorkspacePath,
-  restoreOutsideWrite,
-  shouldSyncAssistantPlanToFile,
-  trackOutsideWrite,
-  writePlanFile,
-  type OutsideWriteSnapshot,
-  type PermissionMode,
-  type PlanPhase,
-  type TodoItem,
-} from "./utils.ts";
+import { checkAutoRisk } from "./auto-risk.ts";
+import { classifyBashTiers, isAutoFallbackBash, isSafeCommand } from "./bash-analysis.ts";
+import { PermissionMode, PlanPhase, filterSkillsFromPrompt, injectModePrompt, resolveModePrompt } from "./mode-prompt.ts";
+import { OutsideWriteSnapshot, listTrackedOutsideWrites, popTrackedOutsideWrite, restoreOutsideWrite, trackOutsideWrite } from "./outside-writes.ts";
+import { commandReferencesSensitivePath, findProjectRoot, isOutsideCwd, isSensitivePath } from "./path-safety.ts";
+import { TodoItem, ensurePlanFile, extractPlanSection, extractTodoItems, filterSubstantivePlanItems, getPlanFilePath, hashPlan, isPlanFilePath, markCompletedSteps, readPlanFile, resolveWorkspacePath, shouldSyncAssistantPlanToFile, writePlanFile } from "./plan.ts";
+import { formatCount } from "./ui/format.ts";
 import {
   runPlanApprovalDialog,
 } from "./ui/plan-approval-dialog.ts";

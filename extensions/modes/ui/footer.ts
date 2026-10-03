@@ -5,7 +5,7 @@
 import { homedir } from "node:os";
 import { visibleWidth, truncateToWidth } from "@earendil-works/pi-tui";
 import { MODE_META } from "./meta.ts";
-import type { PermissionMode } from "../utils.ts";
+import type { PermissionMode } from "../mode-prompt.ts";
 
 /** Render-time footer inputs (passed as a getter so renders stay fresh). */
 export interface ModesFooterState {

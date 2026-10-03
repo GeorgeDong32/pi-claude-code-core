@@ -35,7 +35,12 @@
 | auto 分类器 | `classifier-client.ts`、`classifier-prompt.ts`、`classifier-prompts/`、`classifier-transcript.ts`、`classifier-tool*.ts`、`classifier-redact.ts`、`classifier-messages.ts` | auto 模式的可选 LLM 分类器;读取 AGENTS.md 上下文、脱敏、缓存裁定 |
 | 子代理集成 | `permission-forwarding.ts`、`mode-inherit.ts` | 审批转发经 `~/.pi/agent/sessions/permission-modes-forwarding/sessions/<id>/{requests,responses}`(P0-CT-05);`PERMISSION_MODES_INHERITED_MODE` 继承(P0-CT-04) |
 | Profiles | `profiles.ts` | 模型 profile(`provider/model[:effort]` 经 `lib/model-id.ts`);未设置时 `applyProfileModelForMode` 返回 undefined——没有静默 medium 默认 |
-| Plan 模式 | `session-branch.ts`、`branch-stats.ts`、`fusion-tools.ts`、`injection-probe.ts`、`denial-tracking.ts`、`config.ts`、`config-cache.ts`、`utils.ts` | plan 阶段跟踪、会话分支、working stats |
+| Plan 模式 | `session-branch.ts`、`branch-stats.ts`、`fusion-tools.ts`、`injection-probe.ts`、`denial-tracking.ts`、`config.ts`、`config-cache.ts`、`plan.ts` | plan 阶段跟踪、会话分支、working stats |
+| Bash 风险分析 | `bash-analysis.ts` | safe/destructive/auto-fallback/auto-approvable 分级裁决（自旧 `utils.ts` 拆出，arch review C3） |
+| 路径安全与项目身份 | `path-safety.ts` | outside-cwd/敏感路径检测；project root/id/tmp-dir（自 `utils.ts` 拆出） |
+| Outside-write 快照 | `outside-writes.ts` | `<ts>__<hash>.json` track/list/restore/pop 引擎（自 `utils.ts` 拆出；命令层在 `index.ts`） |
+| Mode prompt 手术 | `mode-prompt.ts` | 锚点式 mode 提醒注入 + skill 块过滤（自 `utils.ts` 拆出） |
+| Auto 风险 | `auto-risk.ts` | auto 模式的 bash 分类模式 + outside-cwd 写入风险（自 `utils.ts` 拆出） |
 | UI | `ui/footer.ts`、`ui/meta.ts`、`ui/confirm.ts`、`ui/plan-widget.ts`、`ui/plan-approval-dialog.ts` | `MODE_META` 单点维护 icon/label/role(总线 `meta` 通道) |
 
 ## 不变量与坑

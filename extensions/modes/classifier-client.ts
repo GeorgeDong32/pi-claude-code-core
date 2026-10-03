@@ -25,6 +25,7 @@ import {
 	type ClassifierStage,
 } from "./config.ts"
 import { redactForClassifier } from "./classifier-redact.ts"
+import { liftJson } from "../../lib/json-lift.ts"
 import {
 	CLASSIFIER_TOOL_NAME,
 	classifierResultTool,
@@ -345,61 +346,6 @@ function verdictFromParsedObject(
 	return null
 }
 
-function repairJsonCandidate(raw: string): string {
-	return raw.replace(/^\uFEFF/, "").replace(/,\s*([}\]])/g, "$1")
-}
-
-function findBalancedJsonObjects(text: string): string[] {
-	const results: string[] = []
-	for (let i = 0; i < text.length; i++) {
-		if (text[i] !== "{") continue
-		let depth = 0
-		let inString = false
-		let escaped = false
-		for (let j = i; j < text.length; j++) {
-			const ch = text[j]!
-			if (inString) {
-				if (escaped) escaped = false
-				else if (ch === "\\") escaped = true
-				else if (ch === '"') inString = false
-				continue
-			}
-			if (ch === '"') {
-				inString = true
-				continue
-			}
-			if (ch === "{") depth++
-			else if (ch === "}") {
-				depth--
-				if (depth === 0) {
-					results.push(text.slice(i, j + 1))
-					break
-				}
-			}
-		}
-	}
-	return results
-}
-
-function collectJsonCandidates(text: string): string[] {
-	const trimmed = text.trim()
-	const candidates: string[] = []
-	const fenced = [...trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)]
-	for (const match of fenced) {
-		const inner = match[1]?.trim()
-		if (inner) candidates.push(inner)
-	}
-	candidates.push(...findBalancedJsonObjects(trimmed))
-	if (candidates.length === 0) {
-		const start = trimmed.indexOf("{")
-		const end = trimmed.lastIndexOf("}")
-		if (start !== -1 && end > start) {
-			candidates.push(trimmed.slice(start, end + 1))
-		}
-	}
-	return [...new Set(candidates)]
-}
-
 function extractReason(text: string): string | undefined {
 	return (
 		text.match(/["']reason["']\s*:\s*"([^"]*)"/i)?.[1] ??
@@ -437,18 +383,14 @@ export function parseClassifierVerdict(text: string): ClassifierVerdict | null {
 	const trimmed = text.trim()
 	if (!trimmed) return null
 
-	for (const candidate of collectJsonCandidates(trimmed)) {
-		for (const variant of [candidate, repairJsonCandidate(candidate)]) {
-			try {
-				const parsed = JSON.parse(variant) as Record<string, unknown>
-				const verdict = verdictFromParsedObject(parsed)
-				if (verdict) return verdict
-			} catch {
-				// try next candidate
-			}
-		}
-	}
-
+	// C4 (2026-10-03): fence handling, string-aware spans, candidate order
+	// and BOM/trailing-comma repair live in lib/json-lift; only the verdict
+	// payload shape is validated here.
+	const verdict = liftJson(trimmed, (value) => {
+		if (typeof value !== "object" || value === null || Array.isArray(value)) return null
+		return verdictFromParsedObject(value as Record<string, unknown>)
+	})
+	if (verdict) return verdict
 	return regexVerdictFallback(trimmed)
 }
 

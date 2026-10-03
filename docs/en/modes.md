@@ -35,7 +35,12 @@ Claude-Code-style permission modes for pi, cycled with Shift+Tab:
 | Auto classifier | `classifier-client.ts`, `classifier-prompt.ts`, `classifier-prompts/`, `classifier-transcript.ts`, `classifier-tool*.ts`, `classifier-redact.ts`, `classifier-messages.ts` | Optional LLM classifier for auto mode; reads AGENTS.md context, redacts secrets, caches verdicts |
 | Subagent integration | `permission-forwarding.ts`, `mode-inherit.ts` | Approval forwarding via `~/.pi/agent/sessions/permission-modes-forwarding/sessions/<id>/{requests,responses}` (P0-CT-05); `PERMISSION_MODES_INHERITED_MODE` inheritance (P0-CT-04) |
 | Profiles | `profiles.ts` | Model profiles (`provider/model[:effort]` via `lib/model-id.ts`); `applyProfileModelForMode` returns undefined when unset — no silent medium default |
-| Plan mode | `session-branch.ts`, `branch-stats.ts`, `fusion-tools.ts`, `injection-probe.ts`, `denial-tracking.ts`, `config.ts`, `config-cache.ts`, `utils.ts` | Plan phase tracking, session branching, working stats |
+| Plan mode | `session-branch.ts`, `branch-stats.ts`, `fusion-tools.ts`, `injection-probe.ts`, `denial-tracking.ts`, `config.ts`, `config-cache.ts`, `plan.ts` | Plan phase tracking, session branching, working stats |
+| Bash risk analysis | `bash-analysis.ts` | Tiered safe/destructive/auto-fallback/auto-approvable adjudication (carved from the old `utils.ts`, arch review C3) |
+| Path safety & project identity | `path-safety.ts` | Outside-cwd/sensitive-path detection; project root/id/tmp-dir (carved from `utils.ts`) |
+| Outside-write snapshots | `outside-writes.ts` | `<ts>__<hash>.json` track/list/restore/pop engine (carved from `utils.ts`; command layer in `index.ts`) |
+| Mode prompt surgery | `mode-prompt.ts` | Anchored mode-reminder injection + skill-block filtering (carved from `utils.ts`) |
+| Auto risk | `auto-risk.ts` | Bash category patterns + outside-cwd write risk for auto mode (carved from `utils.ts`) |
 | UI | `ui/footer.ts`, `ui/meta.ts`, `ui/confirm.ts`, `ui/plan-widget.ts`, `ui/plan-approval-dialog.ts` | `MODE_META` single-sources icon/label/role (bus `meta` channel) |
 
 ## Invariants & gotchas

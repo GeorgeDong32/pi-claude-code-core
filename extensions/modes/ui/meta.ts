@@ -6,7 +6,7 @@
  * footer). Moved here from index.ts at DC3: presentation material lives
  * with the presentation layer.
  */
-import type { PermissionMode } from "../utils.ts";
+import type { PermissionMode } from "../mode-prompt.ts";
 
 export const MODE_META: Record<PermissionMode, { icon: string; label: string; role: string }> = {
   ask: { icon: "●", label: "Ask", role: "muted" },

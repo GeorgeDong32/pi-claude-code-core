@@ -2,7 +2,7 @@
  * Bash permission rule matching (CC bashPermissions.ts subset).
  */
 
-import { splitShellSegments } from "./utils.ts"
+import { splitShellSegments } from "./bash-analysis.ts"
 import {
 	matchShellRule,
 	parsePermissionRule,
