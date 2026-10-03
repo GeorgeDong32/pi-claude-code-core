@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Added (goal cost accounting — spec 2026-10-04-goal-cost-accounting)
+- **Goal usage now carries USD cost alongside tokens**: `GoalUsage.costUsed` (fractional, upgrade-safe — pre-cost records read as 0) accumulates `usage.cost.total` from parent assistant turns AND from `tool_result` events that report execution usage (subagent runs, codemode `models.classify`/`generateImages`). Fixes the structural undercount verified 2026-10-03: three reviewer subagents (1.94M tokens / $0.49) were invisible to the goal ledger because only `role==assistant` messages were counted. Cost renders in the goal footer, one-line summary, `/goal` panel, compaction summary, pool list, "goal achieved" line, and archive report (2 decimals ≥$1, 3 below — flash-tier rounds read $0.023, not $0.02).
+
 ### Changed (pi 1.0.x adaptation — spec 2026-10-03-pi-1.0-adaptation)
 - **Host compatibility widened to pi 1.x**: all four `@earendil-works/*` devDependencies move 0.99.1 → 1.0.1, and the three earendil peerDependencies open their ceiling from `<1.0.0` to `<2.0.0` (floors unchanged). Verified additive-only for every symbol core imports (pi-tui export lines extended, pi-ai/pi-agent-core no removals); the contract suite's real-package imports (`pi-host-semantics` ③④⑤⑥) now run against 1.0.1. Recorded as DEVIATIONS #97.
 - **codemode interaction pinned** (2 new tests in modes): ask mode passes the `codemode` tool body silently — by design, since a script's nested tool calls go through the full agent tool pipeline (`tool_call` gates apply per tool); plan mode's snapshot/restore keeps `codemode` in the active list while the gate denies it (activity and gating are orthogonal). Plan-mode denial semantics unchanged (META-04).

@@ -2,6 +2,10 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## goal 用量统计增强批(2026-10-04,spec 2026-10-04-goal-cost-accounting;免计划对抗——用户豁免)
+
+- **状态:已执行**。GoalUsage 增 costUsed(美元、浮点不 floor、老 record 回 0);parent 记帐增 usage.cost.total;新挂 tool_result 事件计 subagent/codemode 执行用量(修 2026-10-03 实证的结构性漏记);七个显示 surface(footer/oneLine/面板/compaction/pool/goal-achieved 行/归档报告)+ formatCostValue 三档格式化(≥$1 两位 / <$1 三位);新增 goal-cost-accounting.test.ts ×8。aborted 聚合路径同步带 cost。
+
 ## pi 1.0.x 适配批(2026-10-03,spec 2026-10-03-pi-1.0-adaptation;计划对抗 2 轮 R1 修订→R2 ACCEPT)
 
 - **状态:已执行**。依赖矩阵全量升级(四 devDeps 1.0.1 + 三 peerDeps `<2.0.0`,floor 不动);唯一代码适配 = modes 测试 fake host 补 `registerToolRenderer` no-op;三门禁全绿(check / 774 test / 28 contracts,契约直面真实 1.0.1 包)。codemode 钉测试 ×2(ask 静默放行钉现状 + plan 快照/恢复共存)。DEVIATIONS #97;详见 CHANGELOG Unreleased 段。
