@@ -6,7 +6,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { reconcileMemoryIndex, slugify } from "./memdir.ts";
+import { invalidateMemDirCache, reconcileMemoryIndex, slugify } from "./memdir.ts";
 
 export interface ImportReport {
 	copied: number;
@@ -49,6 +49,7 @@ export function importFromClaude(projectMemoryDir: string, targetDir: string): I
 			continue;
 		}
 		writeFileSync(target, content, "utf-8");
+		invalidateMemDirCache(targetDir); // C7: direct write bypassed atomicWriteFile
 		report.copied++;
 	}
 	reconcileMemoryIndex(targetDir); // rebuild index from files, never from source MEMORY.md
@@ -189,6 +190,7 @@ function importSection(
 			mkdirSync(targetDir, { recursive: true });
 			const frontmatter = `---\nname: ${candidate}\ndescription: ${description}\nmetadata:\n  type: ${type}\n---\n\n${section.body}${created}\n`;
 			writeFileSync(target, frontmatter, "utf-8");
+			invalidateMemDirCache(targetDir); // C7: direct write bypassed atomicWriteFile
 			return "copied";
 		}
 		if (readFileSync(target, "utf-8").includes(section.body)) return "skipped"; // same fact — idempotent

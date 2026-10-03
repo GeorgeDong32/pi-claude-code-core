@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { FakeHost, clearCoreGlobals, snapshotCoreGlobals } from "../contracts/fake-host.ts";
 import { resetCoreBusForTests } from "../../extensions/bus.ts";
 import memoryExtension from "../../extensions/memory/index.ts";
-import { parseMemoryFrontmatter, scanMemoryDir, reconcileMemoryIndex } from "../../extensions/memory/memdir.ts";
+import { invalidateMemDirCache, parseMemoryFrontmatter, scanMemoryDir, reconcileMemoryIndex } from "../../extensions/memory/memdir.ts";
 import { resolveMemoryPaths, isMemoryWritePath } from "../../extensions/memory/paths.ts";
 import { freshnessHeader } from "../../extensions/memory/recall.ts";
 import type { Selector, SelectorOutcome } from "../../extensions/memory/selector.ts";
@@ -69,6 +69,9 @@ function writeMemory(layer: "user" | "project", name: string, title: string, des
 		join(target, name),
 		`---\nname: ${title}\ndescription: ${description}\nmetadata:\n  type: ${type}${pinned ? "\n  pinned: true" : ""}\n---\n\n${body}`,
 	);
+	// C7: direct write bypassed the invalidating primitives — drop the scan
+	// cache so scan→write→scan sequences in one test stay exact.
+	invalidateMemDirCache(target);
 }
 
 beforeEach(() => {

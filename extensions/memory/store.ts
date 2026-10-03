@@ -25,7 +25,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { isValidMemoryType, listMemoryFiles, reconcileMemoryIndex, slugify, splitFrontmatter } from "./memdir.ts";
+import { invalidateMemDirCache, isValidMemoryType, listMemoryFiles, reconcileMemoryIndex, slugify, splitFrontmatter } from "./memdir.ts";
 import { findSecret } from "./guard.ts";
 
 /** Per-file body cap enforced by the write engine (S3: lives with its only enforcer). */
@@ -109,6 +109,10 @@ export function atomicWriteFile(dir: string, file: string, content: string): voi
 	const tmp = join(dir, `.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}.md`);
 	writeFileSync(tmp, content, "utf-8");
 	renameSync(tmp, join(dir, file));
+	// C7: the ONE write primitive invalidates the scan cache — applyMemoryOps
+	// AND runConsolidation (and any future writer) can never read their own
+	// stale layer back within the TTL window.
+	invalidateMemDirCache(dir);
 }
 
 /** Split a memory file into frontmatter fields + body; null when invalid. */
@@ -273,7 +277,10 @@ export function applyMemoryOps(
 	for (const step of planned) {
 		try {
 			if (step.kind === "write") atomicWriteFile(step.dir, step.file, step.content);
-			else unlinkSync(join(step.dir, step.file));
+			else {
+				unlinkSync(join(step.dir, step.file));
+				invalidateMemDirCache(step.dir); // C7: deletes bypass atomicWriteFile
+			}
 			outcome.applied++;
 			touched.add(step.dir);
 		} catch (err) {

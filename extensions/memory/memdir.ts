@@ -155,7 +155,21 @@ export interface MemoryFile {
 	mtimeMs: number;
 }
 
-const bodyCache = new Map<string, { fingerprint: string; files: MemoryFile[]; skipped: number }>();
+const bodyCache = new Map<string, { fingerprint: string; files: MemoryFile[]; skipped: number; at: number }>();
+
+/** C7 (arch review 2026-10-03): fresh-window TTL — within this window a hit
+ * skips even the fingerprint stat pass. External edits (outside pi) are
+ * invisible for at most this long; every internal write path invalidates
+ * explicitly (store.ts atomicWriteFile / applyMemoryOps deletes,
+ * consolidate.ts, importers.ts) so automation never reads its own stale
+ * writes. */
+export const MEMDIR_TTL_MS = 1000;
+
+/** Drop the cached scan for one dir — called by every internal write path
+ * after mutating the layer (see MEMDIR_TTL_MS). */
+export function invalidateMemDirCache(memoryDir: string): void {
+	bodyCache.delete(memoryDir);
+}
 
 /** name:mtimeMs:size for every .md — any edit, add, delete, rename shows. */
 function dirFingerprint(memoryDir: string, names: string[]): string {
@@ -178,10 +192,16 @@ function dirFingerprint(memoryDir: string, names: string[]): string {
  * read every file's content three times per turn.
  */
 export function scanMemoryDirCached(memoryDir: string): { files: MemoryFile[]; skipped: number } {
+	// C7: fresh-window hit — no readdir, no stat pass (the second and later
+	// calls in the same turn were re-fingerprinting the whole dir).
+	const cached = bodyCache.get(memoryDir);
+	if (cached && Date.now() - cached.at < MEMDIR_TTL_MS) {
+		return { files: cached.files, skipped: cached.skipped };
+	}
 	const names = listMemoryFiles(memoryDir);
 	const fingerprint = dirFingerprint(memoryDir, names);
-	const cached = bodyCache.get(memoryDir);
 	if (cached && cached.fingerprint === fingerprint) {
+		cached.at = Date.now();
 		return { files: cached.files, skipped: cached.skipped };
 	}
 	const files: MemoryFile[] = [];
@@ -205,7 +225,7 @@ export function scanMemoryDirCached(memoryDir: string): { files: MemoryFile[]; s
 			skipped++;
 		}
 	}
-	bodyCache.set(memoryDir, { fingerprint, files, skipped });
+	bodyCache.set(memoryDir, { fingerprint, files, skipped, at: Date.now() });
 	return { files, skipped };
 }
 

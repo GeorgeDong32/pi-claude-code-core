@@ -17,7 +17,7 @@ import { FakeHost, clearCoreGlobals, snapshotCoreGlobals } from "../contracts/fa
 import { resetCoreBusForTests } from "../../extensions/bus.ts";
 import memoryExtension from "../../extensions/memory/index.ts";
 import { parseOperations, completeMemoryOps } from "../../extensions/memory/llm.ts";
-import { isCorrection, loadMemorySettings, resolveSideChannelModel, setupAutomation, type AutomationState } from "../../extensions/memory/automation.ts";
+import { conversationParts, isCorrection, loadMemorySettings, resolveSideChannelModel, setupAutomation, type AutomationState } from "../../extensions/memory/automation.ts";
 import { resolveRecallModel } from "../../extensions/memory/selector.ts";
 import { ConsolidationTrigger } from "../../extensions/memory/consolidate.ts";
 import { resolveMemoryPaths } from "../../extensions/memory/paths.ts";
@@ -60,6 +60,36 @@ afterEach(() => {
 });
 
 // ─── llm.ts extraction ───
+
+describe("C7 conversationParts backward window", () => {
+	it("returns the LAST n non-empty user/assistant parts — identical to full-walk + slice, empty/non-message skipped", () => {
+		const entries: Array<{ type?: string; message?: unknown }> = [];
+		for (let i = 0; i < 80; i += 1) {
+			if (i % 9 === 0) {
+				entries.push({ type: "compaction", message: { role: "compactionSummary", content: "sum" } }); // never matches
+				continue;
+			}
+			const role = i % 2 ? "assistant" : "user";
+			const text = i % 7 === 0 ? "" : `m${i}`; // every 7th message has empty text → skipped
+			entries.push({ type: "message", message: { role, content: [{ type: "text", text }] } });
+		}
+		const ctx = { sessionManager: { getBranch: () => entries } } as never;
+		const parts = conversationParts(ctx, 6);
+		expect(parts).toHaveLength(6);
+		// expected = last 6 non-empty message entries, in order
+		const expected = entries
+			.filter((e) => e.type === "message" && ["user", "assistant"].includes((e.message as { role?: string }).role ?? ""))
+			.map((e) => ({ role: (e.message as { role: string }).role, text: (e.message as { content: Array<{ text?: string }> }).content[0]!.text }))
+			.filter((p) => (p.text ?? "").trim() !== "")
+			.slice(-6);
+		expect(parts).toEqual(expected);
+	});
+
+	it("stale session manager → empty window, never throws", () => {
+		const ctx = { sessionManager: { getBranch: () => { throw new Error("stale"); } } } as never;
+		expect(conversationParts(ctx, 6)).toEqual([]);
+	});
+});
 
 describe("V2-A parseOperations", () => {
 	it("parses a plain JSON object", () => {

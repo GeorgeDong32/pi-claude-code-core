@@ -249,9 +249,29 @@ function allConversationParts(ctx: ExtensionContext, perMessageCap = 2000): Conv
 	return parts;
 }
 
-/** Last-N window (correction/flush use fixed windows). */
-function conversationParts(ctx: ExtensionContext, limit: number): ConversationPart[] {
-	return allConversationParts(ctx).slice(-limit);
+/** Last-N window (correction/compact flush use fixed windows). C7 (arch
+ * review 2026-10-03): backward early-stop walk — collect the last `limit`
+ * non-empty parts without paying text extraction for the whole branch;
+ * output is byte-identical to allConversationParts(ctx).slice(-limit)
+ * (structural filter only — compaction entries never match). Exported for
+ * direct unit tests. */
+export function conversationParts(ctx: ExtensionContext, limit: number): ConversationPart[] {
+	const collected: ConversationPart[] = [];
+	try {
+		const entries = ctx.sessionManager.getBranch() as Array<{ type?: string; message?: unknown }>;
+		for (let i = entries.length - 1; i >= 0 && collected.length < limit; i -= 1) {
+			const entry = entries[i];
+			if (entry?.type !== "message" || !entry.message) continue;
+			const role = (entry.message as { role?: string }).role;
+			if (role !== "user" && role !== "assistant") continue;
+			const text = getMessageText(entry.message).trim();
+			if (!text) continue;
+			collected.push({ role, text: text.length > 2000 ? `${text.slice(0, 2000)}…` : text });
+		}
+	} catch {
+		/* stale session manager → empty snapshot */
+	}
+	return collected.reverse();
 }
 
 function countToolCalls(message: unknown): number {

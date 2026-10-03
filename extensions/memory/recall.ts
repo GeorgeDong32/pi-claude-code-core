@@ -278,8 +278,12 @@ export function createRecall(deps: {
 		outcome: Extract<SelectorOutcome, { kind: "selected" }>,
 		history: DerivedHistory,
 		delivery: "immediate" | "deferred",
+		// C7 (arch review 2026-10-03): the entry-time candidate pool — reuse it
+		// instead of a second deps.files() pass. The real selector can only
+		// return keys from the pool it was shown, so byKey loses nothing.
+		pool: RecallFile[],
 	): RecallBlock | null {
-		const byKey = new Map(deps.files().map((f) => [f.key, f]));
+		const byKey = new Map(pool.map((f) => [f.key, f]));
 		const picked: RecallFile[] = [];
 		for (const key of outcome.keys) {
 			const file = byKey.get(key);
@@ -356,7 +360,13 @@ export function createRecall(deps: {
 					if (controller.signal.aborted) return;
 					if (outcome.kind === "selected") {
 						stats.selections++;
-						const block = assemble(outcome, deriveHistory(history(), deps.cwd), "deferred");
+						// C7 disclosure: the deferred pass re-derives history (mandatory —
+						// RV-07 drops files read during the selection) but reuses the
+						// ENTRY-TIME pool: files written or deleted by automation between
+						// entry and delivery deliver their entry-time body (stale by
+						// seconds); keys outside the pool (only a non-conforming Selector
+						// could produce them) are dropped.
+						const block = assemble(outcome, deriveHistory(history(), deps.cwd), "deferred", candidates);
 						if (block) deps.deliver(block);
 						else stats.empties++;
 					} else if (outcome.kind === "empty") stats.empties++;
@@ -380,7 +390,7 @@ export function createRecall(deps: {
 				return null;
 			}
 			stats.selections++;
-			return assemble(outcome, derived, "immediate");
+			return assemble(outcome, derived, "immediate", candidates);
 		},
 
 		abort() {

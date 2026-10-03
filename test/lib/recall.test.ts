@@ -58,6 +58,22 @@ function machine(selector: Selector, files: RecallFile[], cwd = "/w", delivered:
 	};
 }
 
+/** C7: like machine(), but counts deps.files() invocations. */
+function countingMachine(selector: Selector, files: RecallFile[], delivered: RecallBlock[] = []) {
+	let calls = 0;
+	const m = createRecall({
+		selector,
+		modelLabel: "test/selector-1",
+		files: () => {
+			calls += 1;
+			return files;
+		},
+		cwd: "/w",
+		deliver: (b) => delivered.push(b),
+	});
+	return { m, delivered, filesCalls: () => calls };
+}
+
 describe("RV recall machine (spec §8)", () => {
 	it("1 RV-02: skill wrapper stripped; skill-only and <6 chars skip; >4000 chars truncated", async () => {
 		const log: SelectorRequest[] = [];
@@ -119,6 +135,26 @@ describe("RV recall machine (spec §8)", () => {
 		release!();
 		await new Promise((r) => setTimeout(r, 5));
 		expect(d0).toHaveLength(1);
+	});
+
+	it("C7: deferred delivery maps keys via the ENTRY pool — deps.files() runs exactly once per selection", async () => {
+		let release: (() => void) | null = null;
+		const slow = fakeSelector(async () => {
+			await new Promise<void>((r) => {
+				release = r;
+			});
+			return { kind: "selected", keys: ["memory/a.md"], elapsedMs: 9 };
+		});
+		const files = [file("memory/a.md"), file("memory/b.md")];
+		const { m, delivered, filesCalls } = countingMachine(slow, files);
+		const immediate = await m.onUserMessage("show me the convention", () => [], 0);
+		expect(immediate).toBeNull(); // parked (zero-wait)
+		expect(filesCalls()).toBe(1); // entry pass only — the deferred assemble reuses the pool
+		release!();
+		await new Promise((r) => setTimeout(r, 5));
+		expect(delivered).toHaveLength(1);
+		expect(delivered[0]!.details.files.map((f: { key: string }) => f.key)).toEqual(["memory/a.md"]);
+		expect(filesCalls()).toBe(1); // delivery did not trigger a second scan pass
 	});
 
 	it("4 delivery-time re-filter: files read during the selection drop out (mutable history thunk)", async () => {
