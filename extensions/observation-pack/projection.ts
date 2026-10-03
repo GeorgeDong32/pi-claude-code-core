@@ -52,7 +52,11 @@ export interface ProjectionState {
 	 * a tool result is immutable once in the transcript (append-only
 	 * history; invariant 9 only ever rewrites the projection copy), so the
 	 * per-request join/byteLength/2×sha256/countLines work is pure waste
-	 * after the first request. */
+	 * after the first request. Retention cost (code review R1 P3-2): each
+	 * entry holds the Observation INCLUDING its full text — roughly 2x the
+	 * bytes those large results already occupy in the session, held for the
+	 * session's lifetime and NOT reclaimed at compaction (proportional to
+	 * eligible-result volume; accepted). */
 	readonly identity: Map<string, Observation | null>;
 	/** C1: observation ids already stored through ports.store. Skips the
 	 * EEXIST full-read + re-hash verification on every later request.

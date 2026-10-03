@@ -326,9 +326,9 @@ export async function sessionRecall(options: RecallOptions): Promise<RecallResul
 			// fd close) never runs and ECMAScript has no GC finalizer for
 			// generators: every limit-reaching query leaked one fd. return()
 			// resumes the generator, closes the handle, and settles. Its return
-		// value here is the PASSED argument (not the reader's meta), so a
-		// partial-break file keeps {bytes:0} — the transparency line slightly
-		// under-reports on that path (disclosed).
+			// value here is the PASSED argument (not the reader's meta), so a
+			// partial-break file keeps {bytes:0} — the transparency line slightly
+			// under-reports on that path (disclosed).
 			if (!finished) await iterator.return(undefined as never);
 		}
 		budget -= meta.bytes;

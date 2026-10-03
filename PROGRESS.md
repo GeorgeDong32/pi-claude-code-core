@@ -12,7 +12,8 @@
 - **C8** sessionsDirFor 包裹横杠修复(真机从恒空变为可用)+ async 有界读 + 三重上限(200/1MB 部分读/8MB)+ 透明度行(DEVIATIONS #90)。
 - **随手修** readJson×2+死成员、glob memo(含同一性 pin 测试)、drain 并行、cast 三处收敛(DEVIATIONS #91)。
 - **提交切分**:C1/C7/C6/C5-B/C5-A/C8/随手修 七个 commit(spec §7 逐条对齐)。
-- **测试计数**:vitest 772(+rules-render memo)+ node:test 全绿;contracts 28。
+- **测试计数**:vitest 771 + node:test 全绿;contracts 28(直跑真退出码全 0)。
+- **code 对抗审查**(flash 档 glm-5.3-flash,2 轮用满):R1 REJECT → 真实 P1 修复(session_recall limit-break fd 泄漏:挂起 generator 显式 iterator.return(),回归测钉住;drain 诊断单点聚合)+ 3a09f63;R2 ACCEPT(with notes)→ 抓出 R1 处置两处虚记(P3-2/P3-4 脚本未断言未落地),断言+grep 复核真正落地(DEVIATIONS #93);R2 report-only 两项采纳。审查文档:REVIEW-2026-10-03-arch-followups-code-r{1,2}-adversarial.md。
 
 ## 架构巡查批(2026-10-03,双轴 arch+perf review,方案见 ../specs/design/2026-10-03-arch-review-followups.md)
 
