@@ -2,6 +2,18 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## 架构巡查后续批(2026-10-03,spec 2026-10-03-arch-followups-batch;对抗审查 R1 REJECT→修订→R2 REJECT→定向复核 ACCEPT)
+
+- **状态:已执行**。管线:总 spec → 计划对抗 2 轮(R1: C8 整文件跳过设计否决+3P2+10P3;R2: 抓出 sessionsDirFor 真机恒空的生产 bug → 修 spec 后 parent 定向复核,轮数封顶)→ 按序执行 → code 对抗审查(见下)。
+- **C1** observation-pack identity/stored memo + ledger mkdir-once(5 新测)。
+- **C7** recall 候选池复用(两次 derive 保留,RV-07 红线未破)+ conversationParts 尾部回走(补直测)+ memdir 1s TTL + 全写路径失效(store/consolidate/importers/测试 helper)。
+- **C6** 渲染三件套 → goal/renderers.ts;oneLineSummary → goal-core;auditorRejectionBlock 统一(丢冗余门,DEVIATIONS #87;paused header 增 goalId)。
+- **C5-B** ProfileController(profile-apply.ts,四保真点);**C5-A** alt+t → effort,decideCycleShortcut 纯决策(noop 零写入守卫修 probe 污染 bug,ctrl+shift+e 同修),modes 负例钉死无双注册。
+- **C8** sessionsDirFor 包裹横杠修复(真机从恒空变为可用)+ async 有界读 + 三重上限(200/1MB 部分读/8MB)+ 透明度行(DEVIATIONS #90)。
+- **随手修** readJson×2+死成员、glob memo(含同一性 pin 测试)、drain 并行、cast 三处收敛(DEVIATIONS #91)。
+- **提交切分**:C1/C7/C6/C5-B/C5-A/C8/随手修 七个 commit(spec §7 逐条对齐)。
+- **测试计数**:vitest 772(+rules-render memo)+ node:test 全绿;contracts 28。
+
 ## 架构巡查批(2026-10-03,双轴 arch+perf review,方案见 ../specs/design/2026-10-03-arch-review-followups.md)
 
 - **状态:已完成**(C2/C3/C4 落地;C1 判定为上游原设计非迁移 bug,修复待拍板;C5/C6/C7 探查结论已沉淀 spec 文档;C8 方案已规划待批)。

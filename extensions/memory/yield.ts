@@ -15,6 +15,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { POLICY_MARKER } from "./policy.ts";
 import { join } from "node:path";
+import { readJson } from "../../lib/settings.ts";
 
 export interface YieldState {
 	yielded: boolean;
@@ -24,19 +25,13 @@ export interface YieldState {
 
 /** Static probe: hermes present among installed packages? */
 export function staticProbe(agentDir: string): boolean {
-	// 1) settings.json packages entries
-	try {
-		const settingsPath = join(agentDir, "settings.json");
-		if (existsSync(settingsPath)) {
-			const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as { packages?: unknown };
-			if (Array.isArray(settings.packages)) {
-				for (const pkg of settings.packages) {
-					if (typeof pkg === "string" && /hermes/i.test(pkg)) return true;
-				}
-			}
+	// 1) settings.json packages entries — quickwin-1: readJson (invariant 10);
+	// missing/malformed → {} exactly like the old hand-rolled read.
+	const settings = readJson<{ packages?: unknown }>(join(agentDir, "settings.json"), {});
+	if (Array.isArray(settings.packages)) {
+		for (const pkg of settings.packages) {
+			if (typeof pkg === "string" && /hermes/i.test(pkg)) return true;
 		}
-	} catch {
-		/* unreadable settings → fall through */
 	}
 	// 2) npm install dir scan
 	try {

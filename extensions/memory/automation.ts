@@ -51,7 +51,9 @@ import { completeMemoryOps, resolveModelRef, type LlmComplete, type OpsCompletio
 import { applyMemoryOps, type MemoryOp } from "./store.ts";
 import type { ConsolidationTrigger } from "./consolidate.ts";
 import { scanMemoryDirCached } from "./memdir.ts";
-import { bumpAttempts, clampQueueParts, loadQueue, QUEUE_V, removeRecord, writeQueueRecord } from "./queue.ts";
+import { bumpAttempts, clampQueueParts, loadQueue, QUEUE_V, removeRecord, writeQueueRecord, type StagedRecord } from "./queue.ts";
+import { readJson } from "../../lib/settings.ts";
+import { readBranchEntries, readSessionId } from "../modes/session-branch.ts";
 
 // ─── settings (two knobs, DESIGN-MEMORY-V2 §4) ───
 
@@ -78,18 +80,20 @@ export const RECALL_WAIT_MIN_MS = 0;
 export const RECALL_WAIT_MAX_MS = 15_000;
 
 export function loadMemorySettings(agentDir: string): MemorySettings {
-	try {
-		const raw = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8")) as { memory?: { automation?: unknown; model?: unknown; recallModel?: unknown; recallWaitMs?: unknown } };
-		const wait = typeof raw.memory?.recallWaitMs === "number" ? raw.memory.recallWaitMs : undefined;
-		return {
-			automation: raw.memory?.automation !== false,
-			model: typeof raw.memory?.model === "string" ? raw.memory.model : undefined,
-			recallModel: typeof raw.memory?.recallModel === "string" ? raw.memory.recallModel : undefined,
-			recallWaitMs: wait === undefined ? undefined : Math.min(RECALL_WAIT_MAX_MS, Math.max(RECALL_WAIT_MIN_MS, wait)),
-		};
-	} catch {
-		return { automation: true };
-	}
+	// quickwin-1 (arch review): one JSON settings reader (invariant 10) —
+	// missing/malformed input falls back identically to the old hand-rolled
+	// readFileSync+parse (silent default, no throw).
+	const raw = readJson<{ memory?: { automation?: unknown; model?: unknown; recallModel?: unknown; recallWaitMs?: unknown } }>(
+		join(agentDir, "settings.json"),
+		{},
+	);
+	const wait = typeof raw.memory?.recallWaitMs === "number" ? raw.memory.recallWaitMs : undefined;
+	return {
+		automation: raw.memory?.automation !== false,
+		model: typeof raw.memory?.model === "string" ? raw.memory.model : undefined,
+		recallModel: typeof raw.memory?.recallModel === "string" ? raw.memory.recallModel : undefined,
+		recallWaitMs: wait === undefined ? undefined : Math.min(RECALL_WAIT_MAX_MS, Math.max(RECALL_WAIT_MIN_MS, wait)),
+	};
 }
 
 /** Resolve the side-channel model: memory.model → memory.recallModel →
@@ -211,7 +215,6 @@ export interface AutomationState {
 
 export interface AutomationDeps {
 	complete?: LlmComplete;
-	now?: () => number;
 }
 
 export interface ConversationPart {
@@ -234,7 +237,8 @@ function getMessageText(message: unknown): string {
 function allConversationParts(ctx: ExtensionContext, perMessageCap = 2000): ConversationPart[] {
 	const parts: ConversationPart[] = [];
 	try {
-		const entries = ctx.sessionManager.getBranch() as Array<{ type?: string; message?: unknown }>;
+		// local uniform shape — the reader owns the defensive probing
+		const entries = readBranchEntries(ctx.sessionManager) as Array<{ type?: string; message?: unknown }>;
 		for (const entry of entries) {
 			if (entry?.type !== "message" || !entry.message) continue;
 			const role = (entry.message as { role?: string }).role;
@@ -258,7 +262,8 @@ function allConversationParts(ctx: ExtensionContext, perMessageCap = 2000): Conv
 export function conversationParts(ctx: ExtensionContext, limit: number): ConversationPart[] {
 	const collected: ConversationPart[] = [];
 	try {
-		const entries = ctx.sessionManager.getBranch() as Array<{ type?: string; message?: unknown }>;
+		// local uniform shape — the reader owns the defensive probing
+		const entries = readBranchEntries(ctx.sessionManager) as Array<{ type?: string; message?: unknown }>;
 		for (let i = entries.length - 1; i >= 0 && collected.length < limit; i -= 1) {
 			const entry = entries[i];
 			if (entry?.type !== "message" || !entry.message) continue;
@@ -592,14 +597,72 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 		}
 	};
 
-	async function drainPendingRecords(cap: {
+	type DrainCap = {
 		d: { project: string; user: string; projectsDir: string; agentDir: string };
 		model: Model<Api> | undefined;
 		registry: never;
 		projectKey: string | undefined;
 		complete: LlmComplete | undefined;
-	}): Promise<void> {
+	};
+
+	/** One staged record, best-effort (quickwin-3, arch review 2026-10-03:
+	 * records are independent — applyMemoryOps is fully synchronous, so
+	 * concurrent applies cannot lost-update the corpus under the event
+	 * loop). The serial version's infra-failure `return` aborted the WHOLE
+	 * drain; in parallel mode each record now runs best-effort alone. */
+	async function drainOneRecord(cap: DrainCap, staged: StagedRecord): Promise<void> {
+		// B4: persist the attempt BEFORE the call — a SIGKILL mid-call counts
+		if (!bumpAttempts(cap.d.agentDir, staged)) {
+			drainBlacklist.add(staged.file);
+			return;
+		}
+		let completion: OpsCompletion;
+		try {
+			completion = await completeMemoryOps(
+				cap.model,
+				cap.registry,
+				{
+					systemPrompt: FLUSH_SYSTEM + routingGuidance(cap.projectKey),
+					userPrompt: buildOpsUserPrompt(cap.d, clampQueueParts(staged.record.parts)),
+					// independent lane: pure timeout, deliberately NOT linked to
+					// sessionAbort (the drain must survive /new mid-drain)
+					timeoutMs: FLUSH_QUEUE_MS,
+				},
+				{ complete: cap.complete },
+			);
+		} catch {
+			return; // infra failure — record retained (attempt already counted)
+		}
+		if (completion.ok) {
+			if (completion.ops.length > 0) {
+				const routedNotes: string[] = [];
+				const outcome = applyMemoryOps(completion.ops as MemoryOp[], cap.d, { projectKey: cap.projectKey, routedNotes });
+				if (routedNotes.length > 0) {
+					state.routed += routedNotes.length;
+					state.lastRouted = routedNotes.join("; ");
+				}
+				state.opsApplied += outcome.applied;
+				state.flushes++;
+				state.lastFlush = `flush-queued: ${outcome.applied} op(s)`;
+				if (outcome.error) {
+					// B2 apply-fatal: deterministic disk-layer error — retrying
+					// cannot fix it, so CONSUME (drop) with a diagnostic
+					removeRecord(cap.d.agentDir, staged.file);
+					state.lastError = `flush-queued: ${outcome.error}`;
+					return;
+				}
+			}
+			removeRecord(cap.d.agentDir, staged.file);
+		} else if (staged.record.attempts >= QUEUE_MAX_ATTEMPTS) {
+			removeRecord(cap.d.agentDir, staged.file);
+			state.lastError = `flush-queued: dropped after ${staged.record.attempts} attempts (${completion.reason ?? "failed"})`;
+		}
+		// else: LLM failure with attempts left — retain for the next session
+	}
+
+	async function drainPendingRecords(cap: DrainCap): Promise<void> {
 		let processed = 0;
+		const eligible: StagedRecord[] = [];
 		for (const staged of loadQueue(cap.d.agentDir)) {
 			if (processed >= QUEUE_DRAIN_MAX) break;
 			if (drainBlacklist.has(staged.file)) continue;
@@ -607,62 +670,21 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 			// of the SAME project (exact projectsDir match — projectKey
 			// substring heuristics can cross-project collide).
 			if (staged.record.projectsDir !== cap.d.projectsDir) continue;
-			const record = staged.record;
 			// leftover edge: attempts already past the cap on disk — drop now
-			if (record.attempts >= QUEUE_MAX_ATTEMPTS) {
+			if (staged.record.attempts >= QUEUE_MAX_ATTEMPTS) {
 				removeRecord(cap.d.agentDir, staged.file);
-				state.lastError = `flush-queued: dropped after ${record.attempts} attempts`;
+				state.lastError = `flush-queued: dropped after ${staged.record.attempts} attempts`;
 				continue;
 			}
 			processed++;
-			// B4: persist the attempt BEFORE the call — a SIGKILL mid-call counts
-			if (!bumpAttempts(cap.d.agentDir, staged)) {
-				drainBlacklist.add(staged.file);
-				continue;
-			}
-			let completion: OpsCompletion;
-			try {
-				completion = await completeMemoryOps(
-					cap.model,
-					cap.registry,
-					{
-						systemPrompt: FLUSH_SYSTEM + routingGuidance(cap.projectKey),
-						userPrompt: buildOpsUserPrompt(cap.d, clampQueueParts(record.parts)),
-						// independent lane: pure timeout, deliberately NOT linked to
-					// sessionAbort (the drain must survive /new mid-drain)
-						timeoutMs: FLUSH_QUEUE_MS,
-					},
-					{ complete: cap.complete },
-				);
-			} catch {
-				return; // infra failure — record retained (attempt already counted)
-			}
-			if (completion.ok) {
-				if (completion.ops.length > 0) {
-					const routedNotes: string[] = [];
-					const outcome = applyMemoryOps(completion.ops as MemoryOp[], cap.d, { projectKey: cap.projectKey, routedNotes });
-					if (routedNotes.length > 0) {
-						state.routed += routedNotes.length;
-						state.lastRouted = routedNotes.join("; ");
-					}
-					state.opsApplied += outcome.applied;
-					state.flushes++;
-					state.lastFlush = `flush-queued: ${outcome.applied} op(s)`;
-					if (outcome.error) {
-						// B2 apply-fatal: deterministic disk-layer error — retrying
-						// cannot fix it, so CONSUME (drop) with a diagnostic
-						removeRecord(cap.d.agentDir, staged.file);
-						state.lastError = `flush-queued: ${outcome.error}`;
-						continue;
-					}
-				}
-				removeRecord(cap.d.agentDir, staged.file);
-			} else if (record.attempts >= QUEUE_MAX_ATTEMPTS) {
-				removeRecord(cap.d.agentDir, staged.file);
-				state.lastError = `flush-queued: dropped after ${record.attempts} attempts (${completion.reason ?? "failed"})`;
-			}
-			// else: LLM failure with attempts left — retain for the next session
+			eligible.push(staged);
 		}
+		if (eligible.length === 0) return;
+		// quickwin-3: ≤5 records × 20s LLM budget ran SERIALLY (worst case
+		// 100s of background drain); Promise.allSettled runs them in parallel
+		// (worst case max(20s)). QUEUE_DRAIN_MAX still counts only eligible
+		// records — blacklist/projectsDir/attempts-cap skips never consume it.
+		await Promise.allSettled(eligible.map((staged) => drainOneRecord(cap, staged)));
 	}
 
 	// ZERO-LLM shutdown (spec 2026-10-03): stage the unextracted tail as a
@@ -687,10 +709,6 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 /** Best-effort session id for queue record naming/merging (the ctx shape
  * is structural — ReadonlySessionManager exposes getSessionId()). */
 function sessionIdOf(ctx: ExtensionContext): string {
-	try {
-		const id = (ctx.sessionManager as { getSessionId?: () => string } | undefined)?.getSessionId?.();
-		return typeof id === "string" && id ? id : "unknown";
-	} catch {
-		return "unknown";
-	}
+	// quickwin-4: the defensive reader lives in modes/session-branch.ts
+	return readSessionId(ctx.sessionManager) ?? "unknown";
 }

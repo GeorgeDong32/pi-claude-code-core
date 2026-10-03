@@ -50,6 +50,7 @@ import { llmSelector, resolveRecallModel } from "./selector.ts";
 import { guardMemoryWrites } from "./guard.ts";
 import { InjectionGate } from "./yield.ts";
 import { recallTransparencyLine, sessionRecall } from "./session-recall.ts";
+import { readSessionProjection } from "../modes/session-branch.ts";
 import { renderSessionRecallCall, sessionRecallResultRows, type SessionRecallArgs } from "./renderers.ts";
 import { renderRows } from "../../lib/tool-render.ts";
 import { MEMORY_INDEX_MAX } from "../../lib/context-budget.ts";
@@ -84,13 +85,9 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 
 	/** RV/D9: the history snapshot — the projection's message list. */
 	function historyFor(ctx: ExtensionContext): readonly unknown[] {
-		try {
-			const sm = ctx.sessionManager as unknown as { buildSessionProjection?: () => { messages?: unknown[] } | undefined };
-			const projection = sm.buildSessionProjection?.();
-			return projection?.messages ?? [];
-		} catch {
-			return [];
-		}
+		// quickwin-4 (arch review): ONE defensive sessionManager reader — the
+		// local hand-rolled cast moved to modes/session-branch.ts.
+		return readSessionProjection(ctx.sessionManager);
 	}
 
 	/** The persisted custom message shape for a delivered recall block. */

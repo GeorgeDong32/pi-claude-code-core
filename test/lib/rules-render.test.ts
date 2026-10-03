@@ -274,3 +274,12 @@ describe("adversarial-audit fix: tiny blocks under a small budget", () => {
 		expect(output.length).toBeLessThanOrEqual(300);
 	});
 });
+
+// quickwin-2 (arch review 2026-10-03): compiled once per glob — the rules
+// tool_call hot path re-compiled every glob × every path before this cache.
+describe("globToRegExp memo", () => {
+	it("returns the SAME RegExp object per glob (identity, not just equality)", () => {
+		expect(globToRegExp("src/**/*.ts")).toBe(globToRegExp("src/**/*.ts"));
+		expect(globToRegExp("a/*")).not.toBe(globToRegExp("b/*"));
+	});
+});

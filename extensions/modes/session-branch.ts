@@ -45,6 +45,7 @@ type SessionManagerLike = {
 	getEntries?: () => unknown
 	getGitBranch?: () => unknown
 	getSessionId?: () => unknown
+	buildSessionProjection?: () => { messages?: unknown[] } | undefined
 }
 
 /** Raw wrapped entries from getBranch(), for transcript builders. */
@@ -109,6 +110,18 @@ export function readGitBranch(sessionManager: unknown): string | undefined {
 		return typeof raw === "string" ? raw : undefined
 	} catch {
 		return undefined
+	}
+}
+
+/** Projection messages when available (quickwin-4, arch review: ONE
+ * defensive reader for the sessionManager shape — memory's recall wiring
+ * previously hand-rolled its own cast). */
+export function readSessionProjection(sessionManager: unknown): readonly unknown[] {
+	try {
+		const raw = (sessionManager as SessionManagerLike | undefined)?.buildSessionProjection?.()
+		return raw?.messages ?? []
+	} catch {
+		return []
 	}
 }
 
