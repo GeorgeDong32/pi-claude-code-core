@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed (pi 1.0.x adaptation — spec 2026-10-03-pi-1.0-adaptation)
+- **Host compatibility widened to pi 1.x**: all four `@earendil-works/*` devDependencies move 0.99.1 → 1.0.1, and the three earendil peerDependencies open their ceiling from `<1.0.0` to `<2.0.0` (floors unchanged). Verified additive-only for every symbol core imports (pi-tui export lines extended, pi-ai/pi-agent-core no removals); the contract suite's real-package imports (`pi-host-semantics` ③④⑤⑥) now run against 1.0.1. Recorded as DEVIATIONS #97.
+- **codemode interaction pinned** (2 new tests in modes): ask mode passes the `codemode` tool body silently — by design, since a script's nested tool calls go through the full agent tool pipeline (`tool_call` gates apply per tool); plan mode's snapshot/restore keeps `codemode` in the active list while the gate denies it (activity and gating are orthogonal). Plan-mode denial semantics unchanged (META-04).
+
 ## 0.2.1 (2026-10-03)
 
 ### Changed (architecture review 2026-10-03 — C2/C3/C4)

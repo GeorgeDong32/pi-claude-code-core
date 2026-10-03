@@ -16,6 +16,8 @@
 | `auto` | 分层自动批准 + 可选内置分类器 + 风险黑名单 |
 | `bypass` | 全自动批准(旧 auto 语义);少量安全提醒 |
 
+**codemode(pi 1.0)**:`plan` 模式直接拒绝 `codemode` 本体——它会执行其他工具。codemode 脚本发起的嵌套工具调用走完整 agent tool pipeline(`tool_call` 门、权限检查),上述模式规则对它们逐工具生效;codemode 不是权限旁路。
+
 ## 关键表面
 
 - **命令**:`/mode`、`/permissions`、`/permissions-clear-grants`、

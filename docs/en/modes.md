@@ -16,6 +16,8 @@ Claude-Code-style permission modes for pi, cycled with Shift+Tab:
 | `auto` | Tiered auto-approve + optional built-in classifier + risk blacklist |
 | `bypass` | Full auto-approve (old auto semantics); sparse security reminders |
 
+**codemode (pi 1.0)**: `plan` mode denies the `codemode` tool itself — it executes other tools. A codemode script's nested tool calls run through the full agent tool pipeline (`tool_call` gates, permission checks), so the mode rules above apply to them per tool; codemode is not a permission bypass.
+
 ## Key surfaces
 
 - **Commands**: `/mode`, `/permissions`, `/permissions-clear-grants`,

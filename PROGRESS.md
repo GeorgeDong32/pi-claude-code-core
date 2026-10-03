@@ -2,6 +2,10 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## pi 1.0.x 适配批(2026-10-03,spec 2026-10-03-pi-1.0-adaptation;计划对抗 2 轮 R1 修订→R2 ACCEPT)
+
+- **状态:已执行**。依赖矩阵全量升级(四 devDeps 1.0.1 + 三 peerDeps `<2.0.0`,floor 不动);唯一代码适配 = modes 测试 fake host 补 `registerToolRenderer` no-op;三门禁全绿(check / 774 test / 28 contracts,契约直面真实 1.0.1 包)。codemode 钉测试 ×2(ask 静默放行钉现状 + plan 快照/恢复共存)。DEVIATIONS #97;详见 CHANGELOG Unreleased 段。
+
 ## 架构巡查后续批(2026-10-03,spec 2026-10-03-arch-followups-batch;对抗审查 R1 REJECT→修订→R2 REJECT→定向复核 ACCEPT)
 
 - **状态:已执行**。管线:总 spec → 计划对抗 2 轮(R1: C8 整文件跳过设计否决+3P2+10P3;R2: 抓出 sessionsDirFor 真机恒空的生产 bug → 修 spec 后 parent 定向复核,轮数封顶)→ 按序执行 → code 对抗审查(见下)。
