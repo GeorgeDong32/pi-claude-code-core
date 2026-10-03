@@ -23,9 +23,11 @@
 
 - **命令**:`/effort`(设置/循环思考档位)、`/fast`(为 `gpt-5*` 类快速模型
   开关 fast 模式)。
-- **快捷键**:alt+t 循环思考档位(含 `off`;由 modes 模块注册,经 effort
-  所有者按显式选择处理);ctrl+shift+e 由 effort 模块自身循环 effort
-  (感知 env 钉死——`PI_CORE_EFFORT` 置位期间拒绝并提示)。
+- **快捷键**:alt+t 循环思考档位(含 `off`)与 ctrl+shift+e 循环 effort ——
+  两者均由 effort 模块注册(arch review C5:alt+t 自 modes 迁入;不再用硬编码表,
+  改为 cycleLevel/cycleLevelWithOff 模型感知循环,并带零写入守卫——单档模型
+  不再把被 clamp 的值钉进显式槽);感知 env 钉死——`PI_CORE_EFFORT` 置位期间
+  拒绝并提示。
 - **总线**:`effort` 通道 —— `{ level, source: "env" | "session" | "profile" | "model-default" }`。
 - **Status 槽**:`pi-effort-thinking`、`pi-effort-fast`(契约 P0-CT-07)。
 

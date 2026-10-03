@@ -24,10 +24,13 @@ chain is the only place in core allowed to call it** (P1-EF-07 source scan).
 
 - **Commands**: `/effort` (set/cycle thinking level), `/fast` (toggle fast
   mode for fast-model ids like `gpt-5*`).
-- **Shortcuts**: alt+t cycles thinking levels (including `off`; registered by the
-  modes module, routed through the effort owner as an explicit choice);
-  ctrl+shift+e cycles effort from within the effort module itself (env-pin
-  aware — refuses with a notice while `PI_CORE_EFFORT` is set).
+- **Shortcuts**: alt+t cycles thinking levels (including `off`) and
+  ctrl+shift+e cycles effort — BOTH registered by the effort module (arch
+  review C5: alt+t moved from modes; now model-aware via
+  cycleLevel/cycleLevelWithOff instead of a hardcoded table, with a
+  zero-write guard so single-level models can no longer pin a clamped value
+  into the explicit slot); env-pin aware — refuses with a notice while
+  `PI_CORE_EFFORT` is set.
 - **Bus**: `effort` channel — `{ level, source: "env" | "session" | "profile" | "model-default" }`.
 - **Status slots**: `pi-effort-thinking`, `pi-effort-fast` (contract P0-CT-07).
 

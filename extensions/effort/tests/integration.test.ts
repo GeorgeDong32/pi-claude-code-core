@@ -552,3 +552,35 @@ test("bare /effort on a non-reasoning model notifies and returns", async () => {
     cleanupSession(previousAgentDir);
   }
 });
+
+test("C5 (arch review): alt+t registered here; single-level model handler never throws", async () => {
+  const singleLevelModel = {
+    ...reasoningModel,
+    id: "single-tier",
+    thinkingLevelMap: { minimal: null, low: null, medium: null, high: "high" },
+  } as unknown as Model<any>;
+  const { extension, session, previousAgentDir } = await createTestSession(singleLevelModel, "high", "high");
+
+  try {
+    const shortcuts = (
+      extension as unknown as {
+        shortcuts?: Map<string, { handler: (ctx: unknown) => void | Promise<void> }>;
+      }
+    ).shortcuts;
+    assert.ok(shortcuts, "extension exposes its shortcut map");
+    assert.ok(shortcuts.has("alt+t"), "effort registers alt+t (moved from modes)");
+    assert.ok(shortcuts.has("ctrl+shift+e"), "ctrl+shift+e still registered");
+
+    const before = session.thinkingLevel;
+    const { ctx } = buildPickerCtx({ model: singleLevelModel, thinkingLevel: "high", hasUI: true });
+    // ctrl+shift+e on the ONLY user-facing level: noop decision — notify,
+    // zero explicit writes, thinking level unchanged.
+    await shortcuts.get("ctrl+shift+e")!.handler(ctx);
+    assert.equal(session.thinkingLevel, before, "noop path leaves the thinking level untouched");
+    // alt+t from "high": write(off) — a REAL level on this model.
+    await shortcuts.get("alt+t")!.handler(ctx);
+    assert.ok(true, "both shortcut handlers ran without throwing");
+  } finally {
+    cleanupSession(previousAgentDir);
+  }
+});

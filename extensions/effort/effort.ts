@@ -188,6 +188,38 @@ export function cycleLevel(current: string, model: EffortModel | null | undefine
   return levels[(idx + 1) % levels.length];
 }
 
+/** Cycle including "off" (alt+t semantics — the modes module's old
+ * hardcoded six-step table, now model-aware). Wraps around. */
+export function cycleLevelWithOff(current: string, model: EffortModel | null | undefined): EffortLevel | undefined {
+	const levels = getUserFacingLevels(model);
+	if (levels.length === 0) return undefined;
+	const withOff = ["off", ...levels] as EffortLevel[];
+	const idx = withOff.indexOf(current as EffortLevel);
+	if (idx === -1) return withOff[0]!;
+	return withOff[(idx + 1) % withOff.length]!;
+}
+
+/** C5 (arch review): the shared shortcut decision — pure, so the
+ * zero-explicit-write guard is testable without a runtime. "noop" = the
+ * model supports no other level: the handler notifies and MUST NOT call
+ * owner.setExplicit (the old probe loop pinned a clamped value into the
+ * explicit slot and suppressed profile effort for the whole session). */
+export type CycleDecision =
+	| { kind: "write"; next: EffortLevel }
+	| { kind: "noop"; current: string }
+	| { kind: "unavailable" };
+
+export function decideCycleShortcut(
+	current: string,
+	model: EffortModel | null | undefined,
+	opts: { includeOff: boolean },
+): CycleDecision {
+	const next = opts.includeOff ? cycleLevelWithOff(current, model) : cycleLevel(current, model);
+	if (!next) return { kind: "unavailable" };
+	if (next === current) return { kind: "noop", current };
+	return { kind: "write", next };
+}
+
 // ─── Settings persistence ───────────────────────────────────────────
 
 // Thin adapters over lib/settings (P0-LB-01/P0-LB-04: the per-package JSON

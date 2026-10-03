@@ -17,6 +17,8 @@ import {
   resolveMaxLevel,
   resolveMinLevel,
   cycleLevel,
+  cycleLevelWithOff,
+  decideCycleShortcut,
   writeFastMode,
 } from "../effort.ts";
 
@@ -260,4 +262,43 @@ test("completion filter: xhigh-capable model — includes xhigh", () => {
   const model = xhighReasoningModel;
   const levels = getUserFacingLevels(model);
   assert.ok(levels.includes("xhigh" as any), "should include xhigh");
+});
+
+
+// ─── C5 (arch review): shared cycle-shortcut decision ────────────────
+// The zero-explicit-write guard: on a single-level model the decision is
+// "noop" — the handler notifies and never calls owner.setExplicit (the old
+// modes probe loop pinned a clamped value into the explicit slot and
+// suppressed profile effort for the whole session).
+
+const singleLevelModel = {
+  id: "single-tier",
+  reasoning: true,
+  thinkingLevelMap: { minimal: null, low: null, medium: null, high: "high" },
+} as const;
+
+test("decideCycleShortcut: single-level model — ctrl+shift+e is a NOOP (zero explicit write); alt+t still reaches off", () => {
+  // ctrl+shift+e (includeOff=false): the ONLY user-facing level is "high" and
+  // we're on it → noop, never setExplicit (the old probe-loop bug).
+  assert.deepEqual(decideCycleShortcut("high", singleLevelModel, { includeOff: false }), { kind: "noop", current: "high" });
+  // alt+t (includeOff=true): off ↔ high are BOTH real levels on this model —
+  // cycling to them is a legitimate write, not a clamp.
+  assert.deepEqual(decideCycleShortcut("high", singleLevelModel, { includeOff: true }), { kind: "write", next: "off" });
+  assert.deepEqual(decideCycleShortcut("off", singleLevelModel, { includeOff: true }), { kind: "write", next: "high" });
+});
+
+test("decideCycleShortcut: normal model → write next level", () => {
+  assert.deepEqual(decideCycleShortcut("medium", standardReasoningModel, { includeOff: false }), { kind: "write", next: "high" });
+  assert.deepEqual(decideCycleShortcut("medium", standardReasoningModel, { includeOff: true }), { kind: "write", next: "high" });
+});
+
+test("decideCycleShortcut: non-reasoning model — both shortcuts unavailable (off is the only state, nothing to cycle)", () => {
+  const plain = { id: "plain-model", reasoning: false };
+  assert.deepEqual(decideCycleShortcut("off", plain, { includeOff: false }), { kind: "unavailable" });
+  assert.deepEqual(decideCycleShortcut("off", plain, { includeOff: true }), { kind: "unavailable" });
+});
+
+test("cycleLevelWithOff: cycles through off ↔ user levels", () => {
+  assert.equal(cycleLevelWithOff("high", standardReasoningModel), "off");
+  assert.equal(cycleLevelWithOff("off", standardReasoningModel), "minimal");
 });

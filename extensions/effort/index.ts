@@ -7,6 +7,7 @@ import {
   type EffortLevel,
   type EffortModel,
   cycleLevel,
+  decideCycleShortcut,
   getAvailableThinkingLevels,
   getFastMode,
   getUserFacingLevels,
@@ -138,28 +139,44 @@ export default function effortExtension(pi: ExtensionAPI): void {
     };
   });
 
-  // ─── Keyboard shortcut: Ctrl+Shift+E to cycle effort ─────────────
+  // ─── Keyboard shortcuts: Ctrl+Shift+E / Alt+T to cycle effort ──────
+  // C5 (arch review): ONE shared handler. alt+t moved here from the modes
+  // module (its old hardcoded table + write-probe loop pinned clamped values
+  // into the explicit slot on single-level models); ctrl+shift+e gains the
+  // same zero-write guard. Decision logic is pure in effort.ts
+  // (decideCycleShortcut) — "noop" notifies and never calls setExplicit.
+  const cycleShortcut = (ctx: ExtensionContext, opts: { includeOff: boolean }): void => {
+    const pin = owner.envPin();
+    if (pin !== null) {
+      ui.notify(ctx, `Effort is pinned by PI_CORE_EFFORT=${pin}`, "warning");
+      return;
+    }
+    const current = pi.getThinkingLevel();
+    const decision = decideCycleShortcut(current, ctx.model, opts);
+    if (decision.kind === "unavailable") {
+      ui.notify(ctx, "Thinking not available for this model", "warning");
+      return;
+    }
+    if (decision.kind === "noop") {
+      ui.notify(ctx, `Thinking: ${decision.current} (model supports no other levels)`, "info");
+      return;
+    }
+    owner.setExplicit(toThinkingLevel(decision.next), "shortcut");
+    const after = pi.getThinkingLevel();
+    const appliesNow = ctx.isIdle();
+    ui.sync(ctx, after, refreshFastMode(), appliesNow);
+    const suffix = appliesNow ? "" : " (applies next prompt)";
+    ui.notify(ctx, `Effort: ${current} -> ${after}${suffix}`, "info");
+  };
+
   pi.registerShortcut("ctrl+shift+e", {
     description: "Cycle effort level",
-    handler: (ctx) => {
-      const pin = owner.envPin();
-      if (pin !== null) {
-        ui.notify(ctx, `Effort is pinned by PI_CORE_EFFORT=${pin}`, "warning");
-        return;
-      }
-      const current = pi.getThinkingLevel();
-      const next = cycleLevel(current, ctx.model);
-      if (!next) {
-        ui.notify(ctx, "Thinking not available for this model", "warning");
-        return;
-      }
-      owner.setExplicit(toThinkingLevel(next), "shortcut");
-      const after = pi.getThinkingLevel();
-      const appliesNow = ctx.isIdle();
-      ui.sync(ctx, after, refreshFastMode(), appliesNow);
-      const suffix = appliesNow ? "" : " (applies next prompt)";
-      ui.notify(ctx, `Effort: ${current} -> ${after}${suffix}`, "info");
-    },
+    handler: (ctx) => cycleShortcut(ctx, { includeOff: false }),
+  });
+
+  pi.registerShortcut("alt+t", {
+    description: "Cycle thinking level including off",
+    handler: (ctx) => cycleShortcut(ctx, { includeOff: true }),
   });
 
   // ─── External thinking changes: adopt pi's thinking_level_select (EFF-01)
