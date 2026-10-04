@@ -7,6 +7,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtemp } from "node:fs/promises";
+import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -89,4 +90,65 @@ test("auditor error surfaces in the rejection path (never reported as approved)"
 	});
 	assert.equal(outcome.verdict, "rejected");
 	assert.match(outcome.rejectionText, /Auditor error: spawn failed/);
+});
+
+// ---------- audit timeout + abort (spec 2026-10-04-goal-audit-hang-fix §4.1) ----------
+
+test("audit timeout rejects, keeps goal active, aborts the auditor signal", { timeout: 2000 }, async () => {
+	const dir = await mkdtemp(join(tmpdir(), "audit-flow-"));
+	const emissions: AuditEventEmission[] = [];
+	let auditorSignal: AbortSignal | undefined;
+	const ledgerPath = join(dir, ".pi", "goals", "goal_events.jsonl");
+	const outcome = await runCompletionAudit({
+		ctx: fakeCtx(dir),
+		goal: target(),
+		completionSummary: "claim",
+		detailedSummaryText: "s",
+		signal: undefined,
+		timeoutMs: 50,
+		sendAuditEvent: (e) => {
+			emissions.push(e);
+		},
+		auditor: async (args) => {
+			auditorSignal = args.signal;
+			// the incident shape: never settles (auditor session hung)
+			return new Promise<GoalAuditorResult>(() => {});
+		},
+	});
+	assert.equal(outcome.verdict, "rejected");
+	assert.match(outcome.rejectionText, /timed out/);
+	assert.match(outcome.rejectionText, /remains active/);
+	assert.equal(auditorSignal?.aborted, true, "timeout must propagate abort to the auditor session signal");
+	assert.equal(emissions.at(-1)?.phase, "rejected");
+	const events = fs.readFileSync(ledgerPath, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+	assert.equal(events.at(-1)?.type, "audit_result");
+	assert.equal(events.at(-1)?.verdict, "error");
+});
+
+test("user abort mid-audit rejects with 'aborted' text and propagates to the auditor signal", { timeout: 2000 }, async () => {
+	const dir = await mkdtemp(join(tmpdir(), "audit-flow-"));
+	const emissions: AuditEventEmission[] = [];
+	let auditorSignal: AbortSignal | undefined;
+	const toolController = new AbortController();
+	const outcome = await runCompletionAudit({
+		ctx: fakeCtx(dir),
+		goal: target(),
+		completionSummary: undefined,
+		detailedSummaryText: "s",
+		signal: toolController.signal,
+		timeoutMs: 10_000,
+		sendAuditEvent: (e) => {
+			emissions.push(e);
+		},
+		auditor: async (args) => {
+			auditorSignal = args.signal;
+			toolController.abort(); // user pressed Esc while the auditor was mid-flight
+			return new Promise<GoalAuditorResult>(() => {});
+		},
+	});
+	assert.equal(outcome.verdict, "rejected");
+	assert.match(outcome.rejectionText, /aborted/);
+	assert.match(outcome.rejectionText, /remains active/);
+	assert.equal(auditorSignal?.aborted, true, "tool abort must propagate to the auditor session signal");
+	assert.equal(emissions.at(-1)?.phase, "rejected");
 });

@@ -11,10 +11,13 @@
  * stopActiveGoal) stay in the adapter; this module only reports the
  * outcome with ready-to-render text.
  */
-import { loadGoalAuditorFileConfig, runGoalCompletionAuditor } from "./goal-auditor.ts";
+import { DEFAULT_AUDIT_TIMEOUT_MS, loadGoalAuditorFileConfig, runGoalCompletionAuditor, type GoalAuditorResult } from "./goal-auditor.ts";
 import { appendGoalEvent } from "./goal-ledger.ts";
 import { nowIso, type GoalRecord } from "./goal-record.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+
+// Re-exported for consumers that read the budget off the flow (single source lives in goal-auditor.ts).
+export { DEFAULT_AUDIT_TIMEOUT_MS };
 
 /** Structural subset of GoalAuditEventDetails (avoids a goal.ts import cycle). */
 export interface AuditEventEmission {
@@ -35,6 +38,10 @@ export interface CompletionAuditArgs {
 	sendAuditEvent: (emission: AuditEventEmission) => void;
 	/** Test seam: inject a fake auditor (defaults to the real subagent run). */
 	auditor?: typeof runGoalCompletionAuditor;
+	/** Total audit budget in ms (spec 2026-10-04-goal-audit-hang-fix §3.2).
+	 *  On expiry the flow returns a rejected outcome (goal stays active) instead
+	 *  of hanging forever; defaults to DEFAULT_AUDIT_TIMEOUT_MS. */
+	timeoutMs?: number;
 }
 
 export type CompletionAuditOutcome =
@@ -130,13 +137,71 @@ export async function runCompletionAudit(args: CompletionAuditArgs): Promise<Com
 		// Ledger append failure should not block completion
 	}
 
-	const auditor = await (args.auditor ?? runGoalCompletionAuditor)({
-		ctx: args.ctx,
-		goal: args.goal,
-		completionSummary: args.completionSummary,
-		detailedSummary: args.detailedSummaryText,
-		signal: args.signal,
+	// Bounded-wait envelope (spec 2026-10-04-goal-audit-hang-fix §3.2): the
+	// auditor must finish within timeoutMs or the flow returns a rejected
+	// outcome so update_goal always returns. Tool abort (Esc) rides the same
+	// envelope. The internal controller's signal is what the auditor session
+	// receives; both timeout and user abort land on it.
+	const timeoutMs = args.timeoutMs ?? DEFAULT_AUDIT_TIMEOUT_MS;
+	const internal = new AbortController();
+	const onToolAbort = () => internal.abort(new Error("audit aborted by user"));
+	args.signal?.addEventListener("abort", onToolAbort, { once: true });
+	const timer = setTimeout(() => internal.abort(new Error(`audit timed out after ${Math.round(timeoutMs / 1000)}s`)), timeoutMs);
+	// Neither race participant may become an unhandled rejection: the loser of
+	// the race keeps running/settles later (auditor) or rejects late (aborted).
+	const neverAborted = new Promise<never>((_, reject) => {
+		internal.signal.addEventListener("abort", () => reject(internal.signal.reason ?? new Error("audit aborted")), { once: true });
 	});
+	neverAborted.catch(() => {});
+	let timedOut = false;
+	let userAborted = false;
+	let auditorResult: GoalAuditorResult | undefined;
+	try {
+		const auditorPromise = (args.auditor ?? runGoalCompletionAuditor)({
+			ctx: args.ctx,
+			goal: args.goal,
+			completionSummary: args.completionSummary,
+			detailedSummary: args.detailedSummaryText,
+			signal: internal.signal,
+		});
+		auditorPromise.catch(() => {}); // if the abort branch wins the race, the loser must not surface as unhandled
+		auditorResult = await Promise.race([auditorPromise, neverAborted]);
+	} catch (error) {
+		const reason = internal.signal.reason;
+		if (reason instanceof Error && /timed out/.test(reason.message)) {
+			timedOut = true;
+		} else if (args.signal?.aborted) {
+			userAborted = true;
+		} else {
+			// Real auditor failure (not timeout/abort): rethrow after cleanup —
+			// pi surfaces it as a normal tool error; goal stays active.
+			throw error;
+		}
+	} finally {
+		clearTimeout(timer);
+		args.signal?.removeEventListener("abort", onToolAbort);
+	}
+	if (timedOut || userAborted) {
+		const head = timedOut
+			? `Goal audit timed out after ${Math.round(timeoutMs / 1000)}s. The goal remains active.`
+			: "Goal audit aborted by user. The goal remains active.";
+		const rejectionText = [head, "", "No completion verdict was reached. You may call update_goal again to re-run the audit."].join("\n");
+		try {
+			appendGoalEvent(args.ctx, {
+				type: "audit_result",
+				goalId: args.goal.id,
+				verdict: "error",
+				report: head,
+				at: nowIso(),
+			});
+		} catch {
+			// Ledger append failure should not block the rejection path
+		}
+		args.sendAuditEvent({ content: rejectionText, phase: "rejected", goalId: args.goal.id });
+		return { verdict: "rejected", goalId: args.goal.id, rejectionText };
+	}
+
+	const auditor = auditorResult as GoalAuditorResult; // neverAborted is Promise<never>, so only the auditor can win the race
 	// Append ledger: audit result
 	const verdict = auditor.approved ? "approved" : auditor.error ? "error" : ("disapproved" as const);
 	try {

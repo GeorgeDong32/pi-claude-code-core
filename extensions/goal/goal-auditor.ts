@@ -17,6 +17,8 @@ export interface GoalAuditorConfig {
 	provider?: string;
 	model?: string;
 	thinkingLevel?: ThinkingLevel;
+	/** Total audit budget in ms (clamped to MIN_AUDIT_TIMEOUT_MS). */
+	auditTimeoutMs?: number;
 }
 
 export interface GoalAuditorResult {
@@ -50,10 +52,23 @@ export function parseGoalAuditorConfig(raw: unknown): GoalAuditorConfig {
 	const provider = asNonEmptyString(record.provider);
 	const model = asNonEmptyString(record.model);
 	const thinkingLevel = asThinkingLevel(record.thinkingLevel ?? record.thinking_level);
+	const auditTimeoutMs = asAuditTimeoutMs(record.auditTimeoutMs ?? record.audit_timeout_ms);
 	if (provider) config.provider = provider;
 	if (model) config.model = model;
 	if (thinkingLevel) config.thinkingLevel = thinkingLevel;
+	if (auditTimeoutMs !== undefined) config.auditTimeoutMs = auditTimeoutMs;
 	return config;
+}
+
+/** Default total audit budget; covers the observed healthy audit range (3–9 min)
+ *  while bounding the incident shape (auditor tool hang = infinite wait). */
+export const DEFAULT_AUDIT_TIMEOUT_MS = 600_000;
+/** Floor for user-configured timeouts: below this even one model round-trip can exceed the budget. */
+export const MIN_AUDIT_TIMEOUT_MS = 60_000;
+
+function asAuditTimeoutMs(value: unknown): number | undefined {
+	if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return undefined;
+	return Math.max(Math.floor(value), MIN_AUDIT_TIMEOUT_MS);
 }
 
 export function loadGoalAuditorFileConfig(cwd: string): GoalAuditorConfig {
@@ -104,7 +119,7 @@ export function buildGoalAuditorPrompt(args: {
 		"You are the independent completion auditor for pi-goal.",
 		"The executor claims the goal is complete. Your job is to decide whether the user's objective is actually satisfied.",
 		"Be skeptical and semantic. Do not approve from paperwork, intent, file count, word count, build success, or a plausible summary alone.",
-		"Use read/grep/find/ls/bash as needed to inspect real artifacts. Do not mutate files or run destructive commands.",
+		"Use read/grep/find/ls/bash as needed to inspect real artifacts, but stay strictly inside the project working directory (cwd). Never scan the user's home directory, never descend into ~/Library/CloudStorage or any network/automount volume, and never start long-running foreground processes (servers, watchers, REPLs). Do not mutate files or run destructive commands.",
 		"If the work is only an alpha scaffold, generated template, shallow draft, proxy milestone, or lacks the user-facing value requested, disapprove.",
 		"If any explicit requirement is missing, weakly verified, contradicted, or not inspectable with the available evidence, disapprove.",
 		"Return a concise audit report. The final line MUST be exactly one of:",
@@ -128,13 +143,13 @@ export function buildGoalAuditorPrompt(args: {
 		"",
 		"Audit checklist:",
 		"1. Extract the real success criteria from the objective, including quality/reader outcomes.",
-		"2. Inspect artifacts or command output that can prove or disprove those criteria.",
+		"2. Inspect artifacts or command output that can prove or disprove those criteria (within the project directory only).",
 		"3. Explain missing or weak evidence, especially scaffold-vs-final quality gaps.",
 		"4. End with exactly <approved/> only if the objective is truly complete; otherwise end with exactly <disapproved/>.",
 	].join("\n");
 }
 
-function makeAuditorResourceLoader(): ResourceLoader {
+export function makeAuditorResourceLoader(): ResourceLoader {
 	return {
 		getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
 		getSkills: () => ({ skills: [], diagnostics: [] }),
@@ -144,6 +159,7 @@ function makeAuditorResourceLoader(): ResourceLoader {
 		getSystemPrompt: () => [
 			"You are a read-only completion auditor running in an isolated pi agent session.",
 			"Inspect the repository and decide whether the claimed goal completion is genuinely satisfied.",
+			"Stay inside the repository working directory; home-wide or cloud-storage scans hang the machine.",
 			"Never modify files. Never approve unless the actual user objective is complete.",
 		].join("\n"),
 		getAppendSystemPrompt: () => [],
@@ -222,7 +238,21 @@ export async function runGoalCompletionAuditor(args: {
 		});
 		try {
 			if (args.signal?.aborted) return { approved: false, disapproved: true, output: "", model: modelLabel(model), thinkingLevel, error: "Auditor aborted." };
-			await session.prompt(buildGoalAuditorPrompt(args));
+			// Bounded-abort wiring (spec 2026-10-04-goal-audit-hang-fix §3.3):
+			// pi's PromptOptions has no signal, so translate tool-abort/timeout
+			// into AgentSession.abort(). Verified against the pi 1.0.1 implementation:
+			// after abort(), prompt() settles (resolves) via the run-loop's
+			// _agentRunAbortRequested checks, so this await always returns.
+			const onAbort = () => {
+				void session.abort().catch(() => {});
+			};
+			args.signal?.addEventListener("abort", onAbort, { once: true });
+			try {
+				await session.prompt(buildGoalAuditorPrompt(args));
+			} finally {
+				args.signal?.removeEventListener("abort", onAbort);
+				session.dispose();
+			}
 		} finally {
 			unsubscribe();
 		}

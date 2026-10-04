@@ -1208,7 +1208,8 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	}
 
 	function auditorConfigValue(config: GoalAuditorConfig, key: keyof GoalAuditorConfig): string {
-		return config[key] ?? "(default)";
+		const value = config[key];
+		return value === undefined ? "(default)" : String(value);
 	}
 
 	function auditorSettingsLines(config: GoalAuditorConfig): string[] {
@@ -1216,6 +1217,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			`provider: ${auditorConfigValue(config, "provider")}`,
 			`model: ${auditorConfigValue(config, "model")}`,
 			`thinking_level: ${auditorConfigValue(config, "thinkingLevel")}`,
+			`audit_timeout_ms: ${auditorConfigValue(config, "auditTimeoutMs")}`,
 		];
 	}
 
@@ -1725,6 +1727,10 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				completionSummary: params.completionSummary,
 				detailedSummaryText: detailedSummary(auditTarget),
 				signal,
+				// Bounded audit (spec 2026-10-04-goal-audit-hang-fix): update_goal
+				// must always return; on expiry the flow returns a rejected outcome
+				// and the goal stays active.
+				timeoutMs: loadGoalAuditorFileConfig(ctx.cwd).auditTimeoutMs,
 				sendAuditEvent: ({ content, phase, goalId, auditor }) => {
 					pi.sendMessage<GoalAuditEventDetails>({
 						customType: GOAL_AUDIT_ENTRY,

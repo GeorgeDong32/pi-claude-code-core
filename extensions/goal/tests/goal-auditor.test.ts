@@ -77,3 +77,28 @@ test("buildGoalAuditorPrompt demands semantic approval markers", () => {
 	assert.match(prompt, /<disapproved\/>/);
 	assert.match(prompt, /Generated a VitePress scaffold/);
 });
+
+// ---------- prompt guardrails + timeout config (spec 2026-10-04-goal-audit-hang-fix §4.2) ----------
+
+test("buildGoalAuditorPrompt forbids home/cloud-storage scans and long-running processes", () => {
+	const prompt = buildGoalAuditorPrompt({ goal: goal(), completionSummary: "c", detailedSummary: "d" });
+	assert.match(prompt, /project working directory|project directory/);
+	assert.match(prompt, /CloudStorage/);
+	assert.match(prompt, /long-running foreground/);
+});
+
+test("auditor resource-loader system prompt constrains inspection to the repository directory", async () => {
+	const mod = await import("../goal-auditor.ts");
+	const loader = (mod as { makeAuditorResourceLoader?: () => { getSystemPrompt(): string } }).makeAuditorResourceLoader?.();
+	assert.ok(loader, "makeAuditorResourceLoader must be exported for audit wiring reuse");
+	const sp = loader.getSystemPrompt();
+	assert.match(sp, /repository working directory|project/);
+});
+
+test("parseGoalAuditorConfig parses auditTimeoutMs with clamping and fallbacks", () => {
+	assert.deepEqual(parseGoalAuditorConfig({ auditTimeoutMs: 120_000 }), { auditTimeoutMs: 120_000 });
+	assert.deepEqual(parseGoalAuditorConfig({ auditTimeoutMs: 1 }), { auditTimeoutMs: 60_000 });
+	assert.deepEqual(parseGoalAuditorConfig({ auditTimeoutMs: "abc" }), {});
+	assert.deepEqual(parseGoalAuditorConfig({}), {});
+	assert.deepEqual(parseGoalAuditorConfig({ auditTimeoutMs: 0 }), {});
+});
