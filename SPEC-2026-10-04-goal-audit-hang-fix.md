@@ -183,7 +183,9 @@ try {
 
 ## 8. 真机观察记录
 
-(实施完成后补:日期、goal、audit 耗时、结果。)
+- 2026-10-04(实施当日)活体验证:真实 `runCompletionAudit` 链路(真模型会话 + 真工具,临时冒烟 goal,跑后即删脚本)9 秒完成完整裁决流(started → rejected,对冒烟 goal 正确给出 disapproved),有限时间返回 ✅。此前事故救活实证:挂死 find 被杀后,旧进程的 audit 在 ~9 分钟内正常完成并关账(goal_completed 09:43:59Z)。
+- Headless pi -p 端到端尝试受阻于 core 仓库存量 bug(memory 扩展 stale-ctx 在 -p 模式崩溃、turn_end 边界报错),与本次改动无关(首次运行 goal 创建成功即报同一错误),已单独记录待修。
+- 观察项(待用户):真机重启 pi 后,下次真实 update_goal 不再永久卡死;超时/中止文案以 `Goal audit timed out…/aborted by user. The goal remains active.` 呈现,goal 保持 active 可重试。
 
 ## 9. 对抗 review 记录(流程②)
 
