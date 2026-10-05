@@ -38,6 +38,7 @@
 | 子代理集成 | `permission-forwarding.ts`、`mode-inherit.ts` | 审批转发经 `~/.pi/agent/sessions/permission-modes-forwarding/sessions/<id>/{requests,responses}`(P0-CT-05);`PERMISSION_MODES_INHERITED_MODE` 继承(P0-CT-04) |
 | Profiles | `profiles.ts` | 模型 profile(`provider/model[:effort]` 经 `lib/model-id.ts`);未设置时 `applyProfileModelForMode` 返回 undefined——没有静默 medium 默认 |
 | Plan 模式 | `session-branch.ts`、`branch-stats.ts`、`fusion-tools.ts`、`injection-probe.ts`、`denial-tracking.ts`、`config.ts`、`config-cache.ts`、`plan.ts` | plan 阶段跟踪、会话分支、working stats |
+| Working stats | `working-stats.ts` | **AR1005-ST(2026-10-05)**:流式统计缓存 —— cheap key = sessionManager 实例(WeakMap id)+ sessionId + leafId(合法空 branch 的 null 可缓存;getter 缺失/抛错 = 不可缓存,绝不当作"空 leaf")。message_update 命中 key = 零 getBranch/getContextUsage 调用(实测 1K/10K/50K branch × 200 次 update 全零;基线为 200 次 getBranch —— 即复现的 10K 下 200 万次 parent-map 读取)。失效:session_start/session_tree/session_shutdown reset;session_compact invalidate;message_end markDirty(先于宿主 append —— 与 leafId key 双保险,契约 AR1005-ST-HOST 对真实 SessionManager 钉住 leaf 移动);model_select onModelChange;turn_start/turn_end force(已提交终态)、before_provider_request forceUsage(不再无条件重求和)。无 cheap key 的旧宿主走无缓存读路径(peer floor 不变);读取失败绝不缓存为成功空快照 |
 | Bash 风险分析 | `bash-analysis.ts` | safe/destructive/auto-fallback/auto-approvable 分级裁决（自旧 `utils.ts` 拆出，arch review C3） |
 | 路径安全与项目身份 | `path-safety.ts` | outside-cwd/敏感路径检测；project root/id/tmp-dir（自 `utils.ts` 拆出） |
 | Outside-write 快照 | `outside-writes.ts` | `<ts>__<hash>.json` track/list/restore/pop 引擎（自 `utils.ts` 拆出；命令层在 `index.ts`） |

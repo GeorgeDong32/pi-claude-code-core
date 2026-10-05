@@ -2780,3 +2780,114 @@ describe("footer slot ownership vs CC-TUI (2026-09-22)", () => {
 		expect(footerCalls.length).toBe(0)
 	})
 })
+
+// ── AR1005-ST wiring (spec 2026-10-05 §9): operation counts through the
+// REAL registered hooks — a warm message_update stream costs ZERO
+// getBranch/getContextUsage calls; append/model-change/compaction
+// invalidate; turn_end and before_provider_request still refresh. ──
+describe("AR1005-ST working-stats cache (wiring)", () => {
+	function countingSm(entries: Array<{ id: string; type: string; message?: unknown }>) {
+		let branchCalls = 0
+		let leaf: string | null = entries.length ? (entries[entries.length - 1]!.id ?? null) : null
+		return {
+			get sm() {
+				return {
+					getBranch: () => {
+						branchCalls++
+						return entries
+					},
+					getEntries: () => entries,
+					getGitBranch: () => "main",
+					getSessionId: () => "sess-st",
+					getLeafId: () => leaf,
+				}
+			},
+			branchCalls: () => branchCalls,
+			setLeaf: (id: string | null) => (leaf = id),
+			entries,
+		}
+	}
+
+	function stEntry(id: string, usage?: Record<string, unknown>) {
+		return { type: "message", id, message: { role: "assistant", content: [{ type: "text", text: "x" }], usage } }
+	}
+
+	async function stSetup(entries: Array<{ id: string; type: string; message?: unknown }>) {
+		const pi = createFakePi()
+		permissionModesExtension(makeFakePiForExtension(pi))
+		const csm = countingSm(entries)
+		let usageCalls = 0
+		const base = makeCtx(pi, { cwd: process.cwd(), ui: {} as never })
+		const ctx = {
+			...base,
+			sessionManager: csm.sm,
+			getContextUsage: () => {
+				usageCalls++
+				return { tokens: 10, contextWindow: 100_000, percent: 0.01 }
+			},
+		} as never
+		return { pi, csm, usageCalls: () => usageCalls, ctx }
+	}
+
+	async function stFire(pi: FakePi, event: string, ctx: unknown) {
+		const handlers = pi.handlers.get(event) ?? []
+		for (const h of handlers) await h({}, ctx as never)
+	}
+
+	it("ST-T01: after warmup, 200 message_updates cost ZERO getBranch and ZERO getContextUsage calls", async () => {
+		const entries: Array<{ id: string; type: string; message?: unknown }> = []
+		for (let i = 0; i < 10_000; i++) entries.push(stEntry(`e${i}`, { input: 1, output: 1, cost: { total: 0.001 } }))
+		const { pi, csm, usageCalls, ctx } = await stSetup(entries)
+		await stFire(pi, "session_start", ctx)
+		await stFire(pi, "turn_start", ctx) // the warm forced read
+		const b0 = csm.branchCalls()
+		const u0 = usageCalls()
+		for (let i = 0; i < 200; i++) await stFire(pi, "message_update", ctx)
+		expect(csm.branchCalls() - b0).toBe(0)
+		expect(usageCalls() - u0).toBe(0)
+	})
+
+	it("ST-T02: append / model change / compaction invalidate on the next event", async () => {
+		const entries = [stEntry("a1", { input: 5, output: 5 })]
+		const { pi, csm, usageCalls, ctx } = await stSetup(entries)
+		await stFire(pi, "session_start", ctx)
+		await stFire(pi, "turn_start", ctx)
+		expect(csm.branchCalls()).toBeGreaterThan(0)
+
+		// append: leaf moves → the next message_update re-reads
+		entries.push(stEntry("a2", { input: 1 }))
+		csm.setLeaf("a2")
+		await stFire(pi, "message_update", ctx)
+		const afterAppend = csm.branchCalls()
+		expect(afterAppend).toBeGreaterThan(0)
+
+		// model change: usage re-read, branch NOT re-summed
+		const bBeforeModel = csm.branchCalls()
+		const uBeforeModel = usageCalls()
+		await stFire(pi, "model_select", ctx)
+		await stFire(pi, "message_update", ctx)
+		expect(csm.branchCalls()).toBe(bBeforeModel)
+		expect(usageCalls()).toBeGreaterThan(uBeforeModel)
+
+		// compaction invalidates the cached snapshot
+		await stFire(pi, "session_compact", ctx)
+		const bBeforeCompact = csm.branchCalls()
+		await stFire(pi, "message_update", ctx)
+		expect(csm.branchCalls()).toBe(bBeforeCompact + 1)
+	})
+
+	it("ST-T07: before_provider_request forces usage only; turn_end forces ONE committed read", async () => {
+		const entries: Array<{ id: string; type: string; message?: unknown }> = []
+		const { pi, csm, usageCalls, ctx } = await stSetup(entries)
+		await stFire(pi, "session_start", ctx)
+		await stFire(pi, "turn_start", ctx)
+		const b0 = csm.branchCalls()
+		await stFire(pi, "before_provider_request", ctx)
+		expect(csm.branchCalls()).toBe(b0) // unchanged branch is NOT re-summed
+		expect(usageCalls()).toBeGreaterThan(0)
+		entries.push(stEntry("t1", { output: 42 }))
+		csm.setLeaf("t1") // the committed entry moved the leaf
+		await stFire(pi, "turn_end", ctx)
+		expect(csm.branchCalls()).toBe(b0 + 1) // exactly ONE forced committed read
+	})
+})

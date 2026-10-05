@@ -41,11 +41,27 @@ export interface BranchCustomEntry {
 export type BranchEntry = BranchMessageEntry | BranchCustomEntry | { type: string }
 
 type SessionManagerLike = {
+	getLeafId?: () => string | null
 	getBranch?: () => unknown
 	getEntries?: () => unknown
 	getGitBranch?: () => unknown
 	getSessionId?: () => unknown
 	buildSessionProjection?: () => { messages?: unknown[] } | undefined
+}
+
+/** Current leaf entry id — the cheap branch identity for cache keys
+ *  (AR1005-ST-02). undefined = getter unsupported or read failed
+ *  (uncacheable); null = the LEGAL empty branch (cacheable). */
+export function readLeafId(sessionManager: unknown): string | null | undefined {
+	try {
+		const sm = sessionManager as SessionManagerLike | undefined
+		if (typeof sm?.getLeafId !== "function") return undefined
+		const raw = (sm as { getLeafId: () => string | null }).getLeafId()
+		if (raw === null) return null
+		return typeof raw === "string" ? raw : undefined
+	} catch {
+		return undefined
+	}
 }
 
 /** Raw wrapped entries from getBranch(), for transcript builders. */
@@ -55,6 +71,19 @@ export function readBranchEntries(sessionManager: unknown): BranchEntry[] {
 		return Array.isArray(raw) ? (raw as BranchEntry[]) : []
 	} catch {
 		return []
+	}
+}
+
+/** Strict variant for cache owners (AR1005-ST): null = the read failed or
+ *  the host has no getBranch — a failure must NEVER be cached as a
+ *  successful empty snapshot. A legal empty branch returns []. */
+export function readBranchEntriesStrict(sessionManager: unknown): BranchEntry[] | null {
+	try {
+		const raw = (sessionManager as SessionManagerLike | undefined)?.getBranch?.()
+		if (!Array.isArray(raw)) return null
+		return raw as BranchEntry[]
+	} catch {
+		return null
 	}
 }
 

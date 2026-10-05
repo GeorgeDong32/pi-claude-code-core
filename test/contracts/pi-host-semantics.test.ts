@@ -311,3 +311,35 @@ describe("AR1005-FU-HOST renderer render facts (2026-10-05-core-architecture-rel
 describe("AR1005-RU-HOST turn lifecycle (2026-10-05-core-architecture-reliability)", () => {
 	it.todo("⑨ real run loop: one turn_start per turn; tool calls within a turn share it (Phase 4 host acceptance — manual steps in the comment above)");
 });
+
+// ── AR1005-ST-HOST (spec 2026-10-05 §13): the host facts the modes
+// working-stats cache depends on. The leaf-identity half is pinned against
+// the REAL SessionManager below (an appended committed entry moves
+// getLeafId and appears in getBranch — that is what invalidates the cache
+// key). The message_end-before-append ordering is a run-loop property that
+// cannot be driven without a model — registered todo with the Phase 4
+// target and manual steps (spec §13.2); defensively, the modes wiring ALSO
+// marks the snapshot dirty on message_end, so the cache never relies on
+// the ordering alone. ──
+import { SessionManager as RealSessionManager } from "@earendil-works/pi-coding-agent";
+import { mkdtempSync, rmSync } from "node:fs";
+
+describe("AR1005-ST-HOST branch identity (2026-10-05-core-architecture-reliability)", () => {
+	it("⑩ a real SessionManager: appending a committed entry moves getLeafId and lands in getBranch (the cache key's invalidation signal)", () => {
+		const dir = mkdtempSync(join(tmpdir(), "st-host-"));
+		try {
+			const root = { id: "root", parentId: null, type: "session", timestamp: Date.now() };
+			const first = { id: "m1", parentId: "root", type: "message", message: { role: "user", content: [{ type: "text", text: "hi" }] }, timestamp: Date.now() };
+			const sm = RealSessionManager.inMemory(dir, undefined, [root, first] as never);
+			const leafBefore = sm.getLeafId();
+			const branchBefore = sm.getBranch().length;
+			sm.appendMessage({ role: "assistant", content: [{ type: "text", text: "ok" }] } as never);
+			expect(sm.getLeafId()).not.toBe(leafBefore); // the key moved
+			expect(sm.getBranch().length).toBe(branchBefore + 1); // and the branch grew
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it.todo("⑪ real run loop: message_end fires before SessionManager append (Phase 4 host acceptance — manual: breakpoint/log both in a live session; the modes cache also marks dirty on message_end, so correctness never relies on the ordering alone)");
+});

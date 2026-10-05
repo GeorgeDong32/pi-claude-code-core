@@ -80,6 +80,7 @@ import {
   accumulateBranchStats,
   emptyBranchStatsState,
 } from "./branch-stats.ts";
+import { createWorkingStats } from "./working-stats.ts";
 import {
   addPermissionRule,
   loadMergedPermissionRules,
@@ -776,7 +777,9 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
   // on message_end), so per-chunk work is O(new entries), not O(session
   // length); a moved prefix (navigate/fork/switch) forces a full recompute
   // (plan A1, property-tested in branch-stats.test.ts).
-  const branchStatsState = emptyBranchStatsState();
+  // AR1005-ST: the working-stats cache owns the snapshot + host-read
+  // invalidation (cheap key: sessionManager instance + sessionId + leafId).
+  const workingStats = createWorkingStats();
 
   function computeStats(ctx: ExtensionContext): {
     input: number;
@@ -785,24 +788,21 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     cacheWrite: number;
     cost: number;
   } {
-    try {
-      return accumulateBranchStats(
-        readBranchEntries(ctx.sessionManager),
-        branchStatsState,
-      );
-    } catch {
-      // Render path: keep last totals rather than throw.
-      return { ...branchStatsState.accum };
-    }
+    // AR1005-ST: the cache module owns failure handling (a failed read
+    // returns the last totals and stays uncached); branchStatsState is gone.
+    return workingStats.snapshot({ sessionManager: ctx.sessionManager }).stats;
   }
 
-  function workingStatsParts(ctx: ExtensionContext): string[] {
-    const s = computeStats(ctx);
+  function workingStatsParts(ctx: ExtensionContext, opts?: { forceUsage?: boolean }): string[] {
+    // AR1005-ST: stats AND usage come from ONE snapshot call (the old path
+    // read getBranch and getContextUsage separately per refresh).
+    const entry = workingStats.snapshot({ sessionManager: ctx.sessionManager, getContextUsage: ctx.getContextUsage }, opts);
+    const s = entry.stats;
     const parts = [`↑${formatCount(s.input)}`, `↓${formatCount(s.output)}`];
     if (s.cacheRead) parts.push(`R${formatCount(s.cacheRead)}`);
     if (lastTps > 0) parts.push(`⚡${Math.round(lastTps)} tok/s`);
     parts.push(`$${s.cost.toFixed(3)}`);
-    const usage = ctx.getContextUsage?.();
+    const usage = entry.usage;
     if (usage && usage.percent != null) {
       parts.push(`${Math.round(usage.percent)}% ctx`);
     }
@@ -831,13 +831,13 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     });
   }
 
-  function refreshWorkingMessage(ctx: ExtensionContext): void {
+  function refreshWorkingMessage(ctx: ExtensionContext, opts?: { forceUsage?: boolean }): void {
     if (!ctx.hasUI) return;
     // DC5 flip: logic always publishes (snapshot is always-full); the
     // working-message slot write belongs to the fallback adapter, which
     // yields to a live CC-TUI at its own write point. With cctui active
     // its status row owns the working line — publishing alone is correct.
-    const stats = workingStatsParts(ctx).join(" · ");
+    const stats = workingStatsParts(ctx, opts).join(" · ");
     publishCapability({ workingStats: stats });
     fallbackAdapter.onSnapshot(coreBus().snapshot());
   }
@@ -1828,13 +1828,26 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
   // ---- streaming-stat working message -----------------------------------
   pi.on("turn_start", async (_event, ctx) => {
     streamStart = Date.now();
-    outputAtStart = computeStats(ctx).output;
+    // AR1005-ST: ONE forced read feeds both the TPS baseline and the
+    // display (the refresh that follows is cache-hot — zero extra reads).
+    outputAtStart = workingStats.snapshot({ sessionManager: ctx.sessionManager }, { force: true }).stats.output;
     refreshWorkingMessage(ctx);
   });
   pi.on("before_provider_request", async (_event, ctx) =>
-    refreshWorkingMessage(ctx),
+    // ST: force ONE context-usage refresh; the branch sum reuses the cache
+    // (no unconditional re-sum of an unchanged branch).
+    refreshWorkingMessage(ctx, { forceUsage: true }),
   );
   pi.on("message_update", async (_event, ctx) => refreshWorkingMessage(ctx));
+  pi.on("message_end", async (_event, _ctx) => {
+    // ST: fired BEFORE the host appends the entry — the cached snapshot must
+    // not be mistaken for the new branch state (the leafId key also moves).
+    workingStats.markDirty();
+  });
+  pi.on("model_select", async (_event, _ctx) => {
+    // ST: observable model change invalidates the usage snapshot.
+    workingStats.onModelChange();
+  });
 
   // ---- turn_end: tps + plan-step tracking --------------------------------
   pi.on("turn_end", async (event, ctx) => {
@@ -1844,7 +1857,9 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       /* ignore */
     }
 
-    const stats = computeStats(ctx);
+    // ST: ONE forced committed-final read feeds the TPS math AND the
+    // display refresh (the old handler read the branch twice per turn_end).
+    const stats = workingStats.snapshot({ sessionManager: ctx.sessionManager }, { force: true }).stats;
     const elapsed = Math.max((Date.now() - streamStart) / 1000, 0.001);
     const delta = stats.output - outputAtStart;
     if (delta > 0) lastTps = delta / elapsed;
@@ -1963,6 +1978,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_compact", async (_event, ctx) => {
+    workingStats.invalidate(); // ST: compaction rewrites the branch
     if (currentMode === "bypass") {
       needsBypassSecurityReminder = true;
     }
@@ -2174,6 +2190,8 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", onSessionStart);
   pi.on("session_tree", onSessionStart);
+  pi.on("session_start", () => workingStats.reset()); // ST: re-base on (re)load
+  pi.on("session_tree", () => workingStats.reset());
   pi.on("session_start", (_event, ctx: ExtensionContext) => {
     // P4-FAM-05: session-scoped authorizations reset on (re)load
     clearSessionState();
@@ -2181,6 +2199,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     void ctx;
   });
   pi.on("session_shutdown", () => {
+    workingStats.reset(); // ST: clear the private cache (legacy keys unaffected)
     fallbackAdapter.shutdown();
     forwardingPoller?.stop();
     forwardingPoller = undefined;
