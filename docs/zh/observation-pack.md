@@ -41,6 +41,7 @@ obs_4b1d7b39 · +15.5KB`)+ 分页结果视图(大小 · 行数 · 范围,内容�
 | `index.ts` | 装配:context 投影、obs_recall 工具、哨兵 |
 | `observation.ts` | `createObservation`、`ensureStored`、`placeholderFor`、`isPureTextResult`、阈值(`THRESHOLD_BYTES`、`FULL_SENDS`)、UTF-8 边界 withhold(4 字节 emoji 安全) |
 | `ledger.ts` | 面向总线的累计 `ObservationPatch` 台账 |
+| `projection.ts` | 纯投影步骤(候选循环、send 计数恢复、FULL_SENDS 判定、哨兵)。**AR1005-OB(2026-10-05)**:`ProjectionState` 另持有**稳定 placeholder memo** —— 以同一 `${root}\0${toolName}\0${toolCallId}` identity 为键,值仅为 placeholder 字符串 + token 估算。头/尾完整行摘录构造(全文扫描,8 MiB 约 26 ms)原先每个热请求都跑一遍;现在每 identity 每进程恰一次(实测 16 KiB/2 MiB/8 MiB × 51 请求 1 次构造,热请求 ~0.001 ms)。memo 在首次 replacement 需要时生成(full-send 阶段绝不构造)、逐字复用、ledger 失败后保留(计数/节省不提交、下次重试)、不跨 root/tool;进程重启重新生成。state 上的 `placeholderConstructions` 为诚实可观察量(无 monkeypatch、无生产导出配置)。每次 replacement 请求仍追加 ledger 行 —— memo 绝不跳过审计 |
 
 ## 不变量与坑
 

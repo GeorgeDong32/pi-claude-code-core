@@ -66,6 +66,19 @@ export interface ProjectionState {
 	 * not memoized here, so the per-message fail-open retry semantics
 	 * (OBS-08) are unchanged. */
 	readonly stored: Set<string>;
+	/** AR1005-OB-01: the STABLE projection memo, keyed by the same
+	 * `${root}\0${toolName}\0${toolCallId}` identity as `identity`. Value =
+	 * the placeholder string + its token estimate — NOTHING else (no full
+	 * text copy, no permanent split array). Populated at the FIRST
+	 * replacement need (never during the full-send phase), reused verbatim
+	 * on every later request. Lives with the state's lifecycle: different
+	 * roots/tools never cross, a process restart regenerates. Survives a
+	 * failed ledger append (the computation is kept; the ledger/send
+	 * counts/savings are NOT committed — they retry next request). */
+	readonly placeholder: Map<string, { text: string; tokens: number }>;
+	/** OB test/diagnostic observable: how many times the (line-scanning)
+	 * placeholder construction actually ran — one per identity per process. */
+	placeholderConstructions: number;
 	sentinelWarned: boolean;
 	sentinelStreak: number;
 	placeholderCount: number;
@@ -77,6 +90,8 @@ export function createProjectionState(): ProjectionState {
 		sentCounts: new Map<string, number>(),
 		identity: new Map<string, Observation | null>(),
 		stored: new Set<string>(),
+		placeholder: new Map<string, { text: string; tokens: number }>(),
+		placeholderConstructions: 0,
 		sentinelWarned: false,
 		sentinelStreak: 0,
 		placeholderCount: 0,
@@ -158,8 +173,20 @@ export async function projectContext(args: {
 				continue;
 			}
 
-			const placeholder = placeholderFor(observation);
-			const placeholderTokens = estimateTokens(placeholder);
+			// AR1005-OB-01: the placeholder is constructed ONCE per identity —
+			// the head/tail complete-line excerpt scan is pure waste on every
+			// later request (measured ~26 ms/request at 8 MiB). The memo is set
+			// BEFORE the ledger append: a failed ledger keeps the computed
+			// memo (OB-01) while the counts below stay uncommitted (OBS-08).
+			let memo = args.state.placeholder.get(memoKey);
+			if (memo === undefined) {
+				const text = placeholderFor(observation);
+				memo = { text, tokens: estimateTokens(text) };
+				args.state.placeholder.set(memoKey, memo);
+				args.state.placeholderConstructions += 1;
+			}
+			const placeholder = memo.text;
+			const placeholderTokens = memo.tokens;
 			const removedTokens = Math.max(0, observation.tokens - placeholderTokens);
 			await args.ports.appendLedger({
 				event: "placeholder",

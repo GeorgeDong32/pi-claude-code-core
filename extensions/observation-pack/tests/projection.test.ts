@@ -239,3 +239,105 @@ test("C1: same toolCallId under different toolNames keeps separate identities", 
 	assert.equal(state.identity.size, 2, "the memo key includes toolName — no collision");
 	assert.equal(stored.length, 2);
 });
+
+// ── AR1005-OB (spec 2026-10-05 §10): the stable placeholder memo. The
+// head/tail complete-line construction (a full-text scan) ran on EVERY
+// hot request; it now runs once per identity and the memo is reused
+// verbatim. Counts via state.placeholderConstructions — an honest state
+// observable, no monkeypatching, no production export config. ──
+
+async function runRequests(n: number, messages: AgentMessage[], state = createProjectionState(), ports = fakePorts().ports) {
+	const out = [];
+	for (let i = 0; i < n; i++) out.push(await projectContext({ messages, root: "/w", state, ports }));
+	return out;
+}
+
+test("OB-T01: the cached placeholder is byte-identical across requests and fresh states (CRLF, no trailing newline, unicode, long single line)", async () => {
+	const variants = [
+		"line1\r\nline2\r\n" + "y".repeat(THRESHOLD_BYTES), // CRLF + no trailing newline
+		"中文内容\n" + "§".repeat(THRESHOLD_BYTES) + "\n✅", // unicode
+		"z".repeat(THRESHOLD_BYTES * 2), // long single line
+	];
+	for (const text of variants) {
+		const messages = [bigResult(text)];
+		const stateA = createProjectionState();
+		const portsA = fakePorts();
+		const results = await runRequests(FULL_SENDS + 3, messages, stateA, portsA.ports);
+		const placeholders = results.slice(FULL_SENDS).map((r) => (r.messages[0] as ToolResultMessage).content[0] && (r.messages[0] as ToolResultMessage).content[0]!.type === "text" ? ((r.messages[0] as ToolResultMessage).content[0] as { text: string }).text : "");
+		assert.ok(placeholders.every((p) => p.length > 0));
+		assert.ok(new Set(placeholders).size === 1, "placeholder identical across hot requests");
+		// a FRESH state regenerates the byte-identical placeholder
+		const stateB = createProjectionState();
+		const portsB = fakePorts();
+		await runRequests(FULL_SENDS + 1, messages, stateB, portsB.ports);
+		const fresh = (await runRequests(1, messages, stateB, portsB.ports))[0]!.messages[0] as ToolResultMessage;
+		const freshText = ((fresh.content[0] as { text: string }).text);
+		assert.equal(freshText, placeholders[0]);
+	}
+});
+
+test("OB-T02: zero constructions during full-send; ONE at the first replacement; zero on hot requests", async () => {
+	const messages = [bigResult(BIG)];
+	const state = createProjectionState();
+	const ports = fakePorts();
+	const results = await runRequests(FULL_SENDS, messages, state, ports.ports);
+	void results;
+	assert.equal(state.placeholderConstructions, 0, "full-send phase never constructs");
+	await runRequests(1, messages, state, ports.ports);
+	assert.equal(state.placeholderConstructions, 1, "first replacement constructs once");
+	await runRequests(5, messages, state, ports.ports);
+	assert.equal(state.placeholderConstructions, 5 === 5 ? 1 : 1, "hot requests never re-construct");
+});
+
+test("OB-T03: isolation — same call id under different tools, multiple roots, fresh state", async () => {
+	const a = bigResult(BIG, "bash");
+	const b: ToolResultMessage = { ...bigResult(BIG, "read"), toolCallId: "tc-1" }; // SAME call id, different tool
+	const state = createProjectionState();
+	const ports = fakePorts();
+	for (let i = 0; i < FULL_SENDS + 2; i++) {
+		await projectContext({ messages: [a, b], root: "/w", state, ports: ports.ports });
+		await projectContext({ messages: [a, b], root: "/other", state, ports: ports.ports }); // different root
+	}
+	assert.equal(state.placeholderConstructions, 4, "one per (root, tool, callId) identity");
+});
+
+test("OB-T05: a failed ledger keeps the original bytes, commits nothing, retries correctly — and keeps the computed memo", async () => {
+	const messages = [bigResult(BIG)];
+	const state = createProjectionState();
+	const ledger: Array<Record<string, unknown>> = [];
+	let failLedger = false;
+	const ports: ProjectionPorts = {
+		store: async () => {},
+		appendLedger: async (entry) => {
+			if (failLedger && entry.event === "placeholder") throw new Error("ledger down");
+			ledger.push(entry);
+		},
+	};
+	for (let i = 0; i < FULL_SENDS; i++) await projectContext({ messages, root: "/w", state, ports });
+	failLedger = true;
+	const failed = await projectContext({ messages, root: "/w", state, ports });
+	assert.equal(failed.replacedThisRequest, 0);
+	assert.equal(failed.failOpenReasons.length, 1);
+	assert.equal((failed.messages[0] as ToolResultMessage).content, messages[0]!.content, "original bytes kept");
+	assert.equal(state.savedTokens, 0, "no savings committed");
+	assert.equal(state.placeholderConstructions, 1, "the computed memo is KEPT (OB-01)");
+	failLedger = false;
+	const recovered = await projectContext({ messages, root: "/w", state, ports });
+	assert.equal(recovered.replacedThisRequest, 1);
+	assert.equal(state.placeholderConstructions, 1, "recovery reuses the memo");
+	assert.ok(state.savedTokens > 0);
+});
+
+test("OB-T07: ledger event order and sentinel/first-savings semantics match the baseline with the memo active", async () => {
+	const messages = [bigResult(BIG)];
+	const state = createProjectionState();
+	const ports = fakePorts();
+	await runRequests(FULL_SENDS + 2, messages, state, ports.ports);
+	assert.deepEqual(
+		ports.ledger.map((e) => e.event),
+		["full", "full", "placeholder", "placeholder"],
+	);
+	assert.equal(ports.ledger.filter((e) => e.event === "placeholder").length, 2, "one audit row per replacement request — the memo never skips the ledger");
+	assert.equal(state.placeholderCount, 1);
+	assert.ok(state.savedTokens > 0);
+});

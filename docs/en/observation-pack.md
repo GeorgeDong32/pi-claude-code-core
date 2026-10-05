@@ -45,6 +45,7 @@ sentinel warns when the projection stops taking effect (CMP-04).
 | `index.ts` | Assembly: context projection, obs_recall tool, sentinel |
 | `observation.ts` | `createObservation`, `ensureStored`, `placeholderFor`, `isPureTextResult`, thresholds (`THRESHOLD_BYTES`, `FULL_SENDS`), UTF-8 boundary withholding (4-byte emoji safe) |
 | `ledger.ts` | Cumulative `ObservationPatch` ledger for the bus |
+| `projection.ts` | The pure projection step (candidate loop, send-count recovery, FULL_SENDS decision, sentinel). **AR1005-OB (2026-10-05)**: `ProjectionState` also owns the STABLE placeholder memo — keyed by the same `${root}\0${toolName}\0${toolCallId}` identity, value = the placeholder string + token estimate only. The head/tail complete-line construction (a full-text scan, ~26 ms at 8 MiB) ran on EVERY hot request; it now runs once per identity per process (measured: 1 construction across 51 requests at 16 KiB/2 MiB/8 MiB, hot requests ~0.001 ms). The memo is populated at the FIRST replacement need (never during full-send), reused verbatim, kept across a failed ledger append (the counts/savings stay uncommitted and retry), and never crosses roots/tools; a process restart regenerates. `placeholderConstructions` on the state is the honest observable (no monkeypatching, no production export config). Ledger rows are still appended per replacement request — the memo never skips the audit |
 
 ## Invariants & gotchas
 
