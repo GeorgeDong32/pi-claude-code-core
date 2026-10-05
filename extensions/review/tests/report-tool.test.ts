@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 
-import { runReportTool } from "../src/report-tool.js";
+import { extractVerdictBlock, runReportTool } from "../src/report-tool.js";
 import { ensureRunDir, writeManifest } from "../src/review-report.js";
 import type { RunManifest } from "../src/review-report.js";
 
@@ -411,5 +411,16 @@ describe("runReportTool", () => {
 		});
 		assert.equal(res.ok, false);
 		assert.ok((res as { error: string }).error.includes("manifest not found"));
+	});
+});
+// AR1005-JS-06: connection pin — the review consumer accepts its verdict
+// shape through the shared extraction while a genuine trailing comma is
+// repaired; string bodies pass through byte-identical.
+describe("extractVerdictBlock (AR1005-JS-06)", () => {
+	test("string bodies with ,} stay verbatim while a real trailing comma is repaired", () => {
+		const md = 'prose\n```json\n{"verdict":"CHANGES_REQUESTED","reason":"literal ,} sequence",}\n```';
+		const v = extractVerdictBlock(md);
+		assert.equal(v?.verdict, "CHANGES_REQUESTED");
+		assert.equal(v?.reason, "literal ,} sequence");
 	});
 });

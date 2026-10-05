@@ -9,6 +9,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 
 import { RECALL_MANIFEST_MAX } from "../../lib/context-budget.ts";
 import { llmSelector, manifestRow, parseSelection, resolveRecallModel, type SelectionCandidate } from "../../extensions/memory/selector.ts";
+import { parseOperations } from "../../extensions/memory/llm.ts";
 import type { LlmComplete } from "../../extensions/memory/llm.ts";
 
 const NOW = Date.now();
@@ -104,5 +105,22 @@ describe("RV llmSelector (spec §8)", () => {
 		expect(resolveRecallModel("nope/x", registry)).toBeUndefined();
 		expect(resolveRecallModel(undefined, registry)).toBeUndefined();
 		expect(resolveRecallModel("test/sel-1", undefined)).toBeUndefined();
+	});
+});
+
+// AR1005-JS-06: connection pins — both memory consumers accept their real
+// payload shapes through the shared extraction while a genuine trailing
+// comma is repaired; string bodies pass through byte-identical.
+describe("JS string fidelity through the memory consumers", () => {
+	it("parseSelection keeps a selected key containing ,} verbatim alongside a real trailing comma", () => {
+		const valid = new Set(["memory/odd,}key.md", "memory/plain.md"]);
+		const text = '{"selected":["memory/odd,}key.md","memory/plain.md"],}';
+		expect(parseSelection(text, valid)).toEqual(["memory/odd,}key.md", "memory/plain.md"]);
+	});
+
+	it("parseOperations keeps op bodies with ,} verbatim alongside a real trailing comma", () => {
+		const text = '{"operations":[{"action":"add","layer":"user","file":"x.md","body":"literal ,} sequence",}],}';
+		const ops = parseOperations(text);
+		expect(ops).toEqual([{ action: "add", layer: "user", file: "x.md", body: "literal ,} sequence" }]);
 	});
 });

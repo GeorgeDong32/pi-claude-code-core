@@ -14,6 +14,7 @@
 | `effort-owner.ts` | 思考档位所有权链(P1-EF-05) | 单一所有者:① `PI_CORE_EFFORT` env 钉死 > ② 会话显式选择(/effort、picker、alt+t)> ③ 模式 profile `:effort` > ④ 模型默认。**core 中唯一的 `pi.setThinkingLevel` 调用点**(P1-EF-07 源码扫描强制)。 |
 | `context-budget.ts` | 静态注入预算切分(P3-RU-10) | `RULES_MAX` 40 000 / `MEMORY_INDEX_MAX` 25 000 / `DYNAMIC_STEER_MAX` 8 000 字符;以只读 `contextBudget` 通道发布到总线。是常量不是分配器——两个生产方场景下够用。 |
 | `core-economy.ts` | economy 功能开关(SPEC DEC-02) | `~/.pi/agent/core-economy.json` → `{ version: 1, actionFusion, observationPack }`,缺省均 true;文件畸形时降级为默认值并警告一次(刻意不同于上游 SoL-Pi 的 fail-fast)。 |
+| `json-lift.ts` | 模型文本 JSON 提取(架构巡查 C4;AR1005-JS) | `jsonCandidates` / `liftJson` / `repairJsonCandidate` / `balancedObjectSpans` —— 面向 modes 分类器、memory ops、recall 选择器、review verdict 的唯一字符串感知实现。候选顺序:fenced ```json 块从后往前 → 整文 trim → 字符串感知 balanced spans → 最外层 slice。AR1005-JS-01:repair 为字符状态扫描(跟踪字符串/转义),真实尾逗号只删除该逗号本身 —— `"literal ,} sequence"` 等字符串正文逐字保留(旧正则会改写它们)。AR1005-JS-02:候选由两个导出共享的私有惰性 generator 产生;阶段 1/2 成功即终止生成,整文/fence 已可解析的输入不再支付(可能平方的)span 扫描。仍需 span fallback 的输入保留已披露的平方最坏情形(AR1005-JS-03)。 |
 | `pi-compat.ts` | pi 宿主兼容性探针(SPEC CMP-01..06) | `MIN_PI_VERSION = "0.87.0"`;探测工具工厂 + `withFileMutationQueue`。economy 模块依赖的每个 pi 能力都是显式探针,绝非隐式假设(要防的失败模式:pi 升级静默破坏机制)。不 import pi 运行时对象——全部注入,可纯单测。 |
 
 测试:`test/lib/*.test.ts`(vitest)—— 每个原语一个套件,另有跨模块接线套件。

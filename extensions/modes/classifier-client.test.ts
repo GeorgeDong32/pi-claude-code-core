@@ -160,6 +160,14 @@ describe("parseClassifierVerdict", () => {
 			parseClassifierVerdict('shouldBlock: false, reason: "looks fine"'),
 		).toEqual({ allow: true, reason: "looks fine" })
 	})
+
+	// AR1005-JS-06: connection pin — the shared extraction keeps string bodies
+	// byte-identical while repairing the real trailing comma (classifier shape).
+	it("parses a verdict whose reason string contains ,} alongside a real trailing comma", () => {
+		expect(
+			parseClassifierVerdict('{"shouldBlock": false, "reason": "literal ,} sequence",}'),
+		).toEqual({ allow: true, reason: "literal ,} sequence" })
+	})
 })
 
 function makeRegistry(
