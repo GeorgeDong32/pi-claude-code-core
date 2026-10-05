@@ -15,7 +15,9 @@
 - **OB**:ProjectionState 稳定 placeholder memo(同 identity 键,值仅字符串+token;8MiB 热请求基线 ~26ms 构造 → 每 identity 恰 1 次,热请求 ~0.001ms);full-send 阶段零构造;ledger 失败保留 memo 但计数/节省不提交;每次 replacement 仍写 ledger 行(审计绝不跳过);placeholderConstructions 为状态上的诚实计数 seam。
 - **CL**:applyMemoryOps 每 op 死读取 `existing = listMemoryFiles(dir)` 删除(引用检查确认零消费;batch 起始计数与真实存在/安全检查保留)。
 - **RV**:prepareRun 规则发现改「workspace 重试落定后、以最终 workspacePath」(基线:调用仓无规则+目标仓有 → rulePaths=[] 并静默跳过 rulesheriff);manifest.rulePaths/ChangeProfile/路由/directive 消费同一 prepared 值;冻结相对路径数组形状不变;重试竞态取最终 workspace 规则;gh diff 权威/重试语义/local·diff-file 选择/config 优先级全保留。
-- **三门(最终)**:check 退出 0;test 55 文件 818 测全绿(vitest)+node:test 89/178/176/17/27(一次孤发 flake:modes 分类器重试时序测试,后续 3 轮全量不复现,非本批引入);contracts 31 通过 + 2 todo 退出 0。
+- **对抗审查(REVIEW-2026-10-05-...-adversarial.md)**:R1(P1,已修复)— ST 强制快照以无 getContextUsage 的 host 调用使 usageFresh 被污染为 true,真机流式期 ctx% 行消失(fake ctx 无该能力故 460 项测试全漏);修复 = wiring 单一 statsHost 形状 + 模块侧能力缺席不再置 fresh + 回归测试钉住;R2 备注显式 epoch 以清键等价实现;R3 备注基线预存在的分类器时序 flake(本批未触碰)。审查结论 ACCEPT(修复后)。
+
+**三门(最终)**:check 退出 0;test 55 文件 818 测全绿(vitest)+node:test 89/178/176/17/27(一次孤发 flake:modes 分类器重试时序测试,后续 3 轮全量不复现,非本批引入);contracts 31 通过 + 2 todo 退出 0。
 - **登记与遗留**:契约表新增 AR1005-{ST,RC,RU,FU}-HOST 四行(先登记后测试);DEVIATIONS #98-108;CHANGELOG Unreleased 五段;docs en/zh 八模块同步。**遗留 todo(§13.2 协议)**:⑨ RU-HOST(真机 turn_start 每 turn 一次、同 turn 多工具共享)与 ⑪ ST-HOST(真机 message_end 先于 SessionManager append)—— 无法以受控 adapter 无付费调用驱动真实 run-loop(ModelRuntime 无自定义 provider 注入 seam),已按协议登记 + test.todo 指向宿主验收 + 契约注释内保留可执行人工步骤;两项实现均已双保险(RU 预算以事件为准、ST 以 leafId key 失效),正确性不依赖该时序,但按 §17 该两 fact 未取证前对应项的宿主时序证据项保持 open,待用户真机会话执行注释内步骤后回填。
 
 ## goal 用量统计增强批(2026-10-04,spec 2026-10-04-goal-cost-accounting;免计划对抗——用户豁免)

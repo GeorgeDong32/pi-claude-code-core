@@ -80,7 +80,7 @@ import {
   accumulateBranchStats,
   emptyBranchStatsState,
 } from "./branch-stats.ts";
-import { createWorkingStats } from "./working-stats.ts";
+import { createWorkingStats, type WorkingStatsHost } from "./working-stats.ts";
 import {
   addPermissionRule,
   loadMergedPermissionRules,
@@ -781,6 +781,14 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
   // invalidation (cheap key: sessionManager instance + sessionId + leafId).
   const workingStats = createWorkingStats();
 
+  /** AR1005-ST: ONE host shape for every snapshot call site — the usage
+   * capability must be consistently present (a capability-less forced read
+   * would mark usage fresh with no value and hide the ctx% line on later
+   * cache hits). */
+  function statsHost(ctx: ExtensionContext): WorkingStatsHost {
+    return { sessionManager: ctx.sessionManager, getContextUsage: ctx.getContextUsage };
+  }
+
   function computeStats(ctx: ExtensionContext): {
     input: number;
     output: number;
@@ -790,13 +798,13 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
   } {
     // AR1005-ST: the cache module owns failure handling (a failed read
     // returns the last totals and stays uncached); branchStatsState is gone.
-    return workingStats.snapshot({ sessionManager: ctx.sessionManager }).stats;
+    return workingStats.snapshot(statsHost(ctx)).stats;
   }
 
   function workingStatsParts(ctx: ExtensionContext, opts?: { forceUsage?: boolean }): string[] {
     // AR1005-ST: stats AND usage come from ONE snapshot call (the old path
     // read getBranch and getContextUsage separately per refresh).
-    const entry = workingStats.snapshot({ sessionManager: ctx.sessionManager, getContextUsage: ctx.getContextUsage }, opts);
+    const entry = workingStats.snapshot(statsHost(ctx), opts);
     const s = entry.stats;
     const parts = [`↑${formatCount(s.input)}`, `↓${formatCount(s.output)}`];
     if (s.cacheRead) parts.push(`R${formatCount(s.cacheRead)}`);
@@ -1830,7 +1838,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     streamStart = Date.now();
     // AR1005-ST: ONE forced read feeds both the TPS baseline and the
     // display (the refresh that follows is cache-hot — zero extra reads).
-    outputAtStart = workingStats.snapshot({ sessionManager: ctx.sessionManager }, { force: true }).stats.output;
+    outputAtStart = workingStats.snapshot(statsHost(ctx), { force: true }).stats.output;
     refreshWorkingMessage(ctx);
   });
   pi.on("before_provider_request", async (_event, ctx) =>
@@ -1859,7 +1867,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
 
     // ST: ONE forced committed-final read feeds the TPS math AND the
     // display refresh (the old handler read the branch twice per turn_end).
-    const stats = workingStats.snapshot({ sessionManager: ctx.sessionManager }, { force: true }).stats;
+    const stats = workingStats.snapshot(statsHost(ctx), { force: true }).stats;
     const elapsed = Math.max((Date.now() - streamStart) / 1000, 0.001);
     const delta = stats.output - outputAtStart;
     if (delta > 0) lastTps = delta / elapsed;

@@ -80,7 +80,7 @@ describe("AR1005-ST module behavior", () => {
 		const a = cache.snapshot(host)
 		const b = cache.snapshot(host)
 		expect(a.stats).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 })
-		expect(b).toBe(a) // same entry object — the null-leaf snapshot is a cache hit
+		expect(b.stats).toEqual(a.stats) // null-leaf snapshot is reusable (identity is not the contract; zero host reads is)
 	})
 })
 
@@ -132,5 +132,33 @@ describe("AR1005-ST real-SessionManager parity (ST-T03)", () => {
 		} finally {
 			rmSync(tmp, { recursive: true, force: true })
 		}
+	})
+})
+
+describe("AR1005-ST capability-consistency regression (adversarial R1)", () => {
+	it("a forced read with the usage capability keeps usage alive on later key hits (ctx% never disappears mid-stream)", () => {
+		const cache = createWorkingStats()
+		let usageCalls = 0
+		const host = {
+			sessionManager: { getLeafId: () => "e1", getBranch: () => [] },
+			getContextUsage: () => {
+				usageCalls++
+				return { tokens: 5, contextWindow: 100, percent: 5 }
+			},
+		}
+		// turn_start-style forced read WITH the capability
+		const forced = cache.snapshot(host, { force: true })
+		expect(forced.usage?.percent).toBe(5)
+		// message_update-style key hit must still carry the usage
+		const hit = cache.snapshot(host)
+		expect(hit.usage?.percent).toBe(5)
+		expect(hit).toBe(forced)
+		// and a capability-less forced snapshot never poisons freshness for
+		// capability-bearing later reads
+		const bareForced = cache.snapshot({ sessionManager: host.sessionManager }, { force: true })
+		expect(bareForced.usage).toBeUndefined()
+		const recovered = cache.snapshot(host)
+		expect(recovered.usage?.percent).toBe(5)
+		expect(usageCalls).toBe(2) // forced + recovered; the capability-less read makes NO host call
 	})
 })

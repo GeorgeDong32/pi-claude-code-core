@@ -90,12 +90,16 @@ export function createWorkingStats(): WorkingStatsCache {
 		}
 	}
 
-	/** Read context usage. An ABSENT capability is fresh (nothing to retry);
-	 *  a returning-undefined or throwing read stays unfresh — the next event
-	 *  retries (a failure is never cached as a successful empty snapshot). */
+	/** Read context usage. A returning-undefined or throwing read stays
+	 *  unfresh — the next event retries (a failure is never cached as a
+	 *  successful empty snapshot). An ABSENT capability also leaves freshness
+	 *  unset: a capability-less read must never mark usage fresh, or a later
+	 *  capability-bearing key hit would wrongly reuse a missing value
+	 *  (adversarial R1 — the ctx% line would vanish mid-stream). The absent
+	 *  case costs one typeof check, no host read. */
 	function readUsage(host: WorkingStatsHost): ContextUsageLike | undefined {
 		if (typeof host.getContextUsage !== "function") {
-			usageFresh = true;
+			usageFresh = false;
 			return undefined;
 		}
 		try {
