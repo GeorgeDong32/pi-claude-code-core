@@ -7,6 +7,14 @@
  * event trio, and the ledger writes. The emit seam is injected — the
  * adapter owns pi.sendMessage — so no pi dependency and no import cycle.
  *
+ * AR1005-AU-01 (2026-10-05): the bounded-wait envelope establishes its
+ * internal-cancellation result FIRST, then connects the external tool
+ * signal, then checks that signal's CURRENT state — a pre-aborted call
+ * never invokes the auditor (no new model work) and returns the existing
+ * rejected outcome; timer + both listeners are released on every exit
+ * path. The started event means "the audit flow was requested", not "the
+ * model ran" (spec 2026-10-05 §5 AU-01.3).
+ *
  * State changes (auditAttempts++, persist, pendingGoalAchievement,
  * stopActiveGoal) stay in the adapter; this module only reports the
  * outcome with ready-to-render text.
@@ -137,35 +145,53 @@ export async function runCompletionAudit(args: CompletionAuditArgs): Promise<Com
 		// Ledger append failure should not block completion
 	}
 
-	// Bounded-wait envelope (spec 2026-10-04-goal-audit-hang-fix §3.2): the
-	// auditor must finish within timeoutMs or the flow returns a rejected
-	// outcome so update_goal always returns. Tool abort (Esc) rides the same
-	// envelope. The internal controller's signal is what the auditor session
-	// receives; both timeout and user abort land on it.
+	// Bounded-wait envelope (spec 2026-10-04-goal-audit-hang-fix §3.2; AR1005-AU-01
+	// 2026-10-05): the auditor must finish within timeoutMs or the flow returns
+	// a rejected outcome so update_goal always returns. Tool abort (Esc) rides
+	// the same envelope. The internal controller's signal is what the auditor
+	// session receives; both timeout and user abort land on it.
+	//
+	// AR1005-AU-01 ordering: (1) establish the internal-cancellation result and
+	// its cleanup FIRST, (2) then connect the external signal, (3) then check
+	// the external signal's CURRENT state — a pre-aborted tool call must not
+	// invoke the auditor at all (no new model work) and returns the existing
+	// rejected outcome. Establishing the internal listener before any abort can
+	// fire also guarantees the never-resolving-race branch can never occur.
 	const timeoutMs = args.timeoutMs ?? DEFAULT_AUDIT_TIMEOUT_MS;
 	const internal = new AbortController();
+	// (1) internal cancellation result + its cleanup, FIRST.
+	let rejectNever: ((reason: unknown) => void) | null = null;
+	const neverAborted = new Promise<never>((_, reject) => {
+		rejectNever = reject;
+	});
+	// Neither race participant may become an unhandled rejection: the loser of
+	// the race keeps running/settles later (auditor) or rejects late (aborted).
+	neverAborted.catch(() => {});
+	const onInternalAbort = () => rejectNever?.(internal.signal.reason ?? new Error("audit aborted"));
+	internal.signal.addEventListener("abort", onInternalAbort, { once: true });
+	// (2) connect the external signal …
 	const onToolAbort = () => internal.abort(new Error("audit aborted by user"));
 	args.signal?.addEventListener("abort", onToolAbort, { once: true });
 	const timer = setTimeout(() => internal.abort(new Error(`audit timed out after ${Math.round(timeoutMs / 1000)}s`)), timeoutMs);
-	// Neither race participant may become an unhandled rejection: the loser of
-	// the race keeps running/settles later (auditor) or rejects late (aborted).
-	const neverAborted = new Promise<never>((_, reject) => {
-		internal.signal.addEventListener("abort", () => reject(internal.signal.reason ?? new Error("audit aborted")), { once: true });
-	});
-	neverAborted.catch(() => {});
 	let timedOut = false;
 	let userAborted = false;
 	let auditorResult: GoalAuditorResult | undefined;
 	try {
-		const auditorPromise = (args.auditor ?? runGoalCompletionAuditor)({
-			ctx: args.ctx,
-			goal: args.goal,
-			completionSummary: args.completionSummary,
-			detailedSummary: args.detailedSummaryText,
-			signal: internal.signal,
-		});
-		auditorPromise.catch(() => {}); // if the abort branch wins the race, the loser must not surface as unhandled
-		auditorResult = await Promise.race([auditorPromise, neverAborted]);
+		if (args.signal?.aborted) {
+			// AU-01.2: pre-aborted on entry — no auditor invocation, no model work;
+			// the started event above still fired ("requested", not "model ran").
+			userAborted = true;
+		} else {
+			const auditorPromise = (args.auditor ?? runGoalCompletionAuditor)({
+				ctx: args.ctx,
+				goal: args.goal,
+				completionSummary: args.completionSummary,
+				detailedSummary: args.detailedSummaryText,
+				signal: internal.signal,
+			});
+			auditorPromise.catch(() => {}); // if the abort branch wins the race, the loser must not surface as unhandled
+			auditorResult = await Promise.race([auditorPromise, neverAborted]);
+		}
 	} catch (error) {
 		const reason = internal.signal.reason;
 		if (reason instanceof Error && /timed out/.test(reason.message)) {
@@ -178,8 +204,12 @@ export async function runCompletionAudit(args: CompletionAuditArgs): Promise<Com
 			throw error;
 		}
 	} finally {
+		// AU-01.5: timer, external listener and internal listener released on
+		// EVERY exit path.
 		clearTimeout(timer);
 		args.signal?.removeEventListener("abort", onToolAbort);
+		internal.signal.removeEventListener("abort", onInternalAbort);
+		rejectNever = null;
 	}
 	if (timedOut || userAborted) {
 		const head = timedOut

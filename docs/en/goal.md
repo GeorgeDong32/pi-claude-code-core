@@ -41,7 +41,8 @@ is audited complete.
 | `goal-record.ts`, `goal-pool.ts`, `goal-ledger.ts` | State model: active/paused records, open-goal pool, usage ledger |
 | `goal-policy.ts` | What tools are allowed in which goal status (`ACTIVE_GOAL_TOOL_NAMES`, `POST_STOP_ALLOWED_TOOLS`, …) |
 | `goal-draft.ts`, `goal-questionnaire.ts` | /goals-style intent discussion → `propose_goal_draft` → Confirm/Continue dialog |
-| `goal-auditor.ts` | Independent completion auditor; its approval gates `update_goal(status=complete)` |
+| `goal-auditor.ts` | Independent completion auditor; its approval gates `update_goal(status=complete)`. AR1005-AU-02: the session's entire remaining lifecycle is try/finally-covered from the moment creation resolves — cancel-during-creation skips the prompt and disposes once; subscribe/prompt/unsubscribe failures all still dispose; a late completion after timeout/abort can only clean up (never approves). `sessionAdapter` is the internal test seam (controlled adapter vs the real `createAgentSession`) |
+| `goal-audit-flow.ts` | Completion-audit orchestration (B7 step 2): config resolution, started/rejected/passed event trio, ledger writes, bounded-wait envelope. AR1005-AU-01: internal-cancellation result established FIRST, external signal connected then checked for pre-abort (a pre-aborted call never invokes the auditor and returns the existing rejected outcome); timer + both listeners released on every exit path |
 | `goal-compaction.ts` | Keep the goal context within budget across long runs |
 | `goal-questionnaire.ts` | Structured interview tools for ambiguous intents |
 | `storage/goal-files.ts` | `.pi/goals/` disk layout |

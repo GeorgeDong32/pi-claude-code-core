@@ -19,7 +19,8 @@ handoff 2026-09-20 称「npm 最新 0.1.7、本地领先」。**实测(registry.
 | 文件 | 差异 | 白名单依据 |
 |---|---|---|
 | `goal.ts` | +`publishGoalChannel()`(bus goal 通道:active/paused/summary),挂 `updateUI()` 开头;+coreBus/displayObjectiveTitle import;+`isSubagentChildProcess` import(modes/permission-forwarding)——`loadState` 子会话跳过磁盘收养、`reconcileFocusedGoalFromDisk` 同判定返回、`queueContinuation` 顶部早退(goal-hijack 修复,GH-02/02b/03,DEVIATIONS #71);`assistantTurnTokens()` 改为四通道求和(input/output/cacheRead/cacheWrite,上游仅前两项)——cache-inclusive 记账,开启 prompt caching 时上游口径会把真实用量低报约一个量级 | 用户指令 2026-10-01(DEVIATIONS #69);bus 通道形状零变化,仅数值口径 |
-| `goal-auditor.ts` | config 读写迁 `lib/settings.ts`(readJson/writeJsonAtomic,写入获得 tmp+rename 原子性);pi 0.85 类型漂移修复(ResourceLoader 补 `getSystemPromptSource`/`getAppendSystemPromptSources`;`createAgentSession` 删 `modelRegistry` 选项——0.85 默认 modelRuntime 读同一 agentDir,auditor model 已显式解析为具体 Model) | P2-GO-03a;漂移修复是 fork 入树的必然(P0 时只读源包靠白名单豁免,入树后必须过 tsc) |
+| `goal-audit-flow.ts` | AR1005-AU-01(2026-10-05):封套顺序改为「内部取消结果 → 连接外部 signal → 检查当前状态」,预中止不调用 auditor;timer/双 listener 全路径释放 | 本树 B7 拆分文件(上游无对应物);spec 2026-10-05 §5 |
+| `goal-auditor.ts` | config 读写迁 `lib/settings.ts`(readJson/writeJsonAtomic,写入获得 tmp+rename 原子性);pi 0.85 类型漂移修复(ResourceLoader 补 `getSystemPromptSource`/`getAppendSystemPromptSources`;`createAgentSession` 删 `modelRegistry` 选项——0.85 默认 modelRuntime 读同一 agentDir,auditor model 已显式解析为具体 Model);AR1005-AU-02(2026-10-05):session 全剩余生命周期 try/finally + `sessionAdapter` 测试 seam + 取消/异常路径恰好一次 dispose | P2-GO-03a;漂移修复是 fork 入树的必然(P0 时只读源包靠白名单豁免,入树后必须过 tsc);spec 2026-10-05 §5 |
 | `goal-questionnaire.ts` | 对话框底座 `ctx.ui.custom(factory)` → `showComponentOverlay(ctx, {component})`(bare 调用、无 overlay options,行为等价) | P2-GO-03a |
 | `ui.ts` | core 新增文件(DC4b 呈现解耦层)：状态栏/goal 块渲染经 `GoalUiDeps` 6-getter 参数化,上游无此文件 | DC4b(见 PROGRESS Core/UI 解耦批；上游无对应物) |
 | `questionnaire-layout.ts` | core 新增文件(DC4b)：问卷布局表驱动化,上游无此文件 | DC4b(同上) |

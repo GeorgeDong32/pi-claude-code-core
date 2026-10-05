@@ -13,6 +13,33 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { GoalRecord } from "./goal-record.ts";
 
+/*
+ * goal-auditor.ts — the independent completion auditor session (fork of
+ * capyup/pi-goal, see FORK.md). AR1005-AU-02 (2026-10-05): the moment
+ * session creation resolves, the session enters a try/finally covering
+ * its ENTIRE remaining lifecycle — cancel-during-creation skips the prompt
+ * and disposes exactly once; subscribe/prompt/unsubscribe failures all
+ * still dispose (each cleanup step guarded so one throwing cannot skip
+ * the other); a creation rejection never touches a nonexistent disposer.
+ * `sessionAdapter` is the internal test seam (controlled adapter vs the
+ * real createAgentSession — one host boundary, not a mock-everything
+ * layer). A late completion after the flow's timeout/abort can only clean
+ * up: it returns an aborted error outcome, never an approval.
+ */
+
+/** Structural session shape the auditor drives (AR1005-AU-02 test seam:
+ * production uses the real createAgentSession result; tests use a
+ * controlled adapter — one host boundary, not a mock-everything layer). */
+export interface AuditorSession {
+	subscribe(listener: (event: unknown) => void): () => void;
+	prompt(prompt: string): Promise<unknown>;
+	abort(): Promise<void>;
+	dispose(): void;
+}
+
+/** Opens an auditor session over createAgentSession-shaped options. */
+export type OpenAuditorSession = (opts: Parameters<typeof createAgentSession>[0]) => Promise<{ session: AuditorSession }>;
+
 export interface GoalAuditorConfig {
 	provider?: string;
 	model?: string;
@@ -205,6 +232,9 @@ export async function runGoalCompletionAuditor(args: {
 	completionSummary?: string | null;
 	detailedSummary: string;
 	signal?: AbortSignal;
+	/** AU-02 internal test seam: controlled session adapter (defaults to the
+	 * real createAgentSession). Production and tests drive the same interface. */
+	sessionAdapter?: OpenAuditorSession;
 }): Promise<GoalAuditorResult> {
 	const config = loadGoalAuditorConfig(args.ctx.cwd);
 	const resolved = resolveAuditorModel(args.ctx, config);
@@ -215,7 +245,12 @@ export async function runGoalCompletionAuditor(args: {
 		return { approved: false, disapproved: true, output: "", model: modelLabel(model), thinkingLevel, error: resolved.error };
 	}
 	try {
-		const { session } = await createAgentSession({
+		// AU-02: the session enters a try/finally covering its ENTIRE remaining
+		// lifecycle the moment creation resolves. Creation itself may reject —
+		// then there is no session object and no disposer to call (the catch
+		// below reports the error outcome; nothing leaks).
+		const openSession = args.sessionAdapter ?? ((opts) => createAgentSession(opts) as Promise<{ session: AuditorSession }>);
+		const { session } = await openSession({
 			cwd: args.ctx.cwd,
 			model,
 			thinkingLevel,
@@ -225,18 +260,21 @@ export async function runGoalCompletionAuditor(args: {
 			// inherited registry is not needed (fork drift fix)
 			resourceLoader: makeAuditorResourceLoader(),
 			sessionManager: SessionManager.inMemory(args.ctx.cwd),
-			settingsManager: SettingsManager.inMemory({ compaction: { enabled: false } }),
+			settingsManager: SettingsManager.inMemory({ compaction: { enabled: false } }) as never,
 			tools: ["read", "grep", "find", "ls", "bash"],
 		});
-		const unsubscribe = session.subscribe((event) => {
-			if (event.type !== "message_end") return;
-			const message = event.message as any;
-			if (message.role !== "assistant") return;
-			for (const part of message.content ?? []) {
-				if (part.type === "text" && typeof part.text === "string") outputParts.push(part.text);
-			}
-		});
+		let unsubscribe: (() => void) | null = null;
 		try {
+			unsubscribe = session.subscribe((event) => {
+				if ((event as { type?: string }).type !== "message_end") return;
+				const message = (event as { message?: { role?: string; content?: Array<{ type?: string; text?: string }> } }).message;
+				if (message?.role !== "assistant") return;
+				for (const part of message.content ?? []) {
+					if (part.type === "text" && typeof part.text === "string") outputParts.push(part.text);
+				}
+			});
+			// AU-02: cancelled DURING creation — do not prompt, dispose exactly
+			// once (the finally below), no model work.
 			if (args.signal?.aborted) return { approved: false, disapproved: true, output: "", model: modelLabel(model), thinkingLevel, error: "Auditor aborted." };
 			// Bounded-abort wiring (spec 2026-10-04-goal-audit-hang-fix §3.3):
 			// pi's PromptOptions has no signal, so translate tool-abort/timeout
@@ -251,10 +289,21 @@ export async function runGoalCompletionAuditor(args: {
 				await session.prompt(buildGoalAuditorPrompt(args));
 			} finally {
 				args.signal?.removeEventListener("abort", onAbort);
-				session.dispose();
 			}
 		} finally {
-			unsubscribe();
+			// AU-02: subscribe/prompt/early-return/unsubscribe failures must ALL
+			// still dispose; each step guarded so one throwing cannot skip the
+			// other. dispose exactly once (this is the only disposal site).
+			try {
+				unsubscribe?.();
+			} catch {
+				/* unsubscribe failure must not skip dispose */
+			}
+			try {
+				session.dispose();
+			} catch {
+				/* an already-disposed/throwing disposer must not mask the result */
+			}
 		}
 		const output = outputParts.join("\n\n").trim();
 		const decision = parseAuditorDecision(output);

@@ -152,3 +152,90 @@ test("user abort mid-audit rejects with 'aborted' text and propagates to the aud
 	assert.equal(auditorSignal?.aborted, true, "tool abort must propagate to the auditor session signal");
 	assert.equal(emissions.at(-1)?.phase, "rejected");
 });
+
+// ── AR1005-AU-01 (spec 2026-10-05 §5): pre-aborted entry, registration-near
+// cancellation, and late-success-after-timeout — the auditor is not invoked
+// on pre-abort, the rejected outcome is the existing one, and a late
+// approval can never flip a timed-out flow. Baseline red evidence via stash. ──
+
+test("AU-T01: signal already aborted on entry — auditor NEVER called, existing rejected outcome, started event still fired", { timeout: 2000 }, async () => {
+	const dir = await mkdtemp(join(tmpdir(), "au-t01-"));
+	const emissions: AuditEventEmission[] = [];
+	let auditorCalls = 0;
+	const controller = new AbortController();
+	controller.abort(); // pre-aborted tool call
+	const outcome = await runCompletionAudit({
+		ctx: fakeCtx(dir),
+		goal: target(),
+		completionSummary: undefined,
+		detailedSummaryText: "s",
+		signal: controller.signal,
+		sendAuditEvent: (e) => {
+			emissions.push(e);
+		},
+		auditor: async () => {
+			auditorCalls++;
+			return { approved: true, output: "<approved/>", model: "m", thinkingLevel: undefined } as GoalAuditorResult;
+		},
+		timeoutMs: 10_000,
+	});
+	assert.equal(auditorCalls, 0, "pre-abort must not invoke the auditor / start model work");
+	assert.equal(outcome.verdict, "rejected");
+	assert.match(outcome.rejectionText, /aborted by user/);
+	assert.match(outcome.rejectionText, /goal remains active/i);
+	// the started event still fired (requested, not model-ran) and the ledger carries the error audit_result
+	assert.deepEqual(emissions.map((e) => e.phase), ["started", "rejected"]);
+	const events = fs.readFileSync(join(dir, ".pi", "goals", "goal_events.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+	assert.ok(events.some((e) => e.type === "completion_requested"));
+	assert.ok(events.some((e) => e.type === "audit_started"));
+	assert.ok(events.some((e) => e.type === "audit_result" && e.verdict === "error"));
+});
+
+test("AU-T02: abort immediately after registration — rejected, no unhandled rejection, auditor signal aborted", { timeout: 2000 }, async () => {
+	const dir = await mkdtemp(join(tmpdir(), "au-t02-"));
+	const controller = new AbortController();
+	let auditorSignal: AbortSignal | undefined;
+	const outcomePromise = runCompletionAudit({
+		ctx: fakeCtx(dir),
+		goal: target(),
+		completionSummary: undefined,
+		detailedSummaryText: "s",
+		signal: controller.signal,
+		sendAuditEvent: () => {},
+		auditor: async (args) => {
+			auditorSignal = args.signal;
+			return await new Promise<GoalAuditorResult>(() => {}); // never settles
+		},
+		timeoutMs: 10_000,
+	});
+	await new Promise((r) => setTimeout(r, 5));
+	controller.abort(); // fires right after registration
+	const outcome = await outcomePromise;
+	assert.equal(outcome.verdict, "rejected");
+	assert.match(outcome.rejectionText, /aborted by user/);
+	assert.ok(auditorSignal?.aborted);
+});
+
+test("AU-T05: auditor approves AFTER the timeout — the flow already returned rejected; late success changes nothing", { timeout: 2000 }, async () => {
+	const dir = await mkdtemp(join(tmpdir(), "au-t05-"));
+	let releaseAuditor: ((r: GoalAuditorResult) => void) | null = null;
+	const outcome = await runCompletionAudit({
+		ctx: fakeCtx(dir),
+		goal: target(),
+		completionSummary: undefined,
+		detailedSummaryText: "s",
+		signal: undefined,
+		sendAuditEvent: () => {},
+		auditor: () => new Promise<GoalAuditorResult>((resolve) => {
+			releaseAuditor = resolve;
+		}),
+		timeoutMs: 50,
+	});
+	assert.equal(outcome.verdict, "rejected");
+	assert.match(outcome.rejectionText, /timed out/);
+	// the late success lands after the flow returned — consumed only by the
+	// pre-attached catch; it cannot flip anything.
+	(releaseAuditor as ((r: GoalAuditorResult) => void) | null)?.({ approved: true, output: "<approved/>", model: "m", thinkingLevel: undefined } as GoalAuditorResult);
+	await new Promise((r) => setTimeout(r, 10));
+	assert.equal(outcome.verdict, "rejected");
+});
