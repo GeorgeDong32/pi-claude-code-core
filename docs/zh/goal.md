@@ -40,6 +40,7 @@
 | `goal-draft.ts`、`goal-questionnaire.ts` | /goals 式意图讨论 → `propose_goal_draft` → Confirm/Continue 对话框 |
 | `goal-auditor.ts` | 独立完成度审计;其批准是 `update_goal(status=complete)` 的门槛。AR1005-AU-02:session 创建一解决即进入覆盖其全部剩余生命周期的 try/finally —— 创建期间取消则不 prompt、恰好 dispose 一次;subscribe/prompt/unsubscribe 失败均仍 dispose;超时/中止后的晚到完成只清理、永不批准。`sessionAdapter` 为内部测试 seam(受控 adapter 对真实 `createAgentSession`) |
 | `goal-audit-flow.ts` | 完成审计编排(B7 step 2):配置解析、started/rejected/passed 事件三件套、台账写入、有界等待封套。AR1005-AU-01:先建立内部取消结果,再连接外部 signal 并检查其当前状态(预中止调用不触发 auditor,直接返回既有 rejected outcome);timer 与两个 listener 在所有退出路径释放 |
+| `goal-accounting.ts` | **活动时钟(AR1005-GO-A)**:持有当前 goal、活动段起点与每个未完成 goal 的毫秒余数。`settle` 返回 floor((elapsed+carry)/1000) 整秒并保留余数(旧 floor 后重置每事件丢亚秒碎片 —— 8 次 250ms 工具结束把真实 2 秒记为 0 秒);`preview` 为无副作用展示读;`pause` 丢弃段但保留各 goal 余数(草拟/暂停/焦点切换);`forget` 释放完成/清除 goal 的余数。余数不跨 goal;磁盘 record 仍为整数 `activeSeconds`(冻结格式 —— 重启至多丢当前段亚秒余数,不再逐事件丢失)。注入式时钟 seam(测试传固定时钟,生产单调时钟,墙上时间戳仍走 `nowIso`) |
 | `goal-compaction.ts` | 长跑中把 goal 上下文压在预算内 |
 | `goal-questionnaire.ts` | 意图含糊时的结构化访谈工具 |
 | `storage/goal-files.ts` | `.pi/goals/` 磁盘布局 |

@@ -68,6 +68,7 @@ import {
 	type GoalStatus,
 	type StopReason,
 } from "./goal-record.ts";
+import { createGoalAccounting } from "./goal-accounting.ts";
 import {
 	appendGoalEvent,
 	latestAuditorResultForGoal,
@@ -313,7 +314,7 @@ function isMeaningfulProgressToolCall(toolName: string, args: unknown): boolean 
 
 // ---------- extension entry point ----------
 
-export default function goalExtension(pi: ExtensionAPI): void {
+export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => number } = {}): void {
 	let goalsById = new Map<string, GoalRecord>();
 	let focusedGoalId: string | null = null;
 	// B3: the three session-local singletons live INSIDE the factory now —
@@ -382,10 +383,10 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	// (cleared) in before_agent_start.
 	let postCompactReminderPending = false;
 
-	const accounting = {
-		activeGoalId: null as string | null,
-		lastAccountedAt: null as number | null,
-	};
+	// AR1005-GO-A: the activity clock owns the segment start and per-goal
+	// millisecond remainders (sub-second fragments are no longer lost per
+	// settle). Injectable clock seam for tests; production is monotonic.
+	const clock = createGoalAccounting({ now: deps.now });
 
 	const draftingHiddenWorkTools = [
 		"bash",
@@ -484,8 +485,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	}
 
 	function clearActiveAccounting(): void {
-		accounting.activeGoalId = null;
-		accounting.lastAccountedAt = null;
+		clock.pause(); // segment dropped; per-goal carries are kept for resume
 	}
 
 	function clearStoppedRuntimeState(): void {
@@ -613,15 +613,18 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			clearActiveAccounting();
 			return;
 		}
-		accounting.activeGoalId = state.goal.id;
-		accounting.lastAccountedAt = Date.now();
+		// GO-A: begin starts a NEW segment (resets the segment start) without
+		// deleting this goal's accumulated carry.
+		clock.begin(state.goal.id);
 	}
 
 	function goalForDisplay(): GoalRecord | null {
-		if (!state.goal || state.goal.status !== "active" || accounting.activeGoalId !== state.goal.id || accounting.lastAccountedAt === null) {
+		if (!state.goal || state.goal.status !== "active") {
 			return state.goal;
 		}
-		const liveSeconds = Math.max(0, Math.floor((Date.now() - accounting.lastAccountedAt) / 1000));
+		// GO-A: read-only preview (segment + carry) — repeated renders never
+		// consume or accumulate seconds.
+		const liveSeconds = clock.preview(state.goal.id);
 		if (liveSeconds === 0) return state.goal;
 		const live = cloneGoal(state.goal);
 		live.usage.activeSeconds += liveSeconds;
@@ -640,14 +643,19 @@ export default function goalExtension(pi: ExtensionAPI): void {
 			return;
 		}
 		if (state.goal?.activePath && !reconcileFocusedGoalFromDisk(ctx, { preserveMemoryUsage: true })) return;
-		if (!state.goal || state.goal.status !== "active" || accounting.activeGoalId !== state.goal.id) {
+		if (!state.goal || state.goal.status !== "active") {
 			beginAccounting();
 			return;
 		}
-
-		const now = Date.now();
-		const elapsedSeconds = accounting.lastAccountedAt === null ? 0 : Math.floor((now - accounting.lastAccountedAt) / 1000);
-		accounting.lastAccountedAt = now;
+		// GO-A: settle closes the segment delta and re-arms it; the sub-second
+		// remainder stays as the goal's carry (never reset, even on
+		// zero-token/zero-cost events). null = no active segment, begin one.
+		const settled = clock.settle(state.goal.id);
+		if (settled === null) {
+			beginAccounting();
+			return;
+		}
+		const elapsedSeconds = settled;
 
 		const tokens = Math.max(0, Math.trunc(opts.completedTurnTokens ?? 0));
 		const cost = Math.max(0, opts.completedTurnCost ?? 0);
@@ -859,6 +867,12 @@ export default function goalExtension(pi: ExtensionAPI): void {
 		}
 		if (!state.goal || state.goal.status === "paused" || state.goal.status === "complete") {
 			clearActiveAccounting();
+		}
+		// GO-A: a goal that is gone (cleared/aborted) or completed can never
+		// consume its sub-second carry again — release it. Paused goals KEEP
+		// theirs (resume continues accumulating fragments).
+		if (previousGoalId && (!state.goal || state.goal.status === "complete")) {
+			clock.forget(previousGoalId);
 		}
 		if (!state.goal || state.goal.id !== previousGoalId) {
 			// Drop any stale tweak-edit-gate that didn't belong to this goal.
