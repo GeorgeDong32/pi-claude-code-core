@@ -269,3 +269,27 @@ describe("AR1005-RC-HOST recall teardown (2026-10-05-core-architecture-reliabili
 		expect(out).toContain("SCENARIO_DONE");
 	});
 });
+
+// ── AR1005-FU-HOST (spec 2026-10-05 §13): the renderer render facts the
+// action-fusion UI adapter depends on. Type-level pin against the REAL
+// installed package — if a pi upgrade drops/renames either field this file
+// stops compiling at the contracts gate (bun run check) before anything
+// else; the runtime fallbacks for missing fields are covered by the
+// structurally-missing stand-ins in test/lib/tool-renderers.test.ts. ──
+// Deep-path import via relative resolution (node enforces the package "exports"
+// map for bare deep specifiers; these types are not re-exported at the root).
+import type { ToolRenderContext, ToolRenderResultOptions } from "../../node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.js";
+
+describe("AR1005-FU-HOST renderer render facts (2026-10-05-core-architecture-reliability)", () => {
+	it("⑧ ToolRenderResultOptions.isPartial + ToolRenderContext.args/isError exist and are populated", () => {
+		const options: ToolRenderResultOptions = { expanded: true, isPartial: false };
+		const context: Pick<ToolRenderContext, "args" | "isError" | "isPartial"> = {
+			args: { then_run: { command: "bun run check" } },
+			isError: false,
+			isPartial: false,
+		};
+		expect(options.isPartial).toBe(false);
+		expect((context.args as { then_run?: { command?: string } }).then_run?.command).toBe("bun run check");
+		expect(context.isError).toBe(false);
+	});
+});

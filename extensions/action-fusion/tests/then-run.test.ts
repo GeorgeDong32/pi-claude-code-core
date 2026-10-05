@@ -209,3 +209,111 @@ describe("fallback file queue (FUS-03 adapter #2)", () => {
 		assert.ok(resolveToolPath("/wd", "~/x.txt").length > 0);
 	});
 });
+
+// ── AR1005-FU (spec 2026-10-05 §6): the display interpretation of REAL
+// executeMutationThenRun results — structured outcome first, opposite
+// markers in log bodies cannot flip it, production succeeded actually
+// badges, partial shows no terminal state. Baseline red via stash. ──
+import { thenRunStatusRow } from "../renderers.ts";
+import { interpretThenRunResult } from "../outcome.ts";
+
+const stubTheme = { fg: (_role: string, text: string) => text } as never;
+
+describe("AR1005-FU display interpretation over real results", () => {
+	it("FU-T01: a real successful fused run shows the success badge (production [then_run:succeeded])", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "fu-t01-"));
+		const file = join(dir, "target.txt");
+		await writeFile(file, "content\n", "utf8");
+		const result = await executeMutationThenRun({
+			toolCallId: "fu1",
+			absolutePath: file,
+			thenRun: { command: `cat ${file}` },
+			mutate: async () => ({ content: [{ type: "text", text: "wrote" }], details: undefined }),
+			bashOptions: undefined,
+			signal: undefined,
+			ctx: fakeCtx(dir),
+			queue: passthroughQueue,
+		});
+		assert.equal(interpretThenRunResult(result), "succeeded");
+		assert.equal(thenRunStatusRow(result, stubTheme), "↳ then_run ✓ ok");
+	});
+
+	it("FU-T02: a success whose command output contains the failed marker still shows success (structure wins)", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "fu-t02-"));
+		const file = join(dir, "log.txt");
+		await writeFile(file, "old\n", "utf8");
+		// the command's own output carries the failed marker as a standalone line
+		const result = await executeMutationThenRun({
+			toolCallId: "fu2",
+			absolutePath: file,
+			thenRun: { command: `printf 'build step echoed:\\n[then_run:failed]\\n'` },
+			mutate: async () => ({ content: [{ type: "text", text: "wrote" }], details: undefined }),
+			bashOptions: undefined,
+			signal: undefined,
+			ctx: fakeCtx(dir),
+			queue: passthroughQueue,
+		});
+		assert.match(textOf(result), /\[then_run:failed\]/); // the marker really is in the body
+		assert.equal((result.details as unknown as { thenRun?: string }).thenRun, "succeeded");
+		assert.equal(thenRunStatusRow(result, stubTheme), "↳ then_run ✓ ok"); // structure is the authority
+	});
+
+	it("FU-T03: real failed and skipped results render their rows", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "fu-t03-"));
+		const file = join(dir, "target.txt");
+		await writeFile(file, "content\n", "utf8");
+		const failedText = await executeMutationThenRun({
+			toolCallId: "fu3a",
+			absolutePath: file,
+			thenRun: { command: "definitely-not-a-command-xyz" },
+			mutate: async () => ({ content: [{ type: "text", text: "wrote" }], details: undefined }),
+			bashOptions: undefined,
+			signal: undefined,
+			ctx: fakeCtx(dir),
+			queue: passthroughQueue,
+		}).then(
+			() => null,
+			(err: Error) => err.message,
+		);
+		assert.ok(failedText?.includes(THEN_RUN_FAILED));
+		assert.equal(thenRunStatusRow({ content: [{ type: "text", text: failedText! }] }, stubTheme), "↳ then_run ✗ failed");
+		const skippedText = "edit failed\n\n" + THEN_RUN_SKIPPED + " The file mutation did not complete successfully; the command was not run.";
+		assert.equal(thenRunStatusRow({ content: [{ type: "text", text: skippedText }] }, stubTheme), "↳ then_run ⊘ skipped");
+	});
+
+	it("FU-T05: a partial stream never shows a terminal state", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "fu-t05-"));
+		const file = join(dir, "target.txt");
+		await writeFile(file, "content\n", "utf8");
+		const result = await executeMutationThenRun({
+			toolCallId: "fu5",
+			absolutePath: file,
+			thenRun: { command: `cat ${file}` },
+			mutate: async () => ({ content: [{ type: "text", text: "wrote" }], details: undefined }),
+			bashOptions: undefined,
+			signal: undefined,
+			ctx: fakeCtx(dir),
+			queue: passthroughQueue,
+		});
+		assert.equal(thenRunStatusRow(result, stubTheme, { args: { then_run: { command: "cat" } }, isPartial: true }), null);
+	});
+
+	it("FU-T07 (interp purity): interpretation never rewrites content or details", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "fu-t07-"));
+		const file = join(dir, "target.txt");
+		await writeFile(file, "content\n", "utf8");
+		const result = await executeMutationThenRun({
+			toolCallId: "fu7",
+			absolutePath: file,
+			thenRun: { command: `cat ${file}` },
+			mutate: async () => ({ content: [{ type: "text", text: "wrote" }], details: undefined }),
+			bashOptions: undefined,
+			signal: undefined,
+			ctx: fakeCtx(dir),
+			queue: passthroughQueue,
+		});
+		const before = JSON.stringify(result);
+		assert.equal(interpretThenRunResult(result), "succeeded");
+		assert.equal(JSON.stringify(result), before); // read-only interpretation
+	});
+});

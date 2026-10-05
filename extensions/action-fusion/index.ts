@@ -192,7 +192,7 @@ export function createActionFusionExtension(options: ActionFusionOptions = {}): 
 			// wrapper row (↳ then_run badge / status), the builtin payload is
 			// untouched and plain write/edit render identically (zero-wrap rule).
 			renderCall: (args, theme, context) => withThenRunBadge(baseEdit(context.cwd).renderCall!(args, theme, context), args as ThenRunArgs, theme),
-			renderResult: (result, resultOptions, theme, context) => withThenRunStatus(baseEdit(context.cwd).renderResult!(result, resultOptions, theme, context), result, theme),
+			renderResult: (result, resultOptions, theme, context) => withThenRunStatus(baseEdit(context.cwd).renderResult!(result, resultOptions, theme, context), result, theme, { args: context.args as ThenRunArgs | undefined, isPartial: resultOptions.isPartial || context.isPartial }),
 		});
 
 		pi.registerTool<typeof writeParameters, undefined>({
@@ -211,7 +211,7 @@ export function createActionFusionExtension(options: ActionFusionOptions = {}): 
 				});
 			},
 			renderCall: (args, theme, context) => withThenRunBadge(baseWrite(context.cwd).renderCall!(args, theme, context), args as ThenRunArgs, theme),
-			renderResult: (result, resultOptions, theme, context) => withThenRunStatus(baseWrite(context.cwd).renderResult!(result, resultOptions, theme, context), result, theme),
+			renderResult: (result, resultOptions, theme, context) => withThenRunStatus(baseWrite(context.cwd).renderResult!(result, resultOptions, theme, context), result, theme, { args: context.args as ThenRunArgs | undefined, isPartial: resultOptions.isPartial || context.isPartial }),
 		});
 
 		selfCheck();

@@ -132,3 +132,42 @@ describe("TR C — core tool compact rows", () => {
 		expect(rows).toEqual(["l1", "l2", "l3"]);
 	});
 });
+
+// ── AR1005-FU-02 (spec 2026-10-05 §6): zero-wrap for plain tools even when
+// the body carries a marker; legacy replay (succeeded / ok alias); no
+// mid-line substring matching. Baseline red via stash. ──
+describe("FU — then_run render facts (AR1005)", () => {
+	it("FU-T04: args present without then_run → builtin component untouched even if the body contains a marker", () => {
+		const base = { tag: "builtin" } as never;
+		const markerBody = { content: [{ type: "text", text: `output mentions ${"[then_run:failed]"} in a log line` }] };
+		expect(withThenRunStatus(base, markerBody, theme, { args: {} })).toBe(base);
+		expect(withThenRunStatus(base, markerBody, theme, { args: { then_run: { command: "" } } })).toBe(base);
+		// and no status row either way
+		expect(thenRunStatusRow(markerBody, theme, { args: {} })).toBeNull();
+		// args unknown (old host) → legacy marker-scan behavior retained
+		// (line-anchored markers still badge; mid-line prose never does)
+		const lineAnchored = { content: [{ type: "text", text: "output log:\n[then_run:failed] exit 1" }] };
+		expect(thenRunStatusRow(lineAnchored, theme)).toBe("↳ then_run ✗ failed");
+	});
+
+	it("FU-T06: legacy replay — ok alias and succeeded line both show the success badge without metadata", () => {
+		expect(thenRunStatusRow({ content: [{ type: "text", text: "done\n[then_run:ok] exit 0" }] }, theme)).toBe("↳ then_run ✓ ok");
+		expect(thenRunStatusRow({ content: [{ type: "text", text: "[then_run:succeeded]\nall checks passed" }] }, theme)).toBe("↳ then_run ✓ ok");
+		// structured authority: unknown field values are not coerced to success
+		expect(thenRunStatusRow({ content: [{ type: "text", text: "plain" }], details: { thenRun: "banana" } }, theme)).toBeNull();
+		// FU-T02 core: a structured success with the OPPOSITE marker in the log body stays a success
+		expect(
+			thenRunStatusRow(
+				{ content: [{ type: "text", text: "wrote\n[then_run:failed]\n(the command echoed it)" }], details: { thenRun: "succeeded" } },
+				theme,
+			),
+		).toBe("↳ then_run ✓ ok");
+	});
+
+	it("FU: mid-line substring prose never matches — only line-anchored protocol lines do", () => {
+		const prose = { content: [{ type: "text", text: "we discussed the [then_run:failed] token in the docs body" }] };
+		expect(thenRunStatusRow(prose, theme)).toBeNull();
+		const standalone = { content: [{ type: "text", text: "first line\n[then_run:skipped]\nrest" }] };
+		expect(thenRunStatusRow(standalone, theme)).toBe("↳ then_run ⊘ skipped");
+	});
+});
