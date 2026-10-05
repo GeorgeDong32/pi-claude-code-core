@@ -23,7 +23,8 @@ import { statSync, readFileSync, readdirSync } from "node:fs";
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { CONTEXT_BUDGET, DYNAMIC_STEER_MAX } from "../../lib/context-budget.js";
+import { CONTEXT_BUDGET } from "../../lib/context-budget.js";
+import { createRuleActivation } from "./activation.ts";
 import { coreBus } from "../bus.js";
 import { BUILTIN_RULES } from "./defaults.ts";
 import { collectRules, globToRegExp, renderRules, setRulesHome, type RenderedRule, type RuleDir, type RuleFs } from "./render.ts";
@@ -89,7 +90,6 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 		let fingerprint: string | null = null;
 		let cachedOutput: string | null = null;
 		let cachedRules: RenderedRule[] | null = null;
-		const activatedNames = new Set<string>();
 		let budgetPublished = false;
 
 		function fingerprintOf(dirs: RuleDir[]): string {
@@ -158,24 +158,23 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 			return cachedOutput;
 		}
 
-		/** Steer the full rule text once per session (P3-RU-07); oversized
-		 * rules steer a pointer instead — the render red line (never cut
-		 * mid-content) applies to steers too (review #15). */
-		function steerRule(rule: RenderedRule): void {
-			activatedNames.add(rule.name);
-			const full = `### ${rule.name}\n\n${rule.content}`;
-			const content =
-				full.length <= DYNAMIC_STEER_MAX
-					? full
-					: `${rule.name}: rule text exceeds the per-turn steer budget (${DYNAMIC_STEER_MAX} chars). Read ${rule.path} on demand.`;
+		// AR1005-RU: the activation budget module — the turn's activations
+	// cumulatively share DYNAMIC_STEER_MAX; the session set and the turn
+	// epoch live here, not in scattered wiring state.
+	const activation = createRuleActivation({
+		send: (content) => {
+			// Synchronous adapter: a synchronous throw is an activation
+			// failure (rolled back inside the module); async delivery
+			// rejections are not.
 			pi.sendMessage(
 				{ customType: "pi-rules-activate", content, display: true },
 				{ deliverAs: "steer" },
 			);
-		}
+		},
+	});
 
 		pi.on("session_start", () => {
-			activatedNames.clear();
+			activation.onSessionStart(); // RU-01: activation set + budget epoch
 			fingerprint = null;
 			cachedOutput = null;
 			cachedRules = null;
@@ -183,6 +182,13 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 				budgetPublished = true;
 				coreBus().publish({ contextBudget: { ...CONTEXT_BUDGET } });
 			}
+		});
+
+		pi.on("turn_start", () => {
+			// AR1005-RU-01: a turn spans turn_start → the next turn_start; every
+			// tool call in between shares one budget epoch. Nothing resets at
+			// before_agent_start or per tool_call.
+			activation.onTurnStart();
 		});
 
 		pi.on("before_agent_start", (event, ctx: ExtensionContext) => {
@@ -205,16 +211,12 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 				const fresh: string[] = [];
 				for (const rule of cachedRules) {
 					if (rule.globs === undefined) continue;
-					if (activatedNames.has(rule.name)) continue;
 					if (paths.some((p) => rule.globs!.some((g) => globMatches(p, g)))) {
-						fresh.push(rule.name);
+						fresh.push(rule.name); // session-dedup happens inside activate()
 					}
 				}
 				if (fresh.length === 0) return undefined;
-				for (const ruleName of fresh) {
-					const rule = cachedRules.find((r) => r.name === ruleName)!;
-					steerRule(rule);
-				}
+				activation.activate(fresh.map((ruleName) => cachedRules!.find((r) => r.name === ruleName)!));
 				return undefined;
 			}
 			const { activated } = renderRules({
@@ -230,12 +232,11 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 			// steer from the CACHED collected rules — a matching tool call
 			// costs zero extra scans (review #16a).
 			const rules = collectRules({ dirs, cwd: ctx.cwd, projectTrusted: trusted(ctx), touchedPaths: [], fs: realFs }).rules;
-			for (const ruleName of activated) {
-				if (activatedNames.has(ruleName)) continue; // once per session (P3-RU-07)
-				const rule = rules.find((r) => r.name === ruleName);
-				if (!rule) continue;
-				steerRule(rule);
-			}
+			activation.activate(
+				activated
+					.filter((ruleName) => rules.some((r) => r.name === ruleName))
+					.map((ruleName) => rules.find((r) => r.name === ruleName)!),
+			);
 			return undefined; // activation never blocks a tool call
 		});
 
@@ -256,7 +257,7 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 				const inlineCount = (result.output.match(/^### /gm) ?? []).length;
 				const rowCount = (result.output.match(/^- .+ read .+ on demand$/gm) ?? []).length;
 				const budget = options?.budgetChars ?? CONTEXT_BUDGET.rulesMax;
-				const summary = `rules: ${inlineCount} inline, ${rowCount} indexed, ${result.output.length}/${budget} chars, ${activatedNames.size} activated this session`;
+				const summary = `rules: ${inlineCount} inline, ${rowCount} indexed, ${result.output.length}/${budget} chars, ${activation.sessionActivatedCount()} activated this session`;
 				pi.sendMessage({ customType: "pi-rules-list", content: `${summary}\n\n${result.output}`, display: true });
 			},
 		});

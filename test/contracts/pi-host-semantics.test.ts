@@ -293,3 +293,21 @@ describe("AR1005-FU-HOST renderer render facts (2026-10-05-core-architecture-rel
 		expect(context.isError).toBe(false);
 	});
 });
+
+// ── AR1005-RU-HOST (spec 2026-10-05 §13): the turn lifecycle the rules
+// activation budget depends on — turn_start fires once per turn and every
+// tool call within a turn shares it. The fact is a property of pi's real
+// run loop (agent-session fires turn_start at turn boundaries); it cannot
+// be exercised automatically without a full model-driven run, so per spec
+// §13.2 this is a registered todo with the Phase 4 host-acceptance target.
+// Manual verification steps (executed and recorded at Phase 4):
+//   1. start a real pi session in a throwaway project with a rule file
+//      carrying `globs: ["src/**/*.ts"]`;
+//   2. send one user message that triggers TWO read/edit tool calls on
+//      matching paths — both activations must land in the SAME turn
+//      (pi's pending-steer queue flushes them together at turn_end);
+//   3. send a second user message triggering another matching call —
+//      exactly one turn_start must have separated the two batches.
+describe("AR1005-RU-HOST turn lifecycle (2026-10-05-core-architecture-reliability)", () => {
+	it.todo("⑨ real run loop: one turn_start per turn; tool calls within a turn share it (Phase 4 host acceptance — manual steps in the comment above)");
+});

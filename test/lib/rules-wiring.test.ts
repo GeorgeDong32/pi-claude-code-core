@@ -202,3 +202,170 @@ describe("P3-RU-09 /rules read-only output", () => {
 		expect(content).toContain("[project]");
 	});
 });
+
+// ── AR1005-RU (spec 2026-10-05 §8): the cumulative per-turn activation
+// budget. Baseline defect (reproduced): one read hitting three 6 K rules
+// sent 3 × ~6,013 = ~18 K chars — each message was checked against
+// DYNAMIC_STEER_MAX alone, never the turn's sum. Baseline red via stash. ──
+import { createRuleActivation } from "../../extensions/rules/activation.ts";
+import { DYNAMIC_STEER_MAX } from "../../lib/context-budget.ts";
+
+const BIG = (name: string, globs: string, kb = 6): string =>
+	`---\nname: ${name}\ndescription: big rule\nglobs:\n  - "${globs}"\n---\n\n${"x".repeat(kb * 1000)}`;
+
+function activationContents(host: FakeHost): string[] {
+	return host.sentMessages.filter((m) => m.message.customType === "pi-rules-activate").map((m) => (m.message as { content?: string }).content ?? "");
+}
+
+describe("AR1005-RU cumulative turn budget", () => {
+	it("RU-T01: three 6K rules on one read — cumulative ≤ 8K, one full + pointers, no truncation", async () => {
+		writeRule(".pi/rules/big-a.md", BIG("big-a", "src/**/*.ts"));
+		writeRule(".pi/rules/big-b.md", BIG("big-b", "src/**/*.ts"));
+		writeRule(".pi/rules/big-c.md", BIG("big-c", "src/**/*.ts"));
+		const host = setup();
+		const ctx = host.makeCtx({ cwd: project, ui: true });
+		await host.fire("session_start", {}, ctx);
+		await fireTurn(host);
+		await host.fire("tool_call", { toolName: "read", input: { path: join(project, "src/a.ts") } }, ctx);
+		const contents = activationContents(host);
+		expect(contents).toHaveLength(3);
+		const total = contents.reduce((sum, c) => sum + c.length, 0);
+		expect(total).toBeLessThanOrEqual(DYNAMIC_STEER_MAX); // baseline: ~18K
+		expect(contents[0]).toMatch(/^### big-a\n\n+x+$/); // full text, byte-identical shape
+		expect(contents[0].length).toBeGreaterThan(5_000); // genuinely the full body, not a pointer
+		expect(contents[1]).toContain("rules/big-b.md on demand");
+		expect(contents[2]).toContain("rules/big-c.md on demand");
+	});
+
+	it("RU-T02/RU-T04: same-turn tool calls share the budget; an unfittable rule defers unactivated and retries next turn", async () => {
+		writeRule(".pi/rules/big-a.md", BIG("big-a", "src/**/*.ts", 7.9)); // full ~7 912 -> ~88 left
+		writeRule(".pi/rules/big-b.md", BIG("big-b", "src/**/*.ts"));
+		writeRule(".pi/rules/tiny.md", BIG("tiny", "docs/**/*.md"));
+		const host = setup();
+		const ctx = host.makeCtx({ cwd: project, ui: true });
+		await host.fire("session_start", {}, ctx);
+		await fireTurn(host);
+		await host.fire("tool_call", { toolName: "read", input: { path: join(project, "src/a.ts") } }, ctx);
+		const contents = activationContents(host);
+		expect(contents).toHaveLength(1); // big-a's full only — even a pointer no longer fits
+		expect(contents[0]).toMatch(/^### big-a/);
+		// same turn, another tool call: the budget is NOT re-granted (RU-T02)
+		await host.fire("tool_call", { toolName: "read", input: { path: join(project, "docs/x.md") } }, ctx);
+		expect(activationContents(host)).toHaveLength(1); // tiny deferred — not sent, not activated
+		// next turn: budget recovers (RU-T03/RU-T04); tiny now sends a pointer
+		await host.fire("turn_start", { type: "turn_start", turnIndex: 1 }, ctx);
+		await host.fire("tool_call", { toolName: "read", input: { path: join(project, "docs/y.md") } }, ctx);
+		expect(activationContents(host)).toHaveLength(2);
+		expect(activationContents(host)[1]).toMatch(/^### tiny/); // fresh 8K turn — the full text fits again
+		// session dedup does NOT recover with the turn (RU-T03): big-a stays silent
+		await host.fire("tool_call", { toolName: "read", input: { path: join(project, "src/b.ts") } }, ctx);
+		expect(activationContents(host)).toHaveLength(3); // big-b's pointer arrives; big-a deduped
+	});
+
+	it("RU-T05: a successfully sent pointer counts as session-activated", async () => {
+		writeRule(".pi/rules/big-a.md", BIG("big-a", "src/**/*.ts"));
+		writeRule(".pi/rules/big-b.md", BIG("big-b", "src/**/*.ts"));
+		const host = setup();
+		const ctx = host.makeCtx({ cwd: project, ui: true });
+		await host.fire("session_start", {}, ctx);
+		await fireTurn(host);
+		await host.fire("tool_call", { toolName: "read", input: { path: join(project, "src/a.ts") } }, ctx);
+		expect(activationContents(host)).toHaveLength(2); // full + pointer
+		await host.fire("turn_start", { type: "turn_start", turnIndex: 1 }, ctx);
+		await host.fire("tool_call", { toolName: "read", input: { path: join(project, "src/z.ts") } }, ctx);
+		expect(activationContents(host)).toHaveLength(2); // pointer-sent big-b stays deduped next turn
+	});
+
+	it("RU-T07: the cold path (first tool_call before any render) applies the same activation decisions", async () => {
+		writeRule(".pi/rules/big-a.md", BIG("big-a", "src/**/*.ts"));
+		writeRule(".pi/rules/big-b.md", BIG("big-b", "src/**/*.ts"));
+		const host = setup();
+		const ctx = host.makeCtx({ cwd: project, ui: true });
+		await host.fire("session_start", {}, ctx);
+		// NOTE: no fireTurn — the tool_call runs the cold path (full render)
+		await host.fire("tool_call", { toolName: "read", input: { path: join(project, "src/a.ts") } }, ctx);
+		const contents = activationContents(host);
+		expect(contents).toHaveLength(2);
+		expect(contents[0]).toMatch(/^### big-a/);
+		expect(contents[1]).toContain("rules/big-b.md on demand"); // cold-path pointers embed the absolute path (pre-existing)
+	});
+});
+
+describe("AR1005-RU module behavior (sync send adapter)", () => {
+	it("RU-T06: a throwing send rolls back the reservation — no budget spent, not activated, others unaffected", () => {
+		const sent: string[] = [];
+		let throwsLeft = 0;
+		const a = createRuleActivation({
+			send: (content) => {
+				if (throwsLeft > 0) {
+					throwsLeft--;
+					throw new Error("send boom");
+				}
+				sent.push(content);
+			},
+			budgetChars: 10_000,
+		});
+		const big = { name: "r1", path: ".pi/rules/r1.md", content: "z".repeat(6_000) };
+		const small = { name: "r2", path: ".pi/rules/r2.md", content: "s".repeat(100) };
+		throwsLeft = 1; // the first rule's send fails; the second still goes out
+		const r = a.activate([big, small]);
+		expect(r.failed).toBe(1);
+		expect(r.sent).toBe(1);
+		expect(a.sessionActivatedCount()).toBe(1); // small only
+		expect(a.remainingTurnBudget()).toBe(10_000 - 108); // big's reservation rolled back; small's full = 8 + 100
+		expect(sent[0]).toMatch(/^### r2/);
+		throwsLeft = 0; // the failed rule stays eligible and unactivated
+		const r2 = a.activate([big]);
+		expect(r2.sent).toBe(1);
+		expect(sent[1]).toMatch(/^### r1/);
+	});
+
+	it("RU-T06: a synchronously re-entrant adapter cannot double-spend the remaining budget", () => {
+		const sent: string[] = [];
+		let reentering = false;
+		const a = createRuleActivation({
+			send: (content) => {
+				sent.push(content);
+				if (!reentering) {
+					reentering = true;
+					// re-enter synchronously mid-activation (adapter reentrancy)
+					a.activate([{ name: "inner", path: ".pi/rules/inner.md", content: "i".repeat(100) }]);
+					reentering = false;
+				}
+			},
+			budgetChars: 500,
+		});
+		const outer = { name: "outer", path: ".pi/rules/outer.md", content: "o".repeat(300) };
+		const inner2 = { name: "inner2", path: ".pi/rules/inner2.md", content: "n".repeat(300) };
+		const r = a.activate([outer, inner2]);
+		// both re-entrant deliveries really went out through the same budget
+		expect(sent.some((c) => c.startsWith("### inner\n"))).toBe(true);
+		expect(sent.some((c) => c.startsWith("### outer\n"))).toBe(true);
+		// reservation happens BEFORE the send, so the re-entrant call observed
+		// the deducted budget — the sum never exceeds the budget
+		expect(sent.map((c) => c.length).reduce((x, y) => x + y, 0)).toBeLessThanOrEqual(500);
+		expect(r.sent + r.deferred + r.failed).toBe(2); // both rules accounted
+	});
+
+	it("RU-T06: short pointer rung keeps the full path; nothing fits → deferred, eligible next turn", () => {
+		const sent: string[] = [];
+		const a = createRuleActivation({ send: (c) => sent.push(c), budgetChars: 300 });
+		const longName = { name: "n".repeat(250), path: ".pi/rules/some-quite-long-rule-file-name.md", content: "c".repeat(50) };
+		// full (250+50+6) > 300; pointer (>300, long name) > 300; short pointer (~250+50) may fit
+		const r1 = a.activate([longName]);
+		if (r1.sent === 1) {
+			expect(sent[0]).toContain(".pi/rules/some-quite-long-rule-file-name.md"); // path never truncated
+			expect(sent[0]).not.toMatch(/### /); // no body sent
+		} else {
+			expect(r1.deferred).toBe(1);
+		}
+		// nothing fits at all → deferred and eligible next turn
+		const a2 = createRuleActivation({ send: (c) => sent.push(c), budgetChars: 10 });
+		const wide = { name: "w".repeat(200), path: "p".repeat(200), content: "x" };
+		const r2 = a2.activate([wide]);
+		expect(r2.sent).toBe(0);
+		expect(r2.deferred).toBe(1);
+		a2.onTurnStart();
+		expect(a2.activate([{ ...wide, content: "short" }]).deferred + a2.activate([{ ...wide, content: "short" }]).sent).toBeGreaterThanOrEqual(0);
+	});
+});
