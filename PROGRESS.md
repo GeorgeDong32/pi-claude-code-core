@@ -2,6 +2,22 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## 核心扩展性能与可靠性批(2026-10-05,spec 2026-10-05-core-architecture-reliability;11 项 AR1005 全量)
+
+- **状态:11/11 项已实施并按项提交**(JS c05e4e1 → RC f70ffbe → AU ddbeac7 → FU 2d76e53 → GO-A 564d1f8 → GO-B 4601129 → RU 834d23b → ST 208882d → OB 07c34f1 → CL 6b09fb9 → RV b27e1c7)。Phase 0 基线在 76e933a 干净树取得:三门真实退出码全 0(check / vitest 54 文件 776 测 + node:test 452 / contracts 28)。每项缺陷测试先以 stash 方式在基线确认红(记录于各 commit message 与 DEVIATIONS #98-108)再转绿。
+- **JS**:repair 改字符状态扫描(字符串保真,基线复现 `"literal ,} sequence"`→`"literal } sequence"`),候选改私有惰性 generator(整文/fence 成功 0 次 span 扫描;基线 2K/8K/32K 花括号 5.3/55.9/887.8ms → 0 扫描);span fallback 平方最坏情形按 AR1005-JS-03 保留并披露。
+- **RC**:RecallMachine 增终态 dispose;每请求 generation+AbortController+timer+cancelled resolver(在途 await 即时返回 null;晚到完成零 history 读/零投递/零污染);onUserMessage total promise(入口/延迟段抛错收敛 null + 每失败请求至多一条 diagnose);deferred 仅在 deliver 同步成功后记账;wiring session_shutdown 任意原因同步 dispose + session_start 防御性 dispose + 重建/关闭先 dispose 旧机。契约 AR1005-RC-HOST:真实 ExtensionRunner + invalidate,晚到完成零发送零 unhandledRejection(基线红:SCENARIO_UNHANDLED + exit 2),隔离子进程由 bun 显式拉起。
+- **AU**:封套顺序「内部取消结果→连接外部 signal→检查当前状态」,预中止不调用 auditor、返回既有 rejected outcome(started=被请求而非模型已启动);auditor session 创建一解决即全剩余生命周期 try/finally(subscribe/prompt/unsubscribe 异常均恰一次 dispose;创建失败不调不存在 disposer;超时后晚到完成只清理永不 passed);sessionAdapter 内部测试 seam。
+- **FU**:新增 action-fusion/outcome.ts 纯解释模块 —— 结构化 details.thenRun 第一权威(生产 [then_run:succeeded] 现在真的显示成功徽标:旧扫描找的是生产从不写的 [then_run:ok];成功日志含相反 marker 不再翻转);文本兼容行锚定(独立协议行/text block 开头,不再任意行中子串;历史 ok alias 保留);render facts 能力探测(args 无 then_run 永不包装、partial 无终态;契约 AR1005-FU-HOST 编译期钉住)。
+- **GO-A**:新增 goal/goal-accounting.ts 时钟模块(段起点+每 goal 毫秒 carry;settle 保留余数、preview 零副作用、pause 保留各 goal 余数、forget 释放);8×250ms 基线记 0 秒(红:actual 0 ≠ expected 2)修后记 2 秒;落盘仍整数 activeSeconds(冻结格式,重启至多丢当前段亚秒余数)。**GO-B**:accountProgress 持每事件读取上下文,聚焦文件每事件恰解析一次(基线 4 → 3;1/10/100 goal 每事件 N 解析、零额外聚焦读);零 usage 早退保持在 reconcile 后(外部取消/删除检测不跳过);writeActiveGoalFile 安全检查全保留。
+- **RU**:新增 rules/activation.ts 累计预算模块(turn = turn_start→下一 turn_start,同 turn 全部激活共享 DYNAMIC_STEER_MAX;基线复现 3×6K=18,036 字符红 `expected 18036 ≤ 8000`);阶梯 全文→既有指针→短指针(完整路径)→本轮不发不标记(下次匹配重试);预留-发送-回滚单一同步过程(send 同步抛错回滚、重入不双花)。
+- **ST**:新增 modes/working-stats.ts(cheap key = sessionManager 实例+sessionId+leafId;合法空 branch null 可缓存、getter 缺失/抛错不可缓存走旧路径);预热后 200 次 message_update 零 getBranch/getContextUsage(基线红 `expected 200 to be 0`;1K/10K/50K 同零,O(1) key 读/事件);失效表全接(session_start/tree/shutdown reset、compact invalidate、message_end markDirty、model_select usage 失效、turn_start/end force、before_provider_request 仅 forceUsage;turn_end 旧版同 handler 双读改单读);读取失败绝不缓存为成功空快照。ST-T03 对真实 SessionManager.inMemory 对照 brute-force 一致。
+- **OB**:ProjectionState 稳定 placeholder memo(同 identity 键,值仅字符串+token;8MiB 热请求基线 ~26ms 构造 → 每 identity 恰 1 次,热请求 ~0.001ms);full-send 阶段零构造;ledger 失败保留 memo 但计数/节省不提交;每次 replacement 仍写 ledger 行(审计绝不跳过);placeholderConstructions 为状态上的诚实计数 seam。
+- **CL**:applyMemoryOps 每 op 死读取 `existing = listMemoryFiles(dir)` 删除(引用检查确认零消费;batch 起始计数与真实存在/安全检查保留)。
+- **RV**:prepareRun 规则发现改「workspace 重试落定后、以最终 workspacePath」(基线:调用仓无规则+目标仓有 → rulePaths=[] 并静默跳过 rulesheriff);manifest.rulePaths/ChangeProfile/路由/directive 消费同一 prepared 值;冻结相对路径数组形状不变;重试竞态取最终 workspace 规则;gh diff 权威/重试语义/local·diff-file 选择/config 优先级全保留。
+- **三门(最终)**:check 退出 0;test 55 文件 818 测全绿(vitest)+node:test 89/178/176/17/27(一次孤发 flake:modes 分类器重试时序测试,后续 3 轮全量不复现,非本批引入);contracts 31 通过 + 2 todo 退出 0。
+- **登记与遗留**:契约表新增 AR1005-{ST,RC,RU,FU}-HOST 四行(先登记后测试);DEVIATIONS #98-108;CHANGELOG Unreleased 五段;docs en/zh 八模块同步。**遗留 todo(§13.2 协议)**:⑨ RU-HOST(真机 turn_start 每 turn 一次、同 turn 多工具共享)与 ⑪ ST-HOST(真机 message_end 先于 SessionManager append)—— 无法以受控 adapter 无付费调用驱动真实 run-loop(ModelRuntime 无自定义 provider 注入 seam),已按协议登记 + test.todo 指向宿主验收 + 契约注释内保留可执行人工步骤;两项实现均已双保险(RU 预算以事件为准、ST 以 leafId key 失效),正确性不依赖该时序,但按 §17 该两 fact 未取证前对应项的宿主时序证据项保持 open,待用户真机会话执行注释内步骤后回填。
+
 ## goal 用量统计增强批(2026-10-04,spec 2026-10-04-goal-cost-accounting;免计划对抗——用户豁免)
 
 - **状态:已执行**。GoalUsage 增 costUsed(美元、浮点不 floor、老 record 回 0);parent 记帐增 usage.cost.total;新挂 tool_result 事件计 subagent/codemode 执行用量(修 2026-10-03 实证的结构性漏记);七个显示 surface(footer/oneLine/面板/compaction/pool/goal-achieved 行/归档报告)+ formatCostValue 三档格式化(≥$1 两位 / <$1 三位);新增 goal-cost-accounting.test.ts ×8。aborted 聚合路径同步带 cost。
