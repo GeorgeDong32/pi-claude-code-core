@@ -8,7 +8,9 @@
  *
  * Semantics:
  *   - per-op preflight: invalid ops are skipped (reason recorded) while
- *     valid ops in the same batch still apply — one hallucinated op must
+ *     valid ops in the same batch still apply (AR1005-CL 2026-10-05: the
+ *     per-op dead directory read is gone — batch-start counts and the real
+ *     existence/safety checks remain) — one hallucinated op must
  *     not discard a whole LLM capture batch (skip-invalid, hermes-equivalent
  *     semantics). Two gates ARE batch-fatal (nothing written): >200 ops and
  *     a layer file-count cap breach.
@@ -167,7 +169,12 @@ export function applyMemoryOps(
 	for (const rawOp of ops) {
 		const op = hoistLeadingFrontmatter(rawOp);
 		const dir = dirFor(routeLayer(op));
-		const existing = listMemoryFiles(dir);
+		// AR1005-CL (spec 2026-10-05 §12): the per-op `existing =
+		// listMemoryFiles(dir)` preflight read had NO consumer (verified:
+		// single occurrence in the file) — deleted. The batch-start
+		// postFileCount reads above and the real existence/safety checks
+		// below stay; op planning, limits, routing, disk order and error
+		// semantics are unchanged.
 
 		if (op.action === "add") {
 			if (!op.name || !op.description) {
