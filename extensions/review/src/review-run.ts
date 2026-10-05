@@ -79,7 +79,6 @@ export async function prepareRun(input: PrepareRunInput): Promise<PreparedRun | 
 
 	const diffResult = await acquireDiff(cwd, target, runDir);
 	const changedFiles = parseChangedFilesFromDiff(diffResult.diff);
-	const rulePaths = discoverRulePathsLocal(cwd);
 	// Pass the diff's head SHA so the workspace checkout can verify it landed
 	// on the same commit (guards the force-push-between-calls TOCTOU window).
 	let workspaceResult = await prepareWorkspace({
@@ -101,6 +100,17 @@ export async function prepareRun(input: PrepareRunInput): Promise<PreparedRun | 
 			);
 		}
 	}
+
+	// AR1005-RV-01 (spec 2026-10-05 §11): rule discovery runs AFTER the
+	// workspace retries/HEAD checks settle, against the FINAL workspacePath —
+	// the TARGET repo owns "which rules apply to this change" (AGENTS.md,
+	// .pi/rules/… of the reviewed code). Config loading, run artifacts and
+	// manifest/diff/workflow writes stay anchored on the CALLER's cwd; the
+	// relative paths in rulePaths resolve against the workspace (the frozen
+	// manifest field shape is unchanged). manifest.rulePaths,
+	// ChangeProfile.rulePaths, rulesheriff routing and the directive all
+	// consume this ONE prepared value — nothing re-derives from the caller.
+	const rulePaths = discoverRulePathsLocal(workspaceResult.workspacePath);
 
 	const manifest: RunManifest = {
 		runId,

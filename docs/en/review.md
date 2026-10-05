@@ -41,7 +41,7 @@ few read-only git commands.
 | File | Notes |
 |---|---|
 | `index.ts` | Assembly: commands, report tool, TUI renderer |
-| `src/review-run.ts` | `prepareRun`: target resolution, diff prep, manifest |
+| `src/review-run.ts` | `prepareRun`: target resolution, diff prep, manifest. **AR1005-RV (2026-10-05)**: rule discovery (`discoverRulePathsLocal`) runs AFTER the workspace retries/HEAD checks settle, against the FINAL `workspacePath` — the TARGET repo owns which rules apply (its AGENTS.md / .pi/rules), while config loading, run artifacts and manifest/diff/workflow writes stay anchored on the CALLER's cwd. manifest.rulePaths, ChangeProfile.rulePaths, rulesheriff routing and the directive consume the ONE prepared value; the frozen relative-path array shape is unchanged. Baseline defect: a caller with no rules reviewing a target WITH rules got `rulePaths: []` and silently skipped rulesheriff |
 | `src/directive.ts` | Hidden directive text (workflow-script contract) |
 | `src/workflow-schemas.ts` | Reviewer/gate output schemas |
 | `src/gate-enforce.ts` | Verdict enforcement in code (report tool side) |

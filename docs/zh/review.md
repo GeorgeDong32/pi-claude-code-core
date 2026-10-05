@@ -38,7 +38,7 @@
 | 文件 | 说明 |
 |---|---|
 | `index.ts` | 装配:命令、report 工具、TUI 渲染器 |
-| `src/review-run.ts` | `prepareRun`:目标解析、diff 准备、manifest |
+| `src/review-run.ts` | `prepareRun`:目标解析、diff 准备、manifest。**AR1005-RV(2026-10-05)**:规则发现(`discoverRulePathsLocal`)在 workspace 重试/HEAD 检查全部落定**之后**、以**最终 `workspacePath`** 运行 —— 目标仓拥有"哪些规则适用于本次变更"(其 AGENTS.md / .pi/rules),而配置加载、run artifacts 与 manifest/diff/workflow 写入仍锚定**调用者 cwd**。manifest.rulePaths、ChangeProfile.rulePaths、rulesheriff 路由与 directive 消费同一份 prepared 值;冻结的相对路径数组形状不变。基线缺陷:调用仓无规则而目标仓有规则时得到 `rulePaths: []` 并静默跳过 rulesheriff |
 | `src/directive.ts` | 隐藏 directive 文本(workflow script 契约) |
 | `src/workflow-schemas.ts` | 评审/gate 输出 schema |
 | `src/gate-enforce.ts` | 裁定在代码中强制(report 工具侧) |

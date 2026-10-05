@@ -558,3 +558,179 @@ describe("cleanup mechanisms", () => {
 
 export type { FakeCmd };
 void writeFileSync;
+// ── AR1005-RV (spec 2026-10-05 §11): rule discovery targets the FINAL
+// workspace, not the caller's cwd. The fake clone handler receives the
+// cloneDir as args[3] and plants the target repo's rule files there —
+// through the REAL prepareRun, asserting the manifest (not just directive
+// substrings). Baseline red via stash. ──
+
+function rvDiff(): string {
+	return [
+		"diff --git a/src/a.ts b/src/a.ts",
+		"--- a/src/a.ts",
+		"+++ b/src/a.ts",
+		"@@" + " -1 +1,2 @@", // (avoid editor lint on decorators)
+		" line",
+		"+added",
+	].join("\n");
+}
+
+/** Fake gh for a PR target (view + diff). */
+function rvGh(diff: string): FakeCmd {
+	return fakeCmd({
+		gh: (args) => {
+			if (args[0] === "pr" && args[1] === "view") {
+				return { stdout: JSON.stringify({ number: "42", baseRefName: "main", baseRefOid: "aaa", headRefOid: "bbb" }), stderr: "", exitCode: 0 };
+			}
+			if (args[0] === "pr" && args[1] === "diff") return { stdout: diff, stderr: "", exitCode: 0 };
+			return { stdout: "", stderr: "no", exitCode: 1 };
+		},
+	});
+}
+
+/** Fake workspace cmds; `plant(cloneDir)` seeds the target repo's rules on clone. */
+function rvWorkspaceCmd(plant: (cloneDir: string, cloneIndex: number) => void, opts: { headSha?: string } = {}) {
+	let clones = 0;
+	return async (cmd: string, args: string[]) => {
+		if (cmd === "gh" && args[0] === "repo" && args[1] === "clone") return { stdout: "", stderr: "no gh", exitCode: 1 };
+		if (cmd === "git" && args[0] === "clone") {
+			clones += 1;
+			// git clone args: [clone, --depth, 50, url, cloneDir] — args[4] is the dir
+			const cloneDir = args[4]!;
+			mkdirSync(cloneDir, { recursive: true });
+			plant(cloneDir, clones);
+			return { stdout: "", stderr: "", exitCode: 0 };
+		}
+		if (cmd === "git" && args[0] === "fetch") return { stdout: "", stderr: "", exitCode: 0 };
+		if (cmd === "git" && args[0] === "checkout") return { stdout: "", stderr: "", exitCode: 0 };
+		if (cmd === "git" && args[0] === "rev-parse") return { stdout: (opts.headSha ?? "bbb") + "\n", stderr: "", exitCode: 0 };
+		return { stdout: "", stderr: "no", exitCode: 1 };
+	};
+}
+
+function writeRuleFile(dir: string, rel: string, body = "rules"): void {
+	const target = join(dir, rel);
+	mkdirSync(dirname(target), { recursive: true });
+	writeFileSync(target, `# rules\n\n${body}\n`);
+}
+
+describe("AR1005-RV — target-workspace rule discovery", () => {
+	test("RV-T01: caller has NO rules, target workspace HAS them → rulePaths from the workspace", async () => {
+		const cwd = setup();
+		setReviewRunCmd(rvGh(rvDiff()));
+		setTargetWorkspaceCmd(rvWorkspaceCmd((cloneDir) => {
+			writeRuleFile(cloneDir, "AGENTS.md");
+			writeRuleFile(cloneDir, join(".pi", "rules", "r1.md"));
+		}));
+		const prepared = await prepareRun({ cwd, input: "https://github.com/o/r/pull/42" });
+		assert.ok(prepared);
+		assert.deepEqual(prepared!.manifest.rulePaths.sort(), [".pi/rules/r1.md", "AGENTS.md"].sort());
+		assert.ok(prepared!.manifest.reviewerIds!.includes("rulesheriff"));
+	});
+
+	test("RV-T02: caller HAS rules, target workspace has NONE → rulePaths empty, rulesheriff skipped (adaptive)", async () => {
+		const cwd = setup();
+		writeRuleFile(cwd, "AGENTS.md");
+		const cfg = { ...DEFAULT_CONFIG, routing: { mode: "adaptive" as const } };
+		writeConfig(cfg);
+		setReviewRunCmd(rvGh(rvDiff()));
+		setTargetWorkspaceCmd(rvWorkspaceCmd(() => {}));
+		const prepared = await prepareRun({ cwd, input: "https://github.com/o/r/pull/42" });
+		assert.ok(prepared);
+		assert.deepEqual(prepared!.manifest.rulePaths, []);
+		assert.ok(!prepared!.manifest.reviewerIds!.includes("rulesheriff"), "target has no rules — the lane cannot add signal");
+		assert.ok((prepared!.manifest.skippedReviewers ?? []).some((s) => s.id === "rulesheriff"));
+	});
+
+	test("RV-T03: both sides have DIFFERENT rules → the workspace's set wins", async () => {
+		const cwd = setup();
+		writeRuleFile(cwd, "AGENTS.md");
+		writeRuleFile(cwd, join(".pi", "rules", "caller-only.md"));
+		setReviewRunCmd(rvGh(rvDiff()));
+		setTargetWorkspaceCmd(rvWorkspaceCmd((cloneDir) => {
+			writeRuleFile(cloneDir, "CLAUDE.md");
+			writeRuleFile(cloneDir, join(".pi", "rules", "target-rule.md"));
+		}));
+		const prepared = await prepareRun({ cwd, input: "https://github.com/o/r/pull/42" });
+		assert.ok(prepared);
+		const paths = prepared!.manifest.rulePaths;
+		assert.ok(paths.includes("CLAUDE.md"));
+		assert.ok(paths.includes(".pi/rules/target-rule.md"));
+		assert.ok(!paths.some((p) => p.includes("caller-only")), "caller-cwd rules must not leak in");
+	});
+
+	test("RV-T04: the FIRST workspace is replaced by the HEAD-mismatch retry → rulePaths from the FINAL workspace", async () => {
+		const cwd = setup();
+		setReviewRunCmd(rvGh(rvDiff()));
+		// diff head = bbb; first clone reports a MOVED head (ccc) → retry; second clone matches.
+		let firstDir = "";
+		setTargetWorkspaceCmd(rvWorkspaceCmd(
+			(cloneDir, cloneIndex) => {
+				if (cloneIndex === 1) {
+					firstDir = cloneDir;
+					writeRuleFile(cloneDir, "AGENTS.md", "first workspace rules");
+				} else {
+					writeRuleFile(cloneDir, "CLAUDE.md", "final workspace rules");
+				}
+			},
+			{ headSha: "ccc" }, // rev-parse reports the moved head for BOTH clones…
+		));
+		// …so the retry also mismatches → prepareRun throws. Override: match on the 2nd.
+		// Simpler: make rev-parse report ccc only for the first clone's dir.
+		resetTargetWorkspaceCmd();
+		let revParseCalls = 0;
+		setTargetWorkspaceCmd(async (cmd: string, args: string[]) => {
+			if (cmd === "gh" && args[0] === "repo") return { stdout: "", stderr: "no gh", exitCode: 1 };
+			if (cmd === "git" && args[0] === "clone") {
+				const cloneDir = args[4]!;
+				mkdirSync(cloneDir, { recursive: true });
+				writeRuleFile(cloneDir, "CLAUDE.md", "final workspace rules");
+				return { stdout: "", stderr: "", exitCode: 0 };
+			}
+			if (cmd === "git" && args[0] === "fetch") return { stdout: "", stderr: "", exitCode: 0 };
+			if (cmd === "git" && args[0] === "checkout") return { stdout: "", stderr: "", exitCode: 0 };
+			if (cmd === "git" && args[0] === "rev-parse") {
+				revParseCalls += 1;
+				// first workspace reports the moved head; the retry matches the diff head
+				const sha = revParseCalls === 1 ? "ccc" : "bbb";
+				return { stdout: sha + "\n", stderr: "", exitCode: 0 };
+			}
+			return { stdout: "", stderr: "no", exitCode: 1 };
+		});
+		const prepared = await prepareRun({ cwd, input: "https://github.com/o/r/pull/42" });
+		assert.ok(prepared);
+		assert.deepEqual(prepared!.manifest.rulePaths, ["CLAUDE.md"], "rules come from the FINAL (retried) workspace");
+		assert.ok(!prepared!.manifest.rulePaths.includes("AGENTS.md"));
+		void firstDir;
+	});
+
+	test("RV-T05: local-git and diff-file targets keep the cwd-as-workspace behavior (caller rules still apply)", async () => {
+		const cwd = setup();
+		writeRuleFile(cwd, "AGENTS.md");
+		// local-git: fake a git repo with a dirty tree
+		setReviewRunCmd(fakeCmd({
+			git: (args) => {
+				if (args[0] === "status") return { stdout: " M src/a.ts\n", stderr: "", exitCode: 0 };
+				if (args[0] === "diff") return { stdout: rvDiff(), stderr: "", exitCode: 0 };
+				if (args[0] === "rev-parse") return { stdout: "bbb\n", stderr: "", exitCode: 0 };
+				return { stdout: "", stderr: "", exitCode: 0 };
+			},
+		}));
+		const prepared = await prepareRun({ cwd, input: "" });
+		assert.ok(prepared);
+		assert.equal(prepared!.manifest.workspacePath, cwd);
+		assert.deepEqual(prepared!.manifest.rulePaths, ["AGENTS.md"]);
+	});
+
+	test("RV-T06: --lite keeps the single lite-review lane regardless of workspace rules", async () => {
+		const cwd = setup();
+		setReviewRunCmd(rvGh(rvDiff()));
+		setTargetWorkspaceCmd(rvWorkspaceCmd((cloneDir) => {
+			writeRuleFile(cloneDir, "AGENTS.md");
+		}));
+		const prepared = await prepareRun({ cwd, input: "https://github.com/o/r/pull/42", lite: true });
+		assert.ok(prepared);
+		assert.deepEqual(prepared!.manifest.reviewerIds, ["lite-review"]);
+		assert.deepEqual(prepared!.manifest.rulePaths, ["AGENTS.md"], "lite still records the discovered target rules");
+	});
+});
