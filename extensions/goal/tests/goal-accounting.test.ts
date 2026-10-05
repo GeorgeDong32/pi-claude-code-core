@@ -179,3 +179,48 @@ test("GO-T07 (wiring): a paused goal's disk edits are observed by the next event
 		f.cleanup();
 	}
 });
+
+// ── AR1005-GO-B (spec 2026-10-05 §7.3): one accounting event parses the
+// pool exactly once with NO extra focused-file parse (reconcile + persist
+// share the event-read context); the next event still observes external
+// edits. Op counts via the goal-files parse counter seam. ──
+import * as fs from "node:fs";
+import { _parseGoalFileCountForTests, _resetParseGoalFileCountForTests } from "../storage/goal-files.ts";
+
+test("GO-T09: one accounting event parses the focused file once; the next event sees external edits", async () => {
+	resetCoreBusForTests();
+	const cwd = mkdtempSync(path.join(tmpdir(), "pi-goal-gob-"));
+	const clk = fixedClock(2_000_000);
+	const host = new FakeHost();
+	goalExtension(host.asPi(), { now: clk.now });
+	const focused = writeActiveGoalFile({ cwd }, createGoal({ objective: "=== Goal ===\nObjective: original objective", autoContinue: false, sisyphus: false }, Date.UTC(2026, 9, 5)));
+	const ctx = host.makeCtx({ cwd, ui: false, sessionEntries: [{ type: "custom", customType: "pi-goal-focus", data: { version: 1, focusedGoalId: focused.id } }] });
+	writeActiveGoalFile({ cwd }, createGoal({ objective: "=== Goal ===\nObjective: another goal", autoContinue: false, sisyphus: false }, Date.UTC(2026, 9, 5)));
+	writeActiveGoalFile({ cwd }, createGoal({ objective: "=== Goal ===\nObjective: third goal", autoContinue: false, sisyphus: false }, Date.UTC(2026, 9, 5)));
+	try {
+		await host.fire("session_start", { reason: "new" }, ctx);
+		await host.fire("before_agent_start", { systemPrompt: "BASE", prompt: "work" }, ctx);
+		const focusedAbs = path.join(cwd, focused.activePath ?? "");
+
+		void focusedAbs;
+		// op count: with 3 goals on disk, ONE accounting event parses the pool
+		// exactly once (3 parses) and does NOT re-parse the focused file for the
+		// persist merge (baseline: 3 + 1 = 4).
+		_resetParseGoalFileCountForTests();
+		clk.advance(1500);
+		await host.fire("tool_execution_end", { type: "tool_execution_end", toolCallId: "g1" }, ctx);
+		assert.equal(_parseGoalFileCountForTests(), 3, `parse count in one event: ${_parseGoalFileCountForTests()}`);
+		const byId = () => readActiveGoalFiles({ cwd }).find((r) => r.id === focused.id)!;
+		assert.equal(byId().usage.activeSeconds, 1);
+
+		// cross-event freshness: external objective edit is observed by the NEXT event
+		const content = fs.readFileSync(focusedAbs, "utf8") as string;
+		fs.writeFileSync(focusedAbs, content.replaceAll("original objective", "externally edited objective")); // JSON field AND body line
+		clk.advance(1200);
+		await host.fire("tool_execution_end", { type: "tool_execution_end", toolCallId: "g2" }, ctx);
+		assert.match(byId().objective, /externally edited objective/);
+		assert.equal(byId().usage.activeSeconds, 2);
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});

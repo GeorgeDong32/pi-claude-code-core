@@ -186,7 +186,20 @@ export function extractObjectiveFromBody(body: string): string | undefined {
 	return lines.slice(start + 1, end).join("\n").trim() || undefined;
 }
 
+// Test-only observation seam (AR1005-GO-B): counts parseGoalFile
+// invocations — unit tests assert "one event parses the pool exactly once,
+// with no extra focused-file parse" by operation count, not timing. Not
+// part of any public protocol or package export.
+let parseGoalFileCount = 0;
+export function _parseGoalFileCountForTests(): number {
+	return parseGoalFileCount;
+}
+export function _resetParseGoalFileCountForTests(): void {
+	parseGoalFileCount = 0;
+}
+
 export function parseGoalFile(filePath: string): GoalRecord | null {
+	parseGoalFileCount++;
 	let content: string;
 	try {
 		if (fs.lstatSync(filePath).isSymbolicLink()) return null;

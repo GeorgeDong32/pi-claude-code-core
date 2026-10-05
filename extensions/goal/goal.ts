@@ -506,7 +506,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		return openGoalsFromPool(goalsById);
 	}
 
-	function reconcileFocusedGoalFromDisk(ctx: ExtensionContext, opts: { preserveMemoryUsage?: boolean } = {}): boolean {
+	function reconcileFocusedGoalFromDisk(ctx: ExtensionContext, opts: { preserveMemoryUsage?: boolean; captureDiskGoal?: { goal: GoalRecord | null } } = {}): boolean {
 		// GH-02 (continued): children never reconcile from the project's disk
 		// pool. loadState covers session_start; this closes the mid-session
 		// command/tool paths (goal-list, tweak drafting, …) that would otherwise
@@ -519,6 +519,11 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			return true;
 		}
 		const diskGoal = fresh.get(focusedGoalId) ?? null;
+		// AR1005-GO-B: hand the JUST-PARSED focused disk goal to the caller's
+		// same synchronous segment (persist must not re-read/re-parse it).
+		// The capture is per-event, never path-keyed, never cached across
+		// events or awaits; the next event re-reads the pool as always.
+		if (opts.captureDiskGoal) opts.captureDiskGoal.goal = diskGoal;
 		if (!diskGoal) {
 			if (current && !current.activePath) {
 				goalsById = fresh;
@@ -642,7 +647,13 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			clearActiveAccounting();
 			return;
 		}
-		if (state.goal?.activePath && !reconcileFocusedGoalFromDisk(ctx, { preserveMemoryUsage: true })) return;
+		// AR1005-GO-03/04: the accounting entry owns the event-read context —
+		// ONE disk snapshot per synchronous event segment, reused by reconcile
+		// AND persist. External edits between events are still observed
+		// (the next event re-reads); the zero-usage early return below comes
+		// AFTER the reconcile so external cancel/delete detection never skips.
+		const readCtx: { goal: GoalRecord | null } = { goal: null };
+		if (state.goal?.activePath && !reconcileFocusedGoalFromDisk(ctx, { preserveMemoryUsage: true, captureDiskGoal: readCtx })) return;
 		if (!state.goal || state.goal.status !== "active") {
 			beginAccounting();
 			return;
@@ -667,22 +678,27 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		next.usage.activeSeconds += elapsedSeconds;
 		next.updatedAt = nowIso();
 		state.goal = next;
-		persist(ctx);
+		persist(ctx, readCtx);
 	}
 
-	function syncGoalPromptFromDisk(ctx: ExtensionContext): boolean {
+	function syncGoalPromptFromDisk(ctx: ExtensionContext, readCtx?: { goal: GoalRecord | null }): boolean {
 		if (!state.goal || state.goal.status === "complete") return false;
 		const previousObjective = state.goal.objective;
-		state.goal = mergeGoalPromptFromDisk(ctx, state.goal);
+		// AR1005-GO-B: within one accounting event's synchronous segment the
+		// objective comes from the ALREADY-PARSED pool read (snapshot at event
+		// start — no cross-process transactionality is implied). Every other
+		// caller (commands, refresh paths, post-await continuations) still
+		// takes the fresh disk read below.
+		state.goal = readCtx ? (readCtx.goal ? { ...state.goal, objective: readCtx.goal.objective } : state.goal) : mergeGoalPromptFromDisk(ctx, state.goal);
 		return state.goal.objective !== previousObjective;
 	}
 
-	function persist(ctx?: ExtensionContext): void {
+	function persist(ctx?: ExtensionContext, readCtx?: { goal: GoalRecord | null }): void {
 		const current = state.goal;
 		if (current) {
 			state.goal = { ...current, updatedAt: nowIso() };
 			if (ctx) {
-				syncGoalPromptFromDisk(ctx);
+				syncGoalPromptFromDisk(ctx, readCtx);
 				const next = state.goal;
 				if (next) state.goal = next.status === "complete" ? archiveGoalFile(ctx, next) : writeActiveGoalFile(ctx, next);
 			}
