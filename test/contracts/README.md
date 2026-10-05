@@ -19,6 +19,10 @@
 | (P1 起)`__piClaudeCodeCore` 快照 + 2 个 core 可写 legacy key 同步 | P1-BUS-05 | CCTUI ≥1.5.0、panel | 各自独立撤除,互不阻塞(P1-BUS-09) |
 | 注：快照的 memory 可选通道（`MemoryPatch`，P3-ME-06）由 memory 模块发布，当前零外部消费方——不独立登记，俟有真实消费方时按本表规约补行（B2 处置） | —（附注 P1-BUS-05） | 无 | 有消费方时补登记 |
 | CCTUI `externalToolOwner` 以 source 子串过滤外部工具;core 不重注册 CCTUI 已注册的任何工具(§3.2 第 6 条,仅记录) | —(豁免登记) | CCTUI externalToolOwner | 无 P0 行为可钉(core 空壳零注册);P1+ 若 core 重注册任何工具,由 CT-07 同款白名单思路另行加钉 |
+| 宿主 `message_end` hook 先于 SessionManager append;leaf 能标识已提交 branch 变化 | AR1005-ST-HOST(spec 2026-10-05 §13) | modes working stats | 不再使用该宿主读取缓存策略时移除 |
+| session teardown 使旧 ctx 失效(invalidate/session_shutdown);core 必须取消旧 recall 且吸收晚到失败(无 unhandledRejection) | AR1005-RC-HOST(spec 2026-10-05 §13) | memory recall | recall 不再持有跨事件异步请求时移除 |
+| `turn_start` 的 turn 生命周期:同一 turn 内多次工具调用共享同一预算 epoch | AR1005-RU-HOST(spec 2026-10-05 §13) | rules activation | 激活预算改为另一已登记生命周期时移除 |
+| renderer 的 `args`、`isPartial`、`isError` 能力及缺失时的兼容路径 | AR1005-FU-HOST(spec 2026-10-05 §13) | action-fusion UI adapter | 不再使用这些展示上下文信息时移除 |
 
 维护规约:
 - 新契约必须先在此表登记再写测试;删契约先删表行并注明版本。

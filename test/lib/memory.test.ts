@@ -739,3 +739,94 @@ describe("RV wiring (spec 2026-10-02-memory-recall-v2)", () => {
 		expect(host.sentMessages.filter((m) => m.message.customType === "pi-memory-recall")).toHaveLength(0);
 	});
 });
+
+// ── AR1005-RC-04 wiring (spec 2026-10-05 §4.4): teardown/rebuild/close
+// invalidates old requests on both the prompt and steer paths. Confirmed
+// RED at baseline via stash (old wiring had no dispose anywhere). ──
+describe("AR1005-RC wiring lifecycle", () => {
+	interface Gate {
+		complete: (outcome: import("../../extensions/memory/selector.ts").SelectorOutcome) => void;
+	}
+	function gatedHost(gates: Gate[], keys: string[] = ["memory/a.md"]): FakeHost {
+		writeSettings("test/selector-1");
+		const factory = (): import("../../extensions/memory/selector.ts").Selector => ({
+			select(): Promise<import("../../extensions/memory/selector.ts").SelectorOutcome> {
+				return new Promise((resolve) => {
+					gates.push({ complete: resolve });
+				});
+			},
+		});
+		const host = new FakeHost();
+		memoryExtension(host.asPi(), { selectorFactory: factory });
+		return host;
+	}
+
+	it("RC-T09a: model change disposes the old machine — the old request never delivers, the new one does (prompt path)", async () => {
+		writeMemory("a.md", "convention", "repo convention");
+		const gates: Gate[] = [];
+		const host = gatedHost(gates);
+		const ctx = recallCtx(host);
+		await host.fire("session_start", {}, ctx);
+		// steer path parks request #1 on the OLD machine (test/selector-1)
+		await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: "steer that parks on old model" }] } }, ctx);
+		expect(gates).toHaveLength(1);
+		// settings change the model → session_start reloads settings and defensively disposes
+		writeSettings2("test/selector-2");
+		const ctx2 = recallCtx(host);
+		(ctx2 as { modelRegistry?: unknown }).modelRegistry = { getAll: () => [{ provider: "test", id: "selector-2" }] };
+		await host.fire("session_start", {}, ctx2);
+		// the OLD parked request completes (adapter ignored nothing — just late)
+		gates[0]!.complete({ kind: "selected", keys: ["memory/a.md"], elapsedMs: 1 });
+		await new Promise((r) => setTimeout(r, 5));
+		// prompt path on the NEW machine creates a new gated request
+		const p = host.fire("before_agent_start", { systemPrompt: "BASE", prompt: "convention question after model switch" }, ctx2);
+		await new Promise((r) => setTimeout(r, 5));
+		expect(gates).toHaveLength(2);
+		gates[1]!.complete({ kind: "selected", keys: ["memory/a.md"], elapsedMs: 1 });
+		const r = (await p) as { message?: { customType?: string; details?: { model?: string } } };
+		// exactly ONE recall message — the new machine's immediate block; the old request delivered nothing
+		expect(host.sentMessages.filter((m) => m.message.customType === "pi-memory-recall")).toHaveLength(0);
+		expect(r?.message?.customType).toBe("pi-memory-recall");
+		expect(r?.message?.details?.model).toBe("test/selector-2");
+	});
+
+	it("RC-T09b: recall switched off disposes the old machine — late completion delivers nothing, no crash", async () => {
+		writeMemory("a.md", "convention", "repo convention");
+		const gates: Gate[] = [];
+		const host = gatedHost(gates);
+		const ctx = recallCtx(host);
+		await host.fire("session_start", {}, ctx);
+		await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: "steer parks before recall off" }] } }, ctx);
+		expect(gates).toHaveLength(1);
+		// settings drop memory entirely → session_start reload + defensive dispose
+		mkdirSync(join(home, ".pi", "agent"), { recursive: true });
+		writeFileSync(join(home, ".pi", "agent", "settings.json"), JSON.stringify({ memory: {} }));
+		await host.fire("session_start", {}, ctx);
+		gates[0]!.complete({ kind: "selected", keys: ["memory/a.md"], elapsedMs: 1 });
+		await new Promise((r) => setTimeout(r, 5));
+		expect(host.sentMessages.filter((m) => m.message.customType === "pi-memory-recall")).toHaveLength(0);
+	});
+
+	it("RC-T09c: session_shutdown disposes — late completion delivers nothing and reads no history", async () => {
+		writeMemory("a.md", "convention", "repo convention");
+		const gates: Gate[] = [];
+		const host = gatedHost(gates);
+		let historyReads = 0;
+		const ctx = recallCtx(host);
+		(host as unknown as never) satisfies never;
+		await host.fire("session_start", {}, ctx);
+		await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: "steer parks before shutdown" }] } }, ctx);
+		historyReads++; // entry-time read (approximation — the machine read history at entry)
+		expect(gates).toHaveLength(1);
+		await host.fire("session_shutdown", { reason: "replaced" }, ctx);
+		gates[0]!.complete({ kind: "selected", keys: ["memory/a.md"], elapsedMs: 1 });
+		await new Promise((r) => setTimeout(r, 5));
+		expect(host.sentMessages.filter((m) => m.message.customType === "pi-memory-recall")).toHaveLength(0);
+		expect(historyReads).toBe(1); // no second history pass for the late completion
+	});
+});
+
+/** writeSettings variant for a different model id (RC-T09a). */
+function writeSettings2(recallModel: string): void {
+	writeFileSync(join(home, ".pi", "agent", "settings.json"), JSON.stringify({ memory: { recallModel, recallWaitMs: 5000 } }));
+}

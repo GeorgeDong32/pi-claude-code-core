@@ -12,8 +12,16 @@
  *   turn_end            RV deferred delivery (first continues=true turn_end;
  *                       sendMessage triggerTurn:false — flushed after dispatch)
  *                       + auto-consolidation trigger (V2-C) + P3 automation
- *   agent_end           RV run boundary — abort in-flight selection, drop the
- *                       held block, clear run dedup; unconsumed never leaks
+ *   agent_end           RV run boundary — prompt-state cleanup only (v1.2:
+ *                       an in-flight selection may still complete and deliver;
+ *                       latest-wins supersede happens at the next user
+ *                       message, not at run end)
+ *   session_shutdown    AR1005-RC-04 — dispose the recall machine on ANY
+ *                       shutdown reason (synchronous, no model wait); late
+ *                       selector completions are dropped by generation
+ *                       invalidation. session_start also defensively
+ *                       disposes (reload/resume drivers) — neither replaces
+ *                       the other.
  *   tool_call           guardMemoryWrites secret interceptor (both layers;
  *                       read suppression is history-derived now — RV-07)
  *   tool_result         memory_consolidate settle + stale-read staleness note
@@ -102,9 +110,19 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 
 	/** Ensure the machine exists for THIS settings+registry (creating it on
 	 * whichever path needs it first — prompt or steer). Null when recall is
-	 * off (unset/unresolvable recallModel — D3). */
+	 * off (unset/unresolvable recallModel — D3). AR1005-RC-04: rebuilding or
+	 * closing recall disposes the OLD machine first — old and new requests
+	 * must never deliver in parallel. */
 	function ensureRecallMachine(ctx: ExtensionContext): RecallMachine | null {
-		if (!memorySettings.recallModel) return null;
+		if (!memorySettings.recallModel) {
+			// recall switched off (settings reload): kill any old machine
+			if (recallMachine) {
+				recallMachine.dispose();
+				recallMachine = null;
+				recallModelLabel = "";
+			}
+			return null;
+		}
 		const registry = ctx.modelRegistry as { getAll?: () => unknown[] } | undefined;
 		const model = resolveRecallModel(memorySettings.recallModel, registry);
 		if (!model) {
@@ -112,10 +130,18 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 				recallOffNotified = true;
 				console.log(`pi-memory: recallModel "${memorySettings.recallModel}" unresolvable — recall off`);
 			}
+			// AR1005-RC-04: unresolvable after being on — the old machine must not
+			// keep delivering (its requests were created under the old settings)
+			if (recallMachine) {
+				recallMachine.dispose();
+				recallMachine = null;
+				recallModelLabel = "";
+			}
 			return null;
 		}
 		const label = `${(model as unknown as { provider: string }).provider}/${(model as unknown as { id: string }).id}`;
 		if (!recallMachine || recallModelLabel !== label) {
+			recallMachine?.dispose(); // dispose BEFORE the new machine exists — no parallel delivery
 			recallModelLabel = label;
 			recallMachine = createRecall({
 				selector: (extensionDeps.selectorFactory ?? llmSelector)({ model: () => model, registry: () => ctx.modelRegistry as never }),
@@ -129,6 +155,9 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 				deliver: (block) => {
 					pi.sendMessage(makeRecallMessage(block), { triggerTurn: false });
 				},
+				// AR1005-RC-02: controlled background diagnostics — one line per
+				// failed request; supersede/dispose stay silent.
+				diagnose: (message) => console.log(`pi-memory: recall ${message}`),
 			});
 		}
 		return recallMachine;
@@ -190,6 +219,15 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 
 	pi.on("session_start", (_event, ctx: ExtensionContext) => {
 		try {
+			// AR1005-RC-04: defensive teardown — a session_start on a live
+			// extension instance (reload/resume drivers) must not let an old
+			// machine's in-flight work deliver into the new session. This does
+			// NOT replace the real session_shutdown wiring below.
+			recallMachine?.dispose();
+			recallMachine = null;
+			recallModelLabel = "";
+			recallOffNotified = false;
+			promptMessagePending = false;
 			gate.probeStatic();
 			memorySettings = loadMemorySettings(join(process.env.HOME ?? home, ".pi", "agent"));
 			automationState.enabled = memorySettings.automation;
@@ -385,6 +423,21 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 			/* never block */
 		}
 		return undefined;
+	});
+	pi.on("session_shutdown", (_event, _ctx: ExtensionContext) => {
+		try {
+			// AR1005-RC-04: terminal teardown on ANY shutdown reason —
+			// synchronous, never waits on the model. Late selector completions
+			// are dropped by the machine's generation invalidation (zero history
+			// reads, zero deliveries). Automation's own shutdown handler (queue
+			// staging) is a separate registration and still runs.
+			recallMachine?.dispose();
+			recallMachine = null;
+			recallModelLabel = "";
+			promptMessagePending = false;
+		} catch {
+			/* never block shutdown */
+		}
 	});
 	pi.on("agent_settled", () => {
 		try {

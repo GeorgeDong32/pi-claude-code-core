@@ -1,16 +1,43 @@
 /**
  * memory/recall.ts — the recall v2 deep module
- * (spec 2026-10-02-memory-recall-v2, R1; replaces selection.ts +
- * recall-session.ts wholesale).
+ * (spec 2026-10-02-memory-recall-v2, R1; AR1005-RC 2026-10-05: request
+ * lifecycle, cancellation and error convergence).
  *
- * TWO entries (the only ways in):
+ * THREE entries (the only ways in):
  *   onUserMessage(text, history, waitMs) — per real user message. Hygiene,
  *     history-derived exclusions, selector race against waitMs. Returns the
  *     block when the selector answers in time (prompt path returns it from
  *     before_agent_start as a persisted custom message), else null and the
- *     result parks in a held slot.
- *   abort() — run boundary (agent_end): abort in-flight, discard held,
- *     clear run-scoped dedup.
+ *     selection keeps running, delivering the moment it completes (v1.2:
+ *     sendMessage(triggerTurn:false) rides pi's pending-custom-message
+ *     queue — never parked in a slot, never discarded).
+ *     TOTAL PROMISE SEMANTICS (AR1005-RC-02): this method never rejects —
+ *     every entry-stage and deferred-stage throw converges to null plus at
+ *     most one diagnostic per failed request, so `void onUserMessage(...)`
+ *     in the steer wiring cannot produce an unhandled rejection.
+ *   abort() — reusable reset (run boundary / supersede intent): cancel the
+ *     current request, clear the run-scoped dedup; later messages accepted.
+ *   dispose() — AR1005-RC-01: terminal, idempotent. Invalidate the current
+ *     request, cancel waits, clear state; subsequent onUserMessage calls
+ *     return null WITHOUT touching the selector.
+ *
+ * Request lifecycle (AR1005-RC-01): every request owns a private generation
+ * + AbortController + wait timer + a "cancelled" resolver. A new user
+ * message, abort, dispose or machine replacement bumps the generation and
+ * resolves the old request's cancelled promise — an in-flight `await`
+ * returns null immediately (bounded, never hangs on a selector that ignores
+ * the signal), and a LATE completion (adapter ignored the AbortSignal) is
+ * dropped without reading history, delivering, or mutating the new
+ * request's state. Validity is re-checked after EVERY await, before
+ * reading history, before returning an immediate block, before deliver —
+ * including the positive-waitMs immediate branch.
+ *
+ * Delivery accounting (AR1005-RC-03): deferred requests update
+ * runDelivered/deliveries ONLY after deliver() returns synchronously; a
+ * throwing deliver leaves the file eligible (no permanent false marking).
+ * Immediate keeps the "returning the block counts as delivered" convention.
+ * This is in-module delivery bookkeeping, not a cross-process
+ * exactly-once claim.
  *
  * ALL session state is DERIVED from the projection history on every call
  * (D9 — no closure state can go stale across driver quirks):
@@ -75,9 +102,16 @@ export interface RecallStats {
 
 export interface RecallMachine {
 	/** history is a THUNK: the machine calls it only when it actually needs
-	 * a snapshot (onTurnEnd with nothing held never touches it). */
+	 * a snapshot (a parked selection completing after disposal never
+	 * touches it). Total promise: never rejects (AR1005-RC-02). */
 	onUserMessage(text: string, history: () => readonly unknown[], waitMs: number): Promise<RecallBlock | null>;
+	/** Reusable reset: cancel the current request, clear the run-scoped
+	 * dedup; later messages are accepted. */
 	abort(): void;
+	/** Terminal teardown (AR1005-RC-01): idempotent and irreversible —
+	 * invalidates the current request, cancels waits, clears state;
+	 * subsequent onUserMessage calls return null without a selector call. */
+	dispose(): void;
 	readonly stats: RecallStats;
 }
 
@@ -251,17 +285,30 @@ export function renderRecallBlock(
 
 /** Build the machine over injected ports. `files` is re-read per message
  * (the corpus may change between turns); `history` snapshots arrive per
- * call from the wiring. */
+ * call from the wiring. `diagnose` (AR1005-RC-02) receives at most one
+ * controlled line per FAILED request — cancellations and supersedes stay
+ * silent. */
 export function createRecall(deps: {
 	selector: Selector;
 	modelLabel: string;
 	files: () => RecallFile[];
 	cwd: string;
 	deliver: (block: RecallBlock) => void;
+	diagnose?: (message: string) => void;
 }): RecallMachine {
 	const stats: RecallStats = { selections: 0, empties: 0, failures: 0, lastReason: null, deliveries: 0 };
 	const runDelivered = new Set<string>();
-	let inFlight: AbortController | null = null;
+	const diagnose = deps.diagnose ?? (() => {});
+	let disposed = false;
+	let generation = 0;
+
+	/** Per-request lifecycle record (AR1005-RC-01). */
+	interface RequestState {
+		controller: AbortController;
+		timer: ReturnType<typeof setTimeout> | null;
+		cancel: () => void;
+	}
+	let current: RequestState | null = null;
 
 	function eligible(history: DerivedHistory): RecallFile[] {
 		return deps
@@ -274,6 +321,8 @@ export function createRecall(deps: {
 			);
 	}
 
+	/** Build the block WITHOUT touching delivery bookkeeping (AR1005-RC-03:
+	 * the caller commits only after its delivery rule succeeds). */
 	function assemble(
 		outcome: Extract<SelectorOutcome, { kind: "selected" }>,
 		history: DerivedHistory,
@@ -291,110 +340,188 @@ export function createRecall(deps: {
 			picked.push(file);
 		}
 		if (picked.length === 0) return null;
-		const block = renderRecallBlock(picked, {
+		return renderRecallBlock(picked, {
 			delivery,
 			model: deps.modelLabel,
 			elapsedMs: outcome.elapsedMs,
 			remainingSessionBytes: RECALL_SESSION_MAX_BYTES - history.bytesUsed,
 		});
-		if (!block) return null;
-		for (const f of block.details.files) runDelivered.add(f.key);
-		stats.deliveries++;
-		return block;
 	}
 
-	function abortInFlight(): void {
-		inFlight?.abort();
-		inFlight = null;
+	/** Commit the run-scoped dedup + delivery counter (AR1005-RC-03). */
+	function commitDelivery(block: RecallBlock): void {
+		for (const f of block.details.files) runDelivered.add(f.key);
+		stats.deliveries++;
+	}
+
+	function describeError(err: unknown): string {
+		return err instanceof Error ? `${err.message}` : String(err);
+	}
+
+	/** Invalidate the current request (new message / abort / dispose /
+	 * replacement): bump the generation, abort the controller, clear the
+	 * wait timer AND resolve the request's cancelled promise so an
+	 * in-flight await never hangs on an abort-ignoring selector. */
+	function invalidateCurrent(): void {
+		generation++;
+		const req = current;
+		if (!req) return;
+		current = null;
+		req.controller.abort();
+		if (req.timer !== null) clearTimeout(req.timer);
+		req.cancel();
 	}
 
 	return {
 		async onUserMessage(text, history, waitMs) {
+			if (disposed) return null;
 			// RV-05/D8: a newer user message always wins
-			abortInFlight();
+			invalidateCurrent();
+			const myGen = generation;
+			const isCurrent = () => !disposed && generation === myGen;
 
-			const query = recallQuery(text);
-			if (query === null) {
-				stats.empties++;
-				return null;
-			}
-			const derived = deriveHistory(history(), deps.cwd);
-			if (derived.bytesUsed >= RECALL_SESSION_MAX_BYTES) return null; // RV-08: silent, no selector call
-			const candidates = eligible(derived);
-			if (candidates.length === 0) {
-				stats.empties++;
-				return null;
-			}
+			try {
+				const query = recallQuery(text);
+				if (query === null) {
+					stats.empties++;
+					return null;
+				}
+				const derived = deriveHistory(history(), deps.cwd);
+				if (derived.bytesUsed >= RECALL_SESSION_MAX_BYTES) return null; // RV-08: silent, no selector call
+				const candidates = eligible(derived);
+				if (candidates.length === 0) {
+					stats.empties++;
+					return null;
+				}
 
-			const controller = new AbortController();
-			inFlight = controller;
-			const selection = deps.selector
-				.select({ query, candidates, recentTools: derived.recentTools, signal: controller.signal })
-				.catch((): SelectorOutcome => ({ kind: "failure", reason: "selector_throw", elapsedMs: 0 }));
-
-			let timedOut = false;
-			const timeoutNow = new Promise<"timeout">((resolveTimer) => {
-				timedOut = true;
-				resolveTimer("timeout");
-			});
-			const bounded = await (waitMs > 0
-				? Promise.race([
-						selection,
-						new Promise<"timeout">((resolveTimer) => {
-							const timer = setTimeout(() => {
-								timedOut = true;
-								resolveTimer("timeout");
-							}, waitMs);
-							timer.unref?.();
-						}),
-					])
-				: Promise.race([selection, timeoutNow]));
-
-			if (bounded === "timeout" && timedOut) {
-				// spec v1.2: the selection keeps running and DELIVERS THE MOMENT IT
-				// COMPLETES — the wiring's sendMessage(triggerTurn:false) rides pi's
-				// pending-custom-message queue, flushed at the next turn_end (the
-				// first assistant message's end at the earliest). Never parked, never
-				// discarded; a newer user message aborts it (latest-wins).
-				void selection.then((outcome) => {
-					if (controller.signal.aborted) return;
-					if (outcome.kind === "selected") {
-						stats.selections++;
-						// C7 disclosure: the deferred pass re-derives history (mandatory —
-						// RV-07 drops files read during the selection) but reuses the
-						// ENTRY-TIME pool: files written or deleted by automation between
-						// entry and delivery deliver their entry-time body (stale by
-						// seconds); keys outside the pool (only a non-conforming Selector
-						// could produce them) are dropped.
-						const block = assemble(outcome, deriveHistory(history(), deps.cwd), "deferred", candidates);
-						if (block) deps.deliver(block);
-						else stats.empties++;
-					} else if (outcome.kind === "empty") stats.empties++;
-					else {
-						stats.failures++;
-						stats.lastReason = outcome.reason;
-					}
-					if (inFlight === controller) inFlight = null;
+				const controller = new AbortController();
+				let resolveCancelled: (v: "cancelled") => void = () => {};
+				const cancelled = new Promise<"cancelled">((r) => {
+					resolveCancelled = r;
 				});
-				return null;
-			}
-			if (inFlight === controller) inFlight = null;
-			const outcome = bounded as SelectorOutcome;
-			if (outcome.kind === "empty") {
-				stats.empties++;
-				return null;
-			}
-			if (outcome.kind === "failure") {
+				const req: RequestState = { controller, timer: null, cancel: () => resolveCancelled("cancelled") };
+				current = req;
+
+				// AR1005-RC-02: a selector that throws SYNCHRONOUSLY (runtime
+				// violating the declared Promise) must not escape either —
+				// Promise.resolve(...) keeps an already-settled native promise's
+				// identity (no extra tick) and normalizes everything else.
+				let selection: Promise<SelectorOutcome>;
+				try {
+					selection = Promise.resolve(
+						deps.selector.select({ query, candidates, recentTools: derived.recentTools, signal: controller.signal }),
+					).catch((): SelectorOutcome => ({ kind: "failure", reason: "selector_throw", elapsedMs: 0 }));
+				} catch {
+					selection = Promise.resolve({ kind: "failure", reason: "selector_throw", elapsedMs: 0 });
+				}
+
+				let timedOut = false;
+				const timeoutNow = new Promise<"timeout">((resolveTimer) => {
+					timedOut = true;
+					resolveTimer("timeout");
+				});
+				const timerGate =
+					waitMs > 0
+						? new Promise<"timeout">((resolveTimer) => {
+								req.timer = setTimeout(() => {
+									timedOut = true;
+									resolveTimer("timeout");
+								}, waitMs);
+								req.timer.unref?.();
+							})
+						: timeoutNow;
+				const bounded = await Promise.race([selection, timerGate, cancelled]);
+
+				if (bounded === "cancelled") return null; // superseded/aborted/disposed mid-wait: silent, no stale block
+				if (bounded === "timeout" && timedOut) {
+					// spec v1.2: the selection keeps running and DELIVERS THE MOMENT IT
+					// COMPLETES — the wiring's sendMessage(triggerTurn:false) rides pi's
+					// pending-custom-message queue, flushed at the next turn_end (the
+					// first assistant message's end at the earliest). Never parked, never
+					// discarded; a newer user message aborts it (latest-wins).
+					void selection
+						.then((outcome) => {
+							try {
+								// AR1005-RC-01/02: validity FIRST — a late result (adapter
+								// ignored the AbortSignal, session replaced/disposed) reads
+								// no history, delivers nothing, mutates nothing.
+								if (!isCurrent()) {
+									if (current === req) current = null;
+									return;
+								}
+								if (current === req) current = null;
+								if (outcome.kind === "selected") {
+									stats.selections++;
+									// C7 disclosure: the deferred pass re-derives history (mandatory —
+									// RV-07 drops files read during the selection) but reuses the
+									// ENTRY-TIME pool: files written or deleted by automation between
+									// entry and delivery deliver their entry-time body (stale by
+									// seconds); keys outside the pool (only a non-conforming Selector
+									// could produce them) are dropped.
+									const block = assemble(outcome, deriveHistory(history(), deps.cwd), "deferred", candidates);
+									if (block) {
+										deps.deliver(block); // AR1005-RC-03: commit only on sync success
+										commitDelivery(block);
+									} else stats.empties++;
+								} else if (outcome.kind === "empty") stats.empties++;
+								else {
+									stats.failures++;
+									stats.lastReason = outcome.reason;
+								}
+							} catch (err) {
+								// AR1005-RC-02/03: history/assemble/deliver throws — ONE
+								// diagnostic, no false deliveries, no unhandled rejection.
+								stats.failures++;
+								stats.lastReason = "deliver_error";
+								diagnose(`deferred delivery failed: ${describeError(err)}`);
+							}
+						})
+						.catch((err: unknown) => {
+							// Defense-in-depth: the chain above cannot reject (selection
+							// is pre-catch'd and the callback is fully try/caught), but
+							// every chain keeps an explicit rejection handler (RC-02).
+							diagnose(`deferred chain rejected: ${describeError(err)}`);
+						});
+					return null;
+				}
+				// selection won the race (or settled first at waitMs=0)
+				if (req.timer !== null) clearTimeout(req.timer); // AR1005-RC-02: timer cleanup at race end
+				if (current === req) current = null;
+				if (!isCurrent()) return null; // abort/dispose/new message during the wait — no stale block
+				const outcome = bounded as SelectorOutcome;
+				if (outcome.kind === "empty") {
+					stats.empties++;
+					return null;
+				}
+				if (outcome.kind === "failure") {
+					stats.failures++;
+					stats.lastReason = outcome.reason;
+					return null;
+				}
+				stats.selections++;
+				const block = assemble(outcome, derived, "immediate", candidates);
+				if (block) commitDelivery(block); // immediate: returning the block counts as delivered (existing convention)
+				else stats.empties++;
+				return block;
+			} catch (err) {
+				// AR1005-RC-02: entry-stage throws (files/history/derive) converge
+				// to null + ONE diagnostic — total promise, no unhandled rejection.
 				stats.failures++;
-				stats.lastReason = outcome.reason;
+				stats.lastReason = "entry_error";
+				diagnose(`request failed: ${describeError(err)}`);
 				return null;
 			}
-			stats.selections++;
-			return assemble(outcome, derived, "immediate", candidates);
 		},
 
 		abort() {
-			abortInFlight();
+			invalidateCurrent();
+			runDelivered.clear();
+		},
+
+		dispose() {
+			if (disposed) return;
+			disposed = true;
+			invalidateCurrent();
 			runDelivered.clear();
 		},
 

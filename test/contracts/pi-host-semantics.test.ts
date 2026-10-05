@@ -238,3 +238,34 @@ describe("RV host semantics (2026-10-02-memory-recall-v2)", () => {
 		expect(recall!.details!.files![0]!.key).toBe("memory/a.md");
 	});
 });
+
+// ── AR1005-RC-HOST (spec 2026-10-05 §13/§4): session teardown must cancel
+// old recall work and absorb late failures. Runs the REAL memory extension
+// inside a REAL ExtensionRunner in an ISOLATED subprocess (the unhandled
+// rejection probe must not install a process-wide net into the shared test
+// process). The scenario pins the exact defect reproduced at baseline
+// 76e933a: a late selector completion after invalidate() read the stale
+// ctx inside a void'd promise chain → unhandledRejection. ──
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+describe("AR1005-RC-HOST recall teardown (2026-10-05-core-architecture-reliability)", () => {
+	it("⑦ invalidate + session_shutdown drop the late abort-ignoring selection: zero sends, zero unhandled rejections", () => {
+		const scenario = fileURLToPath(new URL("./rc-host-scenario.ts", import.meta.url));
+		// The scenario imports core's TypeScript sources — run it under bun (the
+		// repo runtime); node's strip-only mode rejects parameter properties.
+		const result = spawnSync("bun", [scenario], {
+			encoding: "utf8",
+			timeout: 60_000,
+			env: { ...process.env, PI_CONTRACT_RC_HOST: "1" },
+		});
+		const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+		if (result.status !== 0) {
+			throw new Error(`scenario exited ${result.status}:\n${out.slice(0, 3000)}`);
+		}
+		expect(out).toContain("SCENARIO_SELECTOR_CALLS:1");
+		expect(out).toContain("SCENARIO_SENT:0"); // the late result delivered nothing
+		expect(out).not.toContain("SCENARIO_UNHANDLED"); // and crashed nothing
+		expect(out).toContain("SCENARIO_DONE");
+	});
+});

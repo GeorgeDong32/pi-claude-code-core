@@ -17,11 +17,12 @@ spec 2026-10-02-memory-recall-v2)、守卫记忆写入路径、自动整合
 
 | 钩子 | 行为 |
 |---|---|
-| `session_start` | 双层 reconcile + 设置加载 + 静态 yield 探测；**queue drain**（spec 2026-10-03）在设置就绪后后台触发（不占启动路径、按项目路由、永不 await）；automation 自身的 `session_start` 重置全部每会话闭包态（A1 —— 宿主在进程内 `/new`、`/resume`、`/fork` 后复用同一批 handler 闭包，不重置则已死的 AbortController 会在首次切换后静默杀死全部 automation） |
+| `session_start` | 双层 reconcile + 设置加载 + 静态 yield 探测；**queue drain**（spec 2026-10-03）在设置就绪后后台触发（不占启动路径、按项目路由、永不 await）；automation 自身的 `session_start` 重置全部每会话闭包态（A1 —— 宿主在进程内 `/new`、`/resume`、`/fork` 后复用同一批 handler 闭包，不重置则已死的 AbortController 会在首次切换后静默杀死全部 automation）；**AR1005-RC**：另防御性 dispose 召回机并清 model label / prompt 标记 / 一次性通知态（reload/resume 驱动 —— 补充而非替代 `session_shutdown`） |
 | `before_agent_start` | 动态 yield 探测 → policy + 双层带帽索引;**RV prompt 路径** —— 每条用户消息一次选择(受 `recallWaitMs` 限时),块作为 custom message 持久化在用户消息之后 |
 | `message_end` | **RV steer 路径** —— run 中途到达的用户消息以等待 0 选择;custom 块永不触发(RV-01)。spec v1.2:挂起的选择**一完成即投递**(`sendMessage` `triggerTurn:false` 入 pi 的 pending 队列,下一个 turn_end 落盘 —— 最早 = 首条模型消息结束):run 内 request #2 起可见,run 结束则下一轮 request #1 可见。永不丢弃;`display:false` 保证两个 TUI 都不渲染 |
 | `turn_end` | P3 automation 计数 + correction 门(≤1/3 turn;review 提取已挪 `agent_end`,2026-10-03;spec v1.2:召回投递不再按 turn 门控 —— 见 `message_end`) |
 | `agent_end` | spec v1.2:仅清 prompt 标记 —— 在途选择仍可完成后投递(下一轮可见);最新者胜的取代发生在下一条用户消息 + 后台 review 提取(2026-10-03 自 turn_end 挪入:完整 run 快照,≥10 turn / ≥15 tool call 门槛,suffix-60 窗口上限,空窗口守卫 —— 不再 run 中途提取,单 run 至多一次 LLM) |
+| `session_shutdown` | **AR1005-RC-04**:任意 shutdown 原因都 dispose 召回机 —— 同步执行、永不等待模型。晚到的选择器完成(adapter 忽略 AbortSignal)被 generation 失效丢弃:零 history 读取、零投递、零 unhandled rejection(契约 AR1005-RC-HOST 对真实 `ExtensionRunner` + `invalidate()` 钉住;基线缺陷正是该崩溃) |
 | `tool_call` | `guardMemoryWrites` 秘密拦截器(双层);已读抑制改为从历史推导(RV-07) |
 | `tool_result` | `memory_consolidate` settle + 陈旧读 staleness 标注 |
 | `agent_settled` | 清除整合进行中标记 |
@@ -52,7 +53,7 @@ child 的 dispatch prompt 触发一次选择器调用(token 费 + ≤waitMs 首 
 |---|---|
 | `index.ts` | 装配;hook 体在边界 try/catch 包裹。只做事件路由 —— 一切召回决策都在 `recall.ts` |
 | `memdir.ts` | 目录扫描/reconcile;`scanMemoryDirCached` 指纹缓存 + git root memo + 1s 新鲜窗口 TTL(arch review C7:同轮后续扫描免 readdir+stat 指纹趟;外部编辑最长 ~1s 可见 —— 全部内部写路径显式失效);`eligibleMemories` = 召回候选集(双层、新→旧、绝对路径);`memoryKey` = 规范键 `user-memory/<file>` / `memory/<file>` |
-| `recall.ts` | **RV 深模块**(三入口:`onUserMessage` / `onTurnEnd` / `abort`)。所有会话态每次调用都从投影历史推导(D9):自最近 `compactionSummary` 起的硬判重(RV-06)、read toolCall 按 cwd 解析的已读抑制(RV-07)、按历史 `details.bytes` 累计的字节预算(RV-08)、自最近用户消息起成功且从未失败的 recentTools(RV-13)。skill 包裹剥离 + 长度卫生(RV-02);最新者胜的取代(RV-05);字节安全截断 + 路径注记渲染;`RecallDetailsV1`(冻结,契约已钉) |
+| `recall.ts` | **RV 深模块**(入口:`onUserMessage` / `abort` / `dispose`;AR1005-RC-01)。所有会话态每次调用都从投影历史推导(D9):自最近 `compactionSummary` 起的硬判重(RV-06)、read toolCall 按 cwd 解析的已读抑制(RV-07)、按历史 `details.bytes` 累计的字节预算(RV-08)、自最近用户消息起成功且从未失败的 recentTools(RV-13)。skill 包裹剥离 + 长度卫生(RV-02);最新者胜的取代(RV-05);字节安全截断 + 路径注记渲染;`RecallDetailsV1`(冻结,契约已钉)。**AR1005-RC**:每个请求持有 generation + AbortController + 等待 timer + cancelled resolver —— 新消息、`abort`、`dispose` 或机器替换立即失效(在途 await 不会挂在忽略 abort 的 selector 上;晚到完成零 history 读取、零投递、零状态污染)。`onUserMessage` 为 total promise(RC-02:入口/延迟段抛错收敛为 null + 每失败请求至多一条诊断 —— steer 路径的 `void` 调用不可能产生 unhandled rejection);延迟投递仅在 `deliver()` 同步成功后提交 run 判重/计数(RC-03) |
 | `selector.ts` | `llmSelector`(共享 llm.ts 通道):清单行 = `[layer][type] key (age): description` 新→旧、上限 200;精度优先提示词(空列表是合法答案);recentTools 反噪音规则;`resolveRecallModel` = 精确 provider/id → 唯一裸 id → 关闭(绝不回退会话模型,D3) |
 | `policy.ts` | policy 注入块(`POLICY_COMPACT`) |
 | `guard.ts` | 记忆写路径的秘密拦截器(secret regex,含无引号值 / base64 padding) |
