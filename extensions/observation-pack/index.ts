@@ -171,7 +171,15 @@ export function createObservationPackExtension(hostExports: {
 			if (outcome.sentinelWarning !== null) console.warn(outcome.sentinelWarning);
 			if (outcome.counters !== null) {
 				// OBS-09: cumulative avoided tokens on the capability bus.
-				coreBus().publish({ observation: { tokensAvoided: outcome.counters.tokensAvoided, placeholders: outcome.counters.placeholders } });
+				// OBS-09-SITES: per-site display-only savings for the
+				// first-replacement requests (never in the projection itself).
+				coreBus().publish({
+					observation: {
+						tokensAvoided: outcome.counters.tokensAvoided,
+						placeholders: outcome.counters.placeholders,
+						sites: outcome.counters.sites,
+					},
+				});
 			}
 			return { messages: [...outcome.messages] };
 		});

@@ -4,7 +4,9 @@
  * Everything the mechanism does per provider request, expressed as a pure
  * function over injected ports: the candidate loop, the send-count recovery
  * heuristic, the FULL_SENDS/placeholder decision, the sentinel streak, and
- * the OBS-09 counters. No pi runtime, no bus, no console — the adapter in
+ * the OBS-09 counters (cumulative) plus their OBS-09-SITES per-site payload:
+ * display-only data for the first-replacement requests — it rides the
+ * capability bus and never enters the projected messages (invariant 9). No pi runtime, no bus, no console — the adapter in
  * index.ts owns those side effects (CON-03/04 keep pinning the wiring
  * end-to-end; node:test drives this step directly).
  *
@@ -108,8 +110,17 @@ export interface ProjectionOutcome {
 	readonly failOpenReasons: readonly string[];
 	/** CMP-04 sentinel tripped this request — the adapter warns once. */
 	readonly sentinelWarning: string | null;
-	/** OBS-09 cumulative counters to publish, or null when nothing new. */
-	readonly counters: { readonly tokensAvoided: number; readonly placeholders: number } | null;
+	/**
+	 * OBS-09 cumulative counters to publish, or null when nothing new.
+	 * OBS-09-SITES: non-null counters always carry the per-site entries for
+	 * the observations FIRST replaced by this request (the single-shot
+	 * semantics upstream SoL-Pi flashes) — display-only, bus-side data.
+	 */
+	readonly counters: {
+		readonly tokensAvoided: number;
+		readonly placeholders: number;
+		readonly sites: ReadonlyArray<{ readonly tool: string; readonly id: string; readonly avoidedTokens: number }>;
+	} | null;
 }
 
 export async function projectContext(args: {
@@ -121,7 +132,10 @@ export async function projectContext(args: {
 	const projected = [...args.messages];
 	let replacedThisRequest = 0;
 	let eligiblePastFullSends = 0;
-	let firstReplacement = false;
+	// OBS-09-SITES: one entry per observation FIRST replaced by this request —
+	// the array's emptiness IS the old firstReplacement boolean (counters stay
+	// null without it, so the publish trigger is unchanged).
+	const firstReplacementSites: Array<{ tool: string; id: string; avoidedTokens: number }> = [];
 	const failOpenReasons: string[] = [];
 
 	// Requests each candidate has already been part of, counted by the
@@ -206,7 +220,7 @@ export async function projectContext(args: {
 			if (previousSends === FULL_SENDS) {
 				args.state.placeholderCount += 1;
 				args.state.savedTokens += removedTokens;
-				firstReplacement = true;
+				firstReplacementSites.push({ tool: observation.toolName, id: observation.id, avoidedTokens: removedTokens });
 			}
 		} catch (error) {
 			// OBS-08 fail-open, per-message: one failure keeps that message's
@@ -234,8 +248,9 @@ export async function projectContext(args: {
 		replacedThisRequest,
 		failOpenReasons,
 		sentinelWarning,
-		counters: firstReplacement
-			? { tokensAvoided: args.state.savedTokens, placeholders: args.state.placeholderCount }
-			: null,
+		counters:
+			firstReplacementSites.length > 0
+				? { tokensAvoided: args.state.savedTokens, placeholders: args.state.placeholderCount, sites: firstReplacementSites }
+				: null,
 	};
 }

@@ -341,3 +341,66 @@ test("OB-T07: ledger event order and sentinel/first-savings semantics match the 
 	assert.equal(state.placeholderCount, 1);
 	assert.ok(state.savedTokens > 0);
 });
+
+// OBS-09-SITES: per-site display-only savings — one entry per observation
+// FIRST replaced by this request (previousSends === FULL_SENDS), matching the
+// single-shot semantics upstream SoL-Pi flashes in showSolPiSavings.
+test("OBS-09-SITES: one sites entry per first-replacement observation, avoidedTokens = that observation's removedTokens", async () => {
+	const state = createProjectionState();
+	const { ports, ledger } = fakePorts();
+	// Two candidates with distinct identities (different tools, different
+	// text sizes) crossing FULL_SENDS in the SAME request.
+	const a = bigResult("a".repeat(THRESHOLD_BYTES + 100), "bash");
+	const b = bigResult("b".repeat(THRESHOLD_BYTES + 4000), "grep");
+	const messages = [a, b];
+	for (let i = 0; i < FULL_SENDS; i += 1) {
+		const outcome = await projectContext({ messages, root: "/t", state, ports });
+		assert.equal(outcome.counters, null);
+	}
+	const first = await projectContext({ messages, root: "/t", state, ports });
+	assert.ok(first.counters, "first-replacement request publishes counters");
+	assert.ok(first.counters.sites.length === 2, "one sites entry per first-replaced observation");
+	const byTool = new Map(first.counters.sites.map((site) => [site.tool, site]));
+	// Shape: exactly tool/id/avoidedTokens per entry.
+	for (const site of first.counters.sites) {
+		assert.deepEqual(Object.keys(site).sort(), ["avoidedTokens", "id", "tool"]);
+		assert.ok(site.id.startsWith("obs_"));
+		assert.ok(site.avoidedTokens > 0);
+	}
+	// avoidedTokens per site = that observation's removedTokens, not a sum:
+	// cross-check against the placeholder ledger rows written this request.
+	const placeholderRows = ledger.filter(
+		(entry) => entry.event === "placeholder" && typeof entry.sendNumber === "number" && entry.sendNumber === FULL_SENDS + 1,
+	);
+	assert.equal(placeholderRows.length, 2);
+	for (const row of placeholderRows) {
+		const site = byTool.get(row.tool as string);
+		assert.ok(site, `ledger row for ${String(row.tool)} has a sites entry`);
+		assert.equal(site.id, row.id);
+		assert.equal(site.avoidedTokens, row.removedTokens);
+	}
+	const distinct = new Set(first.counters.sites.map((site) => site.avoidedTokens));
+	assert.equal(distinct.size, 2, "per-observation values, not one shared number");
+	assert.equal(first.counters.placeholders, 2);
+	// Cumulative total still the sum of removedTokens.
+	assert.equal(first.counters.tokensAvoided, first.counters.sites.reduce((sum, site) => sum + site.avoidedTokens, 0));
+});
+
+// Acceptance (b): after the first-replacement request counters stay null —
+// no sites payload is produced on later requests (publish trigger unchanged).
+test("OBS-09-SITES: later requests keep counters null — no sites payload", async () => {
+	const state = createProjectionState();
+	const { ports } = fakePorts();
+	const message = bigResult(BIG);
+	for (let i = 0; i < FULL_SENDS; i += 1) {
+		await projectContext({ messages: [message], root: "/t", state, ports });
+	}
+	const first = await projectContext({ messages: [message], root: "/t", state, ports });
+	assert.ok(first.counters);
+	assert.equal(first.counters.sites.length, 1);
+	assert.equal(first.counters.sites[0].tool, "bash");
+	for (let i = 0; i < 3; i += 1) {
+		const later = await projectContext({ messages: [message], root: "/t", state, ports });
+		assert.equal(later.counters, null, "only the first replacement publishes counters/sites");
+	}
+});
