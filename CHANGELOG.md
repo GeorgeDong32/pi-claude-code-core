@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 (2026-10-06)
 
 ### Added (sites entries carry toolCallId — OBS-09-SITES row correlation)
 - **`observation.sites[].toolCallId`**: each per-site savings entry now carries the source tool result's `toolCallId` (optional, additive). The context projection rewrites only the provider request — the session transcript and the tool rows the user sees keep the original shape — so content shape cannot locate which row was packed; `toolCallId` is the only reliable display-side key to correlate a flashed saving with its tool row. Malformed sources degrade to field omission, never a throw; old-shape entries (without the field) and readers remain unaffected.

@@ -1,6 +1,6 @@
 {
 	"name": "@georgedong32/pi-claude-code-core",
-	"version": "0.2.1",
+	"version": "0.3.0",
 	"description": "Unified core for pi coding agent: permission modes + effort + goal + review, plus rules / memory / mcp-gov / web-gov modules.",
 	"type": "module",
 	"license": "MIT",
