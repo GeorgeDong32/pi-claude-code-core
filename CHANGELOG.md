@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Added (sites entries carry toolCallId — OBS-09-SITES row correlation)
+- **`observation.sites[].toolCallId`**: each per-site savings entry now carries the source tool result's `toolCallId` (optional, additive). The context projection rewrites only the provider request — the session transcript and the tool rows the user sees keep the original shape — so content shape cannot locate which row was packed; `toolCallId` is the only reliable display-side key to correlate a flashed saving with its tool row. Malformed sources degrade to field omission, never a throw; old-shape entries (without the field) and readers remain unaffected.
+
 ### Added (per-site observation savings on the bus — OBS-09-SITES)
 - **`observation.sites`: display-only single-shot savings for the TUI.** The capability-bus `observation` channel gained an optional `sites: ReadonlyArray<{ tool, id, avoidedTokens }>` field: on each request where an observation is FIRST replaced (the `previousSends === FULL_SENDS` transition — the same single-shot semantics upstream SoL-Pi flashes in `showSolPiSavings`), the published patch carries one entry per first-replaced observation with that observation's `removedTokens`. The field is additive and optional: old publishers leave it undefined, old readers are unaffected, and the `readCoreStatus` channel whitelist is untouched. It is display-layer data only — never part of a provider request or the projected messages (module invariant 9); packaging behavior, the ledger audit and `obs_recall` are unchanged. Pinned end-to-end through the real extension + real bus (exactly one sites-carrying publish per first-replacement request, none after) and as a bus-shape/backward-compat contract.
 

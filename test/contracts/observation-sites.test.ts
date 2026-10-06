@@ -23,7 +23,7 @@ import { targets } from "./targets.ts";
 import { coreBus, createCoreBus, getCoreBus, type CoreSnapshot } from "../../extensions/bus.ts";
 import { readCoreStatus } from "../../types/core-status.mjs";
 
-type SiteEntry = { tool: string; id: string; avoidedTokens: number };
+type SiteEntry = { tool: string; id: string; avoidedTokens: number; toolCallId?: string };
 type ObservationChannel = { tokensAvoided: number; placeholders: number; sites?: ReadonlyArray<SiteEntry> };
 
 function largeToolResult(text: string, toolName: string, toolCallId: string) {
@@ -86,12 +86,14 @@ describe("OBS-09-SITES: per-site display-only savings on the capability bus", ()
 		const byTool = new Map(patch!.sites!.map((site) => [site.tool, site]));
 		expect(new Set(patch!.sites!.map((site) => site.id)).size).toBe(2);
 		for (const site of patch!.sites!) {
-			expect(Object.keys(site).sort()).toEqual(["avoidedTokens", "id", "tool"]);
+			expect(Object.keys(site).sort()).toEqual(["avoidedTokens", "id", "tool", "toolCallId"]);
 			expect(site.id).toMatch(/^obs_[0-9a-f]{24}$/u);
 			expect(site.avoidedTokens).toBeGreaterThan(0);
 		}
 		expect(byTool.get("bash")!.tool).toBe("bash");
+		expect(byTool.get("bash")!.toolCallId).toBe("tc-a");
 		expect(byTool.get("grep")!.tool).toBe("grep");
+		expect(byTool.get("grep")!.toolCallId).toBe("tc-b");
 		// Cumulative counters ride the same patch (OBS-09 unchanged).
 		expect(patch!.placeholders).toBe(2);
 		expect(patch!.tokensAvoided).toBe(patch!.sites!.reduce((sum, site) => sum + site.avoidedTokens, 0));
@@ -118,6 +120,9 @@ describe("OBS-09-SITES: per-site display-only savings on the capability bus", ()
 
 		// New publisher: sites ride verbatim, frozen.
 		const sites: Array<SiteEntry> = [{ tool: "read", id: "obs_0123456789abcdef01234567", avoidedTokens: 2645 }];
+		// Pre-toolCallId publisher shape (a17097d-era entry) still fits the
+		// channel — toolCallId stays optional and absent readers don't throw.
+		expect(sites[0].toolCallId).toBeUndefined();
 		const newShape = bus.publish({ observation: { tokensAvoided: 5 + 2645, placeholders: 2, sites } });
 		expect(newShape.observation?.sites).toEqual(sites);
 		expect(Object.isFrozen(newShape.observation?.sites)).toBe(true);

@@ -23,7 +23,7 @@
 | session teardown 使旧 ctx 失效(invalidate/session_shutdown);core 必须取消旧 recall 且吸收晚到失败(无 unhandledRejection) | AR1005-RC-HOST(spec 2026-10-05 §13) | memory recall | recall 不再持有跨事件异步请求时移除 |
 | `turn_start` 的 turn 生命周期:同一 turn 内多次工具调用共享同一预算 epoch | AR1005-RU-HOST(spec 2026-10-05 §13) | rules activation | 激活预算改为另一已登记生命周期时移除 |
 | renderer 的 `args`、`isPartial`、`isError` 能力及缺失时的兼容路径 | AR1005-FU-HOST(spec 2026-10-05 §13) | action-fusion UI adapter | 不再使用这些展示上下文信息时移除 |
-| 快照 `observation` 通道可选 `sites` 字段(display-only 每站点节省 `ReadonlyArray<{tool,id,avoidedTokens}>`;仅首次替换请求携带,绝不进 provider request/projected messages;对齐 SoL-Pi showSolPiSavings 单次语义) | OBS-09-SITES(单次语义扩展) | pi-claude-code-tui(CC 工具行闪显单次节省) | TUI 不再消费每站点数据时移除 |
+| 快照 `observation` 通道可选 `sites` 字段(display-only 每站点节省 `ReadonlyArray<{tool,id,avoidedTokens,toolCallId?}>`,`toolCallId` 为显示侧行关联键;仅首次替换请求携带,绝不进 provider request/projected messages;对齐 SoL-Pi showSolPiSavings 单次语义) | OBS-09-SITES(单次语义扩展) | pi-claude-code-tui(CC 工具行闪显单次节省) | TUI 不再消费每站点数据时移除 |
 
 维护规约:
 - 新契约必须先在此表登记再写测试;删契约先删表行并注明版本。

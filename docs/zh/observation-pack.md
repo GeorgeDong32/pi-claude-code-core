@@ -32,7 +32,7 @@ obs_4b1d7b39 · +15.5KB`)+ 分页结果视图(大小 · 行数 · 范围,内容�
 - 存储根经 sessionManager 公共 API 派生 —— 原文在
   `<sessionDir>/observation-pack/<sessionId>/` 下。
 - `lib/pi-compat.ts` 门控本模块;降级只警告、不阻塞。
-- **总线**:`observation` 通道 —— `{ tokensAvoided, placeholders, sites? }`。`sites`(OBS-09-SITES)是 display-only 的每站点节省数据 —— 每个被本次请求首次替换的观察一条 `{ tool, id, avoidedTokens }`,供 TUI 闪显单次节省;绝不进入投影后的消息。
+- **总线**:`observation` 通道 —— `{ tokensAvoided, placeholders, sites? }`。`sites`(OBS-09-SITES)是 display-only 的每站点节省数据 —— 每个被本次请求首次替换的观察一条 `{ tool, id, avoidedTokens }`,供 TUI 闪显单次节省;绝不进入投影后的消息。 条目同时携带来源 `toolCallId` —— 显示侧行关联键(投影只改 provider 请求,内容形状无法定位被打包的行)。
 
 ## 文件
 

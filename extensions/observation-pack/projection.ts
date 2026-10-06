@@ -6,7 +6,10 @@
  * heuristic, the FULL_SENDS/placeholder decision, the sentinel streak, and
  * the OBS-09 counters (cumulative) plus their OBS-09-SITES per-site payload:
  * display-only data for the first-replacement requests — it rides the
- * capability bus and never enters the projected messages (invariant 9). No pi runtime, no bus, no console — the adapter in
+ * capability bus and never enters the projected messages (invariant 9).
+ * Each site entry carries the source message's toolCallId: the projection
+ * only rewrites the provider request, so toolCallId is the ONLY key that
+ * correlates a site with the tool row the user sees. No pi runtime, no bus, no console — the adapter in
  * index.ts owns those side effects (CON-03/04 keep pinning the wiring
  * end-to-end; node:test drives this step directly).
  *
@@ -119,7 +122,7 @@ export interface ProjectionOutcome {
 	readonly counters: {
 		readonly tokensAvoided: number;
 		readonly placeholders: number;
-		readonly sites: ReadonlyArray<{ readonly tool: string; readonly id: string; readonly avoidedTokens: number }>;
+		readonly sites: ReadonlyArray<{ readonly tool: string; readonly id: string; readonly avoidedTokens: number; readonly toolCallId?: string }>;
 	} | null;
 }
 
@@ -135,7 +138,7 @@ export async function projectContext(args: {
 	// OBS-09-SITES: one entry per observation FIRST replaced by this request —
 	// the array's emptiness IS the old firstReplacement boolean (counters stay
 	// null without it, so the publish trigger is unchanged).
-	const firstReplacementSites: Array<{ tool: string; id: string; avoidedTokens: number }> = [];
+	const firstReplacementSites: Array<{ tool: string; id: string; avoidedTokens: number; toolCallId?: string }> = [];
 	const failOpenReasons: string[] = [];
 
 	// Requests each candidate has already been part of, counted by the
@@ -220,7 +223,16 @@ export async function projectContext(args: {
 			if (previousSends === FULL_SENDS) {
 				args.state.placeholderCount += 1;
 				args.state.savedTokens += removedTokens;
-				firstReplacementSites.push({ tool: observation.toolName, id: observation.id, avoidedTokens: removedTokens });
+				// OBS-09-SITES: toolCallId correlates the entry with the tool row the
+				// user sees (duck-read: the loop only enters for isPureTextResult
+				// ToolResultMessages, but a malformed field degrades to omission,
+				// never a throw).
+				firstReplacementSites.push({
+					tool: observation.toolName,
+					id: observation.id,
+					avoidedTokens: removedTokens,
+					...(typeof message.toolCallId === "string" ? { toolCallId: message.toolCallId } : {}),
+				});
 			}
 		} catch (error) {
 			// OBS-08 fail-open, per-message: one failure keeps that message's

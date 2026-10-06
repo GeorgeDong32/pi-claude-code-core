@@ -36,7 +36,7 @@ sentinel warns when the projection stops taking effect (CMP-04).
 - Storage root derived via the sessionManager public API — originals under
   `<sessionDir>/observation-pack/<sessionId>/`.
 - `lib/pi-compat.ts` gates the module; degradation warns, never blocks.
-- **Bus**: `observation` channel — `{ tokensAvoided, placeholders, sites? }`. `sites` (OBS-09-SITES) is display-only per-site savings — one `{ tool, id, avoidedTokens }` entry per observation first replaced by that request; the TUI flashes it as a single-shot saving. It never enters the projected messages.
+- **Bus**: `observation` channel — `{ tokensAvoided, placeholders, sites? }`. `sites` (OBS-09-SITES) is display-only per-site savings — one `{ tool, id, avoidedTokens }` entry per observation first replaced by that request; the TUI flashes it as a single-shot saving. It never enters the projected messages. Entries also carry the source `toolCallId` — the display-side row correlation key (the projection rewrites only the provider request, so content shape cannot locate the packed row).
 
 ## Files
 

@@ -57,9 +57,12 @@ export interface MemoryPatch {
  * OBS-09-SITES: the optional `sites` field carries per-site display-only
  * savings for the requests where an observation was FIRST replaced
  * (previousSends === FULL_SENDS) — the single-shot semantics upstream
- * SoL-Pi flashes in showSolPiSavings. Display layer only: never part of a
- * provider request or the projected messages (module invariant 9).
- * Single-sourced from the published snapshot type (twin-shape guard).
+ * SoL-Pi flashes in showSolPiSavings. Each entry's optional toolCallId
+ * correlates it with the visible tool row: the projection rewrites only
+ * the provider request, so toolCallId is the only reliable row key.
+ * Display layer only: never part of a provider request or the projected
+ * messages (module invariant 9). Single-sourced from the published
+ * snapshot type (twin-shape guard).
  */
 export interface ObservationPatch {
 	observation?: CoreSnapshot["observation"];

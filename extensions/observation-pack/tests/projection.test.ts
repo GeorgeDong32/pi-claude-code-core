@@ -15,10 +15,10 @@ import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import { FULL_SENDS, THRESHOLD_BYTES } from "../observation.ts";
 import { createProjectionState, projectContext, SENTINEL_STREAK_LIMIT, type ProjectionPorts } from "../projection.ts";
 
-function bigResult(text: string, toolName = "bash"): ToolResultMessage {
+function bigResult(text: string, toolName = "bash", toolCallId = "tc-1"): ToolResultMessage {
 	return {
 		role: "toolResult",
-		toolCallId: "tc-1",
+		toolCallId,
 		toolName,
 		isError: false,
 		content: [{ type: "text", text }],
@@ -349,9 +349,9 @@ test("OBS-09-SITES: one sites entry per first-replacement observation, avoidedTo
 	const state = createProjectionState();
 	const { ports, ledger } = fakePorts();
 	// Two candidates with distinct identities (different tools, different
-	// text sizes) crossing FULL_SENDS in the SAME request.
-	const a = bigResult("a".repeat(THRESHOLD_BYTES + 100), "bash");
-	const b = bigResult("b".repeat(THRESHOLD_BYTES + 4000), "grep");
+	// text sizes, different call ids) crossing FULL_SENDS in the SAME request.
+	const a = bigResult("a".repeat(THRESHOLD_BYTES + 100), "bash", "tc-multi-a");
+	const b = bigResult("b".repeat(THRESHOLD_BYTES + 4000), "grep", "tc-multi-b");
 	const messages = [a, b];
 	for (let i = 0; i < FULL_SENDS; i += 1) {
 		const outcome = await projectContext({ messages, root: "/t", state, ports });
@@ -361,12 +361,17 @@ test("OBS-09-SITES: one sites entry per first-replacement observation, avoidedTo
 	assert.ok(first.counters, "first-replacement request publishes counters");
 	assert.ok(first.counters.sites.length === 2, "one sites entry per first-replaced observation");
 	const byTool = new Map(first.counters.sites.map((site) => [site.tool, site]));
-	// Shape: exactly tool/id/avoidedTokens per entry.
+	// Shape: exactly tool/id/avoidedTokens/toolCallId per entry — the call
+	// id is the display-side row correlation key (the projection rewrites
+	// only the provider request, so content shape cannot locate the row).
 	for (const site of first.counters.sites) {
-		assert.deepEqual(Object.keys(site).sort(), ["avoidedTokens", "id", "tool"]);
+		assert.deepEqual(Object.keys(site).sort(), ["avoidedTokens", "id", "tool", "toolCallId"]);
 		assert.ok(site.id.startsWith("obs_"));
 		assert.ok(site.avoidedTokens > 0);
 	}
+	assert.equal(byTool.get("bash")!.toolCallId, "tc-multi-a");
+	assert.equal(byTool.get("grep")!.toolCallId, "tc-multi-b");
+	assert.equal(new Set(first.counters.sites.map((site) => site.toolCallId)).size, 2);
 	// avoidedTokens per site = that observation's removedTokens, not a sum:
 	// cross-check against the placeholder ledger rows written this request.
 	const placeholderRows = ledger.filter(
@@ -399,6 +404,7 @@ test("OBS-09-SITES: later requests keep counters null — no sites payload", asy
 	assert.ok(first.counters);
 	assert.equal(first.counters.sites.length, 1);
 	assert.equal(first.counters.sites[0].tool, "bash");
+	assert.equal(first.counters.sites[0].toolCallId, "tc-1");
 	for (let i = 0; i < 3; i += 1) {
 		const later = await projectContext({ messages: [message], root: "/t", state, ports });
 		assert.equal(later.counters, null, "only the first replacement publishes counters/sites");

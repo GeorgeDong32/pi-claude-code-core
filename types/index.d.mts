@@ -33,7 +33,7 @@ export interface CoreSnapshot {
 	contextBudget?: { rulesMax: number; memoryIndexMax: number; dynamicSteerMax: number };
 	memory?: { yielded: boolean; dir?: string };
 	/** OBS-09-SITES: optional per-site display-only savings (first-replacement requests only). */
-	observation?: { tokensAvoided: number; placeholders: number; sites?: ReadonlyArray<{ tool: string; id: string; avoidedTokens: number }> };
+	observation?: { tokensAvoided: number; placeholders: number; sites?: ReadonlyArray<{ tool: string; id: string; avoidedTokens: number; toolCallId?: string }> };
 	fusion?: { fusedCount: number };
 }
 
@@ -66,7 +66,7 @@ export interface CoreStatus {
 	contextBudget?: { rulesMax: number; memoryIndexMax: number; dynamicSteerMax: number };
 	memory?: { yielded: boolean; dir?: string };
 	/** OBS-09-SITES: optional per-site display-only savings (first-replacement requests only). */
-	observation?: { tokensAvoided: number; placeholders: number; sites?: ReadonlyArray<{ tool: string; id: string; avoidedTokens: number }> };
+	observation?: { tokensAvoided: number; placeholders: number; sites?: ReadonlyArray<{ tool: string; id: string; avoidedTokens: number; toolCallId?: string }> };
 	fusion?: { fusedCount: number };
 }
 
