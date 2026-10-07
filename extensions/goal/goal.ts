@@ -121,6 +121,7 @@ import {
 } from "./goal-policy.ts";
 import { createContinuationLoop } from "./goal-continuation.ts";
 import { createPendingAchievementSlot, runCompletionAudit } from "./goal-audit-flow.ts";
+import type { runGoalCompletionAuditor } from "./goal-auditor.ts";
 
 const STATE_ENTRY = "pi-goal-state";
 const FOCUS_ENTRY = "pi-goal-focus";
@@ -314,7 +315,7 @@ function isMeaningfulProgressToolCall(toolName: string, args: unknown): boolean 
 
 // ---------- extension entry point ----------
 
-export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => number } = {}): void {
+export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => number; auditor?: typeof runGoalCompletionAuditor } = {}): void {
 	let goalsById = new Map<string, GoalRecord>();
 	let focusedGoalId: string | null = null;
 	// B3: the three session-local singletons live INSIDE the factory now —
@@ -371,10 +372,11 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 	// Per-turn flags reset in turn_start (#4, C9 fix).
 	// goalWorkToolCalledThisTurn: tracks whether a real goal-work tool was called.
 	//   If false at turn_end, we don't queue another autoContinue (empty chat turn).
-	// turnStoppedFor: set by pause_goal / update_goal(complete) / apply_goal_tweak
-	//   after their successful execute. Once set, pi.on("tool_call") blocks all
-	//   subsequent in-turn tool calls except POST_STOP_ALLOWED_TOOLS. This is the
-	//   schema fix for "agent keeps writing files after pause_goal".
+	// turnStoppedFor: set ONLY by the four real stop tools' successful execute —
+	//   pause_goal / abort_goal / update_goal=complete / apply_goal_tweak (D3=A,
+	//   spec 2026-10-07 P0-2). Once set, pi.on("tool_call") blocks all subsequent
+	//   in-turn tool calls except POST_STOP_ALLOWED_TOOLS. Non-progress tool calls
+	//   are progress-neutral: allowed, no credit, no lock.
 	let goalWorkToolCalledThisTurn = false;
 	let turnStoppedFor: string | null = null;
 
@@ -1728,6 +1730,10 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 				completionSummary: params.completionSummary,
 				detailedSummaryText: detailedSummary(auditTarget),
 				signal,
+				// Test seam (same parameter the audit flow already exposes):
+				// production leaves deps.auditor undefined and runs the real
+				// subagent auditor; tests inject a deterministic verdict.
+				auditor: deps.auditor,
 				// Bounded audit (spec 2026-10-04-goal-audit-hang-fix): update_goal
 				// must always return; on expiry the flow returns a rejected outcome
 				// and the goal stays active.
@@ -2147,14 +2153,18 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 				// Nudge only: do not hard-block, but warn in tool response via get_goal execute
 			}
 		}
-		// Track for #4 empty-turn gate.
-		if (isMeaningfulProgressToolCall(event.toolName, asRecord(event)?.args)) {
+		// Track for #4 empty-turn gate. G3 fix (P0-2 spec 2026-10-07): the host
+		// tool_call event carries `input` (pi ToolCallEvent since 0.87) — the old
+		// `event.args` read never matched, so the echo / .pi/goals exceptions in
+		// isMeaningfulProgressToolCall were dead until now.
+		if (isMeaningfulProgressToolCall(event.toolName, event.input)) {
 			if (state.goal?.id) activeGetGoalTurnsByGoalId.delete(state.goal.id);
 			goalWorkToolCalledThisTurn = true;
-		} else if (state.goal?.status === "active" && state.goal.autoContinue && event.toolName !== "get_goal") {
-			// A non-progress tool should not create an infinite retry chain.
-			turnStoppedFor = state.goal.id;
 		}
+		// D3=A (user 2026-10-08): non-progress tools are progress-neutral —
+		// allowed, no progress credit, and NO turn lock. The old else-branch
+		// mis-locked obs_recall / subagent / MCP / codemode turns; continuation
+		// is driven by agent_end, not by this lock.
 		return;
 	});
 

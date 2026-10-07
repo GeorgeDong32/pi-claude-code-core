@@ -32,7 +32,7 @@
 
 | 文件 | 说明 |
 |---|---|
-| `goal.ts` | 主装配:工具、命令、widget、stop-hook 续跑循环。用量记帐对全部四个 token 通道求和(`input`/`output`/`cacheRead`/`cacheWrite`——cache-inclusive,DEVIATIONS #69),并累计 provider 报告的美元费用(`usage.cost.total`);带执行用量的 `tool_result` 事件(subagent 运行、codemode 的 `models.classify`/`generateImages`)同样入帐——goal 台帐因此包含委派出去的模型开销,而不只 parent 主线程 |
+| `goal.ts` | 主装配:工具、命令、widget、stop-hook 续跑循环。回合内停止锁只由四个真停止工具的成功 execute 设置(`pause_goal` / `abort_goal` / `update_goal=complete` / `apply_goal_tweak`,D3=A,spec 2026-10-07 P0-2);其余工具调用一律进度中性——放行、不计进度、不锁回合(进度例外读取宿主真实的 `event.input` 字段)。用量记帐对全部四个 token 通道求和(`input`/`output`/`cacheRead`/`cacheWrite`——cache-inclusive,DEVIATIONS #69),并累计 provider 报告的美元费用(`usage.cost.total`);带执行用量的 `tool_result` 事件(subagent 运行、codemode 的 `models.classify`/`generateImages`)同样入帐——goal 台帐因此包含委派出去的模型开销,而不只 parent 主线程 |
 | `goal-core.ts` | 渲染/状态助手(footer 状态、时长/token 格式化、单行摘要) |
 | `renderers.ts` | 消息渲染器(result / event / audit-event)——自 wiring 拆出(arch review C6),不经工厂即可测 |
 | `goal-record.ts`、`goal-pool.ts`、`goal-ledger.ts` | 状态模型:active/paused 记录、开放目标池、用量台账 |

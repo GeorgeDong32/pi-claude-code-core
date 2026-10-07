@@ -50,14 +50,18 @@ handoff 2026-09-20 称「npm 最新 0.1.7、本地领先」。**实测(registry.
 - goal 不直接读写其他模块状态;对外只经 status 槽 `goal`、widget `goal`、bus `goal` 通道(P2-BUS-01)。
 - 与 modes 的 context 共存由 test/lib/coexistence.test.ts 钉住(P2-GO-05)。
 
-## 2026-10-07 spec P0-2 (partially landed, D3-gated)
+## 2026-10-07 spec P0-2 — fully landed (D3=A confirmed 2026-10-08)
 
-- **CORE-05 landed alone**: `startGoalDrafting`'s catch now resets
-  `confirmationIntent` + `syncGoalTools()` (symmetric with the tweak path)
-  — a failed draft start no longer strands the drafting tool gate.
-- **Deferred (D3 undecided)**: the turn-lock narrowing (only the four real
-  stop tools may lock the turn) and the G3 `event.args` → `event.input`
-  field fix. The field fix MUST NOT ship without the lock change (spec §6:
-  fixing the field alone pushes echo/read-goal calls into the current
-  mis-locking else-branch). They land together in the D3 batch with tests
-  L1-L5/L7.
+- **CORE-05 (landed 2026-10-07, 6f2a402)**: `startGoalDrafting`'s catch now
+  resets `confirmationIntent` + `syncGoalTools()` (symmetric with the tweak
+  path) — a failed draft start no longer strands the drafting tool gate.
+- **D3=A + G3 (landed 2026-10-08, same batch)**: the non-progress mis-lock
+  else-branch in the `tool_call` handler is deleted — only the four real stop
+  tools' successful execute sets `turnStoppedFor`; every other tool call is
+  progress-neutral. The progress-exception read changed from the nonexistent
+  `event.args` to the host's real `event.input`, activating the dead
+  echo / `.pi/goals` read exceptions. Both changes ship and revert as one
+  unit (spec §7). Tests: `goal-turn-lock.test.ts` L1-L5/L7 (L1/L2/L5 red on
+  the pre-change tree, L3/L4/L7 pin preserved behavior; the approved-audit
+  path drives goal.ts through the same `auditor` parameter seam the audit
+  flow already exposes).

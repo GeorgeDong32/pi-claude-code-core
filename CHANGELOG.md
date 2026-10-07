@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Changed (goal turn lock narrowed to real stops — spec 2026-10-07 P0-2, D3=A)
+- **A goal no longer locks the turn on non-progress tool calls.** Previously, with an active auto-continue goal, any tool outside the progress list (`obs_recall`, `subagent`, MCP tools, `codemode` and its nested calls, …) set the same in-turn stop lock as a real stop, so e.g. a parallel `[obs_recall, edit]` reply had the `edit` rejected with a bogus "goal was already stopped" reason and codemode was unusable during goals. Now only the four real stop tools lock the turn after a successful execute (`pause_goal` / `abort_goal` / `update_goal=complete` / `apply_goal_tweak`); failures and audit rejections never lock, and the lock still resets on the next `turn_start`. The continuation rhythm is unchanged (it was always driven by `agent_end`). Same batch: the progress-exception check now reads the host's real `event.input` field — the old `event.args` read meant the "bash echo" and "read under `.pi/goals/`" exceptions never fired (they were counted as progress and reset the get_goal reminder).
+
 ### Changed (small refactors & cleanup — spec 2026-10-07 P3-1)
 - **`plan_ready` approval now updates the plan-todos widget when execution starts** — the three plan→auto transitions (menu `/plan-execute`, the approval dialog, the agent_end offer) run through one `startPlanExecution`; the plan_ready path previously missed the widget sync after the mode flip.
 - **web-gov / mcp-gov config reads are cached and warn on corruption**: `pi-core-web.json` and `mcp.json` go through the shared settings-JSON reader (malformed input warns once and falls back to the builtin list / empty inventory instead of silently falling back), with stat-fingerprint caches so unchanged files are not re-read per adjudication. Limit: in-place edits preserving mtime and length stay invisible until the next stat-visible change.

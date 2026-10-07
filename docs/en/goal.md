@@ -35,7 +35,7 @@ is audited complete.
 
 | File | Notes |
 |---|---|
-| `goal.ts` | Main assembly: tools, commands, widget, stop-hook continuation loop. Usage accounting sums ALL FOUR token channels (`input`/`output`/`cacheRead`/`cacheWrite` — cache-inclusive, DEVIATIONS #69) plus the provider-reported USD cost (`usage.cost.total`). `tool_result` events carrying execution usage (subagent runs, codemode `models.classify`/`generateImages`) are accounted too — a goal's ledger therefore includes delegated model spend, not just the parent thread |
+| `goal.ts` | Main assembly: tools, commands, widget, stop-hook continuation loop. The in-turn stop lock is set ONLY by the four real stop tools' successful execute (`pause_goal` / `abort_goal` / `update_goal=complete` / `apply_goal_tweak`, D3=A spec 2026-10-07 P0-2); every other tool call is progress-neutral — allowed, no progress credit, no lock (progress exceptions read the host's real `event.input` field). Usage accounting sums ALL FOUR token channels (`input`/`output`/`cacheRead`/`cacheWrite` — cache-inclusive, DEVIATIONS #69) plus the provider-reported USD cost (`usage.cost.total`). `tool_result` events carrying execution usage (subagent runs, codemode `models.classify`/`generateImages`) are accounted too — a goal's ledger therefore includes delegated model spend, not just the parent thread |
 | `goal-core.ts` | Rendering/status helpers (footer status, duration/token formatting, one-line summary) |
 | `renderers.ts` | Message renderers (result / event / audit-event) — carved from the wiring (arch review C6), testable without the factory |
 | `goal-record.ts`, `goal-pool.ts`, `goal-ledger.ts` | State model: active/paused records, open-goal pool, usage ledger |
