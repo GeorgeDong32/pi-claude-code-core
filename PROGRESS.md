@@ -15,7 +15,7 @@
 - **goal.ts 接线(过渡 adapter,spec §4.3 步骤 1 允许)**:闭包 `goalsById/focusedGoalId` 与 state 代理替换为 lifecycle 持有;`setGoal`/`setFocusedGoalId` 退化为动词薄壳(调用方零改动);reconcile/loadState/complete-内联的 9 个 focusedGoalId 写点与 5 个整池替换全部改走原语;读点经 `lifecycle.focusedId`。
 - **测试**:goal-lifecycle.test.ts 6 例记录式转移表(setGoal A→B 全序/null 清焦点 forget carry+双 clear/complete forget vs paused 保留/同 id 无焦点效应/focus 有效-无效-无变化/静默原语零副作用);**现有 502 node:test 零改动全过**(行为冻结验证,goal 套件 30/180 抽验)。
 - **门禁**:check 0;vitest 935;node:test 508;contracts 43+3todo。
-- **待续**:Step 2(complete 内联块/clear/abort 改动词)、Step 3(drafting intents/turn flags 封闭事件入口)、Step 4(撤过渡代理+重复测试删减清单)。drafting 意图目前经 releaseStaleTweakGate port 回写闭包——Step 3 迁入后撤。
+- **待续(checkpoint,下一轮从这继续)**:Step 2——update_goal complete 的内联块(goal.ts ~1768-1791:stopActiveGoal→turnStoppedFor→removeFromPool→appendFocusEntry→ledger→sync/UI)与 handleGoalClear/handleGoalAbort 的共同行为改为调用 lifecycle 动词(complete/terminate(kind)),保留 drafting 分支与提示差异;Step 3——confirmationIntent/tweakDraftingFor/turn flags/nudge 状态移入 lifecycle 封闭事件入口(restore/turn-start/tool-call/draft-*/agent-settled/dispose tag 各配 interface 测试),撤 releaseStaleTweakGate 回写;Step 4——撤过渡代理(goalsById 池引用别名、setGoal/setFocusedGoalId 薄壳),FakeHost 用例与转移表重复行的删减清单(先对拍零差异);全部完成后才可关闭 DEVIATIONS #73。基线:goal-lifecycle.test.ts 转移表 + 现有 508 node:test(已含 Step1 的 6 例)。
 
 ## 2026-10-08 C4-Step3：classifier-retry seam + flaky 测试确定性化（P2-1 3/3）
 
