@@ -54,7 +54,9 @@ import { applyMemoryOps, type MemoryOp } from "./store.ts";
 import type { ConsolidationTrigger } from "./consolidate.ts";
 import { scanMemoryDirCached } from "./memdir.ts";
 import { friendlyProjectHint } from "./paths.ts";
-import { bumpClaimedAttempts, claimRecord, clampQueueParts, loadQueue, QUEUE_MAX_AGE_MS, QUEUE_V, reclaimStaleClaims, releaseClaim, settleClaim, writeQueueRecord, type QueueClaim } from "./queue.ts";
+import type { ConversationPart } from "./queue.ts";
+import { clampQueueParts, QUEUE_V, writeQueueRecord } from "./queue.ts";
+import { drainQueue, FLUSH_QUEUE_MS, type DrainCap, type QueueDrainPorts } from "./queue-drain.ts";
 import { readJson } from "../../lib/settings.ts";
 import { readBranchEntries, readSessionId } from "../modes/session-branch.ts";
 
@@ -221,10 +223,7 @@ export interface AutomationDeps {
 	complete?: LlmComplete;
 }
 
-export interface ConversationPart {
-	role: "user" | "assistant";
-	text: string;
-}
+export type { ConversationPart } from "./queue.ts";
 
 function getMessageText(message: unknown): string {
 	const m = message as { role?: string; content?: unknown } | undefined;
@@ -612,7 +611,7 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 			// A3: capture synchronously — a /resume mid-drain invalidates the
 			// old runner and ctx getters start throwing; past this line the
 			// drain only touches captured values.
-			const cap = {
+			const cap: DrainCap = {
 				d: dirs(ctx),
 				model: sideChannelModel(ctx),
 				registry: ctx.modelRegistry as never,
@@ -625,169 +624,34 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 		}
 	};
 
-	type DrainCap = {
-		d: { project: string; user: string; projectsDir: string; agentDir: string };
-		model: Model<Api> | undefined;
-		registry: never;
-		projectKey: string | undefined;
-		complete: LlmComplete | undefined;
-	};
-
-	/** One staged record, best-effort (quickwin-3, arch review 2026-10-03:
-	 * records are independent — applyMemoryOps is fully synchronous, so
-	 * concurrent applies cannot lost-update the corpus under the event
-	 * loop). The serial version's infra-failure `return` aborted the WHOLE
-	 * drain; in parallel mode each record now runs best-effort alone. */
-	interface DrainRecordSummary {
-		applied: number;
-		routedNotes: string[];
-		lastFlush?: string;
-		lastError?: string;
-	}
-
-	/** One claimed record, best-effort (P0-3 §4.3 orchestration). Ownership
-	 * was taken BEFORE this runs (claim → re-read → route/cap checks); every
-	 * exit settles or releases the token in `finally` — no happy-path-only
-	 * cleanup. Returns a summary; STATE writes are aggregated by the caller
-	 * after allSettled (code review R1 P3-1 — no last-writer-wins races on
-	 * diagnostics). */
-	async function drainOneRecord(cap: DrainCap, claim: QueueClaim): Promise<DrainRecordSummary> {
-		const summary: DrainRecordSummary = { applied: 0, routedNotes: [] };
-		let settled = false;
-		const finish = (consume: boolean): void => {
-			if (settled) return;
-			settled = true;
-			try {
-				if (consume) settleClaim(cap.d.agentDir, claim);
-				else releaseClaim(cap.d.agentDir, claim);
-			} catch {
-				/* settle/release itself failed — leave the diagnosable claim
-				 * for the stale-recovery protocol; never leak a rejected
-				 * promise out of the background drain */
-			}
-		};
-		try {
-			// B4: persist the attempt BEFORE the call — a SIGKILL mid-call counts
-			if (!bumpClaimedAttempts(cap.d.agentDir, claim)) {
-				drainBlacklist.add(`${claim.original}|${claim.record.sessionId}`);
-				finish(false); // bump failed — release for retry, blacklist this session
-				return summary;
-			}
-			let completion: OpsCompletion;
-			try {
-				completion = await completeMemoryOps(
-					cap.model,
-					cap.registry,
-					{
-						systemPrompt: FLUSH_SYSTEM + routingGuidance(cap.projectKey),
-						userPrompt: buildOpsUserPrompt(cap.d, clampQueueParts(claim.record.parts)),
-						// independent lane: pure timeout, deliberately NOT linked to
-						// sessionAbort (the drain must survive /new mid-drain)
-						timeoutMs: FLUSH_QUEUE_MS,
-					},
-					{ complete: cap.complete },
-				);
-			} catch {
-				finish(false); // infra failure — released, retry next session (attempt counted)
-				return summary;
-			}
-			if (completion.ok) {
-				if (completion.ops.length > 0) {
-					const routedNotes: string[] = [];
-					let outcome: ReturnType<typeof applyMemoryOps>;
-					try {
-						outcome = applyMemoryOps(completion.ops as MemoryOp[], cap.d, { projectKey: cap.projectKey, routedNotes });
-					} catch (err) {
-						// apply threw unexpectedly — NOT a success; released for
-						// retry (the §1 disclosed re-apply window applies)
-						summary.lastError = `flush-queued: apply threw: ${err instanceof Error ? err.message : String(err)}`;
-						finish(false);
-						return summary;
-					}
-					summary.applied = outcome.applied;
-					summary.routedNotes = routedNotes;
-					summary.lastFlush = `flush-queued: ${outcome.applied} op(s)`;
-					if (outcome.error) {
-						// B2 apply-fatal: deterministic disk-layer error — retrying
-						// cannot fix it, so CONSUME (drop) with a diagnostic
-						finish(true);
-						summary.lastError = `flush-queued: ${outcome.error}`;
-						return summary;
-					}
-				}
-				finish(true); // ok (incl. zero ops = confirmed nothing salvageable)
-			} else if (claim.record.attempts >= QUEUE_MAX_ATTEMPTS) {
-				finish(true);
-				summary.lastError = `flush-queued: dropped after ${claim.record.attempts} attempts (${completion.reason ?? "failed"})`;
-			} else {
-				// LLM failure with attempts left — release for the next session
-				finish(false);
-			}
-		} finally {
-			// belt-and-suspenders: a code path that forgot to finish still
-			// terminates its token (release keeps the record retryable)
-			finish(false);
-		}
-		return summary;
-	}
-
-	/** Claim-first validation: re-checks EVERYTHING on the re-read record
-	 * (routing, blacklist by original-basename + full sessionId, attempt
-	 * cap, age). Returns an error string to settle-with, or null when the
-	 * record is eligible for the LLM lane; the caller releases on routing
-	 * mismatch. */
-	function validateClaimed(cap: DrainCap, claim: QueueClaim): { drop?: string; skip?: boolean } {
-		if (drainBlacklist.has(`${claim.original}|${claim.record.sessionId}`)) return { skip: true };
-		// B1 routing: this session only consumes records staged by sessions
-		// of the SAME project (exact projectsDir match — projectKey
-		// substring heuristics can cross-project collide).
-		if (claim.record.projectsDir !== cap.d.projectsDir) return { skip: true };
-		// leftover edge: attempts already past the cap on disk — drop now
-		if (claim.record.attempts >= QUEUE_MAX_ATTEMPTS) {
-			return { drop: `flush-queued: dropped after ${claim.record.attempts} attempts` };
-		}
-		// age cap — enforced only by the claim holder, never on stale paths
-		if (Date.now() - claim.record.savedAt > QUEUE_MAX_AGE_MS || claim.record.parts.length === 0) {
-			return { drop: "flush-queued: expired record" };
-		}
-		return {};
-	}
+	// W5 (SPEC 2026-10-07 P2-3): the drain orchestration lives in
+	// queue-drain.ts; automation injects the ports (prompt template, apply
+	// summary, session blacklist) and aggregates the RETURNED diagnostics —
+	// concurrent workers never write shared state.
+	const drainPorts = (): QueueDrainPorts => ({
+		complete: (cap, parts) =>
+			completeMemoryOps(
+				cap.model,
+				cap.registry,
+				{
+					systemPrompt: FLUSH_SYSTEM + routingGuidance(cap.projectKey),
+					userPrompt: buildOpsUserPrompt(cap.d, clampQueueParts(parts)),
+					// independent lane: pure timeout, deliberately NOT linked to
+					// sessionAbort (the drain must survive /new mid-drain)
+					timeoutMs: FLUSH_QUEUE_MS,
+				},
+				{ complete: cap.complete },
+			),
+		blacklistHas: (key) => drainBlacklist.has(key),
+		blacklistAdd: (key) => drainBlacklist.add(key),
+	});
 
 	async function drainPendingRecords(cap: DrainCap): Promise<void> {
-		let processed = 0;
-		const eligible: QueueClaim[] = [];
-		// P0-3 §4.3: dead-claim recovery first — recovered claims are OURS
-		// now and enter the same validation as fresh claims.
-		const recovered = reclaimStaleClaims(cap.d.agentDir, Date.now());
-		const candidates = [...loadQueue(cap.d.agentDir).map((c) => c.file), ...recovered.map((r) => r.current)];
-		for (const file of candidates) {
-			if (processed >= QUEUE_DRAIN_MAX) break;
-			const claim = claimRecord(cap.d.agentDir, { file });
-			if (!claim) continue; // held by another worker / vanished — skip
-			const verdict = validateClaimed(cap, claim);
-			if (verdict.skip) {
-				releaseClaim(cap.d.agentDir, claim);
-				continue;
-			}
-			if (verdict.drop) {
-				settleClaim(cap.d.agentDir, claim);
-				state.lastError = verdict.drop;
-				continue;
-			}
-			processed++; // QUEUE_DRAIN_MAX counts only records that reach the LLM lane
-			eligible.push(claim);
-		}
-		if (eligible.length === 0) return;
-		// quickwin-3: ≤5 records × 20s LLM budget ran SERIALLY (worst case
-		// 100s of background drain); Promise.allSettled runs them in parallel
-		// (worst case max(20s)). QUEUE_DRAIN_MAX still counts only eligible
-		// records — blacklist/projectsDir/attempts-cap skips never consume it.
-		const settled = await Promise.allSettled(eligible.map((claim) => drainOneRecord(cap, claim)));
+		const result = await drainQueue(cap, drainPorts());
 		// single-point state aggregation (code review R1 P3-1): diagnostics are
 		// written once, in record order — no last-writer-wins across awaits.
-		for (const outcome of settled) {
-			if (outcome.status !== "fulfilled") continue;
-			const summary = outcome.value;
+		for (const msg of result.drops) state.lastError = msg;
+		for (const summary of result.summaries) {
 			if (summary.routedNotes.length > 0) {
 				state.routed += summary.routedNotes.length;
 				state.lastRouted = summary.routedNotes.join("; ");

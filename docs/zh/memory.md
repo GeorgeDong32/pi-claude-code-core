@@ -53,6 +53,7 @@ child 的 dispatch prompt 触发一次选择器调用(token 费 + ≤waitMs 首 
 |---|---|
 | `index.ts` | 装配;hook 体在边界 try/catch 包裹。只做事件路由 —— 一切召回决策都在 `recall.ts` |
 | `memdir.ts` | 目录扫描/reconcile;`scanMemoryDirCached` 指纹缓存 + git root memo + 1s 新鲜窗口 TTL(arch review C7:同轮后续扫描免 readdir+stat 指纹趟;外部编辑最长 ~1s 可见 —— 全部内部写路径显式失效);`eligibleMemories` = 召回候选集(双层、新→旧、绝对路径);`memoryKey` = 规范键 `user-memory/<file>` / `memory/<file>` |
+| `writer.ts` | 文档写入引擎(SPEC 2026-10-07 P2-3):write/remove/reindex —— 记忆文档与 MEMORY.md 的唯一变更路径;单向依赖 store/consolidate/importers → writer → memdir;`paths.ts` 同时持有两套身份推导(fullProjectKey 与 friendlyProjectHint) |
 | `recall.ts` | **RV 深模块**(入口:`onUserMessage` / `abort` / `dispose`;AR1005-RC-01)。所有会话态每次调用都从投影历史推导(D9):自最近 `compactionSummary` 起的硬判重(RV-06)、read toolCall 按 cwd 解析的已读抑制(RV-07)、按历史 `details.bytes` 累计的字节预算(RV-08)、自最近用户消息起成功且从未失败的 recentTools(RV-13)。skill 包裹剥离 + 长度卫生(RV-02);最新者胜的取代(RV-05);字节安全截断 + 路径注记渲染;`RecallDetailsV1`(冻结,契约已钉)。**AR1005-RC**:每个请求持有 generation + AbortController + 等待 timer + cancelled resolver —— 新消息、`abort`、`dispose` 或机器替换立即失效(在途 await 不会挂在忽略 abort 的 selector 上;晚到完成零 history 读取、零投递、零状态污染)。`onUserMessage` 为 total promise(RC-02:入口/延迟段抛错收敛为 null + 每失败请求至多一条诊断 —— steer 路径的 `void` 调用不可能产生 unhandled rejection);延迟投递仅在 `deliver()` 同步成功后提交 run 判重/计数(RC-03) |
 | `selector.ts` | `llmSelector`(共享 llm.ts 通道):清单行 = `[layer][type] key (age): description` 新→旧、上限 200;精度优先提示词(空列表是合法答案);recentTools 反噪音规则;`resolveRecallModel` = 精确 provider/id → 唯一裸 id → 关闭(绝不回退会话模型,D3) |
 | `policy.ts` | policy 注入块(`POLICY_COMPACT`) |

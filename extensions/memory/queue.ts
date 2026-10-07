@@ -42,7 +42,13 @@ import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync,
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
-import type { ConversationPart } from "./automation.ts";
+// W5 (SPEC 2026-10-07 P2-3): queue.ts is the type owner for ConversationPart
+// (was automation.ts) — queue → automation → queue-drain → queue must not be
+// a dependency cycle. automation re-exports it for existing importers.
+export interface ConversationPart {
+	role: "user" | "assistant";
+	text: string;
+}
 
 export const QUEUE_V = 1;
 

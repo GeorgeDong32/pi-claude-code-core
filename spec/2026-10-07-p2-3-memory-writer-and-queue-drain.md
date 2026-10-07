@@ -1,6 +1,8 @@
 # SPEC P2-3：memory layer 写入引擎 + queue drain 编排归位
 
 状态：规格已补齐；queue 部分依赖 P0-3（claim 语义）先落地
+
+> **实施记录（2026-10-07）**：已完成（commits 7a006c0 + 见 git log；详见 PROGRESS.md）。writer 三动词 + 单向依赖 + W4 双身份落地；drain 编排归位 queue-drain.ts（D-T1/D-T2 直测）。**可选项「消息文本扁平化」（§4.3）未实施**——按 spec 标注为可选，本批明确跳过（如需收敛另起独立 commit）。
 日期：2026-10-07
 分支：main
 来源：2026-10-07 联合架构审查，报告 C3 / C4 卡片；清单项 CORE-14 / CORE-15
