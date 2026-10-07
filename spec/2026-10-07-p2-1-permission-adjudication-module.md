@@ -1,6 +1,8 @@
 # SPEC P2-1：permission 裁决 deep module（纯裁决 + 一次解释）
 
 状态：规格已补齐；待 P0-1 落地后实施
+
+> **实施记录（2026-10-07）**：**未实施（0/3 步）**。前置 P0-1 已落地且为迁移铺好了第一步（evaluateToolPermission 纯函数 + plan-gate.ts + applyPermissionVerdict 三步结构），但本批会话预算不足以安全完成 3 步迁移 + 对拍 harness + decision table + FakePi 用例删减清单的完整闭环；作为零行为变化的纯架构重构，有序推迟优于半成品。Step 1 起步条件已具备，另批实施时从 §4.3 Step 1 开始。
 日期：2026-10-07
 分支：main
 来源：2026-10-07 联合架构审查，报告 C1 卡片；清单项 CORE-12（吸收 CORE-18 classifier 时钟注入）
