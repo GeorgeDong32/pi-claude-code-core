@@ -30,6 +30,14 @@
 
 顺序修正后的效果:allow 规则不再能解锁 plan 下的写操作/非只读命令(D2a);读工具命中 ask 规则时照常询问且 Block 结果被尊重,不再被静默无视(D1);经 family 治理的 MCP 调用在 family 裁决为允许时仍可在 plan 中使用(规则 / session grant / 首见批准——D2b),无 family 认领的 MCP 形状调用维持拒绝(D2c fail-closed)。硬限制收敛在 `plan-gate.ts#planHardBlock`(纯函数;adapter 采集路径/family/env facts)。扫描边界:内置 `edit/write/bash/powershell/codemode` 名字永不豁免;只有既是 MCP 形状(lib/mcp-shape 权威)又被 family 认领的调用才跳过 generic 嵌入命令扫描——其 `command/run/cmd/then_run` 是远端 schema 参数,不是本地 shell。
 
+### 无 UI 时的 family 首见(SPEC 2026-10-07 P3-1 S3,D6=B)
+
+headless 会话(含 subagent 子会话)在未授权 family 首见调用上依旧
+fail-closed,但 block reason 现在原样携带该 family 给出的建议 allow
+规则与重试指引——例如 `mcp__exa__search` 被拒时会提示:在父会话/交互
+会话向权限规则加入 ``mcp_exa_*`` 后重试。不写授权、不弹窗,family
+首见不进入父会话审批转发协议(D6 将转发保持限于常规 ask 询问路径)。
+
 ## 关键表面
 
 - **命令**:`/mode`、`/permissions`、`/permissions-clear-grants`、

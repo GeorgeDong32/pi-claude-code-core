@@ -2,6 +2,13 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## 2026-10-08 C3：P3-1 S3 无 UI family 首见建议规则（D6=B）
+
+- **实现**：`firstSeenPrompt` 无 UI 分支保留原拒绝前缀,追加 family `suggestAllowRule` 原样规则 + 「在父会话/交互会话预置后重试」指引;不写授权、不弹窗、不创建父会话转发请求(family 首见不进转发协议)。规则获取沿用既有 `match.family.suggestAllowRule`,未自拼 canonicalId。
+- **测试**：p4-families 新增 S3 describe 3 例——headless 拒绝+规则+零授权(文件不变/无 session grant);subagent 无 UI(env 具备转发条件)同步本地拒绝且 forwarding 目录零请求;既有 allow 规则 headless 放行(钉新文案路径不阻塞)。基线红取证:撤回实现后 2 红(用例 1/2)1 绿(用例 3),恢复后 31/31 绿。
+- **门禁**：check 0;contracts 43+3todo;vitest/node:test 见终批汇总。
+- **台账**：CHANGELOG(P3-1 段)、docs/{en,zh}/modes.md S3 小节、DEVIATIONS #113 补记 S3 已实施、spec P3-1 状态行。本 commit 即 C4 对拍基线。
+
 ## 2026-10-08 C2：D4=B 删除 runtime reader（`./types` 纯类型化）
 
 - **契约先行**：commit 62f3642 在契约表登记 D4-READER-REMOVE（撤除范围、保留面、迁移方式、验收手段、P1-BUS-02/07 关闭）。

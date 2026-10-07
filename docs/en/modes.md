@@ -35,10 +35,23 @@ family-governed MCP calls stay usable in plan when their family adjudicates
 allow (rule / session grant / first-seen approval — D2b), while MCP-shaped
 calls with no family stay denied (D2c fail-closed). The hard limits live in
 `plan-gate.ts#planHardBlock` (pure; the adapter collects path/family/env
-facts). Scan boundary: built-in `edit/write/bash/powershell/codemode` names
+facts).
+
+Scan boundary: built-in `edit/write/bash/powershell/codemode` names
 are never exempted; only calls that are BOTH MCP-shaped (lib/mcp-shape
 authority) AND family-claimed skip the generic embedded-command scan — their
 `command/run/cmd/then_run` are remote schema params, not local shell.
+
+### Family first-seen without a UI (SPEC 2026-10-07 P3-1 S3, D6=B)
+
+Headless sessions (and subagent children) still fail closed on an
+unauthorized family first-seen call, but the block reason now carries the
+family's own suggested allow rule verbatim plus a retry hint — e.g. for
+`mcp__exa__search`: pre-approve by adding the rule ``mcp_exa_*`` to your
+permission rules in a parent/interactive session, then retry. No grant is
+written, no dialog is raised, and family first-seen never enters the
+parent-forwarding protocol (D6 keeps forwarding limited to the regular ask
+prompt path).
 
 ## Key surfaces
 

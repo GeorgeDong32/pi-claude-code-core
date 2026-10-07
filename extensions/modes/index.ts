@@ -949,10 +949,18 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     suggestedRule: string,
   ): Promise<Block> {
     if (!ctx.hasUI) {
-      // headless/forwarded path: fail closed (unchanged from 2.8.0)
+      // headless/forwarded path: fail closed (unchanged from 2.8.0).
+      // D6=B (user 2026-10-08, spec 2026-10-07 P3-1 S3): keep the original
+      // reason prefix and append the family's own suggested allow rule so the
+      // user can pre-approve in a parent/interactive session. No grant is
+      // written, no dialog, and no parent-forwarding request is created —
+      // family first-seen never enters the forwarding protocol.
       return {
         block: true,
-        reason: `${tool} (${canonicalId}) needs approval: no UI available.`,
+        reason:
+          `${tool} (${canonicalId}) needs approval: no UI available. ` +
+          `Pre-approve it by adding the rule \`${suggestedRule}\` to your permission rules ` +
+          `in a parent/interactive session, then retry this call.`,
       };
     }
     const choice = (await confirmChoice(ctx, `Allow ${canonicalId}?`, [

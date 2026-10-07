@@ -6,7 +6,7 @@
  * against the five recorded gate outcomes — uiPrompts≤1 is asserted on the
  * end-to-end cases instead (the matrix has no UI surface by design).
  */
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -36,6 +36,7 @@ import { createBrokerMirror, canonicalIdForEvent } from "../../extensions/mcp-go
 import { renderMcpPanel } from "../../extensions/mcp-gov/panel.ts";
 import { setConfigPath } from "../../extensions/modes/config.ts"
 import { writeProjectPermissionsFile } from "../../extensions/modes/permissions-loader.ts"
+import { setAgentDirForTests } from "../../extensions/modes/permission-forwarding.ts";
 import { registerRuleFamily } from "../../extensions/modes/rule-families.ts";
 import { setModelsPath } from "../../extensions/modes/profiles.ts";
 
@@ -684,5 +685,69 @@ describe("P3-1 S4: web-gov override via readJson + cache", () => {
 		writeFileSync(file, JSON.stringify({ mcpServers: { exa: {} } }));
 		const third = readStaticMcpInventory(home);
 		expect(third.servers).toEqual(["exa"]);
+	});
+});
+
+// ---- SPEC 2026-10-07 P3-1 S3 (D6=B): family first-seen with no UI -----------
+describe("P3-1 S3 (D6=B): family first-seen with no UI — fail closed + suggested rule", () => {
+	const prevParent = process.env.PI_SUBAGENT_PARENT_SESSION;
+	const prevChild = process.env.PI_SUBAGENT_CHILD;
+
+	afterEach(() => {
+		setAgentDirForTests(undefined);
+		if (prevParent === undefined) delete process.env.PI_SUBAGENT_PARENT_SESSION;
+		else process.env.PI_SUBAGENT_PARENT_SESSION = prevParent;
+		if (prevChild === undefined) delete process.env.PI_SUBAGENT_CHILD;
+		else process.env.PI_SUBAGENT_CHILD = prevChild;
+	});
+
+	function setupHeadless() {
+		createMcpRuleFamily();
+		const host = new FakeHost();
+		targets.modes.factory(host.asPi());
+		host.flags["permission-mode"] = "ask";
+		const project = mkdtempSync(join(tmpdir(), "p4-s3-"));
+		host.flags._project = project;
+		setConfigPath(join(project, "permission-modes.json"));
+		writeFileSync(join(project, "permission-modes.json"), JSON.stringify({}));
+		setModelsPath(join(project, "model-profiles.json"));
+		const ctx = host.makeCtx({ cwd: project }); // no ui → hasUI false
+		return { host, ctx, project };
+	}
+
+	it("headless: rejects with the original prefix + the family's verbatim suggested rule and retry guidance", async () => {
+		const { host, ctx, project } = setupHeadless();
+		await host.fire("session_start", {}, ctx);
+		const result = await host.fire("tool_call", { toolName: "mcp__exa__search", input: { query: "x" } }, ctx);
+		expect(result).toMatchObject({
+			block: true,
+			reason: expect.stringMatching(
+				/\(mcp_exa_search\) needs approval: no UI available\. .*`mcp_exa_\*`.*parent\/interactive session/,
+			),
+		});
+		// zero grants written: no session grant, no persisted rule
+		expect(hasSessionGrant("mcp_exa_search")).toBe(false);
+		expect(JSON.parse(readFileSync(join(project, "permission-modes.json"), "utf-8"))).toEqual({});
+	});
+
+	it("subagent without UI: rejects locally even with forwarding env set — no forwarding request is created (D6 keeps first-seen out of the forwarding protocol)", async () => {
+		const agentDir = mkdtempSync(join(tmpdir(), "p4-s3-agentdir-"));
+		setAgentDirForTests(agentDir);
+		process.env.PI_SUBAGENT_PARENT_SESSION = "s3-parent";
+		process.env.PI_SUBAGENT_CHILD = "1";
+		const { host, ctx } = setupHeadless();
+		await host.fire("session_start", {}, ctx);
+		const result = await host.fire("tool_call", { toolName: "mcp__exa__search", input: { query: "x" } }, ctx);
+		expect(result).toMatchObject({ block: true, reason: expect.stringContaining("`mcp_exa_*`") });
+		// the block returned synchronously (no forwarding poll) and wrote nothing
+		expect(existsSync(join(agentDir, "sessions", "permission-modes-forwarding"))).toBe(false);
+	});
+
+	it("an existing allow rule still passes headless — the new copy path never engages (regression pin)", async () => {
+		const { host, ctx, project } = setupHeadless();
+		writeFileSync(join(project, "permission-modes.json"), JSON.stringify({ permissions: { allow: ["mcp_exa_*"] } }));
+		await host.fire("session_start", {}, ctx);
+		const result = await host.fire("tool_call", { toolName: "mcp__exa__search", input: { query: "x" } }, ctx);
+		expect(result).toBeUndefined();
 	});
 });
