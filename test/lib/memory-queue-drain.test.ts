@@ -137,6 +137,22 @@ describe("drainQueue direct (D-T1)", () => {
 	});
 });
 
+describe("cap order (review R2 on the fix)", () => {
+	it("beyond QUEUE_DRAIN_MAX, surplus records STAY ready — never stranded as this-pid claims", async () => {
+		for (let i = 0; i < 7; i++) stage(`cap-${i}`, { savedAt: Date.parse("2026-10-07T10:00:00.000Z") + i });
+		let completions = 0;
+		const result = await drainQueue(cap(), ports({ complete: async () => { completions++; return { ok: true as const, ops: [], stopReason: "stop", content: [] }; } }));
+		expect(result.summaries).toHaveLength(5); // QUEUE_DRAIN_MAX
+		expect(completions).toBe(5); // the cap counted records that reached the LLM lane
+		const files = recordFiles();
+		expect(files).toHaveLength(2);
+		// the untouched surplus is still a consumable record shape (ready or
+		// pending — NOT a claim stranded under our pid)
+		expect(files.every((f) => f.endsWith(".json") || f.includes(".pending."))).toBe(true);
+		expect(files.some((f) => f.includes(".claim."))).toBe(false);
+	});
+});
+
 describe("reclaim path through drainQueue (review P2 regression)", () => {
 	it("a dead claim recovered BY drainQueue itself never nests suffixes; release lands on a clean pending name", async () => {
 		stage("rcv");

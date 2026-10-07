@@ -183,11 +183,18 @@ export async function drainQueue(cap: DrainCap, ports: QueueDrainPorts): Promise
 	// validation; re-claiming them would nest suffixes (§3 name grammar).
 	const recovered = reclaimStaleClaims(cap.d.agentDir, Date.now());
 	const candidates = loadQueue(cap.d.agentDir).map((c) => c.file);
-	for (const claim of [
-		...candidates.map((file) => claimRecord(cap.d.agentDir, { file })),
-		...recovered,
-	]) {
-		if (processed >= QUEUE_DRAIN_MAX) break;
+	// LAZY claiming: the cap is checked BEFORE each claim — an eagerly-claimed
+	// surplus would strand records this pid can neither drain (beyond the cap
+	// this pass) nor have recovered (reclaim skips our own pid) while the
+	// host lives (review R2 on the fix). Recovered tokens are already ours.
+	const claimIterator = (function* (): Generator<QueueClaim | null> {
+		for (const file of candidates) {
+			if (processed >= QUEUE_DRAIN_MAX) return;
+			yield claimRecord(cap.d.agentDir, { file });
+		}
+		yield* recovered;
+	})();
+	for (const claim of claimIterator) {
 		if (!claim) continue; // held by another worker / vanished — skip
 		const verdict = validateClaimed(cap, claim, ports);
 		if (verdict.skip) {

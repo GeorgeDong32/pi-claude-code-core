@@ -127,15 +127,15 @@ describe("invalidateMemDirCache source discipline (W-T6)", () => {
 			"-rn", "invalidateMemDirCache(",
 			"extensions/",
 		], { encoding: "utf-8" });
+		// any mention outside the two owners is a violation — including a
+		// comment mention (rewrite the comment instead; a text-based filter
+		// would open string-literal holes — review R3)
 		const offenders = out
 			.split("\n")
 			.filter(Boolean)
 			.filter((line) => {
-				const [file, , text] = line.split(":");
-				if (file === "extensions/memory/writer.ts" || file === "extensions/memory/memdir.ts") return false;
-				// comment-only mention: the call sits inside a comment
-				const before = text.slice(0, text.indexOf("invalidateMemDirCache("));
-				return !before.includes("//");
+				const file = line.split(":")[0]!;
+				return file !== "extensions/memory/writer.ts" && file !== "extensions/memory/memdir.ts";
 			});
 		expect(offenders).toEqual([]);
 	});
