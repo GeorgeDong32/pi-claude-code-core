@@ -158,3 +158,48 @@ describe("real clock defaults", () => {
 		realClassifierClock.clearTimer(h); // no throw
 	});
 });
+
+describe("abort-listener release (review P3-6)", () => {
+	it("the parent signal's abort listener is added once and removed on every exit", async () => {
+		invalidateClassifierVerdictCache();
+		const calls: Array<Record<string, unknown>> = [];
+		const added: Array<() => void> = [];
+		const removed: Array<() => void> = [];
+		const handlers = new Set<() => void>();
+		const makeSignal = (aborted: boolean) => ({
+			aborted,
+			addEventListener: (_t: string, fn: () => void) => {
+				added.push(fn);
+				handlers.add(fn);
+			},
+			removeEventListener: (_t: string, fn: () => void) => {
+				removed.push(fn);
+				handlers.delete(fn);
+			},
+		}) as unknown as AbortSignal;
+		const clock = fakeClassifierClock();
+		const outcomeP = runClassifierAttempts({
+			attempts: 1,
+			attempt: () =>
+				classifyToolCall({
+					modelRef: "test/m",
+					session: { cwd: "/w", mode: "auto", branch: [], agentsMd: null },
+					pendingTool: { name: "bash", input: { command: "npm i" } },
+					registry: hangingRegistry(calls),
+					timeoutMs: 40,
+					signal: makeSignal(false),
+					clock,
+				}) as Promise<unknown>,
+		});
+		// reach the transport, fire the timeout — the finally must remove the
+		// parent listener even on the timeout exit path
+		await new Promise((r) => setImmediate(r));
+		clock.advance(40);
+		const outcome = (await outcomeP) as { ok: boolean; error?: unknown };
+		expect(outcome.ok).toBe(false);
+		expect(String(outcome.error)).toContain("timed out");
+		expect(added.length).toBe(1);
+		expect(removed.length).toBe(1);
+		expect(handlers.size).toBe(0);
+	});
+});

@@ -189,9 +189,11 @@ export function decide(f: AdjudicationFacts): Decision {
 			}
 		}
 
-		// META-03: retrieval-only meta tool passes like the read tier.
+		// META-03: retrieval-only meta tool passes like the read tier. The
+		// old gate returned undefined DIRECTLY here (not via allowToolCall)
+		// — no denial-state reset, review fix P2-1.
 		if (f.tool === "tool_search") {
-			return { kind: "allow", effects: { resetAutoDenialState: true } };
+			return { kind: "allow", effects: {} };
 		}
 		if (f.tool === "read" || f.tool === "grep" || f.tool === "find" || f.tool === "ls") {
 			if (f.pathSensitive) {

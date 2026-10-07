@@ -909,48 +909,9 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     fallbackAdapter.onSnapshot(coreBus().snapshot());
   }
 
-  // P0-1 §4.2: execute an ALREADY-computed permission verdict. The deny
-  // branch lives in the handler (before the plan hard gate); allow / ask /
-  // first-seen side-effect logic below is preserved verbatim from the old
-  // applyConfiguredPermissionRules.
-  async function applyPermissionVerdict(
-    ctx: ExtensionContext,
-    tool: string,
-    input: Record<string, unknown>,
-    verdict: PermissionVerdict,
-  ): Promise<Block | "allow" | "passthrough"> {
-    if (verdict.behavior === "allow") {
-      if (tool === "edit" || tool === "write") {
-        trackOutsideWriteIfNeeded(ctx, tool, String(input.path ?? ""));
-      }
-      // P4-MC-03: record the final allow for family-claimed tools so the
-      // broker mirror's allow-chain stays in lockstep with the gate.
-      noteFamilyAdjudication(
-        tool,
-        input,
-        hasSessionGrant(matchFamily(tool, input)?.canonicalId ?? "")
-          ? "session-grant"
-          : "rule-allow",
-      );
-      return "allow";
-    }
-    if (verdict.behavior === "ask") {
-      // P4-FAM-02 first-seen: a family claiming this tool with no explicit
-      // ask rule gets the family dialog (allow once / session / always).
-      const match = matchFamily(tool, input);
-      if (match && !familyRuleMentions(mergedPermissionRules, match.family, match.canonicalId, "ask")) {
-        return firstSeenPrompt(ctx, match.canonicalId, tool, input, match.family.suggestAllowRule(match.canonicalId));
-      }
-      return promptWithPermissionOptions(
-        ctx,
-        tool,
-        input,
-        `permission rule requires approval: ${verdict.rule}`,
-        "permission-ask",
-      );
-    }
-    return "passthrough";
-  }
+  // P0-1 §4.2's applyPermissionVerdict was absorbed by P2-1: the allow/ask
+  // verdict effects now live in adjudicate.ts step 4/5 + interpret.ts ports
+  // (deleted as dead code — zero callers after the migration; review P3-4).
 
   // P4-FAM-02/05: the first-seen dialog for family-claimed tools.
   async function firstSeenPrompt(

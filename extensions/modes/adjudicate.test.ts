@@ -170,9 +170,9 @@ describe("decide: auto ladder (Step 2)", () => {
 			category: "fusion-command",
 		});
 	});
-	it("tool_search and inside-cwd reads/edits allow with the denial-state reset", () => {
+	it("tool_search allows WITHOUT the denial-state reset (old gate returned directly); reads/edits allow with it", () => {
 		const reset = { resetAutoDenialState: true };
-		expect(decide(facts({ mode: "auto", tool: "tool_search" }))).toEqual({ kind: "allow", effects: reset });
+		expect(decide(facts({ mode: "auto", tool: "tool_search" }))).toEqual({ kind: "allow", effects: {} });
 		expect(decide(facts({ mode: "auto", tool: "read", path: "src/a.ts" }))).toEqual({ kind: "allow", effects: reset });
 		expect(decide(facts({ mode: "auto", tool: "edit", path: "src/a.ts" }))).toEqual({ kind: "allow", effects: reset });
 	});

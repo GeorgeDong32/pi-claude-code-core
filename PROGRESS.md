@@ -7,7 +7,8 @@
 - **实现**:`classifier-retry.ts`——`ClassifierClock`(now/setTimer/clearTimer 注入,默认 real)+ `fakeClassifierClock`(advance 手动驱动、cleared 不触发)+ `runClassifierAttempts`(可见重试层机制:任意 transport 错误重试至 attempts 次,verdict 业务留在 gate)。`classifyToolCall` 的 per-attempt 超时 envelope、verdict cache 时间戳、abort listener 全部走注入 clock,finally 释放不变;`approveAutoTier3` 循环改用 runClassifierAttempts(重试条件/次数/fail-closed/降级语义逐字保留)。
 - **测试替换**:index.test.ts「classifier retry loop is bounded(plan2 B2)」(AR1005-R3 flaky,真实 40ms 计时断言)删除;classifier-retry.test.ts 6 例确定性替代——attempts×timeout 逐次触发、timers 全部 cleared、abort-transport 按 SDK 语义 resolve(aborted)、冻结 wall clock 下超时仍生效。
 - **验证**:check 0;vitest 928(+6-1);contracts 43+3todo;parity 零差异(golden 未动)。
-- **台账**:DEVIATIONS #116 补记⑥;docs 模块表。C4 三步至此 3/3,待独立审查。
+- **台账**:DEVIATIONS #116 补记⑥;docs 模块表。
+- **独立审查(同日)与修复**:审查结论=架构/协议达标,1×P2 行为分歧(tool_search 误加 denial 重置)+1×P2 测试缺口+4×P3。修复:P2-1 撤销 tool_search reset(decision table 同步钉住「不带 reset」);P3-4 删 applyPermissionVerdict 死代码;P2-2 新增 interpret.test.ts(端口分派/effects 顺序/结果透传,6 例);P3-3 矩阵补 5 族(then_run 字符串×2/R2 command 参数/proxy/非 MCP family),**增量 golden 在基线 worktree 2902384 生成且旧 47 case 再生成与原 golden 字节一致**;P3-6 abort-listener 释放断言。修复后 parity 52 case 零差异、三门全绿(vitest 935)。C4 终态 3/3 完成。
 
 ## 2026-10-08 C4-Step2：auto tier 梯子迁入 decide（P2-1 2/3）
 

@@ -915,5 +915,101 @@
 			"mcp_exa_search": "rule-allow"
 		},
 		"outsideWriteCount": 0
+	},
+	"ask/edit with then_run STRING unsafe prompts": {
+		"result": "block: edit blocked by user",
+		"uiSelects": [
+			{
+				"label": "Allow edit? \"npm install\"",
+				"options": [
+					"Allow",
+					"Allow always (this project)",
+					"Allow always (global)",
+					"Block"
+				]
+			}
+		],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"auto/edit with then_run STRING dangerous prompts (ui Block)": {
+		"result": "block: edit blocked by user",
+		"uiSelects": [
+			{
+				"label": "Allow edit? File write/edit requires tier-3 review.",
+				"options": [
+					"Allow",
+					"Allow always (this project)",
+					"Allow always (global)",
+					"Block"
+				]
+			}
+		],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"plan/authorized mcp with command param is remote schema, not local shell (R2)": {
+		"result": "allow",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {
+				"allow": [
+					"mcp_exa_*"
+				]
+			},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {
+			"mcp_exa_search": "rule-allow"
+		},
+		"outsideWriteCount": 0
+	},
+	"ask/proxy-shaped mcp call (tool 'mcp' + input.tool, direct server env)": {
+		"result": "allow",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"plan/non-mcp family (webfetch url) — no generic-scan exemption concerns": {
+		"result": "allow",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
 	}
 }
