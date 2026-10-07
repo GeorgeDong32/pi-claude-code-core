@@ -10,11 +10,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 
-import {
-	prepareWorkspace,
-	resetTargetWorkspaceCmd,
-	setTargetWorkspaceCmd,
-} from "../src/target-workspace.js";
+import { prepareWorkspace } from "../src/target-workspace.js";
+import { resetRunCmd, setRunCmd } from "../src/run-cmd.js";
 
 type CmdResult = { stdout: string; stderr: string; exitCode: number };
 type Cmd = (cmd: string, args: string[], opts: { cwd: string }) => Promise<CmdResult>;
@@ -22,7 +19,7 @@ type Cmd = (cmd: string, args: string[], opts: { cwd: string }) => Promise<CmdRe
 let sandbox: string;
 
 afterEach(() => {
-	resetTargetWorkspaceCmd();
+	resetRunCmd();
 	if (sandbox) rmSync(sandbox, { recursive: true, force: true });
 	sandbox = "";
 });
@@ -95,7 +92,7 @@ describe("prepareWorkspace — PR path", () => {
 	test("happy path: gh clone + FETCH_HEAD verified + detached checkout", async () => {
 		const cwd = setup();
 		const { cmd } = scripted({ fetchHeads: ["H1"], head: "H1" });
-		setTargetWorkspaceCmd(cmd);
+		setRunCmd(cmd);
 		const r = await prepareWorkspace({ cwd, target: { kind: "pr", prRef: PR, expectedHeadSha: "H1" } });
 		assert.equal(r.cloned, true);
 		assert.equal(r.historyAvailable, true);
@@ -111,7 +108,7 @@ describe("prepareWorkspace — PR path", () => {
 			fetchHeads: ["H2"],
 			head: "H2",
 		});
-		setTargetWorkspaceCmd(cmd);
+		setRunCmd(cmd);
 		const r = await prepareWorkspace({ cwd, target: { kind: "pr", prRef: PR, expectedHeadSha: "H2" } });
 		assert.equal(r.cloned, true);
 		assert.equal(r.workspaceHeadSha, "H2");
@@ -123,7 +120,7 @@ describe("prepareWorkspace — PR path", () => {
 			ghClone: [{ stdout: "", stderr: "no gh", exitCode: 1 }],
 			gitClone: [{ stdout: "", stderr: "no network", exitCode: 128 }],
 		});
-		setTargetWorkspaceCmd(cmd);
+		setRunCmd(cmd);
 		await assert.rejects(
 			() => prepareWorkspace({ cwd, target: { kind: "pr", prRef: PR } }),
 			/could not clone some-owner\/some-repo/,
@@ -135,7 +132,7 @@ describe("prepareWorkspace — PR path", () => {
 		const { cmd } = scripted({
 			fetch: [{ stdout: "", stderr: "fetch denied", exitCode: 1 }],
 		});
-		setTargetWorkspaceCmd(cmd);
+		setRunCmd(cmd);
 		await assert.rejects(
 			() => prepareWorkspace({ cwd, target: { kind: "pr", prRef: PR } }),
 			/git fetch pull\/9\/head failed/,
@@ -145,7 +142,7 @@ describe("prepareWorkspace — PR path", () => {
 	test("FETCH_HEAD mismatch + refetch still wrong → throws (PR moving)", async () => {
 		const cwd = setup();
 		const { cmd } = scripted({ fetchHeads: ["AAA", "BBB"] });
-		setTargetWorkspaceCmd(cmd);
+		setRunCmd(cmd);
 		await assert.rejects(
 			() => prepareWorkspace({ cwd, target: { kind: "pr", prRef: PR, expectedHeadSha: "H1" } }),
 			/head moved to BBB .* diff was captured at H1/,
@@ -155,7 +152,7 @@ describe("prepareWorkspace — PR path", () => {
 	test("FETCH_HEAD mismatch + refetch converges → proceeds", async () => {
 		const cwd = setup();
 		const { cmd } = scripted({ fetchHeads: ["AAA", "H1"], head: "H1" });
-		setTargetWorkspaceCmd(cmd);
+		setRunCmd(cmd);
 		const r = await prepareWorkspace({ cwd, target: { kind: "pr", prRef: PR, expectedHeadSha: "H1" } });
 		assert.equal(r.workspaceHeadSha, "H1");
 	});
@@ -163,7 +160,7 @@ describe("prepareWorkspace — PR path", () => {
 	test("empty FETCH_HEAD (undeterminable) → skips verification, no throw", async () => {
 		const cwd = setup();
 		const { cmd } = scripted({ fetchHeads: [""], head: "" });
-		setTargetWorkspaceCmd(cmd);
+		setRunCmd(cmd);
 		const r = await prepareWorkspace({ cwd, target: { kind: "pr", prRef: PR, expectedHeadSha: "H1" } });
 		assert.equal(r.workspaceHeadSha, undefined);
 	});
@@ -174,7 +171,7 @@ describe("prepareWorkspace — PR path", () => {
 			checkout: { stdout: "", stderr: "dirty", exitCode: 1 },
 			fetchHeads: ["H1"],
 		});
-		setTargetWorkspaceCmd(cmd);
+		setRunCmd(cmd);
 		await assert.rejects(
 			() => prepareWorkspace({ cwd, target: { kind: "pr", prRef: PR } }),
 			/checkout of PR 9 head failed/,
@@ -184,7 +181,7 @@ describe("prepareWorkspace — PR path", () => {
 	test("no expectedHeadSha → no verification performed", async () => {
 		const cwd = setup();
 		const { cmd } = scripted({ fetchHeads: ["ZZZ"], head: "ZZZ" });
-		setTargetWorkspaceCmd(cmd);
+		setRunCmd(cmd);
 		const r = await prepareWorkspace({ cwd, target: { kind: "pr", prRef: PR } });
 		assert.equal(r.workspaceHeadSha, "ZZZ");
 	});
@@ -194,18 +191,14 @@ describe("prepareWorkspace — local paths", () => {
 	test("local-git reuses cwd", async () => {
 		const cwd = setup();
 		const { cmd } = scripted({});
-		setTargetWorkspaceCmd(cmd);
+		setRunCmd(cmd);
 		const r = await prepareWorkspace({ cwd, target: { kind: "local-git" } });
 		assert.equal(r.workspacePath, cwd);
 		assert.equal(r.cloned, false);
 	});
 
-	test("diff-file reuses cwd with warning", async () => {
-		const cwd = setup();
-		const { cmd } = scripted({});
-		setTargetWorkspaceCmd(cmd);
-		const r = await prepareWorkspace({ cwd, target: { kind: "diff-file" } });
-		assert.equal(r.workspacePath, cwd);
-		assert.match(r.warning ?? "", /only the diff/);
-	});
+	// P3-1 S5: the diff-file target kind is deleted (unreachable since the
+	// --diff flag became a silently-skipped no-op) — the test that pinned it
+	// is removed with it; old manifests remain readable (manifest reader
+	// untouched).
 });

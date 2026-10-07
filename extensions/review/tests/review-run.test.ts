@@ -12,12 +12,11 @@ import {
 	prepareRun,
 	pruneLegacyFlatArtifacts,
 	pruneStaleWorkspaces,
-	setReviewRunCmd,
-	resetReviewRunCmd,
+
 	loadManifestFor,
 } from "../src/review-run.js";
-import { setTargetWorkspaceCmd, resetTargetWorkspaceCmd } from "../src/target-workspace.js";
 import { setConfigPath, writeConfig, DEFAULT_CONFIG } from "../src/config.js";
+import { resetRunCmd, setRunCmd } from "../src/run-cmd.js";
 
 type FakeCmd = (cmd: string, args: string[], opts: { cwd: string }) => Promise<{
 	stdout: string;
@@ -29,8 +28,7 @@ let sandbox: string;
 let cfgDir: string;
 
 afterEach(() => {
-	resetReviewRunCmd();
-	resetTargetWorkspaceCmd();
+	resetRunCmd();
 	setConfigPath();
 	if (sandbox) rmSync(sandbox, { recursive: true, force: true });
 	if (cfgDir) rmSync(cfgDir, { recursive: true, force: true });
@@ -61,6 +59,19 @@ function fakeCmd(
 	};
 }
 
+/** S1: ONE shared injector — the old PAIR of adapters (each with its own
+ *  injected fake) folds into one fake with fallback semantics: the primary
+ *  fake answers commands it knows (a miss is the EMPTY result — stdout "",
+ *  stderr "", exitCode 1 — with no diagnostic text); anything else falls to
+ *  the secondary. Explicit failures carry stderr text and never fall. */
+function ghThenGit(primary: FakeCmd, fallback: FakeCmd): FakeCmd {
+	return async (cmd, args, opts) => {
+		const r = await primary(cmd, args, opts);
+		if (r.exitCode === 1 && r.stdout === "" && r.stderr === "") return fallback(cmd, args, opts);
+		return r;
+	};
+}
+
 describe("prepareRun — PR cross-repo workspace", () => {
 	test("PR with gh pr diff: writes manifest + diff path + changed files", async () => {
 		const cwd = setup();
@@ -72,8 +83,9 @@ describe("prepareRun — PR cross-repo workspace", () => {
 			" line",
 			"+added",
 		].join("\n");
-		setReviewRunCmd(
-			fakeCmd({
+		setRunCmd(
+			ghThenGit(
+				fakeCmd({
 				gh: (args) => {
 					if (args[0] === "pr" && args[1] === "view") {
 						return {
@@ -93,14 +105,15 @@ describe("prepareRun — PR cross-repo workspace", () => {
 					return { stdout: "", stderr: "no", exitCode: 1 };
 				},
 			}),
-		);
-		setTargetWorkspaceCmd(async (cmd, args) => {
+				async (cmd, args) => {
 			if (cmd === "git" && args[0] === "clone") return { stdout: "", stderr: "", exitCode: 0 };
 			if (cmd === "git" && args[0] === "fetch") return { stdout: "", stderr: "", exitCode: 0 };
 			if (cmd === "git" && args[0] === "checkout") return { stdout: "", stderr: "", exitCode: 0 };
 			if (cmd === "git" && args[0] === "rev-parse") return { stdout: "", stderr: "", exitCode: 0 };
 			return { stdout: "", stderr: "no", exitCode: 1 };
-		});
+		},
+			),
+		);
 
 		const prepared = await prepareRun({
 			cwd,
@@ -129,8 +142,9 @@ describe("prepareRun — PR cross-repo workspace", () => {
 	test("local-git dirty tree uses cwd as workspace and diff HEAD", async () => {
 		const cwd = setup();
 		const diff = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n";
-		setReviewRunCmd(
-			fakeCmd({
+		setRunCmd(
+			ghThenGit(
+				fakeCmd({
 				"git status": (args) => {
 					void args;
 					return { stdout: " M x\n", stderr: "", exitCode: 0 };
@@ -138,8 +152,9 @@ describe("prepareRun — PR cross-repo workspace", () => {
 				"git diff": () => ({ stdout: diff, stderr: "", exitCode: 0 }),
 				"git rev-parse": () => ({ stdout: "abc\n", stderr: "", exitCode: 0 }),
 			}),
+				async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+			),
 		);
-		setTargetWorkspaceCmd(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
 
 		const prepared = await prepareRun({ cwd, input: "" });
 		assert.ok(prepared);
@@ -154,8 +169,9 @@ describe("prepareRun — PR cross-repo workspace", () => {
 		const cwd = setup();
 		const diff = "diff --git a/y b/y\n--- a/y\n+++ b/y\n@@ -1 +1 @@\n-old\n+new2\n";
 		// Dirty → but status empty, so the else branch runs.
-		setReviewRunCmd(
-			fakeCmd({
+		setRunCmd(
+			ghThenGit(
+				fakeCmd({
 				"git status": () => ({ stdout: "", stderr: "", exitCode: 0 }),
 				"git symbolic-ref": (args) => {
 					if (args[2] === "refs/remotes/origin/HEAD") {
@@ -168,8 +184,9 @@ describe("prepareRun — PR cross-repo workspace", () => {
 				"git diff": () => ({ stdout: diff, stderr: "", exitCode: 0 }),
 				"git merge-base": () => ({ stdout: "m1\n", stderr: "", exitCode: 0 }),
 			}),
+				async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+			),
 		);
-		setTargetWorkspaceCmd(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
 
 		const prepared = await prepareRun({ cwd, input: "" });
 		assert.ok(prepared);
@@ -231,8 +248,9 @@ describe("prepareRun — lite + adaptive routing", () => {
 			" line",
 			"+added",
 		].join("\n");
-		setReviewRunCmd(
-			fakeCmd({
+		setRunCmd(
+			ghThenGit(
+				fakeCmd({
 				gh: (args) => {
 					if (args[0] === "pr" && args[1] === "view") {
 						return { stdout: JSON.stringify({ number: "7", baseRefName: "main" }), stderr: "", exitCode: 0 };
@@ -243,14 +261,15 @@ describe("prepareRun — lite + adaptive routing", () => {
 					return { stdout: "", stderr: "no", exitCode: 1 };
 				},
 			}),
-		);
-		setTargetWorkspaceCmd(async (cmd, args) => {
+				async (cmd, args) => {
 			if (cmd === "git" && args[0] === "clone") return { stdout: "", stderr: "", exitCode: 0 };
 			if (cmd === "git" && args[0] === "fetch") return { stdout: "", stderr: "", exitCode: 0 };
 			if (cmd === "git" && args[0] === "checkout") return { stdout: "", stderr: "", exitCode: 0 };
 			if (cmd === "git" && args[0] === "rev-parse") return { stdout: "", stderr: "", exitCode: 0 };
 			return { stdout: "", stderr: "no", exitCode: 1 };
-		});
+		},
+			),
+		);
 
 		const prepared = await prepareRun({
 			cwd,
@@ -326,13 +345,17 @@ describe("prepareRun — config wiring (round-2 adversarial findings)", () => {
 	test("gate.enabled=false skips the gate but keeps the full roster", async () => {
 		const cwd = setup();
 		writeConfig({ ...DEFAULT_CONFIG, gate: { ...DEFAULT_CONFIG.gate, enabled: false } });
-		setReviewRunCmd(prCmds());
-		setTargetWorkspaceCmd(async (cmd, args) => {
+		setRunCmd(
+			ghThenGit(
+				prCmds(),
+				async (cmd, args) => {
 			if (cmd === "git" && args[0] === "rev-parse" && args.includes("HEAD")) {
 				return { stdout: "h1\n", stderr: "", exitCode: 0 };
 			}
 			return { stdout: "", stderr: "", exitCode: 0 };
-		});
+		},
+			),
+		);
 		const prepared = await prepareRun({ cwd, input: PR });
 		assert.ok(prepared);
 		assert.doesNotMatch(prepared!.directiveText, /runs\.run\('gate'/);
@@ -348,8 +371,12 @@ describe("prepareRun — config wiring (round-2 adversarial findings)", () => {
 			...DEFAULT_CONFIG,
 			budgets: { turnBudget: { maxTurns: 33, graceTurns: 2 } },
 		} as typeof DEFAULT_CONFIG);
-		setReviewRunCmd(prCmds());
-		setTargetWorkspaceCmd(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
+		setRunCmd(
+			ghThenGit(
+				prCmds(),
+				async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+			),
+		);
 		const prepared = await prepareRun({ cwd, input: PR });
 		assert.ok(prepared);
 		assert.match(prepared!.directiveText, /maxTurns: 33/);
@@ -358,8 +385,12 @@ describe("prepareRun — config wiring (round-2 adversarial findings)", () => {
 
 	test("manifest records the run's reviewer roster", async () => {
 		const cwd = setup();
-		setReviewRunCmd(prCmds());
-		setTargetWorkspaceCmd(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
+		setRunCmd(
+			ghThenGit(
+				prCmds(),
+				async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+			),
+		);
 		const prepared = await prepareRun({ cwd, input: PR });
 		assert.ok(prepared);
 		assert.ok(Array.isArray(prepared!.manifest.reviewerIds));
@@ -371,8 +402,9 @@ describe("prepareRun — config wiring (round-2 adversarial findings)", () => {
 		const cwd = setup();
 		writeFileSync(join(cwd, "tracked.ts"), "a\n");
 		writeFileSync(join(cwd, "brand-new.ts"), "console.log(1);\n");
-		setReviewRunCmd(
-			fakeCmd({
+		setRunCmd(
+			ghThenGit(
+				fakeCmd({
 				"git status": () => ({ stdout: " M tracked.ts\n?? brand-new.ts\n", stderr: "", exitCode: 0 }),
 				"git diff": () => ({
 					stdout: "diff --git a/tracked.ts b/tracked.ts\n--- a/tracked.ts\n+++ b/tracked.ts\n@@ -1 +1 @@\n-a\n+b\n",
@@ -382,8 +414,9 @@ describe("prepareRun — config wiring (round-2 adversarial findings)", () => {
 				"git ls-files": () => ({ stdout: "brand-new.ts\n", stderr: "", exitCode: 0 }),
 				"git rev-parse": () => ({ stdout: "abc\n", stderr: "", exitCode: 0 }),
 			}),
+				async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+			),
 		);
-		setTargetWorkspaceCmd(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
 		const prepared = await prepareRun({ cwd, input: "" });
 		assert.ok(prepared);
 		const m = prepared!.manifest;
@@ -398,8 +431,9 @@ describe("gh pr diff is the single diff authority (user decision 2026-08-25)", (
 
 	test("gh pr diff failure aborts the run — no locally computed substitute", async () => {
 		const cwd = setup();
-		setReviewRunCmd(
-			fakeCmd({
+		setRunCmd(
+			ghThenGit(
+				fakeCmd({
 				gh: (args) => {
 					if (args[0] === "pr" && args[1] === "view") {
 						return {
@@ -416,8 +450,9 @@ describe("gh pr diff is the single diff authority (user decision 2026-08-25)", (
 					throw new Error("git must not be called for a PR diff");
 				},
 			}),
+				async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+			),
 		);
-		setTargetWorkspaceCmd(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
 
 		await assert.rejects(
 			() => prepareRun({ cwd, input: PR }),
@@ -427,8 +462,9 @@ describe("gh pr diff is the single diff authority (user decision 2026-08-25)", (
 
 	test("manifest records workspaceCloned so the report can reclaim tmp clones", async () => {
 		const cwd = setup();
-		setReviewRunCmd(
-			fakeCmd({
+		setRunCmd(
+			ghThenGit(
+				fakeCmd({
 				gh: (args) => {
 					if (args[0] === "pr" && args[1] === "view") {
 						return {
@@ -443,13 +479,14 @@ describe("gh pr diff is the single diff authority (user decision 2026-08-25)", (
 					return { stdout: "", stderr: "no", exitCode: 1 };
 				},
 			}),
-		);
-		setTargetWorkspaceCmd(async (cmd, args) => {
+				async (cmd, args) => {
 			if (cmd === "git" && args[0] === "rev-parse" && args.includes("HEAD")) {
 				return { stdout: "h1\n", stderr: "", exitCode: 0 };
 			}
 			return { stdout: "", stderr: "", exitCode: 0 };
-		});
+		},
+			),
+		);
 		const prepared = await prepareRun({ cwd, input: "https://github.com/o/r/pull/36" });
 		assert.ok(prepared);
 		assert.equal(prepared!.manifest.workspaceCloned, true);
@@ -459,25 +496,21 @@ describe("gh pr diff is the single diff authority (user decision 2026-08-25)", (
 	test("outer TOCTOU: workspace HEAD mismatch retries, converging run succeeds", async () => {
 		const cwd = setup();
 		const diff = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n";
-		setReviewRunCmd(
-			fakeCmd({
-				gh: (args) => {
-					if (args[0] === "pr" && args[1] === "view") {
-						return {
-							stdout: JSON.stringify({ number: "34", baseRefName: "main", headRefOid: "GOOD" }),
-							stderr: "",
-							exitCode: 0,
-						};
-					}
-					if (args[0] === "pr" && args[1] === "diff") {
-						return { stdout: diff, stderr: "", exitCode: 0 };
-					}
-					return { stdout: "", stderr: "no", exitCode: 1 };
-				},
-			}),
-		);
 		let calls = 0;
-		setTargetWorkspaceCmd(async (cmd, args) => {
+		setRunCmd(async (cmd, args) => {
+			if (cmd === "gh") {
+				if (args[0] === "pr" && args[1] === "view") {
+					return {
+						stdout: JSON.stringify({ number: "34", baseRefName: "main", headRefOid: "GOOD" }),
+						stderr: "",
+						exitCode: 0,
+					};
+				}
+				if (args[0] === "pr" && args[1] === "diff") {
+					return { stdout: diff, stderr: "", exitCode: 0 };
+				}
+				return { stdout: "", stderr: "no", exitCode: 1 };
+			}
 			if (cmd === "git" && args[0] === "rev-parse" && args.includes("HEAD")) {
 				calls++;
 				// First clone lands on the stale head; the retry converges.
@@ -496,8 +529,9 @@ describe("gh pr diff is the single diff authority (user decision 2026-08-25)", (
 	test("outer TOCTOU: persistent mismatch throws instead of reviewing split evidence", async () => {
 		const cwd = setup();
 		const diff = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n";
-		setReviewRunCmd(
-			fakeCmd({
+		setRunCmd(
+			ghThenGit(
+				fakeCmd({
 				gh: (args) => {
 					if (args[0] === "pr" && args[1] === "view") {
 						return {
@@ -512,13 +546,14 @@ describe("gh pr diff is the single diff authority (user decision 2026-08-25)", (
 					return { stdout: "", stderr: "no", exitCode: 1 };
 				},
 			}),
-		);
-		setTargetWorkspaceCmd(async (cmd, args) => {
+				async (cmd, args) => {
 			if (cmd === "git" && args[0] === "rev-parse" && args.includes("HEAD")) {
 				return { stdout: "STALE\n", stderr: "", exitCode: 0 };
 			}
 			return { stdout: "", stderr: "", exitCode: 0 };
-		});
+		},
+			),
+		);
 
 		await assert.rejects(
 			() => prepareRun({ cwd, input: "https://github.com/o/r/pull/35" }),
@@ -617,11 +652,15 @@ function writeRuleFile(dir: string, rel: string, body = "rules"): void {
 describe("AR1005-RV — target-workspace rule discovery", () => {
 	test("RV-T01: caller has NO rules, target workspace HAS them → rulePaths from the workspace", async () => {
 		const cwd = setup();
-		setReviewRunCmd(rvGh(rvDiff()));
-		setTargetWorkspaceCmd(rvWorkspaceCmd((cloneDir) => {
+		setRunCmd(
+			ghThenGit(
+				rvGh(rvDiff()),
+				rvWorkspaceCmd((cloneDir) => {
 			writeRuleFile(cloneDir, "AGENTS.md");
 			writeRuleFile(cloneDir, join(".pi", "rules", "r1.md"));
-		}));
+		}),
+			),
+		);
 		const prepared = await prepareRun({ cwd, input: "https://github.com/o/r/pull/42" });
 		assert.ok(prepared);
 		assert.deepEqual(prepared!.manifest.rulePaths.sort(), [".pi/rules/r1.md", "AGENTS.md"].sort());
@@ -633,8 +672,12 @@ describe("AR1005-RV — target-workspace rule discovery", () => {
 		writeRuleFile(cwd, "AGENTS.md");
 		const cfg = { ...DEFAULT_CONFIG, routing: { mode: "adaptive" as const } };
 		writeConfig(cfg);
-		setReviewRunCmd(rvGh(rvDiff()));
-		setTargetWorkspaceCmd(rvWorkspaceCmd(() => {}));
+		setRunCmd(
+			ghThenGit(
+				rvGh(rvDiff()),
+				rvWorkspaceCmd(() => {}),
+			),
+		);
 		const prepared = await prepareRun({ cwd, input: "https://github.com/o/r/pull/42" });
 		assert.ok(prepared);
 		assert.deepEqual(prepared!.manifest.rulePaths, []);
@@ -646,11 +689,15 @@ describe("AR1005-RV — target-workspace rule discovery", () => {
 		const cwd = setup();
 		writeRuleFile(cwd, "AGENTS.md");
 		writeRuleFile(cwd, join(".pi", "rules", "caller-only.md"));
-		setReviewRunCmd(rvGh(rvDiff()));
-		setTargetWorkspaceCmd(rvWorkspaceCmd((cloneDir) => {
+		setRunCmd(
+			ghThenGit(
+				rvGh(rvDiff()),
+				rvWorkspaceCmd((cloneDir) => {
 			writeRuleFile(cloneDir, "CLAUDE.md");
 			writeRuleFile(cloneDir, join(".pi", "rules", "target-rule.md"));
-		}));
+		}),
+			),
+		);
 		const prepared = await prepareRun({ cwd, input: "https://github.com/o/r/pull/42" });
 		assert.ok(prepared);
 		const paths = prepared!.manifest.rulePaths;
@@ -661,29 +708,20 @@ describe("AR1005-RV — target-workspace rule discovery", () => {
 
 	test("RV-T04: the FIRST workspace is replaced by the HEAD-mismatch retry → rulePaths from the FINAL workspace", async () => {
 		const cwd = setup();
-		setReviewRunCmd(rvGh(rvDiff()));
-		// diff head = bbb; first clone reports a MOVED head (ccc) → retry; second clone matches.
-		let firstDir = "";
-		setTargetWorkspaceCmd(rvWorkspaceCmd(
-			(cloneDir, cloneIndex) => {
-				if (cloneIndex === 1) {
-					firstDir = cloneDir;
-					writeRuleFile(cloneDir, "AGENTS.md", "first workspace rules");
-				} else {
-					writeRuleFile(cloneDir, "CLAUDE.md", "final workspace rules");
-				}
-			},
-			{ headSha: "ccc" }, // rev-parse reports the moved head for BOTH clones…
-		));
-		// …so the retry also mismatches → prepareRun throws. Override: match on the 2nd.
-		// Simpler: make rev-parse report ccc only for the first clone's dir.
-		resetTargetWorkspaceCmd();
+		// S1: ONE injector — the final fake below (set after resetRunCmd) must
+		// itself carry the gh pr view/diff answers the old separate
+		// review-report channel used to provide (rvGh's payload).
+		const diff = rvDiff();
 		let revParseCalls = 0;
-		setTargetWorkspaceCmd(async (cmd: string, args: string[]) => {
-			if (cmd === "gh" && args[0] === "repo") return { stdout: "", stderr: "no gh", exitCode: 1 };
+		setRunCmd(async (cmd: string, args: string[]) => {
+			if (cmd === "gh" && args[0] === "pr" && args[1] === "view") {
+				return { stdout: JSON.stringify({ number: "42", baseRefName: "main", baseRefOid: "aaa", headRefOid: "bbb" }), stderr: "", exitCode: 0 };
+			}
+			if (cmd === "gh" && args[0] === "pr" && args[1] === "diff") return { stdout: diff, stderr: "", exitCode: 0 };
 			if (cmd === "git" && args[0] === "clone") {
 				const cloneDir = args[4]!;
 				mkdirSync(cloneDir, { recursive: true });
+				// the FINAL (retried) workspace carries the rules
 				writeRuleFile(cloneDir, "CLAUDE.md", "final workspace rules");
 				return { stdout: "", stderr: "", exitCode: 0 };
 			}
@@ -701,14 +739,13 @@ describe("AR1005-RV — target-workspace rule discovery", () => {
 		assert.ok(prepared);
 		assert.deepEqual(prepared!.manifest.rulePaths, ["CLAUDE.md"], "rules come from the FINAL (retried) workspace");
 		assert.ok(!prepared!.manifest.rulePaths.includes("AGENTS.md"));
-		void firstDir;
 	});
 
 	test("RV-T05: local-git and diff-file targets keep the cwd-as-workspace behavior (caller rules still apply)", async () => {
 		const cwd = setup();
 		writeRuleFile(cwd, "AGENTS.md");
 		// local-git: fake a git repo with a dirty tree
-		setReviewRunCmd(fakeCmd({
+		setRunCmd(fakeCmd({
 			git: (args) => {
 				if (args[0] === "status") return { stdout: " M src/a.ts\n", stderr: "", exitCode: 0 };
 				if (args[0] === "diff") return { stdout: rvDiff(), stderr: "", exitCode: 0 };
@@ -724,10 +761,14 @@ describe("AR1005-RV — target-workspace rule discovery", () => {
 
 	test("RV-T06: --lite keeps the single lite-review lane regardless of workspace rules", async () => {
 		const cwd = setup();
-		setReviewRunCmd(rvGh(rvDiff()));
-		setTargetWorkspaceCmd(rvWorkspaceCmd((cloneDir) => {
+		setRunCmd(
+			ghThenGit(
+				rvGh(rvDiff()),
+				rvWorkspaceCmd((cloneDir) => {
 			writeRuleFile(cloneDir, "AGENTS.md");
-		}));
+		}),
+			),
+		);
 		const prepared = await prepareRun({ cwd, input: "https://github.com/o/r/pull/42", lite: true });
 		assert.ok(prepared);
 		assert.deepEqual(prepared!.manifest.reviewerIds, ["lite-review"]);

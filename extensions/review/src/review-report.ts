@@ -7,6 +7,8 @@
  * `gh pr diff` all work without the LLM re-fetching anything.
  */
 import { spawn } from "node:child_process";
+import { runCmd, type RunCmd } from "./run-cmd.js";
+export { setRunCmd, resetRunCmd } from "./run-cmd.js";
 import { createHash } from "node:crypto";
 import {
 	existsSync,
@@ -118,7 +120,6 @@ function safeListDir(p: string): string[] {
 		return [];
 	}
 }
-void safeListDir; // keep tree-shaker honest
 
 function safeStat(p: string): { mtimeMs: number } | null {
 	try {
@@ -141,38 +142,6 @@ export interface GhExec {
 	exitCode: number;
 }
 
-/** Spawn `gh` (or `git`) and capture output. Tests inject a fake. */
-export type RunCmd = (
-	cmd: string,
-	args: string[],
-	opts: { cwd: string },
-) => Promise<GhExec>;
-
-let _runCmd: RunCmd = defaultRunCmd;
-export function setRunCmd(fn: RunCmd): void {
-	_runCmd = fn;
-}
-export function resetRunCmd(): void {
-	_runCmd = defaultRunCmd;
-}
-
-async function defaultRunCmd(cmd: string, args: string[], opts: { cwd: string }): Promise<GhExec> {
-	return new Promise((resolve) => {
-		try {
-			const child = spawn(cmd, args, { cwd: opts.cwd, stdio: ["ignore", "pipe", "pipe"] });
-			let stdout = "";
-			let stderr = "";
-			child.stdout?.setEncoding("utf-8");
-			child.stderr?.setEncoding("utf-8");
-			child.stdout?.on("data", (d: string) => (stdout += d));
-			child.stderr?.on("data", (d: string) => (stderr += d));
-			child.on("error", () => resolve({ stdout, stderr, exitCode: 1 }));
-			child.on("close", (code) => resolve({ stdout, stderr, exitCode: code ?? 1 }));
-		} catch (err) {
-			resolve({ stdout: "", stderr: err instanceof Error ? err.message : "spawn failed", exitCode: 1 });
-		}
-	});
-}
 
 export function sha256Hex(buf: string | Buffer): string {
 	return createHash("sha256").update(buf).digest("hex");

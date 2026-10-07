@@ -48,31 +48,6 @@ export interface ReportToolFailure {
 
 export type ReportToolResult = ReportToolSuccess | ReportToolFailure;
 
-/** Map legacy `ReviewerOutput` shape to v0.7 shape (status, coverage). */
-function adaptReviewer(so: unknown): ReviewerOutput {
-	if (!so || typeof so !== "object") {
-		return { status: "limited", issues: [], summary: "", coverage: emptyCoverage() };
-	}
-	const obj = so as Partial<ReviewerOutput> & {
-		issues?: unknown;
-		summary?: unknown;
-		status?: unknown;
-		coverage?: unknown;
-	};
-	const issues = Array.isArray(obj.issues)
-		? (obj.issues as Issue[]).filter(isIssueLike).map(normalizeIssue)
-		: [];
-	return {
-		status: obj.status === "ok" || obj.status === "limited" || obj.status === "skipped"
-			? obj.status
-			: "limited",
-		issues,
-		summary: typeof obj.summary === "string" ? obj.summary : "",
-		coverage: isCoverage(obj.coverage)
-			? obj.coverage
-			: emptyCoverage(),
-	};
-}
 
 function isIssueLike(v: unknown): v is Issue {
 	return !!v && typeof v === "object" && typeof (v as { file?: unknown }).file === "string";

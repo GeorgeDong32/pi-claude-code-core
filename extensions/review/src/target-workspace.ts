@@ -19,47 +19,13 @@
  * positive source observed in the field (diff@new, files@old).
  */
 import { spawn } from "node:child_process";
+import { runCmd } from "./run-cmd.js";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { parsePrRepo } from "./review-report.js";
 
-export type RunCmd = (
-	cmd: string,
-	args: string[],
-	opts: { cwd: string },
-) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
-
-let _runCmd: RunCmd = defaultRunCmd;
-export function setTargetWorkspaceCmd(fn: RunCmd): void {
-	_runCmd = fn;
-}
-export function resetTargetWorkspaceCmd(): void {
-	_runCmd = defaultRunCmd;
-}
-
-async function defaultRunCmd(
-	cmd: string,
-	args: string[],
-	opts: { cwd: string },
-): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-	return new Promise((resolve) => {
-		try {
-			const child = spawn(cmd, args, { cwd: opts.cwd, stdio: ["ignore", "pipe", "pipe"] });
-			let stdout = "";
-			let stderr = "";
-			child.stdout?.setEncoding("utf-8");
-			child.stderr?.setEncoding("utf-8");
-			child.stdout?.on("data", (d: string) => (stdout += d));
-			child.stderr?.on("data", (d: string) => (stderr += d));
-			child.on("error", () => resolve({ stdout, stderr, exitCode: 1 }));
-			child.on("close", (code) => resolve({ stdout, stderr, exitCode: code ?? 1 }));
-		} catch {
-			resolve({ stdout: "", stderr: "spawn failed", exitCode: 1 });
-		}
-	});
-}
 
 /** Allocate a scratch root under the OS tmpdir; created on disk. */
 export function allocateWorkspaceRoot(prefix = "pi-review-ws"): string {
@@ -100,7 +66,7 @@ export interface WorkspaceResult {
 export async function prepareWorkspace(input: {
 	cwd: string;
 	target: {
-		kind: "pr" | "diff-file" | "local-git";
+		kind: "pr" | "local-git";
 		prRef?: string;
 		/** Diff-side head SHA to verify the checkout against. */
 		expectedHeadSha?: string;
@@ -146,14 +112,14 @@ export async function prepareWorkspace(input: {
 	// fallback for anonymous/public setups). depth 50 keeps history-context
 	// usable without a full clone.
 	const url = `https://github.com/${parsed.owner}/${parsed.repo}.git`;
-	const ghClone = await _runCmd(
+	const ghClone = await runCmd(
 		"gh",
 		["repo", "clone", `${parsed.owner}/${parsed.repo}`, cloneDir, "--", "--depth", "50"],
 		{ cwd: root },
 	);
 	const clone = ghClone.exitCode === 0
 		? ghClone
-		: await _runCmd("git", ["clone", "--depth", "50", url, cloneDir], { cwd: root });
+		: await runCmd("git", ["clone", "--depth", "50", url, cloneDir], { cwd: root });
 	if (clone.exitCode !== 0) {
 		removeWorkspaceRoot(root);
 		throw new Error(
@@ -163,7 +129,7 @@ export async function prepareWorkspace(input: {
 
 	// Fetch the PR head into FETCH_HEAD and detach onto it (no named branch →
 	// nothing stale can survive between runs).
-	const headFetch = await _runCmd(
+	const headFetch = await runCmd(
 		"git",
 		["fetch", "origin", `pull/${parsed.number}/head`, "--quiet"],
 		{ cwd: cloneDir },
@@ -174,20 +140,20 @@ export async function prepareWorkspace(input: {
 			`pi-review: git fetch pull/${parsed.number}/head failed (${headFetch.stderr.trim().slice(0, 200)}) — aborting instead of reviewing a mismatched checkout.`,
 		);
 	}
-	const fetchHead = (await _runCmd("git", ["rev-parse", "FETCH_HEAD"], { cwd: cloneDir })).stdout.trim();
+	const fetchHead = (await runCmd("git", ["rev-parse", "FETCH_HEAD"], { cwd: cloneDir })).stdout.trim();
 	if (
 		target.expectedHeadSha &&
 		fetchHead &&
 		fetchHead !== target.expectedHeadSha
 	) {
 		// One refetch — a force-push may have raced the clone.
-		const retry = await _runCmd(
+		const retry = await runCmd(
 			"git",
 			["fetch", "origin", `pull/${parsed.number}/head`, "--quiet"],
 			{ cwd: cloneDir },
 		);
 		const retryHead = retry.exitCode === 0
-			? (await _runCmd("git", ["rev-parse", "FETCH_HEAD"], { cwd: cloneDir })).stdout.trim()
+			? (await runCmd("git", ["rev-parse", "FETCH_HEAD"], { cwd: cloneDir })).stdout.trim()
 			: "";
 		if (retryHead && retryHead !== target.expectedHeadSha) {
 			removeWorkspaceRoot(root);
@@ -196,7 +162,7 @@ export async function prepareWorkspace(input: {
 			);
 		}
 	}
-	const headCheckout = await _runCmd("git", ["checkout", "--detach", "FETCH_HEAD"], { cwd: cloneDir });
+	const headCheckout = await runCmd("git", ["checkout", "--detach", "FETCH_HEAD"], { cwd: cloneDir });
 	if (headCheckout.exitCode !== 0) {
 		removeWorkspaceRoot(root);
 		throw new Error(
@@ -209,31 +175,13 @@ export async function prepareWorkspace(input: {
 }
 
 async function safeHead(cwd: string): Promise<string | undefined> {
-	const r = await _runCmd("git", ["rev-parse", "HEAD"], { cwd });
+	const r = await runCmd("git", ["rev-parse", "HEAD"], { cwd });
 	if (r.exitCode !== 0) return undefined;
 	return r.stdout.trim() || undefined;
 }
 
 async function isGitRepo(cwd: string): Promise<boolean> {
-	const r = await _runCmd("git", ["rev-parse", "--git-dir"], { cwd });
+	const r = await runCmd("git", ["rev-parse", "--git-dir"], { cwd });
 	return r.exitCode === 0;
 }
 
-/** Optional: write a `.pi-review-meta.json` so reviewers can find the run dir. */
-export function writeWorkspaceMarker(workspacePath: string, payload: Record<string, unknown>): void {
-	const path = join(workspacePath, ".pi-review-meta.json");
-	try {
-		writeFileSync(path, JSON.stringify(payload, null, 2) + "\n", "utf-8");
-	} catch {
-		/* read-only fs, etc. */
-	}
-}
-
-/** Quiet helper to remove the marker when the workspace is torn down. */
-export function clearWorkspaceMarker(workspacePath: string): void {
-	try {
-		rmSync(join(workspacePath, ".pi-review-meta.json"), { force: true });
-	} catch {
-		/* ignore */
-	}
-}

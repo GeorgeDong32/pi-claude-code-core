@@ -174,7 +174,9 @@ export interface PiReviewConfig {
  * diff; the extension prepares the diff + target workspace, then reviewer
  * children read it.
  */
-export type ReviewTargetKind = "pr" | "diff-file" | "local-git";
+/** P3-1 S5: "diff-file" removed — unreachable since --diff became a
+ *  silently-skipped flag (old manifests keep reading fine). */
+export type ReviewTargetKind = "pr" | "local-git";
 
 export interface ReviewTarget {
 	kind: ReviewTargetKind;
@@ -184,8 +186,6 @@ export interface ReviewTarget {
 	userContext?: string;
 	/** Parsed PR URL or number when kind === "pr". */
 	prRef?: string;
-	/** Absolute path to an explicit `--diff` file when kind === "diff-file". */
-	diffPath?: string;
 	/** Hint for local-git: dirty working tree vs base...HEAD. */
 	hint?: string;
 	/** Optional short probe note for dry-run. */

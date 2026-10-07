@@ -79,7 +79,6 @@ export function registerReviewReportTool(pi: ExtensionAPI): void {
 			} catch {
 				// appendEntry is best-effort; the agent still has the markdown.
 			}
-			void ctx;
 			return {
 				content: [{ type: "text", text: buildReportReply(result) }],
 				details: { runId: result.runId, verdict: result.verdict, report: result.report },

@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { DEFAULT_CONFIG, loadConfig, resolveModel } from "./config.js";
+import { runCmd } from "./run-cmd.js";
 import { buildReviewDirective } from "./directive.js";
 import { resolveLeanBudgets } from "./lean-agents.js";
 import { extractPrRef } from "./pr-ref.js";
@@ -28,8 +29,6 @@ import {
 	parseChangedFilesFromDiff,
 	pruneStaleRuns,
 	readManifest,
-	resetRunCmd,
-	setRunCmd,
 	sha256Hex,
 	writeDiff,
 	writeManifest,
@@ -37,8 +36,6 @@ import {
 import {
 	prepareWorkspace,
 	removeWorkspaceRoot,
-	resetTargetWorkspaceCmd,
-	setTargetWorkspaceCmd,
 } from "./target-workspace.js";
 import type { ReviewTarget } from "./types.js";
 
@@ -78,6 +75,12 @@ export async function prepareRun(input: PrepareRunInput): Promise<PreparedRun | 
 	const runDir = ensureRunDir(cwd, runId);
 
 	const diffResult = await acquireDiff(cwd, target, runDir);
+	if (target.kind === "local-git") {
+		// S5: label derives from the ONE dirty sample inside acquireLocalDiff
+		target.label = diffResult.mode === "local-uncommitted"
+			? "uncommitted changes"
+			: `vs ${target.probeNote ?? "main"}`;
+	}
 	const changedFiles = parseChangedFilesFromDiff(diffResult.diff);
 	// Pass the diff's head SHA so the workspace checkout can verify it landed
 	// on the same commit (guards the force-push-between-calls TOCTOU window).
@@ -231,11 +234,10 @@ async function acquireDiff(
 	if (target.kind === "pr" && target.prRef) {
 		return acquirePrDiff(cwd, target.prRef, runDir);
 	}
-	if (target.kind === "diff-file" && target.diffPath) {
-		const text = safeRead(target.diffPath);
-		const path = writeDiff(runDir, text);
-		return { path, diff: text, mode: "local-uncommitted" };
-	}
+	// P3-1 S5: the diff-file kind is deleted — `--diff` has been a silently
+	// skipped flag since cli-args listed it as removed, so this branch was
+	// unreachable from any live entry point (old manifests still READ fine —
+	// only the construction path is gone).
 	return acquireLocalDiff(cwd, runDir);
 }
 
@@ -247,7 +249,7 @@ async function acquirePrDiff(
 	// Metadata first (base/head SHAs feed the manifest + workspace checkout
 	// reconciliation). A failed view is non-fatal — the diff below is the
 	// authority, not the metadata.
-	const gh = await _runCmd(
+	const gh = await runCmd(
 		"gh",
 		["pr", "view", prRef, "--json", "number,baseRefName,baseRefOid,headRefOid,headRepository,headRepositoryOwner"],
 		{ cwd },
@@ -274,7 +276,7 @@ async function acquirePrDiff(
 	// that (different merge-base, ref timing), which is exactly the
 	// "diff does not match GitHub" failure class — so we never substitute our
 	// own computation. On failure we stop and tell the user to fix gh.
-	const ghDiff = await _runCmd("gh", ["pr", "diff", prRef], { cwd });
+	const ghDiff = await runCmd("gh", ["pr", "diff", prRef], { cwd });
 	if (ghDiff.exitCode !== 0) {
 		throw new Error(
 			`pi-review: gh pr diff failed for ${prRef} (${ghDiff.stderr.trim().slice(0, 200)}). gh pr diff is the single diff authority (it matches the GitHub web UI exactly), so there is no local fallback — check gh auth/install and re-run. Details: ${ghDiff.stdout.trim().slice(0, 200)}`,
@@ -291,14 +293,14 @@ async function acquirePrDiff(
 }
 
 async function acquireLocalDiff(cwd: string, runDir: string): Promise<DiffAcquisitionResult> {
-	const status = await _runCmd("git", ["status", "--porcelain"], { cwd });
+	const status = await runCmd("git", ["status", "--porcelain"], { cwd });
 	if (status.stdout.trim().length > 0) {
 		// Mixed trees (modified + untracked files) must review BOTH parts —
 		// new files are exactly what needs eyes. Combine the tracked diff
 		// with synthesized new-file diffs instead of returning early on the
 		// first non-empty piece.
-		const tracked = (await _runCmd("git", ["diff", "HEAD"], { cwd })).stdout;
-		const untracked = (await _runCmd("git", ["ls-files", "--others", "--exclude-standard"], { cwd })).stdout;
+		const tracked = (await runCmd("git", ["diff", "HEAD"], { cwd })).stdout;
+		const untracked = (await runCmd("git", ["ls-files", "--others", "--exclude-standard"], { cwd })).stdout;
 		const untrackedParts: string[] = [];
 		for (const f of untracked.trim() ? untracked.trim().split("\n") : []) {
 			try {
@@ -330,22 +332,22 @@ async function acquireLocalDiff(cwd: string, runDir: string): Promise<DiffAcquis
 		const path = writeDiff(runDir, placeholder);
 		return { path, diff: placeholder, mode: "local-vs-default" };
 	}
-	const baseFetch = await _runCmd("git", ["fetch", "origin", base, "--quiet"], { cwd });
+	const baseFetch = await runCmd("git", ["fetch", "origin", base, "--quiet"], { cwd });
 	// A failed fetch with an existing remote-tracking ref silently diffs
 	// against a stale base — surface it instead (the local twin of the PR
 	// stale-ref incident; kept non-fatal because offline local review is a
 	// legitimate mode and the manifest records whichever base was used).
 	let diffWarning: string | undefined;
 	if (baseFetch.exitCode !== 0) {
-		const hasRemoteRef = (await _runCmd("git", ["rev-parse", "--verify", `refs/remotes/origin/${base}`], { cwd })).exitCode === 0;
+		const hasRemoteRef = (await runCmd("git", ["rev-parse", "--verify", `refs/remotes/origin/${base}`], { cwd })).exitCode === 0;
 		if (hasRemoteRef) {
 			diffWarning = `git fetch origin ${base} failed — diffing against possibly-stale origin/${base}`;
 		}
 	}
-	const compare = (await _runCmd("git", ["rev-parse", "--verify", `origin/${base}`], { cwd })).exitCode === 0
+	const compare = (await runCmd("git", ["rev-parse", "--verify", `origin/${base}`], { cwd })).exitCode === 0
 		? `origin/${base}`
 		: base;
-	const diff = await _runCmd("git", ["diff", `${compare}...HEAD`], { cwd });
+	const diff = await runCmd("git", ["diff", `${compare}...HEAD`], { cwd });
 	const text = diff.stdout.length > 0 ? diff.stdout : `(no diff vs ${compare})\n`;
 	const path = writeDiff(runDir, text);
 	return {
@@ -354,70 +356,32 @@ async function acquireLocalDiff(cwd: string, runDir: string): Promise<DiffAcquis
 		mode: "local-vs-default",
 		baseSha: await safeRev(cwd, compare),
 		headSha: await safeRev(cwd, "HEAD"),
-		mergeBase: (await _runCmd("git", ["merge-base", compare, "HEAD"], { cwd })).stdout.trim() || undefined,
+		mergeBase: (await runCmd("git", ["merge-base", compare, "HEAD"], { cwd })).stdout.trim() || undefined,
 		warning: diffWarning,
 	};
 }
 
 async function safeRev(cwd: string, ref: string): Promise<string | undefined> {
-	const r = await _runCmd("git", ["rev-parse", ref], { cwd });
+	const r = await runCmd("git", ["rev-parse", ref], { cwd });
 	if (r.exitCode !== 0) return undefined;
 	return r.stdout.trim() || undefined;
 }
 
 async function detectDefaultBranch(cwd: string): Promise<string | null> {
-	const sym = await _runCmd("git", ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], { cwd });
+	const sym = await runCmd("git", ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], { cwd });
 	if (sym.exitCode === 0) {
 		const v = sym.stdout.trim();
 		return v.startsWith("origin/") ? v.slice("origin/".length) : v;
 	}
 	for (const candidate of ["main", "master"]) {
-		const probe = await _runCmd("git", ["rev-parse", "--verify", `refs/heads/${candidate}`], { cwd });
+		const probe = await runCmd("git", ["rev-parse", "--verify", `refs/heads/${candidate}`], { cwd });
 		if (probe.exitCode === 0) return candidate;
 	}
-	const head = await _runCmd("git", ["symbolic-ref", "--short", "HEAD"], { cwd });
+	const head = await runCmd("git", ["symbolic-ref", "--short", "HEAD"], { cwd });
 	if (head.exitCode === 0) return head.stdout.trim();
 	return null;
 }
 
-interface CmdResult {
-	stdout: string;
-	stderr: string;
-	exitCode: number;
-}
-
-let _runCmd: (cmd: string, args: string[], opts: { cwd: string }) => Promise<CmdResult>;
-async function defaultRunCmd(
-	cmd: string,
-	args: string[],
-	opts: { cwd: string },
-): Promise<CmdResult> {
-	const { spawn } = await import("node:child_process");
-	return new Promise((resolve) => {
-		try {
-			const child = spawn(cmd, args, { cwd: opts.cwd, stdio: ["ignore", "pipe", "pipe"] });
-			let stdout = "";
-			let stderr = "";
-			child.stdout?.setEncoding("utf-8");
-			child.stderr?.setEncoding("utf-8");
-			child.stdout?.on("data", (d: string) => (stdout += d));
-			child.stderr?.on("data", (d: string) => (stderr += d));
-			child.on("error", () => resolve({ stdout, stderr, exitCode: 1 }));
-			child.on("close", (code) => resolve({ stdout, stderr, exitCode: code ?? 1 }));
-		} catch {
-			resolve({ stdout: "", stderr: "spawn failed", exitCode: 1 });
-		}
-	});
-}
-_runCmd = defaultRunCmd;
-
-/** Tests inject a fake. */
-export function setReviewRunCmd(fn: (cmd: string, args: string[], opts: { cwd: string }) => Promise<CmdResult>): void {
-	_runCmd = fn;
-}
-export function resetReviewRunCmd(): void {
-	_runCmd = defaultRunCmd;
-}
 
 /* ------------------------------------------------------------------ */
 /* Reviewer roster — adaptive routing based on target / change-kind.  */
@@ -544,25 +508,17 @@ async function resolveReviewTarget(
 			hint: `Obtain PR ${prRef} yourself via gh and/or git. The plugin already prepared the target repo + diff.`,
 		};
 	}
-	const git = await _runCmd("git", ["rev-parse", "--git-dir"], { cwd }).then((r) => r.exitCode === 0);
+	const git = await runCmd("git", ["rev-parse", "--git-dir"], { cwd }).then((r) => r.exitCode === 0);
 	if (!git) return null;
-	const status = await _runCmd("git", ["status", "--porcelain"], { cwd });
-	const dirty = status.stdout.trim().length > 0;
+	// P3-1 S5: NO git status here — the dirty verdict now comes from the ONE
+	// acquireLocalDiff sample on the final cwd (this resolve step may await
+	// workspace choices; reusing an early status would miss fresh user edits).
 	const base = await detectDefaultBranch(cwd);
-	const baseHint = base ?? "main";
-	if (dirty) {
-		return {
-			kind: "local-git",
-			label: "uncommitted changes",
-			userContext,
-			hint: "Working tree is dirty.",
-		};
-	}
 	return {
 		kind: "local-git",
-		label: `vs ${baseHint}`,
+		label: "", // filled after acquireDiff from the single sample
 		userContext,
-		hint: `Working tree is clean. Diff vs ${baseHint} is already prepared.`,
+		probeNote: base ?? "main",
 	};
 }
 
@@ -572,6 +528,3 @@ function prLabel(prRef: string): string {
 }
 
 // Re-exports for tests
-export { setRunCmd, resetRunCmd, setTargetWorkspaceCmd, resetTargetWorkspaceCmd };
-
-void DEFAULT_CONFIG;
