@@ -95,6 +95,7 @@ import {
 import { checkAutoRisk } from "./auto-risk.ts";
 import { classifyBashTiers, isAutoFallbackBash, isSafeCommand } from "./bash-analysis.ts";
 import { PermissionMode, PlanPhase, filterSkillsFromPrompt, injectModePrompt, resolveModePrompt } from "./mode-prompt.ts";
+import { planHardBlock } from "./plan-gate.ts";
 import { OutsideWriteSnapshot, listTrackedOutsideWrites, popTrackedOutsideWrite, restoreOutsideWrite, trackOutsideWrite } from "./outside-writes.ts";
 import { commandReferencesSensitivePath, findProjectRoot, isOutsideCwd, isSensitivePath } from "./path-safety.ts";
 import { TodoItem, ensurePlanFile, extractPlanSection, extractTodoItems, filterSubstantivePlanItems, getPlanFilePath, hashPlan, isPlanFilePath, markCompletedSteps, readPlanFile, resolveWorkspacePath, shouldSyncAssistantPlanToFile, writePlanFile } from "./plan.ts";
@@ -1520,45 +1521,25 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     // PLAN EXECUTION: use auto-mode tiered gate (classifier + blacklist).
     // planExecuting only affects prompt injection and UI; it does not bypass auto.
 
-    // PLAN: read-only except plan.md; bash allowlist only.
+    // PLAN: read-only except plan.md; bash allowlist only. The hard limits
+    // live in plan-gate.ts (SPEC 2026-10-07 P0-1 §4.1); the adapter collects
+    // the facts (path probe / family match / env) and passes them in.
     if (currentMode === "plan") {
+      const hard = planHardBlock(tool, input, {
+        planFilePath,
+        isPlanFile: isPlanFilePath(String(input.path ?? ""), ctx.cwd),
+        mcpShaped: isMcpShapedCall(tool, input, knownServersSetFromEnv()),
+        familyClaimed: matchFamily(tool, input) !== null,
+        fusionSchemaHint: fusionSchemaHint(tool),
+      });
+      if (hard) return hard;
       if (PLAN_READ_TOOLS.has(tool)) {
         return undefined;
       }
-      // META-01 (SPEC 0.99 adaptation): meta tools + declared MCP tools.
+      // META-01 (SPEC 0.99 adaptation): retrieval only — loads declarations,
+      // executes nothing.
       if (tool === "tool_search") {
-        return undefined; // retrieval only: loads declarations, executes nothing
-      }
-      if (tool === "codemode") {
-        return {
-          block: true,
-          reason: "Plan mode: codemode is not available (it can execute other tools).",
-        };
-      }
-      if (isMcpShapedCall(tool, input, knownServersSetFromEnv())) {
-        return {
-          block: true,
-          reason: `Plan mode: MCP tool ${tool} is not available (plan is read-only).`,
-        };
-      }
-      if (tool === "edit" || tool === "write") {
-        const pathStr = String(input.path ?? "");
-        if (pathStr && isPlanFilePath(pathStr, ctx.cwd)) {
-          return undefined;
-        }
-        return {
-          block: true,
-          reason: `Plan mode: only ${shortenPath(planFilePath)} may be edited.`,
-        };
-      }
-      if (tool === "bash" || tool === "powershell") {
-        const cmd = String(input.command ?? "");
-        if (!isSafeCommand(cmd)) {
-          return {
-            block: true,
-            reason: `Plan mode: read-only commands only.\n  Command: ${cmd}`,
-          };
-        }
+        return undefined;
       }
       return undefined;
     }

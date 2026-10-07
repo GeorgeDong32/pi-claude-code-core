@@ -26,9 +26,10 @@ import permissionModesExtension from "./index.ts"
 import { coreBus } from "../../extensions/bus.ts";
 import { setConfigPath } from "./config.ts"
 import { writeProjectPermissionsFile } from "./permissions-loader.ts"
+import { getProjectId } from "./path-safety.ts"
 import { setModelsPath } from "./profiles.ts"
 import { OutsideWriteSnapshot, listTrackedOutsideWrites } from "./outside-writes.ts"
-import { writePlanFile } from "./plan.ts"
+import { getPlanFilePath, writePlanFile } from "./plan.ts"
 import {
 	listPendingRequests,
 	setAgentDirForTests,
@@ -2889,5 +2890,214 @@ describe("AR1005-ST working-stats cache (wiring)", () => {
 		csm.setLeaf("t1") // the committed entry moved the leaf
 		await stFire(pi, "turn_end", ctx)
 		expect(csm.branchCalls()).toBe(b0 + 1) // exactly ONE forced committed read
+	})
+})
+
+// ---- SPEC 2026-10-07 P0-1: plan-mode permission precedence ------------------
+// D1 (ask honored in plan) / D2a (allow does not unlock writes) / D2b (family-
+// governed MCP stays usable) + FUS-SHAPE (real then_run object form).
+describe("plan precedence: rules vs hard limits (SPEC P0-1)", () => {
+	let pi: FakePi
+	let realProjectRoot: string
+	let configTmp: string
+
+	beforeEach(async () => {
+		pi = createFakePi()
+		configTmp = mkdtempSync(join(tmpdir(), "pm-p01-cfg-"))
+		setConfigPath(join(configTmp, "permission-modes.json"))
+		writeFileSync(
+			join(configTmp, "permission-modes.json"),
+			JSON.stringify({ classifier: { enabled: false } }),
+		)
+		realProjectRoot = process.cwd()
+		// project-scope rules leak across describes in this file (and across
+		// runs): drop them so this suite starts from a clean rule state
+		const permsDir = join(realProjectRoot, ".pi", "projects")
+		for (const f of ["permissions.json", "permissions.local.json"]) {
+			rmSync(join(permsDir, getProjectId(realProjectRoot), f), { force: true })
+		}
+		permissionModesExtension(makeFakePiForExtension(pi))
+	})
+
+	afterEach(() => {
+		const permsDir = join(realProjectRoot, ".pi", "projects")
+		for (const f of ["permissions.json", "permissions.local.json"]) {
+			rmSync(join(permsDir, getProjectId(realProjectRoot), f), { force: true })
+		}
+	})
+
+	async function callToolCall(
+		toolName: string,
+		input: Record<string, unknown>,
+		ui?: FakeCtxOptions["ui"],
+	) {
+		const ctx = makeCtx(pi, { cwd: realProjectRoot, ui })
+		return pi.simulateToolCall(toolName, input, ctx)
+	}
+
+	async function switchModeWithRules(mode: string, perms: { allow?: string[]; ask?: string[]; deny?: string[] }) {
+		writeProjectPermissionsFile(realProjectRoot, perms)
+		pi.flags["permission-mode"] = mode
+		await pi.simulateSessionStart(realProjectRoot)
+	}
+
+	it("T1: plan + ask Read rule — user Block blocks, Allow passes (D1)", async () => {
+		let selectCalls = 0
+		await switchModeWithRules("plan", { ask: ["Read(./.env)"] })
+		let choice = "Block"
+		const blocked = await callToolCall("read", { path: "./.env" }, {
+			select: async () => {
+				selectCalls++
+				return choice
+			},
+		})
+		expect(blocked).toMatchObject({ block: true })
+		expect(String((blocked as { reason?: string }).reason)).toContain("blocked by user")
+		choice = "Allow"
+		const allowed = await callToolCall("read", { path: "./.env" }, {
+			select: async () => {
+				selectCalls++
+				return choice
+			},
+		})
+		expect(allowed).toBeUndefined()
+		expect(selectCalls).toBe(2)
+	})
+
+	it("T2: plan + ask rule + no UI (non-subagent) → block", async () => {
+		await switchModeWithRules("plan", { ask: ["Read(./.env)"] })
+		const result = await callToolCall("read", { path: "./.env" })
+		expect(result).toMatchObject({ block: true })
+		expect(String((result as { reason?: string }).reason)).toContain("needs approval")
+	})
+
+	it("T3: plan + allow Edit rule does not unlock writes (D2a)", async () => {
+		let selectCalls = 0
+		await switchModeWithRules("plan", { allow: ["Edit(src/**)"] })
+		const result = await callToolCall("edit", { path: "src/a.ts", content: "x" }, {
+			select: async () => {
+				selectCalls++
+				return "Allow"
+			},
+		})
+		expect(result).toMatchObject({ block: true })
+		expect(String((result as { reason?: string }).reason)).toContain("Plan mode")
+		expect(selectCalls).toBe(0)
+	})
+
+	it("T4: plan + allow Bash rule does not unlock mutating commands (D2a)", async () => {
+		await switchModeWithRules("plan", { allow: ["Bash(npm run build:*)"] })
+		const result = await callToolCall("bash", { command: "npm run build" })
+		expect(result).toMatchObject({ block: true })
+		expect(String((result as { reason?: string }).reason)).toContain("Plan mode: read-only commands only")
+	})
+
+	it("T5: plan + ask Edit rule → hard block without prompting (D2a)", async () => {
+		let selectCalls = 0
+		await switchModeWithRules("plan", { ask: ["Edit(src/**)"] })
+		const result = await callToolCall("edit", { path: "src/a.ts", content: "x" }, {
+			select: async () => {
+				selectCalls++
+				return "Allow"
+			},
+		})
+		expect(result).toMatchObject({ block: true })
+		expect(String((result as { reason?: string }).reason)).toContain("Plan mode")
+		expect(selectCalls).toBe(0)
+	})
+
+	it("T6: plan-file edit with then_run object + allow Edit(**) → blocked by embedded command", async () => {
+		writePlanFile(realProjectRoot, "# plan")
+		const planPath = getPlanFilePath(realProjectRoot)
+		await switchModeWithRules("plan", { allow: ["Edit(**)"] })
+		const result = await callToolCall("edit", {
+			path: planPath,
+			content: "x",
+			then_run: { command: "npm install x" },
+		})
+		expect(result).toMatchObject({ block: true })
+		expect(String((result as { reason?: string }).reason)).toContain("Plan mode: read-only commands only")
+	})
+
+	it("T11: plan + deny Read rule still denies first (deny beats plan passthrough)", async () => {
+		await switchModeWithRules("plan", { deny: ["Read(./secret)"] })
+		const result = await callToolCall("read", { path: "./secret" })
+		expect(result).toMatchObject({ block: true })
+		expect(String((result as { reason?: string }).reason)).toContain("Denied by permission rule")
+	})
+
+	it("T10: plan-file edit + ask rule → prompt, Allow passes (plan file is plan-legal)", async () => {
+		writePlanFile(realProjectRoot, "# plan")
+		const planPath = getPlanFilePath(realProjectRoot)
+		let selectCalls = 0
+		await switchModeWithRules("plan", { ask: ["Edit(**)"] })
+		const result = await callToolCall("edit", { path: planPath, content: "x" }, {
+			select: async () => {
+				selectCalls++
+				return "Allow"
+			},
+		})
+		expect(result).toBeUndefined()
+		expect(selectCalls).toBe(1)
+	})
+
+	it("T13a: plan-file edit with SAFE then_run object command passes (allow rule present)", async () => {
+		writePlanFile(realProjectRoot, "# plan")
+		const planPath = getPlanFilePath(realProjectRoot)
+		await switchModeWithRules("plan", { allow: ["Edit(**)"] })
+		const result = await callToolCall("edit", {
+			path: planPath,
+			content: "x",
+			then_run: { command: "ls -la" },
+		})
+		expect(result).toBeUndefined()
+	})
+
+	it("T13c: plan-file edit with unsafe then_run object, NO rules → blocked by embedded scan (FUS-SHAPE isolation)", async () => {
+		writePlanFile(realProjectRoot, "# plan")
+		const planPath = getPlanFilePath(realProjectRoot)
+		pi.flags["permission-mode"] = "plan"
+		await pi.simulateSessionStart(realProjectRoot)
+		const result = await callToolCall("edit", {
+			path: planPath,
+			content: "x",
+			then_run: { command: "npm install x" },
+		})
+		expect(result).toMatchObject({ block: true })
+		expect(String((result as { reason?: string }).reason)).toContain("Plan mode: read-only commands only")
+	})
+
+	it("T13b: then_run string/array forms unchanged; non-then_run nested objects not scanned", async () => {
+		writePlanFile(realProjectRoot, "# plan")
+		const planPath = getPlanFilePath(realProjectRoot)
+		await switchModeWithRules("plan", { allow: ["Edit(**)"] })
+		// old string form still scans
+		const strBlocked = await callToolCall("edit", {
+			path: planPath,
+			content: "x",
+			then_run: "rm -rf /tmp/x",
+		})
+		expect(strBlocked).toMatchObject({ block: true })
+		// array form still scans
+		const arrBlocked = await callToolCall("edit", {
+			path: planPath,
+			content: "x",
+			then_run: ["npm install x"],
+		})
+		expect(arrBlocked).toMatchObject({ block: true })
+		// nested objects under OTHER keys are not commands
+		const untouched = await callToolCall("edit", {
+			path: planPath,
+			content: "x",
+			metadata: { command: "rm -rf /" },
+		})
+		expect(untouched).toBeUndefined()
+		// non-string then_run command field is ignored
+		const nonString = await callToolCall("edit", {
+			path: planPath,
+			content: "x",
+			then_run: { command: 42 },
+		})
+		expect(nonString).toBeUndefined()
 	})
 })
