@@ -4,7 +4,7 @@
  * injected, the queue protocol is the real one on a real temp dir.
  */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -134,6 +134,28 @@ describe("drainQueue direct (D-T1)", () => {
 		}));
 		expect(result.summaries).toHaveLength(0);
 		expect(called).toBe(0);
+	});
+});
+
+describe("reclaim path through drainQueue (review P2 regression)", () => {
+	it("a dead claim recovered BY drainQueue itself never nests suffixes; release lands on a clean pending name", async () => {
+		stage("rcv");
+		// forge a dead-owner claim past the TTL (pid 999999 does not exist →
+		// the default signal probe says dead)
+		const ready = readdirSync(queueDir(agentDir)).find((f) => f.endsWith(".json"))!;
+		const nonce = "deadbeef-0000-4000-8000-000000000000";
+		const foreignName = `${ready}.claim.999999.${Date.now() - 11 * 60_000}.${nonce}`;
+		require("node:fs").renameSync(join(queueDir(agentDir), ready), join(queueDir(agentDir), foreignName));
+		// drain through the real orchestration: the internal recovery hands the
+		// reclaimed token DIRECTLY into validation (no re-claim → no nesting)
+		const result = await drainQueue(cap(), ports({ complete: async () => ({ ok: false as const, reason: "provider_error" }) as never }));
+		expect(result.summaries).toHaveLength(1);
+		const files = recordFiles();
+		expect(files).toHaveLength(1);
+		expect(files[0]).toMatch(/^rcv-\d+\.json\.pending\.[0-9a-f-]{36}$/); // NO nested .claim. inside
+		// and the record content survived with its attempts bumped
+		const rec = JSON.parse(readFileSync(join(queueDir(agentDir), files[0]!), "utf-8")) as { attempts: number };
+		expect(rec.attempts).toBe(1);
 	});
 });
 

@@ -250,7 +250,9 @@ export function claimRecord(agentDir: string, candidate: { file: string }): Queu
 
 /** Dir-based claim core (shared by the public API and the GC). */
 function claimFile(dir: string, file: string): QueueClaim | null {
-	const original = PENDING_RE.exec(file)?.[1] ?? file;
+	// original = the READY basename; strip a pending OR claim suffix (a
+	// re-claim of an already-claimed file must not nest suffixes — P0-3 §3)
+	const original = PENDING_RE.exec(file)?.[1] ?? CLAIM_RE.exec(file)?.[1] ?? file;
 	const current = `${original}.claim.${process.pid}.${Date.now()}.${randomUUID()}`;
 	if (!tryRename(dir, file, current)) return null;
 	const record = readRecord(dir, current);

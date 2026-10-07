@@ -178,13 +178,16 @@ export async function drainQueue(cap: DrainCap, ports: QueueDrainPorts): Promise
 	let processed = 0;
 	const eligible: QueueClaim[] = [];
 	const drops: string[] = [];
-	// P0-3 §4.3: dead-claim recovery first — recovered claims are OURS and
-	// enter the same validation as fresh claims.
+	// P0-3 §4.3: dead-claim recovery first. Recovered claims are ALREADY
+	// ours (the reclaim rename took ownership) — they go straight into
+	// validation; re-claiming them would nest suffixes (§3 name grammar).
 	const recovered = reclaimStaleClaims(cap.d.agentDir, Date.now());
-	const candidates = [...loadQueue(cap.d.agentDir).map((c) => c.file), ...recovered.map((r) => r.current)];
-	for (const file of candidates) {
+	const candidates = loadQueue(cap.d.agentDir).map((c) => c.file);
+	for (const claim of [
+		...candidates.map((file) => claimRecord(cap.d.agentDir, { file })),
+		...recovered,
+	]) {
 		if (processed >= QUEUE_DRAIN_MAX) break;
-		const claim = claimRecord(cap.d.agentDir, { file });
 		if (!claim) continue; // held by another worker / vanished — skip
 		const verdict = validateClaimed(cap, claim, ports);
 		if (verdict.skip) {

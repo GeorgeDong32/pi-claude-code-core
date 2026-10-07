@@ -48,14 +48,6 @@ export interface PlanGateBlock {
 	reason: string;
 }
 
-const BUILTIN_LIMIT_TOOLS = new Set([
-	"codemode",
-	"edit",
-	"write",
-	"bash",
-	"powershell",
-]);
-
 /**
  * The plan hard limits (P0-1 §4.1 step 2). Returns the block when the call
  * violates plan's read-only invariant, undefined when it may proceed to
@@ -113,9 +105,4 @@ export function planHardBlock(
 		};
 	}
 	return undefined;
-}
-
-/** The built-in tool names whose plan hard limits family claims cannot exempt. */
-export function isPlanBuiltinLimitTool(tool: string): boolean {
-	return BUILTIN_LIMIT_TOOLS.has(tool);
 }

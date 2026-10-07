@@ -121,7 +121,7 @@ describe("project identity split (W-T5)", () => {
 });
 
 describe("invalidateMemDirCache source discipline (W-T6)", () => {
-	it("direct invalidateMemDirCache( calls appear only in writer, memdir and test helpers", () => {
+	it("direct invalidateMemDirCache( calls appear only in writer and memdir", () => {
 		const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
 		const out = execFileSync("grep", [
 			"-rn", "invalidateMemDirCache(",
@@ -131,11 +131,12 @@ describe("invalidateMemDirCache source discipline (W-T6)", () => {
 			.split("\n")
 			.filter(Boolean)
 			.filter((line) => {
-				const file = line.split(":")[0]!;
-				return file !== "extensions/memory/writer.ts" && file !== "extensions/memory/memdir.ts";
+				const [file, , text] = line.split(":");
+				if (file === "extensions/memory/writer.ts" || file === "extensions/memory/memdir.ts") return false;
+				// comment-only mention: the call sits inside a comment
+				const before = text.slice(0, text.indexOf("invalidateMemDirCache("));
+				return !before.includes("//");
 			});
-		// comment-only mentions carry a `//` before the call — filter those
-		const realOffenders = offenders.filter((line) => !/\binvalidateMemDirCache\(.*\b\/\/|\/\/.*invalidateMemDirCache\(/.test(line.split("invalidateMemDirCache(")[0]!) || /;\s*$/.test(line) && !line.includes("//"));
-		expect(realOffenders).toEqual([]);
+		expect(offenders).toEqual([]);
 	});
 });
