@@ -53,6 +53,7 @@ import { completeMemoryOps, resolveModelRef, type LlmComplete, type OpsCompletio
 import { applyMemoryOps, type MemoryOp } from "./store.ts";
 import type { ConsolidationTrigger } from "./consolidate.ts";
 import { scanMemoryDirCached } from "./memdir.ts";
+import { friendlyProjectHint } from "./paths.ts";
 import { bumpClaimedAttempts, claimRecord, clampQueueParts, loadQueue, QUEUE_MAX_AGE_MS, QUEUE_V, reclaimStaleClaims, releaseClaim, settleClaim, writeQueueRecord, type QueueClaim } from "./queue.ts";
 import { readJson } from "../../lib/settings.ts";
 import { readBranchEntries, readSessionId } from "../modes/session-branch.ts";
@@ -185,8 +186,9 @@ Respond with JSON only, no markdown fences: a single object whose operations fie
  * Heuristic tail-segment — good enough to anchor write-side routing and
  * prompt guidance; worktree dirs surface the worktree name (acceptable). */
 export function projectKeyForDir(projectDir: string): string | undefined {
-	const base = projectDir.replace(/\/memory$/, "").split("/").pop() ?? "";
-	const key = base.replace(/^-+/, "").split("-").pop() ?? "";
+	// W4: the tail-segment derivation lives in paths.ts (friendlyProjectHint);
+	// the ≥3 threshold is this caller's own policy
+	const key = friendlyProjectHint(projectDir);
 	return key.length >= 3 ? key : undefined;
 }
 

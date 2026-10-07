@@ -20,6 +20,27 @@ export function sanitizePath(p: string): string {
 	return p.replace(/[/\\]/g, "-");
 }
 
+// ─── project identity (SPEC 2026-10-07 P2-3 W4) ───
+// TWO deliberately different derivations — never merge them into one return
+// value: the FULL sanitized key is the routing/matching authority (Hermes
+// project64 matching, queue projectsDir comparisons), the FRIENDLY HINT is
+// the display/anchoring tail segment. Truncating the full key to the hint
+// would break Hermes matching and cross-project routing.
+
+/** The FULL sanitized project key from a projects-dir or memory-dir path
+ *  (…/projects/<key>/memory → <key>). Length thresholds stay with callers. */
+export function fullProjectKey(dir: string): string {
+	const parts = dir.replace(/\\/g, "/").replace(/\/memory$/, "").split("/");
+	return parts[parts.length - 1] ?? "";
+}
+
+/** The friendly display hint: the FINAL dash-segment of the project dir
+ *  (leading dashes stripped). Callers apply their own ≥3/≥4 thresholds. */
+export function friendlyProjectHint(projectDir: string): string {
+	const base = projectDir.replace(/\/memory$/, "").split("/").pop() ?? "";
+	return base.replace(/^-+/, "").split("-").pop() ?? "";
+}
+
 /** git rev-parse --git-common-directory; null outside a work tree.
  * Result is memoized per cwd — the canonical root of a working directory
  * effectively never changes mid-process, and the sync subprocess ran on

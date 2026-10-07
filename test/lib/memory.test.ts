@@ -12,7 +12,8 @@ import { join } from "node:path";
 import { FakeHost, clearCoreGlobals, snapshotCoreGlobals } from "../contracts/fake-host.ts";
 import { resetCoreBusForTests } from "../../extensions/bus.ts";
 import memoryExtension from "../../extensions/memory/index.ts";
-import { scanMemoryDir, reconcileMemoryIndex } from "../../extensions/memory/memdir.ts";
+import { scanMemoryDir } from "../../extensions/memory/memdir.ts";
+import { reindex } from "../../extensions/memory/writer.ts";
 import {
 	MAX_BYTES_PER_FILE,
 	MAX_FILES_PER_QUERY,
@@ -83,7 +84,7 @@ describe("P3-ME-02 index reconciler", () => {
 		expect(entries.length).toBe(3);
 		expect(skipped).toBe(1);
 
-		reconcileMemoryIndex(memoryDir());
+		reindex(memoryDir());
 		const index = readFileSync(join(memoryDir(), "MEMORY.md"), "utf-8");
 		const rows = index.split("\n").filter((l) => l.startsWith("- ["));
 		expect(rows.length).toBe(3);
@@ -98,7 +99,7 @@ describe("P3-ME-02 index reconciler", () => {
 				`---\nname: mem-${i}\ndescription: d${i}\nmetadata:\n  type: project\n---\n\nbody`,
 			);
 		}
-		reconcileMemoryIndex(dir);
+		reindex(dir);
 		const index = readFileSync(join(dir, "MEMORY.md"), "utf-8");
 		const rows = index.split("\n").filter((l) => l.startsWith("- ["));
 		expect(rows.length).toBeLessThanOrEqual(200);
@@ -516,14 +517,14 @@ describe("review-2026-09-22-II fixes", () => {
 		mkdirSync(dirB, { recursive: true });
 		writeFileSync(join(dirA, "a.md"), "---\nname: alpha\ndescription: a\nmetadata:\n  type: project\n---\n\nalpha body");
 		writeFileSync(join(dirB, "b.md"), "---\nname: beta\ndescription: b\nmetadata:\n  type: project\n---\n\nbeta body");
-		const first = reconcileMemoryIndex(dirA);
+		const first = reindex(dirA);
 		expect(first.entries.map((e) => e.title)).toEqual(["alpha"]);
 		// same-process second dir must NOT receive A's cached entries
-		const second = reconcileMemoryIndex(dirB);
+		const second = reindex(dirB);
 		expect(second.entries.map((e) => e.title)).toEqual(["beta"]);
 		// deleting a file (no mtime bump anywhere) must drop the dead row
 		rmSync(join(dirA, "a.md"));
-		const third = reconcileMemoryIndex(dirA);
+		const third = reindex(dirA);
 		expect(third.entries.map((e) => e.title)).toEqual([]);
 	});
 

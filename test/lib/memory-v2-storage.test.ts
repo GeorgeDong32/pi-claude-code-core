@@ -12,7 +12,8 @@ import { join } from "node:path";
 import { FakeHost, clearCoreGlobals, snapshotCoreGlobals } from "../contracts/fake-host.ts";
 import { resetCoreBusForTests } from "../../extensions/bus.ts";
 import memoryExtension from "../../extensions/memory/index.ts";
-import { invalidateMemDirCache, parseMemoryFrontmatter, scanMemoryDir, reconcileMemoryIndex } from "../../extensions/memory/memdir.ts";
+import { invalidateMemDirCache, parseMemoryFrontmatter, scanMemoryDir } from "../../extensions/memory/memdir.ts";
+import { reindex } from "../../extensions/memory/writer.ts";
 import { resolveMemoryPaths, isMemoryWritePath } from "../../extensions/memory/paths.ts";
 import { freshnessHeader } from "../../extensions/memory/recall.ts";
 import type { Selector, SelectorOutcome } from "../../extensions/memory/selector.ts";
@@ -260,7 +261,7 @@ describe("V2 data-safety (Phase 0 D2/D3)", () => {
 		const { entries, skipped } = scanMemoryDir(dir);
 		expect(entries.map((e) => e.file)).toEqual(["real.md"]);
 		expect(skipped).toBe(0); // invisible, not even counted as invalid
-		reconcileMemoryIndex(dir);
+		reindex(dir);
 		const index = readFileSync(join(dir, "MEMORY.md"), "utf-8");
 		expect(index).not.toContain("zombie");
 		expect(layerStats(dir).files).toBe(1);

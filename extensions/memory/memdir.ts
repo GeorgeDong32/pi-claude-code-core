@@ -12,7 +12,6 @@
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { MEMORY_INDEX_MAX } from "../../lib/context-budget.ts";
 import { globMatches } from "../../lib/glob.ts";
 import { homedir } from "node:os";
 
@@ -26,12 +25,6 @@ export interface MemoryEntry {
 	/** RV-14: user-layer scoping globs (inline list or comma-separated,
 	 * `~` expanded at match time). Absent = global (visible everywhere). */
 	paths?: string[];
-}
-
-export interface ReconcileResult {
-	entries: MemoryEntry[];
-	skipped: number;
-	rewrote: boolean;
 }
 
 const VALID_TYPES = new Set(["user", "feedback", "project", "reference"]);
@@ -142,12 +135,6 @@ export function scanMemoryDir(memoryDir: string): { entries: MemoryEntry[]; skip
 	return { entries, skipped };
 }
 
-export const INDEX_MAX_LINES = 200;
-// B2: derived from the single budget authority (lib/context-budget.ts) —
-// the bus contextBudget channel publishes the same number, so a bump can
-// never silently diverge from the actual clamp.
-export const INDEX_MAX_BYTES = MEMORY_INDEX_MAX;
-
 /** A memory file with its content — what per-turn injection consumes. */
 export interface MemoryFile {
 	entry: MemoryEntry;
@@ -229,80 +216,9 @@ export function scanMemoryDirCached(memoryDir: string): { files: MemoryFile[]; s
 	return { files, skipped };
 }
 
-/** Build the MEMORY.md body from entries (single-line rows). */
-export function buildIndexBody(entries: MemoryEntry[]): string {
-	return entries
-		.slice(0, INDEX_MAX_LINES)
-		.map((e) => `- [${e.title}](${e.file}) — ${e.description}`)
-		.join("\n");
-}
-
-/** Reconcile MEMORY.md. mtime short-circuit BEFORE any content read
- * (review #18): stat the index and the .md files first; only when the
- * index is stale (or the previous scan had skips) do we read contents.
- * The cache is keyed by memoryDir and validated against the file-name
- * list, so deletions/renames (which don't bump any mtime) still
- * invalidate it — no permanently dead index rows. */
-interface DirCache {
-	skip: number;
-	entries: MemoryEntry[] | null;
-	namesKey: string;
-}
-const dirCache = new Map<string, DirCache>();
-
-export function reconcileMemoryIndex(memoryDir: string): ReconcileResult {
-	// cheap pass: names + mtimes only
-	let indexMtime = -1;
-	try {
-		indexMtime = statSync(join(memoryDir, "MEMORY.md")).mtimeMs;
-	} catch {
-		/* missing index → rewrite */
-	}
-	let newestMd = -1;
-	const names: string[] = [];
-	try {
-		for (const f of readdirSync(memoryDir)) {
-			if (!isMemoryFile(f)) continue;
-			names.push(f);
-			try {
-				newestMd = Math.max(newestMd, statSync(join(memoryDir, f)).mtimeMs);
-			} catch {
-				/* ignore */
-			}
-		}
-	} catch {
-		return { entries: [], skipped: 0, rewrote: false };
-	}
-	const namesKey = names.sort().join("\n");
-	const cached = dirCache.get(memoryDir);
-	if (
-		indexMtime >= 0 && newestMd <= indexMtime &&
-		cached && cached.skip === 0 && cached.entries !== null && cached.namesKey === namesKey
-	) {
-		// hot path: zero file-content reads — reuse the cached entry list
-		return { entries: cached.entries, skipped: 0, rewrote: false };
-	}
-
-	const { entries, skipped } = scanMemoryDir(memoryDir);
-	dirCache.set(memoryDir, { skip: skipped, entries, namesKey });
-
-	// byte-cap: drop tail rows until it fits, then append WARNING
-	let body = buildIndexBody(entries);
-	if (entries.length > INDEX_MAX_LINES || Buffer.byteLength(body, "utf-8") > INDEX_MAX_BYTES) {
-		while (Buffer.byteLength(body, "utf-8") > INDEX_MAX_BYTES && body.includes("\n")) {
-			body = body.slice(0, body.lastIndexOf("\n"));
-		}
-		body += `\n\n<!-- WARNING: memory index exceeded ${INDEX_MAX_LINES} lines / ${INDEX_MAX_BYTES} bytes and was truncated; prune or split memory files -->`;
-	}
-	if (entries.length > 0 || skipped === 0) {
-		try {
-			writeFileSync(join(memoryDir, "MEMORY.md"), `${body}\n`, "utf-8");
-		} catch {
-			return { entries, skipped, rewrote: false };
-		}
-	}
-	return { entries, skipped, rewrote: true };
-}
+// buildIndexBody / reconcileMemoryIndex / DirCache moved to writer.ts
+// (SPEC 2026-10-07 P2-3 W1/W2: index WRITE orchestration lives with the
+// write engine; scanning/parsing stay here).
 
 /** Canonical recall-block key for a memory file (RV; the whereKey successor
  * from the deleted recall-session.ts — one home, next to the storage

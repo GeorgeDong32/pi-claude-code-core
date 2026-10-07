@@ -47,7 +47,9 @@ import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { coreBus } from "../bus.ts";
-import { eligibleMemories, reconcileMemoryIndex, scanMemoryDir, scanMemoryDirCached } from "./memdir.ts";
+import { eligibleMemories, scanMemoryDir, scanMemoryDirCached } from "./memdir.ts";
+import { reindex } from "./writer.ts";
+import { friendlyProjectHint } from "./paths.ts";
 import { resolveMemoryPaths, sessionsDirFor, gitCanonicalRoot } from "./paths.ts";
 import { scopeMatches } from "./memdir.ts";
 import { buildPolicyInjection, policyCompact } from "./policy.ts";
@@ -170,9 +172,11 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 		try {
 			const projectsRoot = join(process.env.HOME ?? home, ".pi", "agent", "projects");
 			if (!existsSync(projectsRoot)) return [];
+			// W4: the tail-segment derivation is paths.friendlyProjectHint;
+			// the ≥4 threshold is this caller's own policy
 			const keys = new Set(
 				readdirSync(projectsRoot)
-					.map((d) => (d.replace(/^-+/, "").split("-").pop() ?? ""))
+					.map((d) => friendlyProjectHint(d))
 					.filter((k) => k.length >= 4),
 			);
 			const out: Array<{ file: string; key: string }> = [];
@@ -242,8 +246,8 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 					/* unwritable parent — the probe below degrades correctly */
 				}
 			}
-			reconcileMemoryIndex(memoryDir(ctx));
-			reconcileMemoryIndex(userMemoryDir(ctx)); // V2-D1 user layer
+			reindex(memoryDir(ctx));
+			reindex(userMemoryDir(ctx)); // V2-D1 user layer
 			// writability probe: a failed write degrades to policy-only
 			try {
 				// existence is not writability (review #17): probe the access mode

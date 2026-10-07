@@ -3,10 +3,12 @@
  * (P3-ME-08). Both are idempotent: re-running produces zero duplicates.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-import { invalidateMemDirCache, reconcileMemoryIndex, slugify } from "./memdir.ts";
+import { slugify } from "./memdir.ts";
+import { reindex, writeDocument } from "./writer.ts";
+import { fullProjectKey } from "./paths.ts";
 
 export interface ImportReport {
 	copied: number;
@@ -48,11 +50,10 @@ export function importFromClaude(projectMemoryDir: string, targetDir: string): I
 			report.skipped++;
 			continue;
 		}
-		writeFileSync(target, content, "utf-8");
-		invalidateMemDirCache(targetDir); // C7: direct write bypassed atomicWriteFile
+		writeDocument(targetDir, file, { kind: "raw", text: content }); // W1: atomic + cache-invalidated
 		report.copied++;
 	}
-	reconcileMemoryIndex(targetDir); // rebuild index from files, never from source MEMORY.md
+	reindex(targetDir); // rebuild index from files, never from source MEMORY.md
 	return report;
 }
 
@@ -84,7 +85,7 @@ export function importFromHermes(hermesFile: string, targetDir: string): ImportR
 			report.skipped++;
 		}
 	}
-	reconcileMemoryIndex(targetDir);
+	reindex(targetDir);
 	return report;
 }
 
@@ -187,10 +188,11 @@ function importSection(
 		const fileName = `${fileNamePrefix}${candidate}.md`;
 		const target = join(targetDir, fileName);
 		if (!existsSync(target)) {
-			mkdirSync(targetDir, { recursive: true });
-			const frontmatter = `---\nname: ${candidate}\ndescription: ${description}\nmetadata:\n  type: ${type}\n---\n\n${section.body}${created}\n`;
-			writeFileSync(target, frontmatter, "utf-8");
-			invalidateMemDirCache(targetDir); // C7: direct write bypassed atomicWriteFile
+			writeDocument(targetDir, fileName, {
+				kind: "memory",
+				body: `${section.body}${created ?? ""}`,
+				meta: { name: candidate, description, type },
+			});
 			return "copied";
 		}
 		if (readFileSync(target, "utf-8").includes(section.body)) return "skipped"; // same fact — idempotent
@@ -208,10 +210,11 @@ export function decodeProject64(b64: string): string | null {
 	}
 }
 
-/** The core project key for a memory dir (.../projects/<key>/memory). */
+/** The core project key for a memory dir (.../projects/<key>/memory).
+ * W4: delegates to paths.fullProjectKey (same semantics: the FULL sanitized
+ * key, never the truncated hint). */
 export function projectKeyOf(memoryDir: string): string {
-	const parts = memoryDir.replace(/\\/g, "/").split("/");
-	return parts.length >= 2 ? parts[parts.length - 2]! : parts[0]!;
+	return fullProjectKey(memoryDir);
 }
 
 /** Does a hermes project name refer to the current project? Rule: the core
@@ -334,8 +337,8 @@ export function importHermesFull(args: {
 		}
 	}
 
-	reconcileMemoryIndex(args.projectMemoryDir);
-	reconcileMemoryIndex(args.userMemoryDir);
+	reindex(args.projectMemoryDir);
+	reindex(args.userMemoryDir);
 	if (collisions > 0) {
 		report.notes.push(`${collisions} slug collision(s): distinct facts sharing a title were disambiguated with a fingerprint suffix or skipped; review the hermes-* files`);
 	}
@@ -344,7 +347,7 @@ export function importHermesFull(args: {
 	}
 	for (const d of foreignDirs) {
 		try {
-			reconcileMemoryIndex(d);
+			reindex(d);
 		} catch {
 			/* foreign index converges when that project next opens */
 		}

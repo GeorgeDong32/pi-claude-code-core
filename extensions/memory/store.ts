@@ -21,13 +21,14 @@
  *   - replace/remove take an optional `old_text` anchor inside the current
  *     file: when provided and absent, the op is skipped as stale (the model
  *     or a sibling session changed the file since it was read)
- *   - every mutation ends with reconcileMemoryIndex so MEMORY.md converges
+ *   - every mutation ends with writer.reindex so MEMORY.md converges
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { invalidateMemDirCache, isValidMemoryType, listMemoryFiles, reconcileMemoryIndex, slugify, splitFrontmatter } from "./memdir.ts";
+import { isValidMemoryType, listMemoryFiles, slugify, splitFrontmatter } from "./memdir.ts";
+import { removeDocument, reindex, serializeMemoryDocument, writeDocument } from "./writer.ts";
 import { findSecret } from "./guard.ts";
 
 /** Per-file body cap enforced by the write engine (S3: lives with its only enforcer). */
@@ -68,9 +69,14 @@ export function safeMemoryFileName(file: string): boolean {
 	return /^[A-Za-z0-9][A-Za-z0-9._-]*\.md$/.test(file) && !file.startsWith(".") && file !== "MEMORY.md";
 }
 
+/** W2: the ONE serializer lives in writer.ts (serializeMemoryDocument) —
+ * store only layers its layer-default type on top. */
 function renderFile(op: MemoryOp): string {
-	const type = op.type ?? (op.layer === "user" ? "user" : "project");
-	return `---\nname: ${op.name}\ndescription: ${op.description}\nmetadata:\n  type: ${type}\n---\n\n${op.body}\n`;
+	return serializeMemoryDocument(op.body ?? "", {
+		name: op.name ?? "",
+		description: op.description ?? "",
+		type: op.type ?? (op.layer === "user" ? "user" : "project"),
+	});
 }
 
 /** 附记 A.1 ③ (spec 2026-10-02-memory-recall-v2): LLM ops sometimes return
@@ -103,18 +109,12 @@ export function fileBytes(path: string): number {
 	}
 }
 
-/** Atomic single-file write: tmp+rename inside the layer dir (S2: the ONE
- * write primitive — applyMemoryOps and runConsolidation share it). Throws
- * on IO error; a landed rename is never rolled back. */
+/** Atomic single-file write (S2: the ONE write primitive — applyMemoryOps
+ * and runConsolidation share it). Delegates to writer.writeDocument (raw
+ * content — byte-faithful); throws on IO error, a landed rename is never
+ * rolled back, the scan cache is invalidated on success. */
 export function atomicWriteFile(dir: string, file: string, content: string): void {
-	mkdirSync(dir, { recursive: true });
-	const tmp = join(dir, `.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}.md`);
-	writeFileSync(tmp, content, "utf-8");
-	renameSync(tmp, join(dir, file));
-	// C7: the ONE write primitive invalidates the scan cache — applyMemoryOps
-	// AND runConsolidation (and any future writer) can never read their own
-	// stale layer back within the TTL window.
-	invalidateMemDirCache(dir);
+	writeDocument(dir, file, { kind: "raw", text: content });
 }
 
 /** Split a memory file into frontmatter fields + body; null when invalid. */
@@ -284,10 +284,7 @@ export function applyMemoryOps(
 	for (const step of planned) {
 		try {
 			if (step.kind === "write") atomicWriteFile(step.dir, step.file, step.content);
-			else {
-				unlinkSync(join(step.dir, step.file));
-				invalidateMemDirCache(step.dir); // C7: deletes bypass atomicWriteFile
-			}
+			else removeDocument(step.dir, step.file); // W1: ENOENT-idempotent, cache dropped
 			outcome.applied++;
 			touched.add(step.dir);
 		} catch (err) {
@@ -296,7 +293,7 @@ export function applyMemoryOps(
 	}
 	for (const dir of touched) {
 		try {
-			reconcileMemoryIndex(dir);
+			reindex(dir);
 		} catch {
 			/* index converges on next session_start */
 		}

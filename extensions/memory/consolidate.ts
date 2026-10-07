@@ -20,7 +20,8 @@ import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { INDEX_MAX_LINES, invalidateMemDirCache, listMemoryFiles, parseMemoryFrontmatter, reconcileMemoryIndex } from "./memdir.ts";
+import { listMemoryFiles, parseMemoryFrontmatter } from "./memdir.ts";
+import { INDEX_MAX_LINES, removeDocument, reindex } from "./writer.ts";
 import { findSecret } from "./guard.ts";
 import {
 	acquireLayerLock,
@@ -126,11 +127,8 @@ export function runConsolidation(
 
 	try {
 		for (const w of writes) atomicWriteFile(dir, w.file, w.content); // C7: invalidates the scan cache
-		for (const d of deletes) {
-			if (existsSync(join(dir, d))) unlinkSync(join(dir, d));
-		}
-		reconcileMemoryIndex(dir);
-		invalidateMemDirCache(dir); // C7: the delete loop bypassed atomicWriteFile
+		for (const d of deletes) removeDocument(dir, d); // W1: ENOENT-idempotent, cache dropped per delete
+		reindex(dir);
 		const after = layerStats(dir);
 		return {
 			ok: true,
