@@ -13,6 +13,11 @@ core 模块与外部消费方之间唯一的状态通道。
   workingStats、meta)、`effort`(level + source)、`goal`、`review`、
   `notifications`(有界尾队列,上限 20,id 单调)、`display.footer`、
   `contextBudget`、`memory`、`observation`、`fusion`。
+  `modes.usage`(XPKG-08,2026-10-07 P2-4)携带原始用量数字
+  (`input/output/cacheRead/cacheWrite/cost` + 可选 `tps`、`ctxTokens`、
+  `ctxPercent`、`contextWindow`),与 `workingStats` 字符串出自同一次
+  working-stats 快照 —— 只发布 finite 非负,未知可选项缺省(绝不伪装成
+  0),session 切换/关停清空;mode-only patch 保留最新值。
 - legacy 键 `__piPermissionModes`、`__pmWorkingStats` 在同一同步批次内从同一
   快照派生——与新快照永不矛盾。
 - v2 扩展点:`snapshot.onChange(fn)` —— **数据式**订阅字段,带版本门控;

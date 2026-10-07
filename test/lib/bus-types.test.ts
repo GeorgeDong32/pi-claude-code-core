@@ -94,3 +94,37 @@ describe("P1-BUS-07 reader total matrix", () => {
 		expect(read.revision).toBe(published.revision);
 	});
 });
+
+// ---- SPEC 2026-10-07 P2-4: XPKG-08 twin guard (U-T1) ------------------------
+describe("P2-4 XPKG-08: modes.usage twin guard", () => {
+	it("U-T1: a REAL bus publish of modes.usage satisfies the published CoreSnapshot type (compile-time + runtime shape)", async () => {
+		// dynamic import keeps the legacy reader tests independent of the
+		// write side (same pattern as the shape-compatibility guard above)
+		const { createCoreBus } = await import("../../extensions/bus.ts");
+		const bus = createCoreBus();
+		const usage = {
+			input: 1200,
+			output: 340,
+			cacheRead: 5000,
+			cacheWrite: 0,
+			cost: 0.012,
+			tps: 42.5,
+			ctxTokens: 10,
+			ctxPercent: 0.01,
+			contextWindow: 100_000,
+		};
+		const snap = bus.publish({
+			modes: { mode: "auto", workingStats: "↑1.2k", usage } as CoreSnapshot["modes"],
+		});
+		// compile-time: the publish result IS a CoreSnapshot
+		const check: CoreSnapshot = snap;
+		// runtime: every declared field round-trips
+		expect(check.modes.usage).toEqual(usage);
+		// optional-only publish (tps/ctx absent) also satisfies the type
+		const partial = bus.publish({
+			modes: { mode: "auto", workingStats: null, usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0 } } as CoreSnapshot["modes"],
+		});
+		expect(partial.modes.usage).toEqual({ input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0 });
+		bus.dispose();
+	});
+});

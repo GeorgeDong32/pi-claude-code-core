@@ -23,7 +23,7 @@ import { clearPlanWidget, updatePlanWidget as updatePlanWidgetUi } from "./ui/pl
 import { confirmChoice } from "./ui/confirm.ts";
 import { notify as uiNotify } from "../ui/notify.ts";
 import { createFallbackAdapter } from "../ui/fallback.ts";
-import { coreBus } from "../bus.ts"
+import { coreBus, type CoreSnapshot } from "../bus.ts"
 import { isMemoryWritePath } from "../memory/paths.ts"
 import { clearSessionGrants, clearSessionState, grantSession, hasSessionGrant, isBypassActive, listSessionGrants, matchFamily, noteAdjudicated, familyRuleMentions, setBypassIndicator } from "./rule-families.ts"
 import { getSharedEffortOwner, type OwnerEffortLevel } from "../../lib/effort-owner.ts";
@@ -80,7 +80,7 @@ import {
   accumulateBranchStats,
   emptyBranchStatsState,
 } from "./branch-stats.ts";
-import { createWorkingStats, type WorkingStatsHost } from "./working-stats.ts";
+import { createWorkingStats, type WorkingStatsCache, type WorkingStatsHost } from "./working-stats.ts";
 import {
   addPermissionRule,
   loadMergedPermissionRules,
@@ -153,6 +153,37 @@ export interface PmCapability {
 	active: boolean;
 	mode: string;
 	workingStats: string | null;
+	/** XPKG-08 (P2-4): raw usage numbers from the same snapshot as
+	 * workingStats. `undefined` on a mode-only patch means "keep"; pass
+	 * `null` to explicitly CLEAR (session switch/shutdown). */
+	usage?: CoreSnapshot["modes"]["usage"] | null;
+}
+
+/** Sanitized raw usage (P2-4 §4.1): finite non-negative only; a missing or
+ * invalid REQUIRED cumulative field omits the whole object; optional ctx
+ * fields are independently absent when unknown — never faked as 0. */
+function sanitizeUsageNumbers(
+	stats: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number },
+	tps: number,
+	usage: { tokens: number | null; contextWindow: number; percent: number | null } | undefined,
+): NonNullable<CoreSnapshot["modes"]["usage"]> | undefined {
+	for (const n of [stats.input, stats.output, stats.cacheRead, stats.cacheWrite, stats.cost]) {
+		if (!Number.isFinite(n) || n < 0) return undefined;
+	}
+	const out: NonNullable<CoreSnapshot["modes"]["usage"]> = {
+		input: stats.input,
+		output: stats.output,
+		cacheRead: stats.cacheRead,
+		cacheWrite: stats.cacheWrite,
+		cost: stats.cost,
+	};
+	if (Number.isFinite(tps) && tps > 0) out.tps = tps;
+	if (usage) {
+		if (usage.tokens != null && Number.isFinite(usage.tokens) && usage.tokens >= 0) out.ctxTokens = usage.tokens;
+		if (usage.percent != null && Number.isFinite(usage.percent) && usage.percent >= 0) out.ctxPercent = usage.percent;
+		if (Number.isFinite(usage.contextWindow) && usage.contextWindow > 0) out.contextWindow = usage.contextWindow;
+	}
+	return out;
 }
 
 export default function permissionModesExtension(pi: ExtensionAPI): void {
@@ -803,14 +834,23 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     return workingStats.snapshot(statsHost(ctx)).stats;
   }
 
-  function workingStatsParts(ctx: ExtensionContext, opts?: { forceUsage?: boolean }): string[] {
-    // AR1005-ST: stats AND usage come from ONE snapshot call (the old path
-    // read getBranch and getContextUsage separately per refresh).
+  /** P2-4 §4.1: the ONE derivation both representations share — the raw
+   * numbers (modes.usage) and the formatted string come from the same
+   * working-stats snapshot call. */
+  function workingStatsEntry(ctx: ExtensionContext, opts?: { forceUsage?: boolean }): {
+    stats: ReturnType<WorkingStatsCache["snapshot"]>["stats"];
+    usage: ReturnType<WorkingStatsCache["snapshot"]>["usage"];
+    tps: number;
+  } {
     const entry = workingStats.snapshot(statsHost(ctx), opts);
+    return { stats: entry.stats, usage: entry.usage, tps: lastTps };
+  }
+
+  function workingStatsParts(entry: { stats: ReturnType<WorkingStatsCache["snapshot"]>["stats"]; usage: ReturnType<WorkingStatsCache["snapshot"]>["usage"]; tps: number }): string[] {
     const s = entry.stats;
     const parts = [`↑${formatCount(s.input)}`, `↓${formatCount(s.output)}`];
     if (s.cacheRead) parts.push(`R${formatCount(s.cacheRead)}`);
-    if (lastTps > 0) parts.push(`⚡${Math.round(lastTps)} tok/s`);
+    if (entry.tps > 0) parts.push(`⚡${Math.round(entry.tps)} tok/s`);
     parts.push(`$${s.cost.toFixed(3)}`);
     const usage = entry.usage;
     if (usage && usage.percent != null) {
@@ -834,6 +874,10 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
         planPhase: (patch as { planPhase?: PlanPhase }).planPhase ?? prev.planPhase ?? planPhase,
         workingStats:
           patch.workingStats !== undefined ? patch.workingStats : prev.workingStats,
+        // XPKG-08: mode-only patches keep the latest usage ("usage" NOT in
+        // patch); an EXPLICIT null clears it (session switch/shutdown) —
+        // `?? prev` here would make clearing impossible.
+        usage: "usage" in patch ? (patch.usage ?? undefined) : prev.usage,
         // DC1: mode presentation material rides the snapshot (single source;
         // stable reference after first publish).
         meta: prev.meta ?? modeMetaData(),
@@ -847,8 +891,9 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     // working-message slot write belongs to the fallback adapter, which
     // yields to a live CC-TUI at its own write point. With cctui active
     // its status row owns the working line — publishing alone is correct.
-    const stats = workingStatsParts(ctx, opts).join(" · ");
-    publishCapability({ workingStats: stats });
+    const entry = workingStatsEntry(ctx, opts);
+    const stats = workingStatsParts(entry).join(" · ");
+    publishCapability({ workingStats: stats, usage: sanitizeUsageNumbers(entry.stats, entry.tps, entry.usage) });
     fallbackAdapter.onSnapshot(coreBus().snapshot());
   }
 
@@ -2171,8 +2216,14 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", onSessionStart);
   pi.on("session_tree", onSessionStart);
-  pi.on("session_start", () => workingStats.reset()); // ST: re-base on (re)load
-  pi.on("session_tree", () => workingStats.reset());
+  pi.on("session_start", () => {
+    workingStats.reset(); // ST: re-base on (re)load
+    publishCapability({ usage: null }); // XPKG-08: old-session numbers never leak into a new one
+  });
+  pi.on("session_tree", () => {
+    workingStats.reset();
+    publishCapability({ usage: null });
+  });
   pi.on("session_start", (_event, ctx: ExtensionContext) => {
     // P4-FAM-05: session-scoped authorizations reset on (re)load
     clearSessionState();
@@ -2181,6 +2232,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
   });
   pi.on("session_shutdown", () => {
     workingStats.reset(); // ST: clear the private cache (legacy keys unaffected)
+    publishCapability({ usage: null }); // XPKG-08: shutdown clears the published numbers
     fallbackAdapter.shutdown();
     forwardingPoller?.stop();
     forwardingPoller = undefined;

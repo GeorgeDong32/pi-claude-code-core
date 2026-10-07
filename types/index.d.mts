@@ -27,6 +27,21 @@ export interface CoreSnapshot {
 		workingStats: string | null;
 		/** DC1: presentation material single-sourced from MODE_META (icon/label/role per mode). */
 		meta?: Readonly<Record<string, { icon: string; label: string; role: string }>>;
+		/** XPKG-08 (SPEC 2026-10-07 P2-4): raw usage numbers, derived from
+		 * the SAME working-stats snapshot as the workingStats string. Finite
+		 * non-negative only; a missing required cumulative field omits the
+		 * whole object; unknown optionals are ABSENT, never faked as 0. */
+		usage?: {
+			input: number;
+			output: number;
+			cacheRead: number;
+			cacheWrite: number;
+			cost: number;
+			tps?: number;
+			ctxTokens?: number;
+			ctxPercent?: number;
+			contextWindow?: number;
+		};
 	};
 	effort: { level: string | null; source: "env" | "session" | "profile" | "model-default" };
 	goal: { active: boolean; paused?: boolean; summary: string | null; widget?: { focus: "focused" | "unfocused" | "none"; statusLine: string; goal?: { objective: string; status: string; sisyphus: boolean; stopReason?: string; pauseReason?: string; pauseSuggestedAction?: string; activePath?: string; archivedPath?: string; tokensUsed: number; activeSeconds: number; costUsed?: number }; openGoalCount?: number } };

@@ -1,6 +1,8 @@
 # SPEC P2-4：modes 通道发布结构化用量（数字上 bus，格式化归 adapter）
 
 状态：规格已补齐，待实施
+
+> **实施记录（2026-10-07）**：已落地（commit d1e8101；详见 PROGRESS.md）。**生产方已就绪**：`CoreSnapshot.modes.usage` 携带 `{ input, output, cacheRead, cacheWrite, cost, tps?, ctxTokens?, ctxPercent?, contextWindow? }`，与 `workingStats` 字符串同批次发布；消费方按字段回退自身 UsageTracker；session 切换清空。XPKG-08 已登记并在 contracts 钉住。待联合验收：与 TUI P1-2 第二步（真实两份数字合一显示）联调。
 日期：2026-10-07
 分支：main
 来源：2026-10-07 联合架构审查，报告 X3 卡片；清单项 CORE-11

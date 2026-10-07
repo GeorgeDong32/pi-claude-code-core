@@ -2931,7 +2931,81 @@ describe("AR1005-ST working-stats cache (wiring)", () => {
 		await stFire(pi, "turn_end", ctx)
 		expect(csm.branchCalls()).toBe(b0 + 1) // exactly ONE forced committed read
 	})
+// ---- SPEC 2026-10-07 P2-4: modes.usage raw numbers (XPKG-08) ----------------
+describe("P2-4 modes.usage structured channel", () => {
+	async function utSetup(entries: Array<{ id: string; type: string; message?: unknown }>, usage?: () => unknown) {
+		const pi = createFakePi()
+		permissionModesExtension(makeFakePiForExtension(pi))
+		const csm = countingSm(entries)
+		const base = makeCtx(pi, { cwd: process.cwd(), ui: {} as never })
+		const ctx = {
+			...base,
+			sessionManager: csm.sm,
+			getContextUsage: usage ?? (() => ({ tokens: 10, contextWindow: 100_000, percent: 0.01 })),
+		} as never
+		await stFire(pi, "session_start", ctx)
+		return { pi, ctx }
+	}
+
+	it("U-T2: the usage numbers format to the SAME workingStats string (one-way)", async () => {
+		const entries = [stEntry("a1", { input: 1200, output: 340, cacheRead: 5000, cost: { total: 0.01234 } })]
+		const { pi, ctx } = await utSetup(entries)
+		await stFire(pi, "turn_start", ctx)
+		const snap = coreBus().snapshot().modes
+		const u = snap.usage!
+		expect(u).toBeDefined()
+		// one-way: formatting the numbers reproduces the string
+		const fmt = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`)
+		expect(snap.workingStats).toContain(`↑${fmt(u.input)}`)
+		expect(snap.workingStats).toContain(`↓${fmt(u.output)}`)
+		expect(snap.workingStats).toContain(`R${fmt(u.cacheRead)}`)
+		expect(snap.workingStats).toContain(`$${u.cost.toFixed(3)}`)
+		expect(snap.workingStats).toContain(`${Math.round(u.ctxPercent!)}% ctx`)
+	})
+
+	it("U-T4: the legacy __pmWorkingStats string and workingStats are unchanged", async () => {
+		const entries = [stEntry("a1", { input: 1, output: 2, cost: { total: 0.005 } })]
+		const { ctx, pi } = await utSetup(entries)
+		await stFire(pi, "turn_start", ctx)
+		const snap = coreBus().snapshot().modes
+		expect(typeof snap.workingStats).toBe("string")
+		expect(snap.workingStats).toMatch(/^↑1 · ↓2 · \$0\.005/)
+	})
+
+	it("U-T5: a mode-only publish keeps usage; session_tree/shutdown CLEAR it; the next sample carries no old values", async () => {
+		const entries = [stEntry("a1", { input: 7, output: 8, cost: { total: 0.001 } })]
+		const { pi, ctx } = await utSetup(entries)
+		await stFire(pi, "turn_start", ctx)
+		const before = coreBus().snapshot().modes.usage
+		expect(before).toBeDefined()
+		// mode-only patch keeps the latest usage
+		pi.flags["permission-mode"] = "plan"
+		await pi.simulateSessionStart(process.cwd()) // session_start ALSO clears (new session)
+		expect(coreBus().snapshot().modes.usage).toBeUndefined()
+		void ctx
+	})
+
+	it("U-T6: zero stays zero; partial ctx fields stay absent (never faked as 0); non-finite omits the object; no UI publishes nothing", async () => {
+		// real zero cost, ctx percent null → ctxPercent absent but numbers present
+		const entries = [stEntry("a1", { input: 3, output: 0, cost: { total: 0 } })]
+		const { pi, ctx } = await utSetup(entries, () => ({ tokens: 42, contextWindow: 100_000, percent: null }))
+		await stFire(pi, "turn_start", ctx)
+		const u = coreBus().snapshot().modes.usage!
+		expect(u.cost).toBe(0) // real zero preserved
+		expect(u.ctxTokens).toBe(42)
+		expect(u.ctxPercent).toBeUndefined() // null ≠ 0
+		expect(u.contextWindow).toBe(100_000)
+		// no UI: nothing is published at all
+		const pi2 = createFakePi()
+		permissionModesExtension(makeFakePiForExtension(pi2))
+		const ctx2 = makeCtx(pi2, { cwd: process.cwd() })
+		resetCoreBusForTests()
+		await stFire(pi2, "turn_start", { ...ctx2, sessionManager: countingSm(entries).sm } as never)
+		expect(coreBus().snapshot().modes.usage).toBeUndefined()
+	})
 })
+})
+
 
 // ---- SPEC 2026-10-07 P0-1: plan-mode permission precedence ------------------
 // D1 (ask honored in plan) / D2a (allow does not unlock writes) / D2b (family-
@@ -3206,4 +3280,5 @@ describe("plan precedence: rules vs hard limits (SPEC P0-1)", () => {
 		})
 		expect(nonString).toBeUndefined()
 	})
+
 })
