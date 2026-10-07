@@ -49,3 +49,15 @@ handoff 2026-09-20 称「npm 最新 0.1.7、本地领先」。**实测(registry.
 
 - goal 不直接读写其他模块状态;对外只经 status 槽 `goal`、widget `goal`、bus `goal` 通道(P2-BUS-01)。
 - 与 modes 的 context 共存由 test/lib/coexistence.test.ts 钉住(P2-GO-05)。
+
+## 2026-10-07 spec P0-2 (partially landed, D3-gated)
+
+- **CORE-05 landed alone**: `startGoalDrafting`'s catch now resets
+  `confirmationIntent` + `syncGoalTools()` (symmetric with the tweak path)
+  — a failed draft start no longer strands the drafting tool gate.
+- **Deferred (D3 undecided)**: the turn-lock narrowing (only the four real
+  stop tools may lock the turn) and the G3 `event.args` → `event.input`
+  field fix. The field fix MUST NOT ship without the lock change (spec §6:
+  fixing the field alone pushes echo/read-goal calls into the current
+  mis-locking else-branch). They land together in the D3 batch with tests
+  L1-L5/L7.

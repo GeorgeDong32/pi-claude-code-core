@@ -1067,6 +1067,12 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 				{ triggerTurn: true, deliverAs: ctx.isIdle() ? "followUp" : "steer" },
 			);
 		} catch (err) {
+			// CORE-05 (spec 2026-10-07 P0-2): a failed draft start must reset
+			// the drafting gate — same shape as the tweak path's catch — or the
+			// tool set stays in drafting form and accounting/turn handlers
+			// keep early-returning for a draft that never started.
+			confirmationIntent = null;
+			syncGoalTools();
 			uiNotify(ctx, `Could not start ${label.toLowerCase()}: ${(err as Error).message}`, "error");
 		}
 	}

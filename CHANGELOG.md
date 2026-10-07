@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed (goal drafting send-failure reset — spec 2026-10-07 P0-2 CORE-05)
+- **A failed goal-draft start no longer leaves the drafting gate stuck.** When `sendMessage` threw while starting `/goal`/`/sisyphus` intent discussion, `confirmationIntent` stayed set: the tool set remained in drafting form and accounting/turn/agent handlers kept early-returning for a draft that never started. The catch now resets the intent and re-syncs the tools (same shape as the tweak path). The turn-lock strategy and the G3 `event.args→event.input` fix from the same spec remain deferred pending the D3 decision.
+
 ### Fixed (memory-queue cross-worker claim — spec 2026-10-07 P0-3)
 - **Two automation instances / pi processes can no longer drain the same queued record concurrently.** The drain previously read the queue and called the model with no ownership: overlapping sessions double-counted attempts and double-applied ops. The queue now runs a single-rename ownership protocol: claiming a record renames it to a unique `<ready>.claim.<pid>.<ts>.<nonce>` file (re-read from disk after claiming), failures rename it to a unique retryable `<ready>.pending.<nonce>`, and stale claims are recovered only past a 10-minute TTL plus a dead-owner probe. GC counts claims toward the 2MiB soft budget but never deletes a live worker's file; same-session replacement and budget eviction also claim-verify-settle instead of unlinking enumerated paths. This is a retrying best-effort queue, not exactly-once: a crash between apply and settle can re-apply (window disclosed in the docs). Staged-record files and the v1 record format are unchanged.
 
