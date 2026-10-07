@@ -2,6 +2,10 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## 2026-10-07 spec 批实施(9 份规格;P0-1 完成)
+
+- **P0-1 plan 权限优先级:完成**(3 commits:① d36828f plan-gate 搬移 ② 4cadd77 FUS-SHAPE ③ 本 commit 优先级翻转)。D1/D2 已拍板;红测试取证 9 例(T1-T6/T10/T13a-c,既有 820 全绿对照);T7-T9/T11 由既有用例+新 T15/T16 family 矩阵钉住;T12 plan-gate 单测 13 例。两处测试标题按规格补前提说明(index.test.ts fail-closed / p4-families D2b)。三门全绿。
+
 ## 核心扩展性能与可靠性批(2026-10-05,spec 2026-10-05-core-architecture-reliability;11 项 AR1005 全量)
 
 - **状态:11/11 项已实施并按项提交**(JS c05e4e1 → RC f70ffbe → AU ddbeac7 → FU 2d76e53 → GO-A 564d1f8 → GO-B 4601129 → RU 834d23b → ST 208882d → OB 07c34f1 → CL 6b09fb9 → RV b27e1c7)。Phase 0 基线在 76e933a 干净树取得:三门真实退出码全 0(check / vitest 54 文件 776 测 + node:test 452 / contracts 28)。每项缺陷测试先以 stash 方式在基线确认红(记录于各 commit message 与 DEVIATIONS #98-108)再转绿。

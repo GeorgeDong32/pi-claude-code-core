@@ -443,7 +443,7 @@ describe("permission-modes extension: tool_call gate", () => {
 			expect(String((result as { reason?: string }).reason)).toContain("codemode is not available")
 		})
 
-		it("plan: declared MCP tools are denied (read-only holds)", async () => {
+		it("plan without any MCP family: declared MCP tools are denied (fail-closed)", async () => {
 			await switchMode("plan")
 			const result = await callToolCall("mcp__exa__search", { query: "x" })
 			expect(result).toMatchObject({ block: true })

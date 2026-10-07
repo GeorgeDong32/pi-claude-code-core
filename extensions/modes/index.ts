@@ -91,6 +91,7 @@ import {
   formatMergedRulesForDisplay,
   suggestAllowRuleForToolCall,
   type PermissionRule,
+  type PermissionVerdict,
 } from "./permissions.ts";
 import { checkAutoRisk } from "./auto-risk.ts";
 import { classifyBashTiers, isAutoFallbackBash, isSafeCommand } from "./bash-analysis.ts";
@@ -851,23 +852,16 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     fallbackAdapter.onSnapshot(coreBus().snapshot());
   }
 
-  async function applyConfiguredPermissionRules(
+  // P0-1 §4.2: execute an ALREADY-computed permission verdict. The deny
+  // branch lives in the handler (before the plan hard gate); allow / ask /
+  // first-seen side-effect logic below is preserved verbatim from the old
+  // applyConfiguredPermissionRules.
+  async function applyPermissionVerdict(
     ctx: ExtensionContext,
     tool: string,
     input: Record<string, unknown>,
+    verdict: PermissionVerdict,
   ): Promise<Block | "allow" | "passthrough"> {
-    const verdict = evaluateToolPermission(
-      tool,
-      input,
-      ctx.cwd,
-      mergedPermissionRules,
-    );
-    if (verdict.behavior === "deny") {
-      return {
-        block: true,
-        reason: `Denied by permission rule [${verdict.source}]: ${verdict.rule}`,
-      };
-    }
     if (verdict.behavior === "allow") {
       if (tool === "edit" || tool === "write") {
         trackOutsideWriteIfNeeded(ctx, tool, String(input.path ?? ""));
@@ -1441,22 +1435,37 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
 
     const planFilePath = getPlanFilePath(ctx.cwd);
 
-    const permResult = await applyConfiguredPermissionRules(ctx, tool, input);
-    if (permResult === "allow") return allowToolCall();
-    if (permResult !== "passthrough") {
-      // Plan exploration: allow read-only tools even when permission rules
-      // would ask, but still honor explicit deny rules.
-      if (
-        currentMode === "plan" &&
-        PLAN_READ_TOOLS.has(tool) &&
-        !String((permResult as { reason?: string }).reason ?? "").startsWith(
-          "Denied by permission rule",
-        )
-      ) {
-        return undefined;
-      }
-      return permResult;
+    // P0-1 §4.1 precedence (plan): 1. rule deny → block; 2. plan hard limits
+    // (plan-gate.ts — allow/ask rules can never unlock them, no prompt here);
+    // 3. ask verdict → prompt/forward, result HONORED (D1); 4. allow verdict;
+    // 5. passthrough → plan allowlist dispatch. The old reason-text prefix
+    // sniffing ("Denied by permission rule") is gone.
+    const verdict = evaluateToolPermission(
+      tool,
+      input,
+      ctx.cwd,
+      mergedPermissionRules,
+    );
+    if (verdict.behavior === "deny") {
+      return {
+        block: true,
+        reason: `Denied by permission rule [${verdict.source}]: ${verdict.rule}`,
+      };
     }
+    if (currentMode === "plan") {
+      const hard = planHardBlock(tool, input, {
+        planFilePath,
+        isPlanFile: isPlanFilePath(String(input.path ?? ""), ctx.cwd),
+        mcpShaped: isMcpShapedCall(tool, input, knownServersSetFromEnv()),
+        familyClaimed: matchFamily(tool, input) !== null,
+        fusionSchemaHint: fusionSchemaHint(tool),
+      });
+      if (hard) return hard;
+    }
+
+    const permResult = await applyPermissionVerdict(ctx, tool, input, verdict);
+    if (permResult === "allow") return allowToolCall();
+    if (permResult !== "passthrough") return permResult;
 
     // plan2 B1: embedded-command gate. Fusion tools (e.g. SoL-Pi Action
     // Fusion) carry shell commands in non-primary input fields; those never
@@ -1464,22 +1473,13 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     // FIELD SCAN, not by tool name (overrides may reuse built-in names).
     // Lazy by construction: field-less inputs (unknown tools included) are
     // untouched; the shell tools' own primary `command` is excluded because
-    // the full ladder below already governs it.
+    // the full ladder below already governs it. Plan's copy of this scan
+    // moved into plan-gate.ts (P0-1) — family-governed MCP calls are exempt
+    // there, so they must NOT fall back into this generic scan.
     const embeddedCommands = extractEmbeddedCommandInputs(tool, input);
     if (embeddedCommands.length > 0) {
       const hint = fusionSchemaHint(tool);
-      if (currentMode === "plan") {
-        const offender = embeddedCommands.find(
-          (c) => !classifyBashTiers(c.command).safe,
-        );
-        if (offender) {
-          return {
-            block: true,
-            reason: `Plan mode: read-only commands only.\n  Command: ${offender.command}${hint}`,
-          };
-        }
-        // all tier-1 — plan dispatch below still applies
-      } else if (currentMode === "auto") {
+      if (currentMode === "auto") {
         for (const { command } of embeddedCommands) {
           if (commandReferencesSensitivePath(command)) {
             return promptWithPermissionOptions(
@@ -1521,18 +1521,10 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     // PLAN EXECUTION: use auto-mode tiered gate (classifier + blacklist).
     // planExecuting only affects prompt injection and UI; it does not bypass auto.
 
-    // PLAN: read-only except plan.md; bash allowlist only. The hard limits
-    // live in plan-gate.ts (SPEC 2026-10-07 P0-1 §4.1); the adapter collects
-    // the facts (path probe / family match / env) and passes them in.
+    // PLAN dispatch: the hard limits already ran before verdict execution
+    // (P0-1 §4.1); what remains is the allowlist — read tools, tool_search,
+    // default pass for plan-legal calls.
     if (currentMode === "plan") {
-      const hard = planHardBlock(tool, input, {
-        planFilePath,
-        isPlanFile: isPlanFilePath(String(input.path ?? ""), ctx.cwd),
-        mcpShaped: isMcpShapedCall(tool, input, knownServersSetFromEnv()),
-        familyClaimed: matchFamily(tool, input) !== null,
-        fusionSchemaHint: fusionSchemaHint(tool),
-      });
-      if (hard) return hard;
       if (PLAN_READ_TOOLS.has(tool)) {
         return undefined;
       }

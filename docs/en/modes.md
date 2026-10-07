@@ -18,6 +18,28 @@ Claude-Code-style permission modes for pi, cycled with Shift+Tab:
 
 **codemode (pi 1.0)**: `plan` mode denies the `codemode` tool itself — it executes other tools. A codemode script's nested tool calls run through the full agent tool pipeline (`tool_call` gates, permission checks), so the mode rules above apply to them per tool; codemode is not a permission bypass.
 
+### Plan-mode adjudication order (SPEC 2026-10-07 P0-1)
+
+| Step | Check | Result |
+|---|---|---|
+| 1 | `evaluateToolPermission` → deny | block (`Denied by permission rule [...]`) |
+| 2 | **plan hard limits** (`plan-gate.ts`) — unaffected by allow/ask rules | block, never prompts |
+| 3 | verdict = ask (rule ask, or family first-seen) | prompt / subagent forward, **result honored** |
+| 4 | verdict = allow (rule allow / session grant) | allow (only plan-legal calls remain) |
+| 5 | passthrough | read tools, `tool_search`, plan file edits, read-only bash, unknown non-MCP tools: unchanged |
+
+Consequences of the fixed order: an `allow` rule can no longer unlock
+writes/mutating commands in plan (D2a); an `ask` verdict on a read tool
+prompts and its Block is honored instead of being silently overridden (D1);
+family-governed MCP calls stay usable in plan when their family adjudicates
+allow (rule / session grant / first-seen approval — D2b), while MCP-shaped
+calls with no family stay denied (D2c fail-closed). The hard limits live in
+`plan-gate.ts#planHardBlock` (pure; the adapter collects path/family/env
+facts). Scan boundary: built-in `edit/write/bash/powershell/codemode` names
+are never exempted; only calls that are BOTH MCP-shaped (lib/mcp-shape
+authority) AND family-claimed skip the generic embedded-command scan — their
+`command/run/cmd/then_run` are remote schema params, not local shell.
+
 ## Key surfaces
 
 - **Commands**: `/mode`, `/permissions`, `/permissions-clear-grants`,
@@ -37,7 +59,7 @@ Claude-Code-style permission modes for pi, cycled with Shift+Tab:
 | Auto classifier | `classifier-client.ts`, `classifier-prompt.ts`, `classifier-prompts/`, `classifier-transcript.ts`, `classifier-tool*.ts`, `classifier-redact.ts`, `classifier-messages.ts` | Optional LLM classifier for auto mode; reads AGENTS.md context, redacts secrets, caches verdicts |
 | Subagent integration | `permission-forwarding.ts`, `mode-inherit.ts` | Approval forwarding via `~/.pi/agent/sessions/permission-modes-forwarding/sessions/<id>/{requests,responses}` (P0-CT-05); `PERMISSION_MODES_INHERITED_MODE` inheritance (P0-CT-04) |
 | Profiles | `profiles.ts` | Model profiles (`provider/model[:effort]` via `lib/model-id.ts`); `applyProfileModelForMode` returns undefined when unset — no silent medium default |
-| Plan mode | `session-branch.ts`, `branch-stats.ts`, `fusion-tools.ts`, `injection-probe.ts`, `denial-tracking.ts`, `config.ts`, `config-cache.ts`, `plan.ts` | Plan phase tracking, session branching, working stats |
+| Plan mode | `session-branch.ts`, `branch-stats.ts`, `fusion-tools.ts`, `injection-probe.ts`, `denial-tracking.ts`, `config.ts`, `config-cache.ts`, `plan.ts`, `plan-gate.ts` | Plan phase tracking, session branching, working stats; `plan-gate.ts` = the pure plan hard-limit block (P0-1) |
 | Working stats | `working-stats.ts` | **AR1005-ST (2026-10-05)**: the streaming-stats cache — cheap key = sessionManager instance (WeakMap id) + sessionId + leafId (the LEGAL empty-branch null is cacheable; a missing/throwing getter is uncacheable, never "empty"). Key hit on message_update = ZERO getBranch/getContextUsage calls (measured: 0 across 200 updates at 1K/10K/50K branches; baseline made 200 getBranch calls — the reproduced 2M parent-map reads at 10K). Invalidation: reset on session_start/session_tree/session_shutdown; invalidate on session_compact; markDirty on message_end (fires before the host append — belt-and-suspenders with the leafId key, contract AR1005-ST-HOST pins the real-SessionManager leaf move); onModelChange on model_select; force on turn_start/turn_end (committed-final), forceUsage on before_provider_request (no unconditional branch re-sum). Old hosts without the cheap key keep the uncached read path (peer floor unchanged); failed reads are never cached as successful empty snapshots |
 | Bash risk analysis | `bash-analysis.ts` | Tiered safe/destructive/auto-fallback/auto-approvable adjudication (carved from the old `utils.ts`, arch review C3) |
 | Path safety & project identity | `path-safety.ts` | Outside-cwd/sensitive-path detection; project root/id/tmp-dir (carved from `utils.ts`) |

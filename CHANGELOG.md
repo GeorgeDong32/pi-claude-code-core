@@ -1,6 +1,13 @@
 # Changelog
 
-## 0.3.0 (2026-10-06)
+## Unreleased
+
+### Fixed (plan-mode permission precedence — spec 2026-10-07 P0-1)
+- **Plan mode now enforces its read-only hard limits ahead of allow/ask permission rules.** Previously an `allow` rule (`Edit(src/**)`, `Bash(npm run build:*)`) short-circuited the gate before plan's checks ran, so plan mode happily executed writes and mutating commands; and a read tool hitting an `ask` rule prompted but the user's **Block was silently ignored** (the call passed anyway, plus a bogus compliance reminder next turn). The order is now: rule deny → plan hard limits (never prompt) → ask verdict (prompt/forward, result honored) → allow verdict → plan allowlist. Users who relied on allow rules to "open a side door" in plan should switch to auto/ask mode for the execution phase.
+- **Family-governed MCP tools stay usable in plan** when their family adjudicates allow (allow rule, session grant, or first-seen approval) — unchanged behavior, now pinned by tests; their remote schema params (`command/run/cmd/then_run`) are no longer misread as local shell by plan's embedded-command scan (review R2: the old early generic scan could block an already-authorized MCP call). MCP-shaped calls with NO family remain denied (fail-closed).
+- **The embedded-command gate now recognizes the real `then_run: { command }` object** that action-fusion registers (it previously only scanned string / string[] forms, so the object form silently bypassed the gate in every mode). `auto`/`ask` modes now also check this form; `bypass` is unchanged; outside plan an explicit allow rule still takes precedence.
+
+
 
 ### Added (sites entries carry toolCallId — OBS-09-SITES row correlation)
 - **`observation.sites[].toolCallId`**: each per-site savings entry now carries the source tool result's `toolCallId` (optional, additive). The context projection rewrites only the provider request — the session transcript and the tool rows the user sees keep the original shape — so content shape cannot locate which row was packed; `toolCallId` is the only reliable display-side key to correlate a flashed saving with its tool row. Malformed sources degrade to field omission, never a throw; old-shape entries (without the field) and readers remain unaffected.
