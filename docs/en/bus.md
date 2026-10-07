@@ -18,6 +18,21 @@ The single state channel between core modules and external consumers.
   with it.
 - v2 extension point: `snapshot.onChange(fn)` — a **data-carried** subscription
   field, version-gated; do NOT bolt on an event system.
+- `snapshot.instance` (XPKG-03, 2026-10-07 P1-1): a random id minted once
+  per bus instance, constant across that instance's publishes. pi loads
+  extensions with jiti `moduleCache:false`, so `/reload` builds a NEW bus
+  while `globalThis` still serves the old snapshot until the new bus's
+  first publish — consumers detect the swap by comparing `instance` and
+  re-subscribe via the new snapshot's onChange. Old snapshots may lack the
+  field (fall back to comparing onChange identity).
+- `display.footer` is a multi-source channel (XPKG-07): producers call
+  `extensions/ui/footer-lines.ts#setFooterLine(source, line)` which keeps
+  one map per bus instance and publishes the whole merged, source-sorted
+  array in one patch. Rendered by whichever footer holds the slot — the
+  core modes footer appends the lines (dim, clamped) after its own two
+  lines; a live cctui's cc-footer renders them instead. After an explicit
+  `/claude-tui off` the host stock footer shows nothing from this channel
+  by design (no presence-based hand-back).
 
 ## Discipline
 

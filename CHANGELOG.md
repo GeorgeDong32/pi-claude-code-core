@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added (bus cross-package surface — spec 2026-10-07 P1-1, XPKG-01..07/09)
+- **`snapshot.instance`** — every snapshot now carries a random per-bus-instance id. pi builds a NEW bus on `/reload` while globalThis still serves the old snapshot; consumers detect the swap by comparing `instance` (old cores without the field: compare onChange identity) and re-subscribe. Patches can never overwrite the field.
+- **`display.footer` is now actually rendered and multi-source safe.** Economy-module degrade lines previously published at factory-load time (a bus-discipline violation), overwrote each other (shallow-merge last-writer-wins), and nobody rendered them. A new `ui/footer-lines.ts` helper merges lines per source into one whole-array publish (per-bus-instance maps — no cross-reload leakage); the degrade warning still prints at load time, and the footer line is published from the first `session_start`. The core modes footer appends the channel's lines (dim, width-clamped) after its own two lines while it holds the slot; a live cctui's cc-footer renders them instead (joint acceptance with the TUI spec). After an explicit `/claude-tui off` the host stock footer shows nothing from this channel by design.
+- **`goal.widget.goal.costUsed?`** added to the published types (the producer already shipped it).
+- Contract rows XPKG-01..09-HOST registered (notification tail-queue negotiation, onChange, instance, obs_recall details protocol, then_run param shape incl. the `{command}` object, the cctui callArgsFor field list, display.footer ownership, modes.usage placeholder for P2-4, and the aboveEditor widget-ordering host assumption as a todo). The cctui tool-registration row was revised: cctui registers no tools since 1.8.0.
+
 ### Fixed (goal drafting send-failure reset — spec 2026-10-07 P0-2 CORE-05)
 - **A failed goal-draft start no longer leaves the drafting gate stuck.** When `sendMessage` threw while starting `/goal`/`/sisyphus` intent discussion, `confirmationIntent` stayed set: the tool set remained in drafting form and accounting/turn/agent handlers kept early-returning for a draft that never started. The catch now resets the intent and re-syncs the tools (same shape as the tweak path). The turn-lock strategy and the G3 `event.args→event.input` fix from the same spec remain deferred pending the D3 decision.
 

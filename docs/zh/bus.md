@@ -17,6 +17,17 @@ core 模块与外部消费方之间唯一的状态通道。
   快照派生——与新快照永不矛盾。
 - v2 扩展点:`snapshot.onChange(fn)` —— **数据式**订阅字段,带版本门控;
   不要另起事件系统。
+- `snapshot.instance`(XPKG-03,2026-10-07 P1-1):每个 bus 实例一次性铸造的
+  随机 id,该实例的所有发布保持不变。pi 以 jiti `moduleCache:false` 加载
+  扩展,`/reload` 会新建 bus,而新 bus 首次发布前 `globalThis` 仍提供旧快照
+  ——消费方比较 `instance` 检测更换,并经新快照的 onChange 重新订阅。旧快照
+  可能缺字段(回退比较 onChange 函数身份)。
+- `display.footer` 是多来源通道(XPKG-07):生产方调用
+  `extensions/ui/footer-lines.ts#setFooterLine(source, line)`,helper 按 bus
+  实例维护一份 map,把合并后按 source 排序的整体数组作为单次 patch 发布。
+  由持槽的 footer 渲染 —— core modes footer 在自身两行后追加(dim、按宽度
+  截断);cctui 在场时由 cc-footer 渲染。显式 `/claude-tui off` 后宿主 stock
+  footer 按设计不显示本通道(不存在基于 presence 的自动交回)。
 
 ## 纪律
 

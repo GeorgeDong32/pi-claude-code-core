@@ -1,6 +1,8 @@
 # SPEC P1-1：bus 的跨包面整理（契约补登记 · 实例标识 · reader 去留提案 · footer 归属）
 
 状态：规格已补齐；instance / footer / 加性契约可实施，reader 去留**待决策 D4**；D5 归属原则已确认
+
+> **实施记录（2026-10-07）**：可实施部分已落地——契约表登记（XPKG-01..09-HOST，ff0f7e7）、`snapshot.instance` + 类型加性补齐（320e7e5）、footer helper + 降级时机 + modes footer 渲染（见 git log）。D4 未决，reader/exports/行为断言原样保留。**生产方已就绪**：TUI 可消费 `snapshot.instance`（reload 检测）、`onChange`（v2 订阅）、`display.footer`（cc-footer 渲染，off 恢复 stock 例外见 §1.4）、通知尾队列协商语义不变。仍待联合验收：两种加载顺序 / off/on / reload 失败下的真实 footer 槽位（B6/C11）、widget 排序时序取证（XPKG-09-HOST todo）。基线 core revision：见 PROGRESS.md 本批条目。
 日期：2026-10-07
 分支：main
 来源：2026-10-07 联合架构审查，清单项 CORE-07 / CORE-08 / CORE-09 / CORE-10（报告 X1、C7 卡片）

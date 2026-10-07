@@ -73,10 +73,33 @@ export function probePiCompat(inputs: PiCompatInputs): PiCompat {
 }
 
 /**
+ * SPEC 2026-10-07 P1-1 §4.4: the PURE-DATA assessment both economy modules
+ * share — no console, no publish. Callers warn at load time and publish the
+ * footer line from their first session_start handler (bus invariant 3: no
+ * publishing outside event handlers). `enabled` true means keep registering.
+ */
+export function assessEconomyModule(compat: PiCompat, label: string): {
+	enabled: boolean;
+	/** Load-time console.warn text (absent when enabled). */
+	warning?: string;
+	/** The session_start-published footer line (absent when enabled). */
+	footerLine?: string;
+} {
+	if (compat.problems.length === 0) return { enabled: true };
+	return {
+		enabled: false,
+		warning: `[${label}] disabled: ${compat.problems.join("; ")}`,
+		footerLine: `${label} requires pi >=${MIN_PI_VERSION}`,
+	};
+}
+
+/**
  * B4: the ONE degrade tail both economy modules share — warn once, publish
  * the footer line, and tell the caller to stop registering. Pure function:
  * the publish and notify channels are injected callbacks, so the self-disable
  * path ("pi upgraded underneath us") is unit-testable without a bus.
+ * NOTE (P1-1): new callers should use assessEconomyModule + a session_start
+ * publish; this legacy form remains for the transition and its existing pins.
  */
 export function degradeEconomyModule(args: {
 	compat: PiCompat;
@@ -86,10 +109,10 @@ export function degradeEconomyModule(args: {
 	/** Console sink override (tests). Defaults to console.warn. */
 	notify?: (message: string) => void;
 }): boolean {
-	if (args.compat.problems.length === 0) return true;
-	const message = `[${args.label}] disabled: ${args.compat.problems.join("; ")}`;
-	if (args.notify) args.notify(message);
-	else console.warn(message);
-	args.publish(`${args.label} requires pi >=${MIN_PI_VERSION}`);
+	const assessment = assessEconomyModule(args.compat, args.label);
+	if (assessment.enabled) return true;
+	if (args.notify) args.notify(assessment.warning!);
+	else console.warn(assessment.warning);
+	args.publish(assessment.footerLine!);
 	return false;
 }

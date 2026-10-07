@@ -27,8 +27,9 @@ import {
 	type WriteToolOptions,
 } from "@earendil-works/pi-coding-agent";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import { degradeEconomyModule, probePiCompat } from "../../lib/pi-compat.ts";
+import { assessEconomyModule, probePiCompat } from "../../lib/pi-compat.ts";
 import { coreBus } from "../bus.ts";
+import { setFooterLine } from "../ui/footer-lines.ts";
 import { withFusedFileQueue } from "./file-queue.ts";
 import { withThenRunBadge, withThenRunStatus, type ThenRunArgs } from "./renderers.ts";
 import { resolveToolPath } from "./tool-path.ts";
@@ -88,13 +89,15 @@ export function createActionFusionExtension(options: ActionFusionOptions = {}): 
 			},
 			mutationQueue: withFileMutationQueue,
 		});
-		if (
-			!degradeEconomyModule({
-				compat,
-				label: "action-fusion",
-				publish: (line) => coreBus().publish({ display: { footer: [line] } }),
-			})
-		) {
+		// P1-1 §4.4 (F2): the assessment is pure data — warn at LOAD time,
+		// publish the footer line from the FIRST session_start (bus invariant
+		// 3: no publishing outside event handlers).
+		const assessment = assessEconomyModule(compat, "action-fusion");
+		if (!assessment.enabled) {
+			console.warn(assessment.warning);
+			pi.on("session_start", () => {
+				setFooterLine("action-fusion", assessment.footerLine);
+			});
 			return;
 		}
 		// FUS-03 (revised after TST-04): the OUTER serialization must be the

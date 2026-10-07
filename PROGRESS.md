@@ -2,9 +2,10 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
-## 2026-10-07 spec 批实施(9 份规格;P0-1 + P0-3 + P0-2 CORE-05 完成)
+## 2026-10-07 spec 批实施(9 份规格;P0-1 + P0-3 + P0-2 CORE-05 + P1-1 可实施面完成)
 
 - **P0-1 plan 权限优先级:完成**(3 commits:① d36828f plan-gate 搬移 ② 4cadd77 FUS-SHAPE ③ 本 commit 优先级翻转)。D1/D2 已拍板;红测试取证 9 例(T1-T6/T10/T13a-c,既有 820 全绿对照);T7-T9/T11 由既有用例+新 T15/T16 family 矩阵钉住;T12 plan-gate 单测 13 例。两处测试标题按规格补前提说明(index.test.ts fail-closed / p4-families D2b)。三门全绿。
+- **P1-1 bus 跨包面:可实施部分完成**(3 commits:契约表 ff0f7e7 → instance 320e7e5 → footer 本 commit)。instance 字段 + patch 不可覆盖 + dispose 终态(B1);契约新文件 bus-cross-package.test.ts 钉 XPKG-01/02/03/04/05 + XPKG-09-HOST todo;footer-lines helper(B4/B8)+ 降级时机改 session_start(B5 两套件改写)+ modes footer 渲染 display.footer(B6 含宽屏路径修复)+ 双语 bus/ui 文档。**D4 未决:reader/exports/断言原样保留**;B6 的 TUI 联合验收(两种加载顺序、off/on、reload 失败的真实槽位)待 TUI 侧配对 spec,core 侧接口已就绪。生产方就绪标记见 spec 实施记录。
 - **P0-2 goal 回合锁:仅 CORE-05 落地**(L6 红取证后修复:sendMessage 抛错复位 confirmationIntent + syncGoalTools,与 tweak 路径对称;goal-turn-lock.test.ts 2 绿)。锁策略(L1-L5/L7)与 G3(args→input)按 D3 待决策整体暂缓,禁止单独合入字段修复 —— FORK.md 已登记边界。
 - **P0-3 memory queue claim:完成**(契约表先行登记;Q-T1 基线红取证 `expected 2 to be 1`)。queue.ts 重写为单次 rename 所有权协议(claim/pending/GC token;claim 后重读;TTL+owner 探测回收;软预算不删活 claim);drain 编排改 claim→重读→路由/上限→bump→complete→apply→settle/release,每条出口 finally 终结 token;Q-T2/Q-T6/Q-T10 用真实子进程验证跨进程互斥与崩溃窗口;契约 disk-layout 钉 claim/pending 后缀形状。claim 套件 19 例 + automation 套件 51 绿。三门全绿。真机多 session 重叠 drain 属实机项,未做。
 

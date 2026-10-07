@@ -23,7 +23,8 @@ import {
 } from "@earendil-works/pi-coding-agent"
 
 import permissionModesExtension from "./index.ts"
-import { coreBus } from "../../extensions/bus.ts";
+import { coreBus, resetCoreBusForTests } from "../../extensions/bus.ts";
+import { setFooterLine } from "../ui/footer-lines.ts";
 import { setConfigPath } from "./config.ts"
 import { writeProjectPermissionsFile } from "./permissions-loader.ts"
 import { getProjectId } from "./path-safety.ts"
@@ -2779,6 +2780,45 @@ describe("footer slot ownership vs CC-TUI (2026-09-22)", () => {
 		; (globalThis as Record<string, unknown>).__ccTuiActive = true
 		await boot()
 		expect(footerCalls.length).toBe(0)
+	})
+
+	// SPEC 2026-10-07 P1-1 (XPKG-07 / B6): while the core modes footer holds
+	// the slot it renders the shared display.footer channel after its own two
+	// lines; a live cctui never sees this footer installed (cc-footer renders
+	// the channel instead — joint acceptance with the TUI spec).
+	it("B6: installed modes footer renders display.footer lines (dim, clamped); cctui presence still skips install", async () => {
+		resetCoreBusForTests()
+		setFooterLine("action-fusion", "action-fusion requires pi >=0.87.0")
+		let rendered: string[] = []
+		footerCalls = []
+		permissionModesExtension(makeFakePiForExtension(pi))
+		await pi.simulateSessionStart("/home/user/project", {
+			setFooter: (factory: unknown) => {
+				footerCalls.push(undefined)
+				const theme = {
+					fg: (_role: string, text: string) => text,
+				}
+				const obj = (factory as (tui: unknown, theme: unknown) => { render(width: number): string[] })(undefined, theme)
+				rendered = obj.render(120)
+			},
+		})
+		expect(footerCalls.length).toBeGreaterThan(0)
+		expect(rendered.length).toBe(3) // two modes lines + one channel line
+		expect(rendered[2]).toContain("action-fusion requires pi")
+		// presence: no install, nothing rendered from this path
+		; (globalThis as Record<string, unknown>).__piCcTui = { active: true }
+		footerCalls = []
+		rendered = []
+		pi.flags["permission-mode"] = "plan"
+		await pi.simulateSessionStart("/home/user/project", {
+			setFooter: (factory: unknown) => {
+				footerCalls.push(undefined)
+				const obj = (factory as (tui: unknown, theme: unknown) => { render(width: number): string[] })(undefined, { fg: (_r: string, t: string) => t })
+				rendered = obj.render(120)
+			},
+		})
+		expect(footerCalls.length).toBe(0)
+		resetCoreBusForTests()
 	})
 })
 

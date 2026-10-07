@@ -33,6 +33,7 @@ against a fake.
 | cctui (primary) | external (pi-claude-code-tui) | Renders when present; detected via presence keys on globalThis |
 | core fallback | `ui/fallback.ts` | Thin default for "core without cctui": owns the working message line and the notification tail display; yields to a live CC-TUI by reading the presence key before any write (poll point self-heals — stale keys are re-read on every snapshot) |
 | notify | `ui/notify.ts` | Shared notification entry for modules (feeds the tail queue) |
+| footer-lines | `ui/footer-lines.ts` | Multi-source `display.footer` publisher (XPKG-07, 2026-10-07 P1-1): one `Map<source, line>` per bus instance (WeakMap — reset/reload drops old lines), publishes the whole source-sorted array in one patch; removing the last line publishes an explicit empty array |
 
 ## Invariants & gotchas
 

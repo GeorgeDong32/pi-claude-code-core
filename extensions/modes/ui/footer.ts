@@ -4,6 +4,7 @@
  */
 import { homedir } from "node:os";
 import { visibleWidth, truncateToWidth } from "@earendil-works/pi-tui";
+import { coreBus } from "../../bus.ts";
 import { MODE_META } from "./meta.ts";
 import type { PermissionMode } from "../mode-prompt.ts";
 
@@ -89,7 +90,7 @@ export function installModesFooter(ctx: FooterCtx, state: () => ModesFooterState
             " ".repeat(rightGap) +
             theme.fg("dim", modelStr);
           const line2 = theme.fg(m.role, modeText);
-          return [line1, line2];
+          return withDisplayFooterLines(theme, width, [line1, line2]);
         }
       }
 
@@ -120,8 +121,26 @@ export function installModesFooter(ctx: FooterCtx, state: () => ModesFooterState
         " ".repeat(gap2) +
         theme.fg("dim", modelDisp);
 
-      return [line1, line2];
+      return withDisplayFooterLines(theme, width, [line1, line2]);
     },
     invalidate() {},
   }));
+}
+
+/** XPKG-07 (SPEC 2026-10-07 P1-1): while the core modes footer holds the
+ *  slot it also renders the shared `display.footer` channel (economy degrade
+ *  lines etc.) — dim, width-clamped, after the modes lines. When a cctui is
+ *  live this footer is never installed (cc-footer renders the channel
+ *  instead); after an explicit off the host stock footer shows nothing from
+ *  this channel by design. */
+function withDisplayFooterLines(
+  theme: { fg(role: string, s: string): string },
+  width: number,
+  lines: string[],
+): string[] {
+  for (const extra of coreBus().snapshot().display?.footer ?? []) {
+    const text = visibleWidth(extra) > width ? truncateToWidth(extra, width) : extra;
+    lines.push(theme.fg("dim", text));
+  }
+  return lines;
 }

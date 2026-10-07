@@ -29,6 +29,7 @@ ui 包装后(如 `effort/ui`),业务流因此可以对 fake await。
 | cctui(优先) | 外部(pi-claude-code-tui) | 在场时负责渲染;经 globalThis 上的 presence 键检测 |
 | core 兜底 | `ui/fallback.ts` | 「无 cctui 的 core」的瘦默认:持有 working 消息行与通知尾队列显示;每次写入前读 presence 键向在场的 CC-TUI 让位(轮询点自愈——过期键在每次快照时重读) |
 | notify | `ui/notify.ts` | 模块共享的通知入口(喂尾队列) |
+| footer-lines | `ui/footer-lines.ts` | 多来源 `display.footer` 发布器(XPKG-07,2026-10-07 P1-1):每个 bus 实例一份 `Map<source, line>`(WeakMap——reset/reload 不沿旧行),单次 patch 发布按 source 排序的整体数组;删除最后一行时显式发布空数组 |
 
 ## 不变量与坑
 

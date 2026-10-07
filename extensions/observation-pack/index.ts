@@ -20,7 +20,8 @@ import { join } from "node:path";
 import { VERSION } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { degradeEconomyModule, probePiCompat } from "../../lib/pi-compat.ts";
+import { assessEconomyModule, probePiCompat } from "../../lib/pi-compat.ts";
+import { setFooterLine } from "../ui/footer-lines.ts";
 import { coreBus } from "../bus.ts";
 import { createLedger, type Ledger } from "./ledger.ts";
 import {
@@ -70,13 +71,14 @@ export function createObservationPackExtension(hostExports: {
 		// CMP-02 version gate: degrade, never block the session. B4: the tail
 		// is the shared helper — version-only probing stays noise-free.
 		const compat = probePiCompat({ version: hostExports.version ?? VERSION });
-		if (
-			!degradeEconomyModule({
-				compat,
-				label: "observation-pack",
-				publish: (line) => coreBus().publish({ display: { footer: [line] } }),
-			})
-		) {
+		// P1-1 §4.4 (F2): pure assessment — warn at LOAD time, publish the
+		// footer line from the FIRST session_start (bus invariant 3).
+		const assessment = assessEconomyModule(compat, "observation-pack");
+		if (!assessment.enabled) {
+			console.warn(assessment.warning);
+			pi.on("session_start", () => {
+				setFooterLine("observation-pack", assessment.footerLine);
+			});
 			return;
 		}
 
