@@ -459,7 +459,9 @@ describe("spec 2026-10-03 — queue write semantics", () => {
 });
 
 describe("spec 2026-10-03 — queue drain", () => {
-	const qfiles = () => (existsSync(queueDir(agentDir)) ? readdirSync(queueDir(agentDir)).filter((f) => f.endsWith(".json")) : []);
+	// P0-3: a record lives as ready (.json), pending or claim — count all
+	// three shapes; only .tmp GC/write leftovers are not records.
+	const qfiles = () => (existsSync(queueDir(agentDir)) ? readdirSync(queueDir(agentDir)).filter((f) => f.endsWith(".json") || f.includes(".pending.") || f.includes(".claim.")) : []);
 	const stage = (over: Partial<QueueRecord> & { sessionId: string }) =>
 		writeQueueRecord(agentDir, { v: 1, projectsDir: projectsDirStr, cwd: project, savedAt: Date.now(), attempts: 0, parts: [{ role: "user", text: "tail content" }], ...over } as QueueRecord);
 
@@ -492,6 +494,7 @@ describe("spec 2026-10-03 — queue drain", () => {
 				const f = qfiles();
 				return f.length === 0 || (JSON.parse(readFileSync(join(queueDir(agentDir), f[0]!), "utf-8")) as QueueRecord).attempts === round;
 			});
+			// (a retained record re-appears as ready or pending; both parse)
 			await new Promise((r) => setTimeout(r, 30));
 		}
 		await until(() => qfiles().length === 0);
@@ -522,6 +525,86 @@ describe("spec 2026-10-03 — queue drain", () => {
 		h.drainPending(h.ctx);
 		await until(() => qfiles().length === 2);
 		expect(h.calls.length).toBe(5);
+	});
+
+	it("Q-T1 (P0-3): two overlapping automation instances drain the same file exactly once; disk attempts=1 while held", async () => {
+		stage({ sessionId: "qt1" });
+		let release!: (v: { stopReason: string; errorMessage: undefined; content: { type: "text"; text: string }[] }) => void;
+		const gate = new Promise<{ stopReason: string; errorMessage: undefined; content: { type: "text"; text: string }[] }>((r) => { release = r; });
+		let completions = 0;
+		const mkHarness = () => harness(OPS_JSON, {
+			complete: (async () => { completions++; return gate; }) as never,
+		});
+		const h1 = mkHarness();
+		const h2 = mkHarness();
+		h1.drainPending(h1.ctx);
+		h2.drainPending(h2.ctx);
+		await new Promise((r) => setTimeout(r, 60)); // both drains have run their claim pass
+		// exactly one LLM call is in flight
+		expect(completions).toBe(1);
+		// the holder's attempt bump is on disk and no second copy exists
+		const claimLike = readdirSync(queueDir(agentDir)).filter((f) => f.endsWith(".json"));
+		const all = readdirSync(queueDir(agentDir));
+		expect(all.filter((f) => f.includes(".claim."))).toHaveLength(1);
+		expect(claimLike).toHaveLength(0);
+		const claimFile = all.find((f) => f.includes(".claim."))!;
+		const held = JSON.parse(readFileSync(join(queueDir(agentDir), claimFile), "utf-8")) as QueueRecord;
+		expect(held.attempts).toBe(1);
+		// second worker saw claim-failure: no extra files, no pending copies
+		expect(all.filter((f) => f.includes(".pending."))).toHaveLength(0);
+		release({ stopReason: "stop", errorMessage: undefined, content: [{ type: "text", text: OPS_JSON }] });
+		await until(() => readdirSync(queueDir(agentDir)).length === 0);
+		expect(completions).toBe(1);
+	});
+
+	it("Q-T4a (P0-3): complete failure with attempts left → RELEASED to pending (retryable), no unhandled rejection", async () => {
+		stage({ sessionId: "qt4a" });
+		const h = harness("", { complete: (async () => ({ stopReason: "error", errorMessage: "down", content: [] })) as never });
+		const unhandled: unknown[] = [];
+		process.on("unhandledRejection", (r) => unhandled.push(r));
+		h.drainPending(h.ctx);
+		await until(() => readdirSync(queueDir(agentDir)).some((f) => f.includes(".pending.")));
+		expect(readdirSync(queueDir(agentDir)).filter((f) => f.includes(".claim."))).toHaveLength(0);
+		expect(unhandled).toHaveLength(0);
+		process.removeAllListeners("unhandledRejection");
+		// retryable: a second drain re-claims the pending and bumps to 2
+		h.drainPending(h.ctx);
+		await until(() => {
+			const f = readdirSync(queueDir(agentDir));
+			return f.length === 1 && (JSON.parse(readFileSync(join(queueDir(agentDir), f[0]!), "utf-8")) as QueueRecord).attempts === 2;
+		});
+	});
+
+	it("Q-T4b (P0-3): apply-fatal (deterministic preflight error) consumes the record with a diagnostic", async () => {
+		stage({ sessionId: "qt4b" });
+		// >200 ops = the store's deterministic preflight rejection (retrying
+		// cannot fix it) → the B2 consume-with-diagnostic path
+		const tooBig = JSON.stringify({
+			operations: Array.from({ length: 201 }, (_, i) => ({ action: "add", layer: "user", name: `f-${i}`, body: "x" })),
+		});
+		const h = harness(tooBig);
+		h.drainPending(h.ctx);
+		await until(() => readdirSync(queueDir(agentDir)).length === 0);
+		expect(h.state.lastError).toContain("flush-queued:");
+	});
+
+	it("Q-T9 (P0-3): crash after apply before settle leaves a claim that a later drain RE-APPLIES — disclosed, not exactly-once", async () => {
+		stage({ sessionId: "qt9" });
+		let first = true;
+		const h = harness(OPS_JSON, {
+			complete: (async () => {
+				if (first) { first = false; throw new Error("simulated crash after apply"); }
+				return { stopReason: "stop", errorMessage: undefined, content: [{ type: "text", text: OPS_JSON }] };
+			}) as never,
+		});
+		h.drainPending(h.ctx);
+		// infra throw during completion → released (attempt counted); the NEXT
+		// drain re-runs the whole record — the §1 disclosed re-apply window
+		await until(() => readdirSync(queueDir(agentDir)).some((f) => f.includes(".pending.")));
+		const second = harness(OPS_JSON);
+		second.drainPending(second.ctx);
+		await until(() => readdirSync(queueDir(agentDir)).length === 0);
+		expect(second.state.opsApplied).toBe(1);
 	});
 
 	it("yielded / automation-off ⇒ drain is a no-op (no LLM, record kept)", async () => {

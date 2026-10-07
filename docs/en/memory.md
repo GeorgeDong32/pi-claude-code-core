@@ -74,7 +74,7 @@ first-token latency). That is expected behavior, not a bug to special-case.
 | `yield.ts` | `InjectionGate` — static + dynamic yield probes (fail-open: injection failures never block a turn, P3-ME-09) |
 | `consolidate.ts` | Consolidation trigger/tool/command; writes via `memory_consolidate` (batch must reduce bytes or file count) |
 | `automation.ts` | P3 automation state + settings (reads via `lib/settings` readJson, invariant 10); per-session state reset on `session_start` (A1); queue drain runs records in PARALLEL (`Promise.allSettled`, ≤5 — worst case 5×20s serial → max(20s); diagnostics aggregated to single-point writes) | 
-| `queue.ts` | Pending-extraction queue (spec 2026-10-03): the shutdown path stages the unextracted tail (cursor-relative suffix-60) as ONE atomic JSON record under `~/.pi/agent/memory-queue/`; the next same-project `session_start` drains it in the background (≤5 records, ≤3 attempts, exact `projectsDir` routing, age/size GC). The shutdown handler itself runs ZERO LLM — the host awaits shutdown handlers serially with no timeout, and the old awaited 10s flush measurably stalled every long-session exit. Records are a plaintext second copy of the session tail (≤7 days, ≤2MB total), disclosed here |
+| `queue.ts` | Pending-extraction queue (spec 2026-10-03; P0-3 single-rename ownership protocol: claim/pending/GC tokens, re-read after claim, TTL+owner-probe recovery, soft budget never deletes live claims): the shutdown path stages the unextracted tail (cursor-relative suffix-60) as ONE atomic JSON record under `~/.pi/agent/memory-queue/`; the next same-project `session_start` drains it in the background (≤5 records, ≤3 attempts, exact `projectsDir` routing, age/size GC). The shutdown handler itself runs ZERO LLM — the host awaits shutdown handlers serially with no timeout, and the old awaited 10s flush measurably stalled every long-session exit. Records are a plaintext second copy of the session tail (≤7 days, ≤2MB total), disclosed here |
 | `importers.ts` | Claude / Hermes import; never overwrites local edits |
 | `store.ts`, `llm.ts`, `paths.ts` | V2 storage (atomic write primitive invalidates the scan cache), the single LLM lane, path resolution (`sessionsDirFor` uses pi's wrapping-dash sessions naming `-${sanitize}-`) |
 | `session-recall.ts` | Cross-session recall (`session_recall` tool). Arch review C8: ASYNC bounded scan (no event-loop blocking) with three caps — ≤200 files (newest first), ≤1MB per file as a BOUNDED PARTIAL READ (never a whole-file skip: the newest sessions are usually the largest), ≤8MB total budget — plus a transparency footer (`scanned=… truncated_size=… budget=… bytes=…/…`; the narrow-your-query advice rides budget exhaustion only). The sessions-dir path fix made the tool work on real machines for the first time (it previously pointed at a directory pi never writes) |
@@ -87,6 +87,21 @@ first-token latency). That is expected behavior, not a bug to special-case.
   queue record (synchronous atomic write, ≤120KB); extraction happens later
   on the drain lane. Never reintroduce an awaited LLM call in a
   `session_shutdown` handler.
+- **Queue ownership protocol (spec 2026-10-07 P0-3)**: one staged record is
+  held by at most one live worker — every transition (ready/pending → claim,
+  dead claim → reclaimer's claim, claim → fresh pending) is a SINGLE
+  same-directory atomic rename; hard links are forbidden (double-name
+  window). After claiming, always re-read the record from the claim file.
+  Stale claims are reclaimed only past a 10-minute TTL AND a dead-owner probe
+  (`kill(pid,0)` ESRCH) — the TTL alone never strips a live worker. The 2MiB
+  budget is SOFT: claims and write-tmps count bytes but are never GC-deleted
+  while their owner may live; a still-over-budget new staging may drop only
+  ITSELF. This is a retrying best-effort queue, NOT exactly-once: a crash
+  between apply and settle can re-apply on the next drain (disclosed). Mixed
+  old/new core versions draining concurrently are NOT safe — upgrade by
+  stopping the old processes first. Recovery from a stuck state: offline,
+  verify the original ready path is absent, then rename the claim/pending
+  back; never overwrite an existing file.
 - **Persisted-once delivery (D1)**: a recall block enters the transcript as a
   `pi-memory-recall` custom message at most once per real user message —
   custom blocks themselves never trigger recall (RV-01), and history-derived

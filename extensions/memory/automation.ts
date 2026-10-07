@@ -53,7 +53,7 @@ import { completeMemoryOps, resolveModelRef, type LlmComplete, type OpsCompletio
 import { applyMemoryOps, type MemoryOp } from "./store.ts";
 import type { ConsolidationTrigger } from "./consolidate.ts";
 import { scanMemoryDirCached } from "./memdir.ts";
-import { bumpAttempts, clampQueueParts, loadQueue, QUEUE_V, removeRecord, writeQueueRecord, type StagedRecord } from "./queue.ts";
+import { bumpClaimedAttempts, claimRecord, clampQueueParts, loadQueue, QUEUE_MAX_AGE_MS, QUEUE_V, reclaimStaleClaims, releaseClaim, settleClaim, writeQueueRecord, type QueueClaim } from "./queue.ts";
 import { readJson } from "../../lib/settings.ts";
 import { readBranchEntries, readSessionId } from "../modes/session-branch.ts";
 
@@ -643,86 +643,144 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 		lastError?: string;
 	}
 
-	/** One staged record, best-effort (quickwin-3, arch review 2026-10-03:
-	 * records are independent — applyMemoryOps is fully synchronous, so
-	 * concurrent applies cannot lost-update the corpus under the event
-	 * loop). Returns a summary; STATE writes are aggregated by the caller
+	/** One claimed record, best-effort (P0-3 §4.3 orchestration). Ownership
+	 * was taken BEFORE this runs (claim → re-read → route/cap checks); every
+	 * exit settles or releases the token in `finally` — no happy-path-only
+	 * cleanup. Returns a summary; STATE writes are aggregated by the caller
 	 * after allSettled (code review R1 P3-1 — no last-writer-wins races on
-	 * diagnostics). The serial version's infra-failure `return` aborted the
-	 * WHOLE drain; in parallel mode each record runs best-effort alone. */
-	async function drainOneRecord(cap: DrainCap, staged: StagedRecord): Promise<DrainRecordSummary> {
+	 * diagnostics). */
+	async function drainOneRecord(cap: DrainCap, claim: QueueClaim): Promise<DrainRecordSummary> {
 		const summary: DrainRecordSummary = { applied: 0, routedNotes: [] };
-		// B4: persist the attempt BEFORE the call — a SIGKILL mid-call counts
-		if (!bumpAttempts(cap.d.agentDir, staged)) {
-			drainBlacklist.add(staged.file);
-			return summary;
-		}
-		let completion: OpsCompletion;
-		try {
-			completion = await completeMemoryOps(
-				cap.model,
-				cap.registry,
-				{
-					systemPrompt: FLUSH_SYSTEM + routingGuidance(cap.projectKey),
-					userPrompt: buildOpsUserPrompt(cap.d, clampQueueParts(staged.record.parts)),
-					// independent lane: pure timeout, deliberately NOT linked to
-					// sessionAbort (the drain must survive /new mid-drain)
-					timeoutMs: FLUSH_QUEUE_MS,
-				},
-				{ complete: cap.complete },
-			);
-		} catch {
-			return summary; // infra failure — record retained (attempt already counted)
-		}
-		if (completion.ok) {
-			if (completion.ops.length > 0) {
-				const routedNotes: string[] = [];
-				const outcome = applyMemoryOps(completion.ops as MemoryOp[], cap.d, { projectKey: cap.projectKey, routedNotes });
-				summary.applied = outcome.applied;
-				summary.routedNotes = routedNotes;
-				summary.lastFlush = `flush-queued: ${outcome.applied} op(s)`;
-				if (outcome.error) {
-					// B2 apply-fatal: deterministic disk-layer error — retrying
-					// cannot fix it, so CONSUME (drop) with a diagnostic
-					removeRecord(cap.d.agentDir, staged.file);
-					summary.lastError = `flush-queued: ${outcome.error}`;
-					return summary;
-				}
+		let settled = false;
+		const finish = (consume: boolean): void => {
+			if (settled) return;
+			settled = true;
+			try {
+				if (consume) settleClaim(cap.d.agentDir, claim);
+				else releaseClaim(cap.d.agentDir, claim);
+			} catch {
+				/* settle/release itself failed — leave the diagnosable claim
+				 * for the stale-recovery protocol; never leak a rejected
+				 * promise out of the background drain */
 			}
-			removeRecord(cap.d.agentDir, staged.file);
-		} else if (staged.record.attempts >= QUEUE_MAX_ATTEMPTS) {
-			removeRecord(cap.d.agentDir, staged.file);
-			summary.lastError = `flush-queued: dropped after ${staged.record.attempts} attempts (${completion.reason ?? "failed"})`;
+		};
+		try {
+			// B4: persist the attempt BEFORE the call — a SIGKILL mid-call counts
+			if (!bumpClaimedAttempts(cap.d.agentDir, claim)) {
+				drainBlacklist.add(`${claim.original}|${claim.record.sessionId}`);
+				finish(false); // bump failed — release for retry, blacklist this session
+				return summary;
+			}
+			let completion: OpsCompletion;
+			try {
+				completion = await completeMemoryOps(
+					cap.model,
+					cap.registry,
+					{
+						systemPrompt: FLUSH_SYSTEM + routingGuidance(cap.projectKey),
+						userPrompt: buildOpsUserPrompt(cap.d, clampQueueParts(claim.record.parts)),
+						// independent lane: pure timeout, deliberately NOT linked to
+						// sessionAbort (the drain must survive /new mid-drain)
+						timeoutMs: FLUSH_QUEUE_MS,
+					},
+					{ complete: cap.complete },
+				);
+			} catch {
+				finish(false); // infra failure — released, retry next session (attempt counted)
+				return summary;
+			}
+			if (completion.ok) {
+				if (completion.ops.length > 0) {
+					const routedNotes: string[] = [];
+					let outcome: ReturnType<typeof applyMemoryOps>;
+					try {
+						outcome = applyMemoryOps(completion.ops as MemoryOp[], cap.d, { projectKey: cap.projectKey, routedNotes });
+					} catch (err) {
+						// apply threw unexpectedly — NOT a success; released for
+						// retry (the §1 disclosed re-apply window applies)
+						summary.lastError = `flush-queued: apply threw: ${err instanceof Error ? err.message : String(err)}`;
+						finish(false);
+						return summary;
+					}
+					summary.applied = outcome.applied;
+					summary.routedNotes = routedNotes;
+					summary.lastFlush = `flush-queued: ${outcome.applied} op(s)`;
+					if (outcome.error) {
+						// B2 apply-fatal: deterministic disk-layer error — retrying
+						// cannot fix it, so CONSUME (drop) with a diagnostic
+						finish(true);
+						summary.lastError = `flush-queued: ${outcome.error}`;
+						return summary;
+					}
+				}
+				finish(true); // ok (incl. zero ops = confirmed nothing salvageable)
+			} else if (claim.record.attempts >= QUEUE_MAX_ATTEMPTS) {
+				finish(true);
+				summary.lastError = `flush-queued: dropped after ${claim.record.attempts} attempts (${completion.reason ?? "failed"})`;
+			} else {
+				// LLM failure with attempts left — release for the next session
+				finish(false);
+			}
+		} finally {
+			// belt-and-suspenders: a code path that forgot to finish still
+			// terminates its token (release keeps the record retryable)
+			finish(false);
 		}
-		// else: LLM failure with attempts left — retain for the next session
 		return summary;
+	}
+
+	/** Claim-first validation: re-checks EVERYTHING on the re-read record
+	 * (routing, blacklist by original-basename + full sessionId, attempt
+	 * cap, age). Returns an error string to settle-with, or null when the
+	 * record is eligible for the LLM lane; the caller releases on routing
+	 * mismatch. */
+	function validateClaimed(cap: DrainCap, claim: QueueClaim): { drop?: string; skip?: boolean } {
+		if (drainBlacklist.has(`${claim.original}|${claim.record.sessionId}`)) return { skip: true };
+		// B1 routing: this session only consumes records staged by sessions
+		// of the SAME project (exact projectsDir match — projectKey
+		// substring heuristics can cross-project collide).
+		if (claim.record.projectsDir !== cap.d.projectsDir) return { skip: true };
+		// leftover edge: attempts already past the cap on disk — drop now
+		if (claim.record.attempts >= QUEUE_MAX_ATTEMPTS) {
+			return { drop: `flush-queued: dropped after ${claim.record.attempts} attempts` };
+		}
+		// age cap — enforced only by the claim holder, never on stale paths
+		if (Date.now() - claim.record.savedAt > QUEUE_MAX_AGE_MS || claim.record.parts.length === 0) {
+			return { drop: "flush-queued: expired record" };
+		}
+		return {};
 	}
 
 	async function drainPendingRecords(cap: DrainCap): Promise<void> {
 		let processed = 0;
-		const eligible: StagedRecord[] = [];
-		for (const staged of loadQueue(cap.d.agentDir)) {
+		const eligible: QueueClaim[] = [];
+		// P0-3 §4.3: dead-claim recovery first — recovered claims are OURS
+		// now and enter the same validation as fresh claims.
+		const recovered = reclaimStaleClaims(cap.d.agentDir, Date.now());
+		const candidates = [...loadQueue(cap.d.agentDir).map((c) => c.file), ...recovered.map((r) => r.current)];
+		for (const file of candidates) {
 			if (processed >= QUEUE_DRAIN_MAX) break;
-			if (drainBlacklist.has(staged.file)) continue;
-			// B1 routing: this session only consumes records staged by sessions
-			// of the SAME project (exact projectsDir match — projectKey
-			// substring heuristics can cross-project collide).
-			if (staged.record.projectsDir !== cap.d.projectsDir) continue;
-			// leftover edge: attempts already past the cap on disk — drop now
-			if (staged.record.attempts >= QUEUE_MAX_ATTEMPTS) {
-				removeRecord(cap.d.agentDir, staged.file);
-				state.lastError = `flush-queued: dropped after ${staged.record.attempts} attempts`;
+			const claim = claimRecord(cap.d.agentDir, { file });
+			if (!claim) continue; // held by another worker / vanished — skip
+			const verdict = validateClaimed(cap, claim);
+			if (verdict.skip) {
+				releaseClaim(cap.d.agentDir, claim);
 				continue;
 			}
-			processed++;
-			eligible.push(staged);
+			if (verdict.drop) {
+				settleClaim(cap.d.agentDir, claim);
+				state.lastError = verdict.drop;
+				continue;
+			}
+			processed++; // QUEUE_DRAIN_MAX counts only records that reach the LLM lane
+			eligible.push(claim);
 		}
 		if (eligible.length === 0) return;
 		// quickwin-3: ≤5 records × 20s LLM budget ran SERIALLY (worst case
 		// 100s of background drain); Promise.allSettled runs them in parallel
 		// (worst case max(20s)). QUEUE_DRAIN_MAX still counts only eligible
 		// records — blacklist/projectsDir/attempts-cap skips never consume it.
-		const settled = await Promise.allSettled(eligible.map((staged) => drainOneRecord(cap, staged)));
+		const settled = await Promise.allSettled(eligible.map((claim) => drainOneRecord(cap, claim)));
 		// single-point state aggregation (code review R1 P3-1): diagnostics are
 		// written once, in record order — no last-writer-wins across awaits.
 		for (const outcome of settled) {

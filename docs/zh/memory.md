@@ -60,7 +60,7 @@ child 的 dispatch prompt 触发一次选择器调用(token 费 + ≤waitMs 首 
 | `yield.ts` | `InjectionGate` —— 静态 + 动态 yield 探测(fail-open:注入失败绝不阻塞 turn,P3-ME-09) |
 | `consolidate.ts` | 整合触发/工具/命令;写入走 `memory_consolidate`(批次必须减少字节或文件数) |
 | `automation.ts` | P3 automation 状态 + 设置(经 `lib/settings` readJson 读取,不变量 10);`session_start` 每会话态重置(A1);queue drain 并行(`Promise.allSettled`,≤5 —— 最坏 5×20s 串行 → max(20s);诊断单点聚合写入) |
-| `queue.ts` | 待提取队列(spec 2026-10-03):shutdown 路径把未提取尾窗（cursor 相对的后缀 60 条）原子落盘为 `~/.pi/agent/memory-queue/` 下的一条 JSON 记录；下一个同项目 `session_start` 后台 drain（≤5 条、≤3 次尝试、`projectsDir` 精确路由、年龄/体积 GC）。shutdown handler 本体**零 LLM** —— 宿主串行 await 全部 shutdown handler 且无超时兑底，旧的 await 10s flush 实测让每次长会话退出必卡满 10s。记录是会话尾窗的明文第二副本（≤7 天、总量 ≤2MB），在此披露 |
+| `queue.ts` | 待提取队列(spec 2026-10-03):shutdown 路径把未提取尾窗（cursor 相对的后缀 60 条）原子落盘为 `~/.pi/agent/memory-queue/` 下的一条 JSON 记录；下一个同项目 `session_start` 后台 drain（≤5 条、≤3 次尝试、`projectsDir` 精确路由、年龄/体积 GC;P0-3 单次 rename 所有权协议:claim/pending/GC token,claim 后重读,TTL+owner 探测回收,软预算不删活 claim）。shutdown handler 本体**零 LLM** —— 宿主串行 await 全部 shutdown handler 且无超时兑底，旧的 await 10s flush 实测让每次长会话退出必卡满 10s。记录是会话尾窗的明文第二副本（≤7 天、总量 ≤2MB），在此披露 |
 | `importers.ts` | Claude / Hermes 导入;绝不覆写本地编辑 |
 | `store.ts`、`llm.ts`、`paths.ts` | V2 存储(原子写原语顺带失效扫描缓存)、唯一 LLM 通道、路径解析(`sessionsDirFor` 用 pi 的包裹横杠 sessions 命名 `-${sanitize}-`) |
 | `session-recall.ts` | 跨会话回溯(`session_recall` 工具)。arch review C8:异步有界扫描(不卡事件循环)+ 三重上限 —— ≤200 文件(新→旧)、单文件 ≤1MB 有界部分读(从不整文件跳过:最新会话往往最大)、总预算 ≤8MB —— 加透明度尾部行(`scanned=… truncated_size=… budget=… bytes=…/…`;「收窄 query」提示只在预算耗尽时)。sessions 目录路径修复使该工具首次在真机可用(此前指向 pi 从不写入的目录) |
@@ -71,6 +71,7 @@ child 的 dispatch prompt 触发一次选择器调用(token 费 + ≤waitMs 首 
 - **零 LLM 退出（spec 2026-10-03）**:`session_shutdown` 只同步落盘一条队列
   记录（原子写，≤120KB）；提取延后到 drain 通道。绝不在 `session_shutdown`
   handler 里重新引入 await 的 LLM 调用。
+- **队列所有权协议(spec 2026-10-07 P0-3)**:同一条入队记录最多由一个存活 worker 同时持有 —— 每次转移(ready/pending → claim、死 claim → 回收者新 claim、claim → 全新 pending)都是同目录单次原子 rename;禁止 hard-link(双名窗口)。claim 后必须从 claim 文件重读记录。过期 claim 只在 10 分钟 TTL 且 owner 探测确认已死(kill(pid,0) ESRCH)后才可回收 —— TTL 本身不剥夺活 worker。2MiB 预算是软上限:claim 与写入 tmp 计入字节,但 owner 可能存活时 GC 永不删除;仍超预算的新暂存只能丢弃它自己。这是带重试的尽力队列,不是 exactly-once:apply 与 settle 之间崩溃可能在下次 drain 重复 apply(已披露)。新旧版本 core 并行 drain 不安全 —— 升级时先停旧进程。卡死恢复:离线状态下确认原 ready 路径不存在后把 claim/pending rename 回去;绝不覆盖现存文件。
 - **持久化一次投递(D1)**:召回块以 `pi-memory-recall` custom message
   进入 transcript,每条真实用户消息至多一次 —— custom 块自身永不触发召回
   (RV-01);历史推导的硬判重保证一个文件在一个 compaction 窗口内至多浮出
