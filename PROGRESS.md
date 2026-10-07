@@ -2,6 +2,13 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## 2026-10-08 C4-Step2：auto tier 梯子迁入 decide（P2-1 2/3）
+
+- **实现**:decide 新增 auto 分支——embedded auto 扫描(sensitive/tier prompt)、tool_search/read/edit 敏感路径、edit cwd 内放行、bash tier1→1.5 allow(复合命令全段安全约束)→1.5b soft_deny→tier2,其余 defers to `classify` 决策(classifier seam);legacyAutoGate 整体删除(4514 字节旧代码离场)。采集层新增 embeddedAuto/bashTiers/commandSensitive/autoAllowMatched/autoSoftDenyMatched/tier3ReviewLabel 探测(全部内存纯函数)。
+- **副作用保真**:旧 `allowToolCall()` 的 classifierDenialState 重置以 `AllowEffects.resetAutoDenialState` 建模——verdict-allow(auto 模式)与 auto 阶梯各 allow 点携带;bypass/plan/ask 的 allow 不携带(与旧代码一致);interpret 端口 `recordAutoAllow` 执行。
+- **验证**:parity golden(未重生成)**零差异**——47 case 含 12 个 auto 案例全过;decision table 17 例;check 0;vitest 923;contracts 43+3todo。
+- **台账**:DEVIATIONS #116 补记;docs 模块表 Step1 行更新于本 commit。
+
 ## 2026-10-08 C4-Step1：permission 裁决 module — bypass/规则/plan/ask 迁入 decide（P2-1 1/3）
 
 - **对拍 harness 先行**(commit 6c01665):47 case 矩阵(模式×工具族×规则×UI,classifier 恒禁用)驱动真实 modes gate,记录 result+ui 对话框+notifications+持久化规则+session grant+family adjudication+outside-write 计数;golden 落自基线 2902384 旧 handler,两次生成字节一致;UPDATE_PARITY_FIXTURE=1 人工门。

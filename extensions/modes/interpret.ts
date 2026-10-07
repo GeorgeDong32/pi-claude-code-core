@@ -11,8 +11,10 @@
  *  - promptApproval: plain user prompt (label only).
  *  - firstSeen: the family first-seen dialog (allow once / session / always).
  *  - editWriteChoice: the ask-mode 5-choice dialog + applyApprovalDecision.
- *  - legacyAutoGate: Step-1 transitional home of the embedded-auto scan +
- *    tier ladder + classifier (folds into decide in Step 2/3).
+ *  - classifyTier3: the classifier seam (approveAutoTier3 — its retry loop
+ *    gets clock/signal injection in Step 3).
+ *  - recordAutoAllow: the old allowToolCall() side effect — resets the
+ *    classifier denial state on every auto-ladder allow.
  */
 import type { BlockShape, Decision, ToolCallRequest } from "./adjudicate.ts";
 
@@ -25,7 +27,11 @@ export interface InterpretPorts {
 	promptApproval(call: ToolCallRequest, label: string): Promise<BlockShape | undefined>;
 	firstSeen(call: ToolCallRequest, canonicalId: string, suggestedRule: string): Promise<BlockShape | undefined>;
 	editWriteChoice(call: ToolCallRequest, path: string): Promise<BlockShape | undefined>;
-	legacyAutoGate(call: ToolCallRequest): Promise<BlockShape | undefined>;
+	classifyTier3(
+		call: ToolCallRequest,
+		tier3: { command?: string; path?: string },
+	): Promise<BlockShape | undefined>;
+	recordAutoAllow(): void;
 	trackOutsideWrite(call: ToolCallRequest): void;
 	noteFamilyAdjudication(
 		call: ToolCallRequest,
@@ -44,6 +50,7 @@ export async function interpretDecision(
 			if (decision.effects.familyAdjudication) {
 				ports.noteFamilyAdjudication(call, decision.effects.familyAdjudication);
 			}
+			if (decision.effects.resetAutoDenialState) ports.recordAutoAllow();
 			return undefined;
 		}
 		case "deny": {
@@ -61,8 +68,8 @@ export async function interpretDecision(
 		case "firstSeen": {
 			return ports.firstSeen(call, decision.canonicalId, decision.suggestedRule);
 		}
-		case "legacyAuto": {
-			return ports.legacyAutoGate(call);
+		case "classify": {
+			return ports.classifyTier3(call, decision.tier3);
 		}
 	}
 }

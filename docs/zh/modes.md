@@ -53,7 +53,7 @@ fail-closed,但 block reason 现在原样携带该 family 给出的建议 allow
 | 领域 | 文件 | 说明 |
 |---|---|---|
 | 权限引擎 | `permissions.ts`、`permission-rule-parser.ts`、`permissions-loader.ts`、`bash-permission-match.ts`、`path-permission-match.ts`、`shell-rule-matching.ts`、`dangerous-permissions.ts` | 规则解析/加载/匹配(Claude-Code 风格 `tool(content)` 规则);loader 合并用户级 + 项目级规则文件 |
-| 裁决 module(P2-1) | `adjudicate.ts`、`interpret.ts` | 纯 `decide(facts)→Decision`(判定顺序表见 adjudicate.ts 头注释)+ `interpretDecision` 经注入端口执行副作用;入口 `createPermissionAdjudicator(deps).check(call)`。Step 1 已迁 bypass/规则/plan/ask;auto 暂走 legacyAuto 决策(Step 2/3 收编)。对拍 golden:`test/lib/adjudication-parity.test.ts` |
+| 裁决 module(P2-1) | `adjudicate.ts`、`interpret.ts` | 纯 `decide(facts)→Decision`(判定顺序表见 adjudicate.ts 头注释)+ `interpretDecision` 经注入端口执行副作用;入口 `createPermissionAdjudicator(deps).check(call)`。Step 1+2 已迁 bypass/规则/plan/ask/auto 阶梯;classifier 经 classify 决策留在端口(Step 3 收编)。对拍 golden:`test/lib/adjudication-parity.test.ts` |
 | 规则族(接缝) | `rule-families.ts` | `registerRuleFamily` —— web-gov/mcp-gov 使用的扩展点;会话授权、裁定缓存、bypass 状态 |
 | auto 分类器 | `classifier-client.ts`、`classifier-prompt.ts`、`classifier-prompts/`、`classifier-transcript.ts`、`classifier-tool*.ts`、`classifier-redact.ts`、`classifier-messages.ts` | auto 模式的可选 LLM 分类器;读取 AGENTS.md 上下文、脱敏、缓存裁定 |
 | 子代理集成 | `permission-forwarding.ts`、`mode-inherit.ts` | 审批转发经 `~/.pi/agent/sessions/permission-modes-forwarding/sessions/<id>/{requests,responses}`(P0-CT-05);`PERMISSION_MODES_INHERITED_MODE` 继承(P0-CT-04) |

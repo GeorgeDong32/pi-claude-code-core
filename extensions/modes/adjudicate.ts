@@ -12,10 +12,13 @@
  *  3. plan hard limits  → deny (plan-gate.ts; allow/ask rules can never unlock)
  *  4. verdict allow     → allow (+ outside-write track + family note)
  *  5. verdict ask       → family first-seen dialog | permission prompt
- *  6. mode auto         → Step-1 transitional: the embedded-command auto scan
- *                         and the tier ladder still run the legacy path
- *                         (legacyAuto decision; becomes real decisions in
- *                         Step 2 — classifier stays behind that path)
+ *  6. mode auto         → embedded-command scan (sensitive path / tier check
+ *                         prompts) then the tier ladder: tool_search / read
+ *                         (sensitive path) / edit-write (sensitive path,
+ *                         inside cwd) / bash tier1 → 1.5 allow → 1.5b
+ *                         soft_deny → tier2; anything else defers to the
+ *                         classifier seam (classify decision — the retry
+ *                         loop itself is extracted in Step 3)
  *  7. embedded commands → ask mode: an unsafe embedded command prompts
  *  8. mode plan         → allow (allowlist: read tools, tool_search, default)
  *  9. mode ask          → read outside cwd prompts; edit/write memory carve-out
@@ -23,9 +26,9 @@
  *                         prompts; everything else passes
  * 10. unknown           → allow (passthrough)
  *
- * Migration: Step 1 (bypass / rules / plan / ask) — this file. Step 2 folds
- * the auto tier ladder in. Step 3 extracts classifier retry with injected
- * clock/signal.
+ * Migration: Step 1 (bypass / rules / plan / ask) + Step 2 (auto tier
+ * ladder) landed. Step 3 extracts the classifier retry with injected
+ * clock/signal behind the classify decision.
  */
 import type { PermissionVerdict } from "./permissions.ts";
 
@@ -75,6 +78,19 @@ export interface AdjudicationFacts {
 	command: string;
 	/** isSafeCommand(command) — ask bash semantics. */
 	commandSafe: boolean;
+	// ---- auto ladder probes (adapter computes; decide only branches) ----
+	/** Embedded commands with their auto-ladder probes, in scan order. */
+	embeddedAuto: Array<{ command: string; sensitive: boolean; safe: boolean; autoApprovable: boolean }>;
+	/** classifyBashTiers(command) — undefined when no command. */
+	bashTiers?: { safe: boolean; autoApprovable: boolean };
+	/** commandReferencesSensitivePath(command). */
+	commandSensitive: boolean;
+	/** autoMode.allow pattern matched the command (guarded by tiers in decide). */
+	autoAllowMatched: boolean;
+	/** autoMode.soft_deny pattern matched the command. */
+	autoSoftDenyMatched: boolean;
+	/** describeTier3Review(tool, input, cwd) — the tier-3 prompt label. */
+	tier3ReviewLabel: string;
 }
 
 export interface AllowEffects {
@@ -82,6 +98,12 @@ export interface AllowEffects {
 	trackOutsideWrite?: boolean;
 	/** Record the allow on the family adjudication cache (P4-MC-03). */
 	familyAdjudication?: "rule-allow" | "session-grant";
+	/**
+	 * Reset the classifier denial state (the old allowToolCall side effect —
+	 * every auto-ladder allow and the verdict-allow path did this in auto
+	 * mode; bypass / plan / ask allows never did).
+	 */
+	resetAutoDenialState?: boolean;
 }
 
 export type PromptFlavor =
@@ -94,7 +116,8 @@ export type Decision =
 	| { kind: "deny"; reason: string }
 	| { kind: "prompt"; flavor: PromptFlavor; label: string; category?: string; path?: string }
 	| { kind: "firstSeen"; canonicalId: string; suggestedRule: string }
-	| { kind: "legacyAuto" };
+	/** Auto tier-3: the classifier seam (approveAutoTier3 until Step 3). */
+	| { kind: "classify"; tier3: { command?: string; path?: string } };
 
 /** The decide function — pure, total, order fixed by the table above. */
 export function decide(f: AdjudicationFacts): Decision {
@@ -118,11 +141,14 @@ export function decide(f: AdjudicationFacts): Decision {
 		return { kind: "deny", reason: f.planHardBlock.reason };
 	}
 
-	// 4. verdict allow: outside-write tracking + family adjudication note.
+	// 4. verdict allow: outside-write tracking + family adjudication note
+	// (allowToolCall's auto denial-state reset applies here too — the old
+	// gate ran every verdict allow through allowToolCall()).
 	if (f.verdict.behavior === "allow") {
 		const effects: AllowEffects = {};
 		if (f.tool === "edit" || f.tool === "write") effects.trackOutsideWrite = true;
 		if (f.family) effects.familyAdjudication = f.familySessionGrant ? "session-grant" : "rule-allow";
+		if (f.mode === "auto") effects.resetAutoDenialState = true;
 		return { kind: "allow", effects };
 	}
 
@@ -141,10 +167,99 @@ export function decide(f: AdjudicationFacts): Decision {
 		};
 	}
 
-	// 6. auto: legacy path owns the embedded auto scan + tier ladder +
-	// classifier until Step 2/3 land.
+	// 6. auto: embedded-command scan, then the tier ladder. Everything the
+	// ladder cannot decide locally defers to the classifier seam.
 	if (f.mode === "auto") {
-		return { kind: "legacyAuto" };
+		for (const e of f.embeddedAuto) {
+			if (e.sensitive) {
+				return {
+					kind: "prompt",
+					flavor: "permission-options",
+					label: `sensitive path in command: ${e.command}${f.embeddedHint}`,
+					category: "sensitive-path",
+				};
+			}
+			if (!e.safe && !e.autoApprovable) {
+				return {
+					kind: "prompt",
+					flavor: "permission-options",
+					label: f.tier3ReviewLabel,
+					category: "fusion-command",
+				};
+			}
+		}
+
+		// META-03: retrieval-only meta tool passes like the read tier.
+		if (f.tool === "tool_search") {
+			return { kind: "allow", effects: { resetAutoDenialState: true } };
+		}
+		if (f.tool === "read" || f.tool === "grep" || f.tool === "find" || f.tool === "ls") {
+			if (f.pathSensitive) {
+				return {
+					kind: "prompt",
+					flavor: "permission-options",
+					label: `sensitive path "${f.path}"`,
+					category: "sensitive-path",
+				};
+			}
+			return { kind: "allow", effects: { resetAutoDenialState: true } };
+		}
+		if (f.tool === "edit" || f.tool === "write") {
+			if (f.pathSensitive) {
+				return {
+					kind: "prompt",
+					flavor: "permission-options",
+					label: `sensitive path "${f.path}"`,
+					category: "sensitive-path",
+				};
+			}
+			if (!f.path || !f.pathOutsideCwd) {
+				return { kind: "allow", effects: { resetAutoDenialState: true } };
+			}
+			// outside cwd — falls to the classifier seam with the path context
+		}
+		if (f.tool === "bash" || f.tool === "powershell") {
+			if (f.command && f.commandSensitive) {
+				return {
+					kind: "prompt",
+					flavor: "permission-options",
+					label: `sensitive path in command: ${f.command}`,
+					category: "sensitive-path",
+				};
+			}
+			// Tier 1: read-only bash auto-approves.
+			if (f.bashTiers?.safe) {
+				return { kind: "allow", effects: { resetAutoDenialState: true } };
+			}
+			// Tier 1.5: autoMode.allow user rules short-circuit before the
+			// classifier — compound commands must still be fully auto-
+			// approvable ("npm install && rm -rf /" must not slip through a
+			// bare "npm" pattern).
+			if (f.command && f.autoAllowMatched && f.bashTiers?.autoApprovable) {
+				return { kind: "allow", effects: { resetAutoDenialState: true } };
+			}
+			// Tier 1.5b: autoMode.soft_deny forces a prompt.
+			if (f.command && f.autoSoftDenyMatched) {
+				return {
+					kind: "prompt",
+					flavor: "permission-options",
+					label: "matched autoMode.soft_deny",
+					category: "auto-deny",
+				};
+			}
+			// Tier 2: common dev workflow commands auto-approve.
+			if (f.bashTiers?.autoApprovable) {
+				return { kind: "allow", effects: { resetAutoDenialState: true } };
+			}
+		}
+
+		return {
+			kind: "classify",
+			tier3: {
+				command: f.tool === "bash" || f.tool === "powershell" ? f.command : undefined,
+				path: f.tool === "edit" || f.tool === "write" ? f.path : undefined,
+			},
+		};
 	}
 
 	// 7. embedded commands (ask semantics ONLY — plan's copy lives in

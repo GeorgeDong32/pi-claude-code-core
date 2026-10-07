@@ -1475,6 +1475,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     const tool = call.tool;
     const input = call.input;
     const path = String(input.path ?? "");
+    const command = String(input.command ?? "");
     const familyMatch = matchFamily(tool, input);
     const planHard = currentMode === "plan"
       ? planHardBlock(tool, input, {
@@ -1509,136 +1510,29 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       pathSensitive: !!path && isSensitivePath(path, ctx.cwd),
       pathOutsideCwd: !!path && isOutsideCwd(path, ctx.cwd),
       pathIsMemoryDir: isMemoryDirWrite(tool, ctx, input),
-      command: String(input.command ?? ""),
-      commandSafe: isSafeCommand(String(input.command ?? "")),
+      command,
+      commandSafe: isSafeCommand(command),
+      embeddedAuto: embedded.map((c) => {
+        const tiers = classifyBashTiers(c.command);
+        return {
+          command: c.command,
+          sensitive: commandReferencesSensitivePath(c.command),
+          safe: tiers.safe,
+          autoApprovable: tiers.autoApprovable,
+        };
+      }),
+      bashTiers: command ? classifyBashTiers(command) : undefined,
+      commandSensitive: !!command && commandReferencesSensitivePath(command),
+      autoAllowMatched:
+        !!command
+        && !!autoModeConfig?.allow?.length
+        && autoModeConfig.allow.some((p) => matchAutoModePattern(command, p)),
+      autoSoftDenyMatched:
+        !!command
+        && !!autoModeConfig?.soft_deny?.length
+        && autoModeConfig.soft_deny.some((p) => matchAutoModePattern(command, p)),
+      tier3ReviewLabel: describeTier3Review(tool, input, ctx.cwd),
     };
-  }
-
-  // Step-1 transitional: the auto path, verbatim from the pre-refactor gate
-  // (embedded-command auto scan first, then the tier ladder + classifier).
-  async function legacyAutoGate(call: ToolCallRequest): Promise<Block> {
-    const ctx = call.ctx as ExtensionContext;
-    const tool = call.tool;
-    const input = call.input;
-
-    // plan2 B1: embedded-command gate (auto copy). Fusion tools carry shell
-    // commands in non-primary input fields; vet them by FIELD SCAN before
-    // the tier ladder. Plan's copy lives in plan-gate.ts; family-governed
-    // MCP calls never reach here (verdict execution returned earlier).
-    const embeddedCommands = extractEmbeddedCommandInputs(tool, input);
-    if (embeddedCommands.length > 0) {
-      const hint = fusionSchemaHint(tool);
-      for (const { command } of embeddedCommands) {
-        if (commandReferencesSensitivePath(command)) {
-          return promptWithPermissionOptions(
-            ctx,
-            tool,
-            input,
-            `sensitive path in command: ${command}${hint}`,
-            "sensitive-path",
-          );
-        }
-        const tiers = classifyBashTiers(command);
-        if (!tiers.safe && !tiers.autoApprovable) {
-          return promptWithPermissionOptions(
-            ctx,
-            tool,
-            input,
-            describeTier3Review(tool, input, ctx.cwd),
-            "fusion-command",
-          );
-        }
-      }
-      // every embedded command individually tier-1/2 — normal auto dispatch
-      // still runs (path checks for edit/write; unknown names keep their
-      // tier-3 review)
-    }
-
-    // META-03: retrieval-only meta tool passes like the read tier.
-    if (tool === "tool_search") {
-      return undefined;
-    }
-    if (tool === "read" || tool === "grep" || tool === "find" || tool === "ls") {
-      const pathStr = String(input.path ?? "");
-      if (pathStr && isSensitivePath(pathStr, ctx.cwd)) {
-        return promptWithPermissionOptions(
-          ctx,
-          tool,
-          input,
-          `sensitive path "${pathStr}"`,
-          "sensitive-path",
-        );
-      }
-      return allowToolCall();
-    }
-
-    if (tool === "edit" || tool === "write") {
-      const pathStr = String(input.path ?? "");
-      if (pathStr && isSensitivePath(pathStr, ctx.cwd)) {
-        return promptWithPermissionOptions(
-          ctx,
-          tool,
-          input,
-          `sensitive path "${pathStr}"`,
-          "sensitive-path",
-        );
-      }
-      if (!pathStr || !isOutsideCwd(pathStr, ctx.cwd)) {
-        return allowToolCall();
-      }
-    }
-
-    if (tool === "bash" || tool === "powershell") {
-      const cmd = String(input.command ?? "");
-      if (cmd && commandReferencesSensitivePath(cmd)) {
-        return promptWithPermissionOptions(
-          ctx,
-          tool,
-          input,
-          `sensitive path in command: ${cmd}`,
-          "sensitive-path",
-        );
-      }
-      // Tier 1 / Tier 2 verdicts share one splitShellSegments pass (plan A4).
-      const tiers = cmd ? classifyBashTiers(cmd) : undefined;
-      // Tier 1: read-only bash auto-approves.
-      if (tiers?.safe) {
-        return allowToolCall();
-      }
-      // Tier 1.5: autoMode.allow user rules short-circuit before classifier.
-      // Guard: compound commands (&&, ||, ;) must have ALL segments safe,
-      // preventing "npm install && rm -rf /" from being allowed by a "npm" rule.
-      if (cmd && autoModeConfig?.allow?.length) {
-        if (autoModeConfig.allow.some((p) => matchAutoModePattern(cmd, p))) {
-          if (tiers?.autoApprovable) {
-            return allowToolCall();
-          }
-          // Pattern matched but command has dangerous segments -> fall through
-        }
-      }
-      // Tier 1.5b: autoMode.soft_deny forces a prompt.
-      if (cmd && autoModeConfig?.soft_deny?.length) {
-        if (autoModeConfig.soft_deny.some((p) => matchAutoModePattern(cmd, p))) {
-          return promptWithPermissionOptions(ctx, tool, input, "matched autoMode.soft_deny", "auto-deny");
-        }
-      }
-      // Tier 2: common dev workflow commands auto-approve without classifier.
-      if (tiers?.autoApprovable) {
-        return allowToolCall();
-      }
-    }
-
-    return approveAutoTier3(ctx, tool, input, {
-      tool,
-      command:
-        tool === "bash" || tool === "powershell"
-          ? String(input.command ?? "")
-          : undefined,
-      path:
-        tool === "edit" || tool === "write"
-          ? String(input.path ?? "")
-          : undefined,
-    });
   }
 
   // The ask-mode 5-choice edit/write dialog (verbatim from the old gate;
@@ -1686,7 +1580,17 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
           firstSeen: (c, canonicalId, suggestedRule) =>
             firstSeenPrompt(c.ctx as ExtensionContext, canonicalId, c.tool, c.input, suggestedRule),
           editWriteChoice: (c, path) => editWriteChoicePrompt(c, path),
-          legacyAutoGate: (c) => legacyAutoGate(c),
+          classifyTier3: (c, tier3) =>
+            approveAutoTier3(c.ctx as ExtensionContext, c.tool, c.input, {
+              tool: c.tool,
+              command: tier3.command,
+              path: tier3.path,
+            }),
+          recordAutoAllow: () => {
+            if (currentMode === "auto") {
+              classifierDenialState = recordClassifierSuccess(classifierDenialState);
+            }
+          },
           trackOutsideWrite: (c) => {
             const ctx = c.ctx as ExtensionContext;
             if (c.tool === "edit" || c.tool === "write") {
