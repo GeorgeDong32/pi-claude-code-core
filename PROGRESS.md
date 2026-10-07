@@ -2,6 +2,13 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## 2026-10-08 C4-Step1：permission 裁决 module — bypass/规则/plan/ask 迁入 decide（P2-1 1/3）
+
+- **对拍 harness 先行**(commit 6c01665):47 case 矩阵(模式×工具族×规则×UI,classifier 恒禁用)驱动真实 modes gate,记录 result+ui 对话框+notifications+持久化规则+session grant+family adjudication+outside-write 计数;golden 落自基线 2902384 旧 handler,两次生成字节一致;UPDATE_PARITY_FIXTURE=1 人工门。
+- **实现**:`adjudicate.ts` 纯 decide(判定顺序表在头注释;bypass→rule deny→plan hard→verdict allow/ask(含 family 首见)→legacyAuto(过渡)→embedded(仅 ask)→plan allowlist→ask dispatch)+ `createPermissionAdjudicator(deps).check(call)`;`interpret.ts` interpretDecision 八端口(全部映射既有闭包函数);index.ts handler 退化为组装 facts→check;auto 分支(embedded auto 扫描+tier 梯子+classifier)逐字抽出为 legacyAutoGate,行为零改动。
+- **验证**:decision table 12 例(adjudicate.test.ts);parity 对比 golden **零差异**;check 0;vitest 919(+13);contracts 43+3todo。
+- **台账**:docs/{en,zh}/modes.md 模块表;DEVIATIONS #116;本条。
+
 ## 2026-10-08 C3：P3-1 S3 无 UI family 首见建议规则（D6=B）
 
 - **实现**：`firstSeenPrompt` 无 UI 分支保留原拒绝前缀,追加 family `suggestAllowRule` 原样规则 + 「在父会话/交互会话预置后重试」指引;不写授权、不弹窗、不创建父会话转发请求(family 首见不进转发协议)。规则获取沿用既有 `match.family.suggestAllowRule`,未自拼 canonicalId。
