@@ -2,9 +2,10 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
-## 2026-10-07 spec 批实施(9 份规格;P0-1 + P0-3 + P0-2 CORE-05 + P1-1 可实施面 + P2-4 + P2-3 完成)
+## 2026-10-07 spec 批实施(9 份规格;P0-1 + P0-3 + P0-2 CORE-05 + P1-1 可实施面 + P2-4 + P2-3 + P3-1(除 D6 项)完成)
 
 - **P0-1 plan 权限优先级:完成**(3 commits:① d36828f plan-gate 搬移 ② 4cadd77 FUS-SHAPE ③ 本 commit 优先级翻转)。D1/D2 已拍板;红测试取证 9 例(T1-T6/T10/T13a-c,既有 820 全绿对照);T7-T9/T11 由既有用例+新 T15/T16 family 矩阵钉住;T12 plan-gate 单测 13 例。两处测试标题按规格补前提说明(index.test.ts fail-closed / p4-families D2b)。三门全绿。
+- **P3-1 小项:S1/S2/S4/S5/S6 完成,S3 待 D6**(3 commits:221ff55 S1+S5、07f7a62 S2、edb1e5b S4+S6)。S1 三 adapter 合一(测试注入统一单注入器+fallback 语义,15 对双设合并);S2 startPlanExecution 三转移合一(plan_ready 补 widget 同步+新断言);S4 两处 JSON 读取走 readJson+stat 指纹缓存(3 测试);S5 diff-file 删除+git status 单次采样;S6 死代码清理(goal 3 个无调用函数/不可达判断/未用 import/nudge 文案)。三门全绿 903。
 - **P2-3 memory writer + drain:完成**(2 commits:① 7a006c0 writer+身份收敛 ② 本 commit drain 归位)。writer 三动词(write raw/memory、remove、reindex)+ 单向依赖 + W4 双身份命名;drain 编排搬 queue-drain.ts(ports 注入、DrainSummary 返回、automation 只聚合);ConversationPart 归 queue。W-T1..T6 + D-T1/D-T2 新增;memory-v2 全套断言零改动通过(编排等价证据)。可选的「消息文本扁平化」(§4.3)未实施 —— 明确记录为可选项跳过。
 - **P2-4 结构化用量:完成**(单 commit d1e8101)。workingStatsEntry 拆两步(字符串格式化不变);refreshWorkingMessage 同一次 publish 写 workingStats+usage;publishCapability 以 "usage" in patch 区分保留/显式清空(session_start/tree/shutdown 三处清);sanitizeUsageNumbers 只发 finite 非负、必填缺失整体缺省、可选项不伪装 0;types CoreSnapshot.modes.usage 登记(CoreStatus/reader 白名单不动,归 D4)。U-T1/2/4/5/6 新增,U-T3=既有 ST 套件零改动通过。三门全绿。**生产方已就绪:TUI P1-2 第二步可消费 modes.usage**。
 - **P1-1 bus 跨包面:可实施部分完成**(3 commits:契约表 ff0f7e7 → instance 320e7e5 → footer 本 commit)。instance 字段 + patch 不可覆盖 + dispose 终态(B1);契约新文件 bus-cross-package.test.ts 钉 XPKG-01/02/03/04/05 + XPKG-09-HOST todo;footer-lines helper(B4/B8)+ 降级时机改 session_start(B5 两套件改写)+ modes footer 渲染 display.footer(B6 含宽屏路径修复)+ 双语 bus/ui 文档。**D4 未决:reader/exports/断言原样保留**;B6 的 TUI 联合验收(两种加载顺序、off/on、reload 失败的真实槽位)待 TUI 侧配对 spec,core 侧接口已就绪。生产方就绪标记见 spec 实施记录。
