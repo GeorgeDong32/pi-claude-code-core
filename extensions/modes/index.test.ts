@@ -85,6 +85,7 @@ interface FakePi extends ExtensionAPI {
 	/** Full ToolInfo list returned by getAllTools(); tests may push before session_start. */
 	allTools: ToolInfo[]
 	userMessages: Array<{ text: string; opts?: unknown }>
+	widgetCalls: Array<{ key: string; value: unknown }>
 	sentMessages: Array<{
 		message: { customType?: string; content?: unknown; display?: boolean }
 		opts?: unknown
@@ -156,6 +157,7 @@ function createFakePi(): FakePi {
 	const activeTools = ["read", "edit", "write", "bash", "grep", "find"]
 	const allTools = activeTools.map((name) => fakeToolInfo(name))
 	const flags: Record<string, boolean | string | undefined> = { "permission-mode": "ask" }
+	const widgetCalls: Array<{ key: string; value: unknown }> = []
 	const setModelCalls: Array<{ model: unknown }> = []
 	let thinkingLevel: FakeThinkingLevel = "off"
 	let sessionName: string | undefined
@@ -168,6 +170,7 @@ function createFakePi(): FakePi {
 		tools,
 		allTools,
 		userMessages,
+		widgetCalls,
 		sentMessages,
 		appendEntries,
 		activeTools,
@@ -361,7 +364,7 @@ function makeCtx(
 			notify: ui.notify ?? (() => {}),
 			editor: ui.editor ?? (async () => undefined),
 			setStatus: () => {},
-			setWidget: () => {},
+			setWidget: (key: string, value: unknown) => p.widgetCalls.push({ key, value }),
 			setFooter: ui.setFooter ?? (() => {}),
 			setWorkingIndicator: () => {},
 			setWorkingMessage: () => {},
@@ -954,6 +957,9 @@ describe("permission-modes extension: tool_call gate", () => {
 			expect(customPlanContent).toContain("Implement feature")
 			expect(result).toMatchObject({ terminate: true })
 			expect(pi.sentMessages.some((m) => m.message.customType === "modes-execute")).toBe(true)
+			// P3-1 S2: the unified transition syncs the plan widget AFTER the
+			// mode flip (the plan_ready path previously missed it)
+			expect(pi.widgetCalls.filter((w) => w.key === "plan-todos" && w.value !== undefined).length).toBeGreaterThan(0)
 		})
 
 		it("refine opens editor and submits a follow-up user message", async () => {

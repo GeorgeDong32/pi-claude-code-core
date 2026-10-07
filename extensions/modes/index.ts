@@ -16,7 +16,7 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui"
+import { Text, truncateToWidth } from "@earendil-works/pi-tui"
 import { MODE_META, modeMetaData } from "./ui/meta.ts";
 import { clearModesStatus, installModesFooter, shortenPath } from "./ui/footer.ts";
 import { clearPlanWidget, updatePlanWidget as updatePlanWidgetUi } from "./ui/plan-widget.ts";
@@ -25,7 +25,7 @@ import { notify as uiNotify } from "../ui/notify.ts";
 import { createFallbackAdapter } from "../ui/fallback.ts";
 import { coreBus, type CoreSnapshot } from "../bus.ts"
 import { isMemoryWritePath } from "../memory/paths.ts"
-import { clearSessionGrants, clearSessionState, grantSession, hasSessionGrant, isBypassActive, listSessionGrants, matchFamily, noteAdjudicated, familyRuleMentions, setBypassIndicator } from "./rule-families.ts"
+import { clearSessionGrants, clearSessionState, grantSession, hasSessionGrant, listSessionGrants, matchFamily, noteAdjudicated, familyRuleMentions, setBypassIndicator } from "./rule-families.ts"
 import { getSharedEffortOwner, type OwnerEffortLevel } from "../../lib/effort-owner.ts";
 // B1: shared MCP-shape core — the authority (mcp-gov/family.ts
 // #canonicalizeMcpTool) and this plan gate consume the same lib predicate,
@@ -1080,26 +1080,35 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
         uiNotify(ctx, "No plan steps found in plan.md. Write a plan first.", "warning");
         return;
       }
-      planExecuting = true;
-      planPhase = "executing";
-      planTodos = extracted;
-      currentMode = "auto";
-      applyToolRestrictions();
-      clearModesStatus(ctx);
-      updatePlanWidgetUi(ctx, planTodos);
-      persistState();
-      await profiles.applyForMode("auto", ctx);
-      const steps = planTodos.map((t) => `${t.step}. ${t.text}`).join("\n");
-      pi.sendMessage(
-        {
-          customType: "modes-execute",
-          content: `Execute the plan now. Steps:\n${steps}\n\nStart with step 1. After finishing each step, include a [DONE:n] tag in your reply.`,
-          display: true,
-        },
-        { triggerTurn: true, deliverAs: "followUp" },
-      );
+      await startPlanExecution(ctx, extracted);
     },
   });
+
+  /** P3-1 S2 (SPEC 2026-10-07): the ONE plan→auto execution transition.
+   *  Order follows /plan-execute: state → tool restrictions → status clear →
+   *  plan widget sync → persist → model profile → the modes-execute send.
+   *  The plan_ready path previously missed the widget update after the mode
+   *  flip — unified here (visible widget-sync fix, CHANGELOG'd). */
+  async function startPlanExecution(ctx: ExtensionContext, todos: TodoItem[]): Promise<void> {
+    planExecuting = true;
+    planPhase = "executing";
+    planTodos = todos;
+    currentMode = "auto";
+    applyToolRestrictions();
+    clearModesStatus(ctx);
+    updatePlanWidgetUi(ctx, planTodos);
+    persistState();
+    await profiles.applyForMode("auto", ctx);
+    const steps = planTodos.map((t) => `${t.step}. ${t.text}`).join("\n");
+    pi.sendMessage(
+      {
+        customType: "modes-execute",
+        content: `Execute the plan now. Steps:\n${steps}\n\nStart with step 1. After finishing each step, include a [DONE:n] tag in your reply.`,
+        display: true,
+      },
+      { triggerTurn: true, deliverAs: "followUp" },
+    );
+  }
 
   // ---- plan approval helpers ---------------------------------------------
   function markPlanOfferHandled(planContent: string): void {
@@ -1199,22 +1208,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       markPlanOfferHandled(planContent ?? "");
 
       if (choice === "execute") {
-        planExecuting = true;
-        planPhase = "executing";
-        currentMode = "auto";
-        applyToolRestrictions();
-        clearModesStatus(ctx);
-        persistState();
-        await profiles.applyForMode("auto", ctx);
-        const steps = planTodos.map((t) => `${t.step}. ${t.text}`).join("\n");
-        pi.sendMessage(
-          {
-            customType: "modes-execute",
-            content: `Execute the plan now. Steps:\n${steps}\n\nStart with step 1. After finishing each step, include a [DONE:n] tag in your reply.`,
-            display: true,
-          },
-          { triggerTurn: true, deliverAs: "followUp" },
-        );
+        await startPlanExecution(ctx, planTodos);
         return {
           content: [{ type: "text", text: "Plan approved by user. Switching to execution mode." }],
           terminate: true,
@@ -1358,14 +1352,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       }
 
       // No args: interactive selector (newest first)
-      if (!ctx.hasUI) {
-        if (ctx.hasUI)
-          uiNotify(ctx, 
-            "No UI available; pass 'all' or '--list' as argument",
-            "warning",
-          );
-        return;
-      }
+      if (!ctx.hasUI) return; // (S6: the inner hasUI check was unreachable)
       const ordered = [...allSnaps].reverse();
       const choice = await ctx.ui.select(
         "Restore which tracked outside-cwd write? (newest first)",
@@ -1980,23 +1967,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     markPlanOfferHandled(syncedContent || JSON.stringify(extracted));
 
     if (choice === "execute") {
-      planExecuting = true;
-      planPhase = "executing";
-      currentMode = "auto";
-      applyToolRestrictions();
-      clearModesStatus(ctx);
-      updatePlanWidgetUi(ctx, planTodos);
-      persistState();
-      await profiles.applyForMode("auto", ctx);
-      const steps = planTodos.map((t) => `${t.step}. ${t.text}`).join("\n");
-      pi.sendMessage(
-        {
-          customType: "modes-execute",
-          content: `Execute the plan now. Steps:\n${steps}\n\nStart with step 1. After finishing each step, include a [DONE:n] tag in your reply.`,
-          display: true,
-        },
-        { triggerTurn: true, deliverAs: "followUp" },
-      );
+      await startPlanExecution(ctx, planTodos);
     } else if (choice === "refine") {
       await promptPlanRefinement(ctx);
     }
