@@ -2,10 +2,12 @@
  * P2-BUS-02 — goal/review channels on the capability bus.
  *
  * goal: restoring a focused active goal from session entries publishes
- * active:true; /goal-pause flips paused; readCoreStatus() sees both.
+ * active:true; /goal-pause flips paused; the raw globalThis snapshot sees both.
  * review: the pi_review_report tool completing publishes done+lastRunAt
  * (running is published by the /review command path, exercised in
- * P2-REL smoke). All reads go through the published types reader.
+ * P2-REL smoke). Reads duck-type the snapshot directly (D4-READER-REMOVE:
+ * the ./types runtime reader is withdrawn; the bus's own snapshot IS the
+ * contract surface).
  */
 import { describe, expect, it, beforeEach } from "vitest";
 import { mkdtempSync } from "node:fs";
@@ -15,11 +17,6 @@ import { join } from "node:path";
 import { FakeHost, clearCoreGlobals, snapshotCoreGlobals } from "../contracts/fake-host.ts";
 import { resetCoreBusForTests } from "../../extensions/bus.ts";
 import { targets } from "../contracts/targets.ts";
-import { readCoreStatus } from "../../types/core-status.mjs";
-import type { CoreStatus } from "../../types/index.d.mts";
-// the .mjs runtime has no sibling declaration (deliberate split-name layout,
-// see DEVIATIONS #13) — assert the published contract type at the boundary
-const reader = readCoreStatus as (g?: unknown) => CoreStatus;
 import { normalizeGoalRecord } from "../../extensions/goal/goal-record.ts";
 
 let globalsSnapshot: Record<string, unknown>;
@@ -35,7 +32,7 @@ function snapshotFromGlobal(): Record<string, unknown> {
 }
 
 describe("P2-BUS-02 goal/review channels", () => {
-	it("goal: restored focused goal publishes active; /goal-pause flips paused; reader sees it", async () => {
+	it("goal: restored focused goal publishes active; /goal-pause flips paused", async () => {
 		const goalRecord = normalizeGoalRecord({ objective: "ship the core", status: "active" });
 		expect(goalRecord).not.toBeNull();
 
@@ -63,7 +60,6 @@ describe("P2-BUS-02 goal/review channels", () => {
 		expect(snap.goal.active).toBe(true);
 		expect(snap.goal.paused).toBe(false);
 		expect(snap.goal.summary).toContain("ship the core");
-		expect(reader(globalThis).goal.active).toBe(true);
 
 		const pause = host.commands.get("goal-pause");
 		expect(pause).toBeDefined();
@@ -72,7 +68,6 @@ describe("P2-BUS-02 goal/review channels", () => {
 		snap = snapshotFromGlobal() as unknown as { goal: GoalChannel };
 		expect(snap.goal.active).toBe(true);
 		expect(snap.goal.paused).toBe(true);
-		expect(reader(globalThis).goal.paused).toBe(true);
 
 		const resume = host.commands.get("goal-resume");
 		expect(resume).toBeDefined();
@@ -80,7 +75,6 @@ describe("P2-BUS-02 goal/review channels", () => {
 		snap = snapshotFromGlobal() as unknown as { goal: GoalChannel };
 		expect(snap.goal.active).toBe(true);
 		expect(snap.goal.paused).toBe(false);
-		expect(reader(globalThis).goal.paused).toBe(false);
 	});
 
 	it("review: report tool completion publishes done + lastRunAt on the bus", async () => {
@@ -129,8 +123,6 @@ describe("P2-BUS-02 goal/review channels", () => {
 		const snap = snapshotFromGlobal() as { review: { status: string; lastRunAt: number | null } };
 		expect(snap.review.status).toBe("done");
 		expect(snap.review.lastRunAt).toBeGreaterThanOrEqual(before);
-		const status = reader(globalThis).review;
-		expect(status.status).toBe("done");
-		expect(typeof status.lastRunAt).toBe("number");
+		expect(typeof snap.review.lastRunAt).toBe("number");
 	});
 });

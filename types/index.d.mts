@@ -1,9 +1,11 @@
 /**
- * pi-claude-code-core capability bus — published types + total reader (P1-BUS-02).
+ * pi-claude-code-core capability bus — published types (pure type-only entry).
  *
- * Hand-maintained declaration twin of types/core-status.mjs (published as pure JS + these
- * declarations via the `./types` subpath export). Shape compatibility with
- * extensions/bus.ts is guarded by test/lib/bus-types.test.ts.
+ * D4=B (user 2026-10-08, spec 2026-10-07 P1-1 §4.3): the `./types` subpath is
+ * TYPE-ONLY — the runtime reader (`readCoreStatus`) and its `CoreStatus`
+ * interface are withdrawn. Consumers duck-type the snapshot on
+ * `globalThis.__piClaudeCodeCore` (or `snapshot.onChange`-subscribe); the
+ * declaration twin of extensions/bus.ts is guarded by test/lib/bus-types.test.ts.
  */
 export interface LegacyPmCapability {
 	version?: number;
@@ -64,31 +66,3 @@ export interface CoreCommandResult {
 	ok: boolean;
 	reason?: string;
 }
-
-export interface CoreStatus {
-	version: number;
-	revision: number;
-	/** XPKG-03 (2026-10-07 P1-1): per-bus-instance random id (see CoreSnapshot). */
-	instance?: string;
-	/** DC5 (P1-BUS-10): data-carried subscription point — snapshot.onChange(fn) registers, returns unsubscribe. v2+ only. */
-	onChange?: (fn: () => void) => () => void;
-	modes: {
-		mode: string;
-		planPhase?: string;
-		workingStats: string | null;
-		meta?: Readonly<Record<string, { icon: string; label: string; role: string }>>;
-	};
-	effort: { level: string | null; source: string };
-	goal: { active: boolean; paused?: boolean; summary: string | null; widget?: { focus: "focused" | "unfocused" | "none"; statusLine: string; goal?: { objective: string; status: string; sisyphus: boolean; stopReason?: string; pauseReason?: string; pauseSuggestedAction?: string; activePath?: string; archivedPath?: string; tokensUsed: number; activeSeconds: number; costUsed?: number }; openGoalCount?: number } };
-	review: { status: string; lastRunAt: number | null };
-	/** DC3: bounded notification tail queue (monotonic ids, newest last, cap 20). */
-	notifications?: ReadonlyArray<{ id: number; level: "info" | "warning" | "error"; msg: string }>;
-	display?: { footer?: readonly string[] };
-	contextBudget?: { rulesMax: number; memoryIndexMax: number; dynamicSteerMax: number };
-	memory?: { yielded: boolean; dir?: string };
-	/** OBS-09-SITES: optional per-site display-only savings (first-replacement requests only). */
-	observation?: { tokensAvoided: number; placeholders: number; sites?: ReadonlyArray<{ tool: string; id: string; avoidedTokens: number; toolCallId?: string }> };
-	fusion?: { fusedCount: number };
-}
-
-export function readCoreStatus(g?: unknown): CoreStatus;

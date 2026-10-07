@@ -40,15 +40,19 @@ The single state channel between core modules and external consumers.
   atomicity).
 - Whole-snapshot replace + `Object.freeze` + monotonic revision.
 - No timers, no polling.
-- Readers use the total function `readCoreStatus()` from `types/` (works on
-  any globalThis shape, returns a total `CoreStatus`).
+- Consumers duck-type the snapshot on `globalThis.__piClaudeCodeCore`
+  directly (D4=B, 2026-10-08: the runtime total reader `readCoreStatus` and
+  its `CoreStatus` interface are withdrawn — see CHANGELOG breaking note).
 
 ## Publishing types
 
-`types/index.d.mts` is a hand-maintained declaration twin of
-`types/core-status.mjs` (published via the `./types` subpath export). Shape
+`types/index.d.mts` is a hand-maintained declaration twin of the bus shape,
+published TYPE-ONLY via the `./types` subpath (the runtime reader is deleted;
+a runtime import fails with ERR_PACKAGE_PATH_NOT_EXPORTED). Shape
 compatibility with `extensions/bus.ts` is guarded by
-`test/lib/bus-types.test.ts` — change both together.
+`test/lib/bus-types.test.ts` — change both together. Subpath acceptance
+(type-only compile / runtime negative / packed file list) lives in
+`test/contracts/types-subpath.test.ts`.
 
 ## Consumers
 

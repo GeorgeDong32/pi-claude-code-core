@@ -48,7 +48,7 @@ lib/                 # 共享原语 —— 禁止反向依赖 extensions/
 test/lib/            # lib 与跨模块接线的 vitest 套件
 test/contracts/      # 契约套件(见 test/contracts/README.md 契约表)
 test/spikes/         # 一次性探针
-types/               # 发布的 `./types` 子路径(core-status.mjs + 手工维护的 .d.mts 孪生声明)
+types/               # 发布的 `./types` 子路径(纯类型:手工维护 .d.mts;运行时 reader 已按 D4=B 撤除)
 scripts/             # check.mjs(tsc 门)、run-tests.mjs(按框架测试入口)
 docs/                # 架构文档(en/ + zh/ 双语分文件)
 ```

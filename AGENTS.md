@@ -50,7 +50,7 @@ lib/                 # shared primitives — must NOT import from extensions/
 test/lib/            # vitest suites for lib/ and cross-module wiring
 test/contracts/      # contract suite (see test/contracts/README.md table)
 test/spikes/         # throwaway spikes
-types/               # published `./types` subpath (core-status.mjs + hand-maintained .d.mts twin)
+types/               # published `./types` subpath (type-only: hand-maintained .d.mts; runtime reader withdrawn D4=B)
 scripts/             # check.mjs (tsc gate), run-tests.mjs (per-framework test entry)
 docs/                # architecture documentation (en/ + zh/)
 ```

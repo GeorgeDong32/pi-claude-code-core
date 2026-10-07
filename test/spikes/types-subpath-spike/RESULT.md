@@ -1,5 +1,10 @@
 # P0-SK-05 spike ① 结论 — `/types` subpath 发布布局
 
+> **已归档(2026-10-08)**:本 spike 验证的 runtime 布局(`core-status.mjs` +
+> import 条件)已随 D4=B 决策撤除——`./types` 现为纯类型子路径(验收见
+> `test/contracts/types-subpath.test.ts`)。本目录保留作历史证据,其结论
+> 不再描述现行发布形态。
+
 **结论:可行,采纳此布局**(2026-09-20 实测,`zsh verify.sh` 全绿)。
 
 验证矩阵(全部通过):

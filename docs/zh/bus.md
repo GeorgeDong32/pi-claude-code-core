@@ -39,14 +39,18 @@ core 模块与外部消费方之间唯一的状态通道。
 - **只在 pi 事件处理器内发布**,中间不得有 `await` 断点(单线程原子性)。
 - 整快照替换 + `Object.freeze` + revision 单调递增。
 - 无定时器、无轮询。
-- 读取方使用 `types/` 中的全函数 `readCoreStatus()`(对任意 globalThis 形状
-  安全,返回完整的 `CoreStatus`)。
+- 消费方直接 duck-type `globalThis.__piClaudeCodeCore` 上的快照
+  (D4=B,2026-10-08:运行时全函数 `readCoreStatus` 与其 `CoreStatus` 接口已
+  撤除——breaking 说明见 CHANGELOG)。
 
 ## 类型发布
 
-`types/index.d.mts` 是 `types/core-status.mjs`(经 `./types` 子路径导出)的
-手工维护声明孪生。与 `extensions/bus.ts` 的形状一致性由
-`test/lib/bus-types.test.ts` 守护——两侧必须一起改。
+`types/index.d.mts` 是 bus 形状的手工维护声明孪生,经 `./types` 子路径
+**纯类型**发布(运行时 reader 已删除;运行时 import 报
+ERR_PACKAGE_PATH_NOT_EXPORTED)。与 `extensions/bus.ts` 的形状一致性由
+`test/lib/bus-types.test.ts` 守护——两侧必须一起改。子路径验收
+(type-only 编译 / 运行时负例 / 打包清单)在
+`test/contracts/types-subpath.test.ts`。
 
 ## 消费方
 

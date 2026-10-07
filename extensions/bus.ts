@@ -28,9 +28,9 @@
 // Type-only import of the published declarations: erased at transform, so
 // bundlers never resolve the .d.mts at runtime.
 import { randomUUID } from "node:crypto";
-import type { CoreSnapshot, CoreStatus, CoreCommand, CoreCommandResult } from "../types/index.d.mts";
+import type { CoreSnapshot, CoreCommand, CoreCommandResult } from "../types/index.d.mts";
 
-export type { CoreSnapshot, CoreStatus, CoreCommand, CoreCommandResult };
+export type { CoreSnapshot, CoreCommand, CoreCommandResult };
 
 // ---- explicit per-channel patches (P0-SK-05 spike ② shape) -----------------
 

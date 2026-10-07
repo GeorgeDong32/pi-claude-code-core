@@ -9,9 +9,9 @@
  *    later replacement requests publish nothing (counters stay null).
  * ② Bus shape pin + backward compatibility: an old-shape publisher (no
  *    sites) leaves the field undefined for readers; a sites-carrying
- *    publish is carried verbatim as frozen pure data; the published reader
- *    (`readCoreStatus`) is structurally unaffected — its channel whitelist
- *    does not include observation, before and after.
+ *    publish is carried verbatim as frozen pure data. (The historical
+ *    total reader never projected observation; it was withdrawn entirely
+ *    by D4=B — old-shape snapshots simply keep sites absent.)
  */
 import { describe, expect, it } from "vitest";
 import { mkdir, mkdtemp } from "node:fs/promises";
@@ -21,7 +21,6 @@ import { join } from "node:path";
 import { clearCoreGlobals, FakeHost, restoreCoreGlobals, snapshotCoreGlobals, type Handler } from "./fake-host.ts";
 import { targets } from "./targets.ts";
 import { coreBus, createCoreBus, getCoreBus, type CoreSnapshot } from "../../extensions/bus.ts";
-import { readCoreStatus } from "../../types/core-status.mjs";
 
 type SiteEntry = { tool: string; id: string; avoidedTokens: number; toolCallId?: string };
 type ObservationChannel = { tokensAvoided: number; placeholders: number; sites?: ReadonlyArray<SiteEntry> };
@@ -106,7 +105,7 @@ describe("OBS-09-SITES: per-site display-only savings on the capability bus", ()
 		restoreCoreGlobals(globalsBackup);
 	});
 
-	it("② old-shape publishers/reader stay compatible: no sites → undefined field; readCoreStatus whitelist untouched", () => {
+	it("② old-shape publishers stay compatible: no sites → undefined field", () => {
 		clearCoreGlobals();
 		getCoreBus()?.dispose();
 		const bus = createCoreBus();
@@ -128,13 +127,9 @@ describe("OBS-09-SITES: per-site display-only savings on the capability bus", ()
 		expect(Object.isFrozen(newShape.observation?.sites)).toBe(true);
 		expect(newShape.observation?.sites?.[0].avoidedTokens).toBe(2645);
 
-		// The published total reader is structurally unaffected: its channel
-		// whitelist never included observation — before AND after this field.
-		const status = readCoreStatus(globalThis);
-		expect(status).not.toBeNull();
-		expect("observation" in status).toBe(false);
-		// And the reader never throws on a sites-carrying snapshot host.
-		expect(() => readCoreStatus(globalThis)).not.toThrow();
+		// D4-READER-REMOVE: the total reader is withdrawn; old-shape
+		// compatibility is pinned by the snapshot assertions above (sites
+		// absent readers get undefined — never a throw).
 
 		bus.dispose();
 		restoreCoreGlobals(globalsBackup);

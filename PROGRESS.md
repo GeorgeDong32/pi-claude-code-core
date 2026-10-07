@@ -2,6 +2,15 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## 2026-10-08 C2：D4=B 删除 runtime reader（`./types` 纯类型化）
+
+- **契约先行**：commit 62f3642 在契约表登记 D4-READER-REMOVE（撤除范围、保留面、迁移方式、验收手段、P1-BUS-02/07 关闭）。
+- **实现**：删除 `types/core-status.mjs`、`CoreStatus` 接口与 `readCoreStatus` 声明;`exports["./types"]` 仅剩 types 条件;bus.ts 去 CoreStatus re-export。保留 CoreSnapshot/CoreCommand/CoreCommandResult、bus、legacy key、writeLegacyAliases。
+- **测试迁移（D4b=A，断言意图不变）**：bus-channels/rules-wiring/memory 改读真实快照;bus-types 删 reader 总函数/回退链用例,孪生守卫直证真实 publish 形状 + instance(patch 不可覆盖);observation-sites ② 删 reader 白名单两断言。
+- **B7 验收**：`test/contracts/types-subpath.test.ts` 3 例——外部 tsconfig fixture 编译 type-only 消费者(self-reference)、node 运行时 import 负例(ERR_PACKAGE_PATH_NOT_EXPORTED)、npm pack 清单不含 `types/core-status.mjs` 且含 `types/index.d.mts`。
+- **门禁**：check 退出 0(main+contracts,fixture 同时被两个 project 编译);vitest 903(bus-types 5→3 用例,-2 为被删 reader 用例);node:test 502;contracts 43 passed + 3 todo(+3 为 B7)。
+- **台账**：契约表 D4-READER-REMOVE 行、DEVIATIONS #115、CHANGELOG Breaking 条目(发布时 ≥0.4.0)、docs/{en,zh}/bus.md、AGENTS(.zh) 布局行、spike RESULT.md 归档注记。spec P1-1 状态行同步。
+
 ## 2026-10-08 C1：P0-2 锁策略 A + G3 落地（goal 回合锁收窄）
 
 - **实现**：删除 `tool_call` handler 的 non-progress 误锁 else 分支（只有 pause_goal / abort_goal / update_goal complete(审计通过) / apply_goal_tweak 成功 execute 设 `turnStoppedFor`）；G3 进度例外读取从不存在的 `event.args` 修正为宿主真实 `event.input`（echo bash / 读 `.pi/goals/` 例外自此生效）。goalExtension deps 新增可选 `auditor` 透传 runCompletionAudit（与 audit flow 既有参数 seam 同构，生产留空）。

@@ -571,19 +571,17 @@ describe("review-2026-09-22-II fixes", () => {
 		expect(readFileSync(join(dir, "note.md"), "utf-8")).toContain("locally edited");
 	});
 
-	it("S4: memory channel is visible via readCoreStatus after yield flips", async () => {
+	it("S4: memory channel is visible on the raw snapshot after yield flips (D4-READER-REMOVE)", async () => {
 		const host = setup();
 		const ctx = host.makeCtx({ cwd: project, ui: true });
 		await host.fire("session_start", {}, ctx);
-		const { readCoreStatus } = await import("../../types/core-status.mjs");
-		let snap = readCoreStatus(globalThis);
-		expect(snap.memory?.yielded).toBe(false);
+		const busSnap = () => (globalThis as Record<string, unknown>).__piClaudeCodeCore as { memory?: { yielded: boolean; dir?: string } };
+		expect(busSnap().memory?.yielded).toBe(false);
 		// dynamic probe: a hermes <memory-policy marker in the system prompt flips the gate
 		const beforeAgent = host.handlers.get("before_agent_start")?.[0] as (e: unknown, c: unknown) => Promise<unknown>;
 		await beforeAgent({ systemPrompt: "<memory-policy>\nhermes is here\n</memory-policy>" }, ctx);
-		snap = readCoreStatus(globalThis);
-		expect(snap.memory?.yielded).toBe(true);
-		expect(snap.memory?.dir).toBe(memoryDir());
+		expect(busSnap().memory?.yielded).toBe(true);
+		expect(busSnap().memory?.dir).toBe(memoryDir());
 	});
 });
 
