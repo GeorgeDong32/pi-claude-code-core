@@ -1,6 +1,6 @@
 # SPEC P2-1：permission 裁决 deep module（纯裁决 + 一次解释）
 
-状态：规格已补齐；待 P0-1 落地后实施
+状态：P0-1 已落地；本规格 **0/3 步，待实施，无待决策项**。本轮先完成 D6=B，再固定其后的行为基线；见 [2026-10-08 剩余任务](2026-10-08-followup-execution.md)。
 
 > **实施记录（2026-10-07）**：**未实施（0/3 步）**。前置 P0-1 已落地且为迁移铺好了第一步（evaluateToolPermission 纯函数 + plan-gate.ts + applyPermissionVerdict 三步结构），但本批会话预算不足以安全完成 3 步迁移 + 对拍 harness + decision table + FakePi 用例删减清单的完整闭环；作为零行为变化的纯架构重构，有序推迟优于半成品。Step 1 起步条件已具备，另批实施时从 §4.3 Step 1 开始。
 日期：2026-10-07
@@ -41,7 +41,7 @@
 - classifier 重试测试变为确定性。
 
 **非目标**
-- 不改任何可观察行为（P0-1 之后的行为为基线）；不改规则语法、family 接口、转发协议（P0-CT-05）、broker mirror 记录点（P4-MC-03）。
+- 不改任何可观察行为（P0-1 与已选 D6=B 落地后的行为为基线）；不改规则语法、family 接口、转发协议（P0-CT-05）、broker mirror 记录点（P4-MC-03）。
 - 不拆 `index.ts` 的其他部分（命令、plan 生命周期见 P3-1，working stats 已在 AR1005 完成）。
 
 ## 4. 设计
@@ -82,7 +82,7 @@ classifier transport 与重试 seam 使用真实 transport 和可控 fake transp
 
 ### 4.3 迁移（每步对拍）
 
-对拍 harness（test-only）：构造输入矩阵——mode × 工具族（read / edit / write / bash / powershell / codemode / tool_search / MCP 五类形态 / 带 then_run 的 edit / 未知工具）× 规则（无 / allow / ask / deny / family 规则 / session grant）× UI（有 / 无 / 子代理）。在冻结的 P0-1 基线上采集旧 handler 的返回值和可观察副作用 trace，再与新 module 比较。旧 handler 不返回 Decision，不能比较虚构的内部对象。fixture 必须来自基线执行，不能由新实现自动更新期望；不在生产里同时运行新旧 handler（会双弹窗 / 双写盘）。加入 then_run 对象/字符串、已授权 MCP 的 command/run/cmd 与 proxy 参数、非 MCP family 不豁免、ask Block/Allow、headless family、forward timeout、classifier 超时/取消等定向 case；无意义的笛卡尔组合不凑数。
+对拍 harness（test-only）：构造输入矩阵——mode × 工具族（read / edit / write / bash / powershell / codemode / tool_search / MCP 五类形态 / 带 then_run 的 edit / 未知工具）× 规则（无 / allow / ask / deny / family 规则 / session grant）× UI（有 / 无 / 子代理）。在 P0-1 与 D6=B 均已落地的固定 revision 上采集旧 handler 的返回值和可观察副作用 trace，再与新 module 比较。旧 handler 不返回 Decision，不能比较虚构的内部对象。fixture 必须来自基线执行，不能由新实现自动更新期望；不在生产里同时运行新旧 handler（会双弹窗 / 双写盘）。D6 的无 UI 建议规则文案应在旧 handler trace 中已经存在；迁移不得拿 D6 前的 trace 把已批准文案改回去。加入 then_run 对象/字符串、已授权 MCP 的 command/run/cmd 与 proxy 参数、非 MCP family 不豁免、ask Block/Allow、headless family、forward timeout、classifier 超时/取消等定向 case；无意义的笛卡尔组合不凑数。
 
 1. **Step 1**：bypass / 规则 / plan / ask 迁入 module 内部 `decide`；auto 仍走旧路径。
 2. **Step 2**：auto tiers（tier1 / 1.5 allow / 1.5b soft_deny / tier2 / sensitive path / outside cwd）迁入；classifier 仍由旧 `approveAutoTier3` 执行。

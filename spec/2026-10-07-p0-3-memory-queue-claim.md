@@ -1,6 +1,6 @@
 # SPEC P0-3：memory 待提取队列逐条 claim
 
-状态：规格已补齐，待实施；独立审查后采用单次 rename 转移协议
+状态：已实施（d339d0a，复审修复 27ba11c / 4893ba2）；跨进程自动化已通过，真实多 session 重叠 drain 验收仍 open。
 日期：2026-10-07
 来源：联合架构审查 CORE-04；P2-3 在本协议落地后搬移 drain 编排
 基线：core `09c2dcb`，`extensions/memory/queue.ts` 与 `automation.ts#drainOneRecord / drainPendingRecords`

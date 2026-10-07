@@ -1,6 +1,6 @@
 # SPEC P0-2：goal 回合锁只留给"真停止"（D3）+ drafting intent 复位
 
-状态：规格已补齐；锁策略**待决策 D3**（推荐方案 A，见 §2），仅 CORE-05 可独立实施；G3 必须与 D3 同批
+状态：**已全部实施（2026-10-08）**——CORE-05 于 6f2a402 先行落地；锁策略 A + G3 同批落地（L1-L5/L7 全绿，基线红已取证；审计通过路径经 deps.auditor seam 驱动）。台账见 DEVIATIONS #114 / CHANGELOG / extensions/goal/FORK.md。
 日期：2026-10-07
 分支：main
 来源：2026-10-07 联合架构审查，清单项 CORE-01 / CORE-05；本 spec 新增发现 G3（`event.args` 字段错误）
@@ -40,12 +40,12 @@ pi 的一个 **turn** 等于"一条模型回复 + 这条回复里的全部工具
 
 | # | 候选 | 做法 | 优点 | 放弃了什么 / 风险 |
 |---|---|---|---|---|
-| **A（推荐）** | 只有真停止才锁回合 | 删掉 `goal.ts:2183-2186` 的 `else if` 分支；进度名单保持不变 | 删除误锁分支；直接消除误锁、codemode 失效和 obs_recall 冲突；续跑节奏不变（本来就由 agent_end 驱动） | 放弃"用锁截短闲聊回合"。当前锁只能截断同一 turn 的后续工具，并不能阻止下一轮续跑 |
+| **A（已选，用户 2026-10-08）** | 只有真停止才锁回合 | 删掉 `goal.ts:2183-2186` 的 `else if` 分支；进度名单保持不变 | 删除误锁分支；直接消除误锁、codemode 失效和 obs_recall 冲突；续跑节奏不变（本来就由 agent_end 驱动） | 放弃"用锁截短闲聊回合"。当前锁只能截断同一 turn 的后续工具，并不能阻止下一轮续跑 |
 | B | A + 扩充进度白名单 | 把 obs_recall / session_recall / subagent / MCP 等加入进度名单 | 委托类工作也能清零 get_goal 提醒 | 仍是封闭世界——core 或其他扩展每加一个工具都要改名单；收益只在提醒计数上 |
 | C | A + 进度改黑名单 | 除 get_goal / goal_question / goal_questionnaire / propose_goal_draft / create_goal、echo、读 `.pi/goals` 外，都算进度 | 开放世界，新工具自动算进度 | 改变进度语义；提醒计数清零得更频繁（影响很小） |
 | D | 保留锁，补齐豁免名单 | 把 core 自有工具加进 `POST_STOP_ALLOWED_TOOLS` | 最保守 | 依旧封闭世界；MCP、subagent、codemode 仍被误伤 |
 
-**推荐 A。** 理由：进度名单如今只影响两件事——①get_goal 提醒计数；②`turn_end` 续跑路径（实际触发很少，主路径是 `agent_end`）。所以 B / C 只是锦上添花，可以以后再做。D 修不干净。
+**采用 A。** 用户已确认，B/C/D 留作历史备选；本批不扩大进度名单。理由：进度名单如今只影响两件事——①get_goal 提醒计数；②`turn_end` 续跑路径（实际触发很少，主路径是 `agent_end`）。所以 B / C 只是锦上添花，可以以后再做。D 修不干净。
 
 其余决策：
 
@@ -68,11 +68,11 @@ pi 的一个 **turn** 等于"一条模型回复 + 这条回复里的全部工具
 
 ## 4. 设计
 
-以下锁策略设计以推荐 A 为准；若选择 D，必须重新定义进度中性工具与 G3 例外的放行，满足 L5 才可实施。
+以下按已选 A 执行；G3 与删除误锁分支同批。当前 goal.ts 的相关处理位于 tool_call handler；旧行号属于原审查基线。
 
 1. `goal.ts:2179-2186`：删除 `else if (... autoContinue && event.toolName !== "get_goal") turnStoppedFor = ...` 分支；头部注释（`371-379`）同步改为"只有 4 个真停止工具设置回合锁"。
 2. 与步骤 1 同批修改 `goal.ts:2180`：`isMeaningfulProgressToolCall(event.toolName, event.input ?? {})`；测试发送真实 tool_call 事件形状。
-3. 若选 B / C：在步骤 1 / 2 基础上另改 `goal-tool-names.ts`（常量 `GOAL_PROGRESS_NEUTRAL_TOOL_NAMES` 或黑名单），并补 `goal-tool-names.test.ts`。
+3. 进度名单保持现状；不实施历史备选 B/C 的名单扩充或黑名单重构。
 4. `startGoalDrafting` catch：`confirmationIntent = null; syncGoalTools();`。
 
 ## 5. 回归测试（node:test，`extensions/goal/tests/`）
@@ -91,9 +91,9 @@ pi 的一个 **turn** 等于"一条模型回复 + 这条回复里的全部工具
 
 ## 6. 实施顺序与门禁
 
-1. D3 未确认时，仅落地 CORE-05 drafting 复位与 L6。G3 / L5 及其他锁策略变更一起等待 D3，禁止先合 args → input。
-2. D3 确认后写 L1–L7，记录基线红绿。
-3. 同批修改 §4 的 1 / 2；按 D3 决定是否做 3。CORE-05 若已独立落地则不重复修改。
+1. CORE-05 / L6 已落地，保留回归，不重复实施。
+2. 在当前实现上补齐 L1–L5/L7，记录基线红绿；D3 已确认，不再等待批准。
+3. 同批修改 §4 的 1 / 2，保留现有进度名单。
 4. `bun run check && bun run test && bun run contracts` 三绿。
 
 ## 7. 风险与回滚

@@ -1,6 +1,6 @@
 # SPEC P2-2：goal lifecycle module（B7 收尾：转移动词持有完整副作用集）
 
-状态：规格已补齐；依赖 P0-2（含 D3 决策与对应验收）落地
+状态：**D3=A 已确认（2026-10-08）**；本规格未实施，依赖 P0-2 锁策略 + G3 通过后进入；已不存在用户决策阻塞。见 [2026-10-08 剩余任务](2026-10-08-followup-execution.md)。
 日期：2026-10-07
 分支：main
 来源：2026-10-07 联合架构审查，报告 C2 卡片；清单项 CORE-13。PROGRESS「架构优化 8-batch」B7 与 DEVIATIONS #73 记录的"状态机核心 + confirmation 粘合仍在 goal.ts、thin adapter 终态未达"
@@ -81,7 +81,7 @@ createGoalLifecycle({
 1. 冻结 P0-2 后可达转移 trace；新建 module，把 pool/focus 与对应转移动词一起迁入。允许过渡 adapter，但不能以永久闭包回调壳作为交付。
 2. 把 complete 内联块、clear/abort 共同行为改为调用动词，保留 drafting 分支、归档与提示差异。
 3. 将 drafting intents / turn flags / nudge 状态移入封闭事件入口；入口只读投影。accounting 与 continuation 的状态仍由各自 module 持有。
-4. 删除无调用的 updateFocusedGoal / removeFocusedGoal / draftingHiddenWorkTools，撤除迁移代理。接口对拍零差异后才减少重复 FakeHost 测试。
+4. P3-1 S6 已在 edb1e5b 删除 updateFocusedGoal / removeFocusedGoal / draftingHiddenWorkTools，不重复处理或重建；撤除本轮迁移代理。接口对拍零差异后才减少重复 FakeHost 测试。
 
 ### 4.4 测试
 

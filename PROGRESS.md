@@ -2,6 +2,21 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## 2026-10-08 C1：P0-2 锁策略 A + G3 落地（goal 回合锁收窄）
+
+- **实现**：删除 `tool_call` handler 的 non-progress 误锁 else 分支（只有 pause_goal / abort_goal / update_goal complete(审计通过) / apply_goal_tweak 成功 execute 设 `turnStoppedFor`）；G3 进度例外读取从不存在的 `event.args` 修正为宿主真实 `event.input`（echo bash / 读 `.pi/goals/` 例外自此生效）。goalExtension deps 新增可选 `auditor` 透传 runCompletionAudit（与 audit flow 既有参数 seam 同构，生产留空）。
+- **测试**：`extensions/goal/tests/goal-turn-lock.test.ts` 2→14 例。基线取证（实现前）：L1/L2/L5a/L5b 红（对应待修复项）、L3d 红（auditor 未透传走真实路径 19s）、L3a/b/c、L3a-neg、L3d-neg、L4、L7、L6×2 绿（钉现状）。修复后 14/14 绿。
+- **门禁**：check 退出 0；vitest 905 + node:test 502 全通过；contracts 40 passed + 3 todo。
+- **台账**：DEVIATIONS #114、CHANGELOG Unreleased、docs/{en,zh}/goal.md goal.ts 行、extensions/goal/FORK.md P0-2 段、spec P0-2 状态行。C1 revision 即 C5(goal lifecycle 迁移)的行为基线。
+
+## 2026-10-08 决策确认与下一轮范围核对（文档更新，未实施新代码）
+
+- 用户已确认 D3=A、D4=B、D6=B；前一批“待用户决策”记录为历史状态。当前续做：P0-2 锁策略+G3、P1-1 reader 删除、P3-1 S3、P2-1 三步迁移、P2-2 lifecycle。
+- 源码/提交核对：core `2ebd226`，TUI `1bf9b7f`；usage 生产方真实提交为 **d539346**（下方旧批次记为 d1e8101，已在此勘误）；TUI 第二步已在 710c9c7/1bf9b7f 落地，不再等待上游/消费方实施。
+- 本次实际门禁：core check 0；unit 905 vitest + 490 node:test 全通过；contracts 40 passed + 3 todo。TUI 272 passed / 0 skipped，typecheck 0。仅核对现状，不代表下一轮尚未实施的功能通过。
+- 真实多 session drain、footer/usage/工具显示与 widget 顺序证据仍 open。TUI 新确认窗口回退混源 U-F1 单列后续修复；其余原批次已做部分不重复派发。
+- 执行入口：`spec/2026-10-08-followup-execution.md`、`spec/2026-10-08-execution-prompt.md`；配对 TUI 同日后续规格。
+
 ## 2026-10-07 spec 批实施(9 份规格;P0-1/P0-3/P0-2 CORE-05/P1-1 可实施面/P2-4/P2-3/P3-1(除 D6)完成;P2-1 未实施)
 
 - **P0-1 plan 权限优先级:完成**(3 commits:① d36828f plan-gate 搬移 ② 4cadd77 FUS-SHAPE ③ 本 commit 优先级翻转)。D1/D2 已拍板;红测试取证 9 例(T1-T6/T10/T13a-c,既有 820 全绿对照);T7-T9/T11 由既有用例+新 T15/T16 family 矩阵钉住;T12 plan-gate 单测 13 例。两处测试标题按规格补前提说明(index.test.ts fail-closed / p4-families D2b)。三门全绿。

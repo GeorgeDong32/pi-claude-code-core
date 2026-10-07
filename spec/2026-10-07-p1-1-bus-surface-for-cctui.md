@@ -1,8 +1,8 @@
-# SPEC P1-1：bus 的跨包面整理（契约补登记 · 实例标识 · reader 去留提案 · footer 归属）
+# SPEC P1-1：bus 的跨包面整理（契约补登记 · 实例标识 · reader 删除 · footer 归属）
 
-状态：规格已补齐；instance / footer / 加性契约可实施，reader 去留**待决策 D4**；D5 归属原则已确认
+状态：instance / footer / 加性契约已实施；**D4=B 删除 reader 已由用户确认（2026-10-08），尚未实施**。真实 footer 槽位联合验收仍 open。续做范围见 [2026-10-08 剩余任务](2026-10-08-followup-execution.md)。
 
-> **实施记录（2026-10-07）**：可实施部分已落地——契约表登记（XPKG-01..09-HOST，ff0f7e7）、`snapshot.instance` + 类型加性补齐（320e7e5）、footer helper + 降级时机 + modes footer 渲染（见 git log）。D4 未决，reader/exports/行为断言原样保留。**生产方已就绪**：TUI 可消费 `snapshot.instance`（reload 检测）、`onChange`（v2 订阅）、`display.footer`（cc-footer 渲染，off 恢复 stock 例外见 §1.4）、通知尾队列协商语义不变。仍待联合验收：两种加载顺序 / off/on / reload 失败下的真实 footer 槽位（B6/C11）、widget 排序时序取证（XPKG-09-HOST todo）。基线 core revision：见 PROGRESS.md 本批条目。
+> **实施记录（2026-10-07）**：可实施部分已落地——契约表登记（XPKG-01..09-HOST，ff0f7e7）、`snapshot.instance` + 类型加性补齐（320e7e5）、footer helper + 降级时机 + modes footer 渲染（见 git log）。该提交时 D4 未决，reader/exports/行为断言保留；2026-10-08 用户选择 B，后续执行 §4.3。**生产方已就绪**：TUI 可消费 `snapshot.instance`（reload 检测）、`onChange`（v2 订阅）、`display.footer`（cc-footer 渲染，off 恢复 stock 例外见 §1.4）、通知尾队列协商语义不变。仍待联合验收：两种加载顺序 / off/on / reload 失败下的真实 footer 槽位（B6/C11）、widget 排序时序取证（XPKG-09-HOST todo）。基线 core revision：见 PROGRESS.md 本批条目。
 日期：2026-10-07
 分支：main
 来源：2026-10-07 联合架构审查，清单项 CORE-07 / CORE-08 / CORE-09 / CORE-10（报告 X1、C7 卡片）
@@ -54,8 +54,8 @@ cctui 实际依赖、但没有登记的面：
 
 | # | 决策 | 候选方案 | 选择 | 放弃了什么 | 风险与承担 | 证据 |
 |---|---|---|---|---|---|---|
-| D4 | `readCoreStatus` 的去留 | A 保留并让类型诚实；B **删除运行时 reader 与 `CoreStatus`，`./types` 改为纯类型导出**；C 连 `./types` 导出一起删 | **待 D4**；B 为提案，未获选定；无 TUI 调用只能证明本地无依赖，不能证明不兼容或授权破坏性删除 | A 的"总读取器"能力（已检索范围未见外部调用）；C 让未来 TS 消费方无类型可用 | 若有未知外部消费方，import 会失败 → CHANGELOG 标为 breaking，发布时至少采用对应破坏性变更的次版本（从当前 0.3.0 可到 0.4.0；本 spec 不授权发布） | §1.1 |
-| D4b | 现有测试里的 reader 断言 | A 改为直接读 `coreBus().snapshot()` / `globalThis.__piClaudeCodeCore`；B 删除断言 | **仅选定 D4=B 后采用 A**（断言意图保留，只换读取方式） | — | 断言改动需按契约协议登记 | 5 个测试文件 |
+| D4 | `readCoreStatus` 的去留 | A 保留并让类型诚实；B **删除运行时 reader 与 `CoreStatus`，`./types` 改为纯类型导出**；C 连 `./types` 导出一起删 | **B（用户 2026-10-08）**；删除授权已明确，TUI 无调用是兼容证据，不等于删除全部 legacy bus 面 | A 的"总读取器"能力（已检索范围未见外部调用）；C 让未来 TS 消费方无类型可用 | 若有未知外部消费方，import 会失败 → CHANGELOG 标为 breaking，发布时至少采用对应破坏性变更的次版本（从当前 0.3.0 可到 0.4.0；本 spec 不授权发布） | §1.1 |
+| D4b | 现有测试里的 reader 断言 | A 改为直接读 `coreBus().snapshot()` / `globalThis.__piClaudeCodeCore`；B 删除断言 | **A（D4=B 已确认）**（断言意图保留，只换读取方式） | — | 断言改动需按契约协议登记 | 5 个测试文件 |
 | I2 | 实例标识 | A 快照加纯数据字段 `instance`；B 在 `session_shutdown` 中 publish `{ stale: true }`；C 消费方只比较 `onChange` 函数身份 | **A**（C 作为旧 core 的回退） | B：消费方仍要检测更换，多一个状态 | 无（可选的加性字段） | §1.2 |
 | D5 | footer 的归属 | A 改走通知队列；B **footer 槽归谁，谁渲染 `display.footer`**：cctui 实际启用时由 cc-footer 渲染，core modes footer 实际安装时由它渲染；off 恢复 stock，不保证持续显示；C 新增 status 槽 | **B**（用户：footer 以 TUI 为准） | A 的零改动；C 需要扩充 P0-CT-07 槽位契约 | core footer 持槽时多一行；off 后 stock 不显示该通道，见 §1.4 | §1.3、`modes/ui/footer.ts:39-50` |
 | F1 | 多来源覆盖 | A 新增字段 `display.footerBySource`；B **保持 `footer: string[]` 形状，统一经一个 helper 按来源合并后整体发布** | **B** | A 是更"结构化"的形状，但多一个契约字段 | 无（形状不变） | `bus.ts:154-160` |
@@ -66,7 +66,7 @@ cctui 实际依赖、但没有登记的面：
 **目标**
 - 契约表覆盖 cctui 的全部真实依赖面，每行都有消费方与移除条件。
 - 快照携带 `instance`，消费方可以可靠检测 bus 更换。
-- 分别列出 D4 保留并修正类型 / 删除 reader 的实施条件；未选定前保留现有运行时导出与断言。
+- 按 D4=B 删除运行时 reader 与 CoreStatus，保留纯类型导出；保留迁移后的生产行为与快照形状断言。
 - 在 core modes footer 或 cctui 实际显示期间渲染 `display.footer`；多来源不再互相覆盖，发布回到事件处理器内。显式 off 的 stock 例外见 §1.4。
 
 **非目标**
@@ -89,7 +89,7 @@ cctui 实际依赖、但没有登记的面：
 | `display.footer`：string 数组，core modes footer 安装时或 cctui 启用时渲染（含其 native footer 模式的 cc-footer）；显式 off 恢复 stock 后不显示，不存在基于 presence 的自动交回 | XPKG-07 | cctui footer、core modes footer | — |
 | 宿主假设：aboveEditor widget 顺序受注册顺序影响；cctui 现有 macrotask 重注册仅为尽力排序，不能保证晚于所有异步 session_start 或后续 core widget 更新。跨包不新增“core 此后不能重注册”的限制 | XPKG-09-HOST | cctui 布局 | pi 提供正式排序 interface 后撤除；未取证时 test.todo 指向本批 TUI P3-1 D5 |
 | 修订第 21 行 | — | — | 改写为"cctui 只经 `registerToolRenderer` 换渲染器，不注册任何工具；core 不得依赖 cctui 的渲染接管" |
-| 修订 OBS-09-SITES 行 | — | — | 仅在 D4=B 获选并实施删除时删去 reader 子句，注明版本；未选定前保留 |
+| D4 reader 导出撤除与 OBS-09-SITES | D4-READER-REMOVE / P1-BUS-02/07 | 既有运行时 reader 消费方；已检索 TUI 无调用 | 先登记删除 runtime reader / CoreStatus、保留类型入口及 legacy bus 的迁移说明，再改测试；当前 OBS-09-SITES 表行已无 reader 子句，保留 sites 契约，迁移其测试中的 reader 断言 |
 
 可执行契约逐条配测试：XPKG-01/02/03/07 放 `test/contracts/bus-cross-package.test.ts`（新文件）；XPKG-04/05 放现有 action-fusion / observation-pack 测试，对形状做编译期或运行期钉住；XPKG-06 在表中列真实 schema 与显示兼容字段；对真实工具注册名/字段做 schema fixture 检查，不能把历史显示别名伪装成生产字段。XPKG-09-HOST 需真实 widget 宿主时序证据，未取得前按协议显式 todo。
 
@@ -120,13 +120,9 @@ cctui 实际依赖、但没有登记的面：
 - `types/index.d.mts` 的 `CoreSnapshot` 增加 `instance?: string`（可选，兼容旧快照），`goal.widget.goal` 补 `costUsed?: number`（当前生产者提供，旧快照允许缺失）；两项不依赖 D4。
 - 头注释写明：消费方应以 `instance` 判断是否需要重新订阅；旧 core 没有该字段时，回退比较 `onChange` 函数身份。
 
-### 4.3 `readCoreStatus` 去留（待 D4）
+### 4.3 删除 `readCoreStatus`（D4=B 已确认）
 
-**未选定前：**保留运行时 reader、`CoreStatus`、`package.json` 的 import 导出及 reader 行为测试。§4.1 的 OBS-09-SITES 删除与下列 B 步骤均不能进入默认实施批次。TUI 兼容不要求删除 reader。
-
-**若选 A（保留）：**运行时 reader 继续维持其总函数 / legacy 回退语义；为 `CoreStatus` 单列真实 reader 输出形状，移除从不返回字段的错误承诺，与完整 `CoreSnapshot` 区分。保留并补齐输出键、坏输入、legacy 回退与声明一致性测试；发布说明交代类型收窄的影响。不要顺便让 reader 返回新字段而扩张 API。
-
-**若选 B（删除）：**才执行以下步骤，发布时按破坏性变更说明；本 spec 不授权发布。
+用户于 2026-10-08 选择 B。A/C 仅为历史备选；直接执行以下删除与迁移，不再等待决定。删除的是 runtime reader 与 CoreStatus，不删除 CoreSnapshot、bus、legacy key 或 TUI 自身的回退读取。先按 §4.1 登记撤除及迁移契约，再修改断言；发布时按破坏性变更说明，本批不执行发布。
 
 1. 删除 `types/core-status.mjs`；从 `types/index.d.mts` 删除 `CoreStatus` 接口与 `readCoreStatus` 声明，保留 `CoreSnapshot` / `CoreCommand` / `CoreCommandResult` / `LegacyPmCapability`。
 2. 快照类型缺口按 §4.2 的独立加性修复处理，reader 删除不应阻塞它。
@@ -162,7 +158,7 @@ cctui 实际依赖、但没有登记的面：
 | B4 | footer：两个来源依次 `setFooterLine` → `display.footer` 同时包含两行；`setFooterLine(src, undefined)` 删除该行 | `test/lib/footer-lines.test.ts` |
 | B5 | 降级路径：加载期零 publish（spy `coreBus().publish`）；`session_start` 后 footer 含降级行 | `extensions/{action-fusion,observation-pack}/tests/compat-degrade.test.ts`（改写现有断言的触发时机） |
 | B6 | modes footer 实际安装时输出含 `display.footer`；在场时跳过安装。联合覆盖 core-first / TUI-first：启用由 cc-footer 显示，off 为 stock 且无 cc-footer / 自动 core 恢复；reload 后 TUI 加载失败但 core session_start 安装成功才由 core 显示 | `extensions/modes/` footer 测试旁 + 配对 TUI C11 |
-| B7 | D4 未选：原 reader / exports 断言继续通过；若 A：输出与收窄声明一致、legacy 回退不变；若 B：迁移行为断言，类型导入成功、运行时 reader 明确不再导出 | 类型 fixture / package exports 检查 |
+| B7 | D4=B：迁移后的行为/快照断言通过；从正式 package subpath 的 type-only import 编译成功，运行时 reader import 失败；旧 legacy bus 及 TUI 回退保持；保留合法的 instance/usage 类型字段 | 类型 fixture / package exports 检查 |
 | B8 | reset/reload 后旧 footer 行不泄漏；两来源重复 session_start 不增行；清空后无提示；headless 仅 warn | footer / compat 测试 |
 
 ## 6. 实施顺序
@@ -170,12 +166,12 @@ cctui 实际依赖、但没有登记的面：
 1. 契约表登记（§4.1）→ 单独一个 commit。
 2. `instance` 字段 + B1 / B3。
 3. footer helper + 降级时机 + modes footer + B4–B6 / B8；与 TUI 联合验证真实槽位。
-4. D4 未选时保留 reader 并通过既有 B7；选定 A / B 后才另批处理 §4.3 的对应方案与文档。
+4. 当前 1–3 已实施；续做 §4.3 的 D4=B、B7 与文档，再重跑保留部分回归。
 5. 三绿：`bun run check && bun run test && bun run contracts`。
 
 ## 7. 风险与回滚
 
-- **仅 D4=B 实施后 breaking**：`@georgedong32/pi-claude-code-core/types` 不再提供运行时导出。已检索的范围内没有消费方；CHANGELOG 标注，发布时至少采用对应破坏性变更的次版本（从当前 0.3.0 可到 0.4.0；本 spec 不授权发布）。
+- **D4=B 实施后的 breaking**：`@georgedong32/pi-claude-code-core/types` 不再提供运行时导出。已检索的范围内没有消费方；CHANGELOG 标注，发布时至少采用对应破坏性变更的次版本（从当前 0.3.0 可到 0.4.0；本 spec 不授权发布）。
 - 降级提示的显示时机从"加载期"变为"首个 session_start"。非交互模式下仍有 `console.warn`。
 - **回滚**：按实际依赖逆序回退；D4 若获选，其 reader 变更独立提交，避免连带回退 instance / footer。
 

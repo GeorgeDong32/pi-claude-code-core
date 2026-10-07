@@ -1,49 +1,42 @@
 # spec/ — core 实现规格
 
-2026-10-07 联合审查已拆成 **core 9 份 + TUI 6 份**。本批当前完成的是规格编写与源码核对，代码均未实施；D3、D4、D6 保留为待用户决策。配对入口：[TUI spec 索引](../../pi-claude-code-tui/spec/README.md)。
+2026-10-08 更新：原批次 **core 9 份 + TUI 6 份** 已完成大部分实现。用户已确认 **D3=A、D4=B、D6=B**，不再作为待用户决策阻塞。
 
-依据：core `09c2dcb`（0.3.0）、TUI `7192d9f`（1.9.0）、本地 pi 1.0.1。文中的旧行号仅用于定位此基线，以文件/函数名为准；新文件明确标注为拟新增。续写来源与勘误见[规格核对记录](2026-10-07-spec-review.md)。
+下一轮从 [剩余任务执行规格](2026-10-08-followup-execution.md) 与 [core 执行 prompt](2026-10-08-execution-prompt.md) 开始；配对 [TUI 索引](../../pi-claude-code-tui/spec/README.md)。原审查与两轮规格核对保留在 [核对记录](2026-10-07-spec-review.md)。
 
-## 规格与前置条件
+当前核对 revision：core `2ebd226`，TUI `1bf9b7f`，宿主依赖 pi 1.0.1。原规格背景行号属于 core `09c2dcb` / TUI `7192d9f`，实施定位以函数与当前源码为准。
 
-| 优先级 | spec | 清单项 | 规格状态 / 实施前置 |
+## 实际状态与续做范围
+
+| 优先级 | spec | 清单项 | 当前状态 / 下一步 |
 |---|---|---|---|
-| P0-1 | [plan 权限优先级](2026-10-07-p0-1-plan-gate-precedence.md) | CORE-02 / 03 + FUS-SHAPE | 已补齐；D1/D2 原则已定；含真实 then_run 对象检查 |
-| P0-2 | [goal 回合锁](2026-10-07-p0-2-goal-turn-lock.md) | CORE-01 / 05 + G3 | 已补齐；锁策略与 G3 一起待 D3；仅 CORE-05 可独立实施 |
-| P0-3 | [memory queue claim](2026-10-07-p0-3-memory-queue-claim.md) | CORE-04 | 已补齐；跨进程、回收、GC、混合版本和崩溃窗口均有验收 |
-| P1-1 | [bus 跨包面](2026-10-07-p1-1-bus-surface-for-cctui.md) | CORE-07 / 08 / 09 / 10 | 已补齐；先登记契约，与 TUI P0-2 联合验证；reader 去留待 D4 |
-| P2-1 | [permission 裁决 module](2026-10-07-p2-1-permission-adjudication-module.md) | CORE-12 / 18 | 已补齐；依赖 P0-1，按冻结基线 trace 对拍 |
-| P2-2 | [goal lifecycle module](2026-10-07-p2-2-goal-lifecycle-module.md) | CORE-13 | 已补齐；依赖 P0-2（包括 D3） |
-| P2-3 | [memory writer + drain](2026-10-07-p2-3-memory-writer-and-queue-drain.md) | CORE-14 / 15 | 已补齐；writer 可独立做，drain 依赖 P0-3 |
-| P2-4 | [结构化用量](2026-10-07-p2-4-structured-usage-channel.md) | CORE-11 | 已补齐；先登记 XPKG-08；配对 TUI P1-2 第二步 |
-| P3-1 | [小型重构与清理](2026-10-07-p3-1-small-refactors-and-cleanup.md) | CORE-06 / 16 / 17 / 19 | 已补齐；仅 S3 待 D6；CORE-17 本批只做 startPlanExecution |
+| P0-1 | [plan 权限优先级](2026-10-07-p0-1-plan-gate-precedence.md) | CORE-02 / 03 + FUS-SHAPE | 已实施；后续重构保留 D1/D2 与 MCP 扫描边界回归 |
+| P0-2 | [goal 回合锁](2026-10-07-p0-2-goal-turn-lock.md) | CORE-01 / 05 + G3 | CORE-05 已实施；D3=A 已确认，锁策略 + G3 同批续做（C1） |
+| P0-3 | [memory queue claim](2026-10-07-p0-3-memory-queue-claim.md) | CORE-04 | 已实施并完成复审修复；跨进程自动化绿，真实多 session 验收 open（H-Q） |
+| P1-1 | [bus 跨包面](2026-10-07-p1-1-bus-surface-for-cctui.md) | CORE-07 / 08 / 09 / 10 | instance/footer/契约已实施；D4=B reader 删除待做（C2）；真实 footer 联验 open |
+| P2-1 | [permission 裁决 module](2026-10-07-p2-1-permission-adjudication-module.md) | CORE-12 / 18 | 0/3 步；先 C3 再固定基线迁移（C4），无决策阻塞 |
+| P2-2 | [goal lifecycle module](2026-10-07-p2-2-goal-lifecycle-module.md) | CORE-13 | 未实施；C1 通过后固定基线迁移（C5） |
+| P2-3 | [memory writer + drain](2026-10-07-p2-3-memory-writer-and-queue-drain.md) | CORE-14 / 15 | 必做已实施；消息文本扁平化可选未做 |
+| P2-4 | [结构化用量](2026-10-07-p2-4-structured-usage-channel.md) | CORE-11 | core d539346 已发布，TUI 710c9c7/1bf9b7f 已消费；完整生产事件与真机联验 open |
+| P3-1 | [小型重构与清理](2026-10-07-p3-1-small-refactors-and-cleanup.md) | CORE-06 / 16 / 17 / 19 | S1/S2/S4/S5/S6 已实施；D6=B 的 S3 待做（C3） |
 
-CORE-01…19 均有去向。CORE-17 的完整 PlanSession 深化本批明确暂缓，仅收敛三条执行转移；不要把它记成完整生命周期重构完成。可选项（消息扁平化、effort pin、ANSI 合并）可以不做，实施报告须区分必做/可选/暂缓。
+CORE-01…19 全部有去向。CORE-17 本批只完成 startPlanExecution，完整 PlanSession 仍暂缓；不得在台账中记为完整生命周期重构。
 
-## 用户决策与实现解释
+## 已确认决策
 
-| # | 原要求 / 问题 | 本规格采用的结论 |
-|---|---|---|
-| D1 | “照常询问” | plan 下 read 命中 ask 要询问并尊重 Allow/Block |
-| D2 | “Allow 的 MCP 可以用，但是别的 edit 不能用” | plan 硬限制不被 allow 解锁；经 family 规则/session/现有首次询问批准的 MCP 可以用。保留首次询问是实现解释，不声称用户另选过 B/C |
-| D3 | “这个是啥东西，展开讲讲” | **待定**。推荐 A：仅四个真停止工具锁住本 turn；其他工具不锁，也不扩大进度名单。P0-2 已展开后果与 A/B/C/D |
-| D4 | 询问 reader 与 TUI 是否兼容，允许考虑删除 | **待定**。源码确认本地 TUI 无调用，不证明不兼容；删除仅为提案，未选定前保留运行时 reader 与断言。instance/footer 不受阻 |
-| D5 | “Foot 的话以 tui 为准” | cctui 启用由 cc-footer 渲染，core modes footer 实际安装时由它渲染；off 恢复宿主 stock，不自动交回 core，届时该通道不显示 |
-| D6 | firstSeenPrompt 无 UI / 子代理时如何做 | **待定**。推荐 B：维持拒绝并提示建议规则；A 的父会话转发需单独扩展协议，尚未获选择 |
+| # | 用户选择与当前含义 |
+|---|---|
+| D1 | plan 下 read 命中 ask 照常询问并尊重结果 |
+| D2 | 已授权 MCP 可用，其他 edit 不可借 allow 绕过 plan 硬限制；保留既有 family 首次询问 |
+| D3 | **A，用户 2026-10-08**：仅四种真停止成功后锁回合；原进度名单不扩大；G3 同批 |
+| D4 | **B，用户 2026-10-08**：删除 runtime reader/CoreStatus，保留纯类型入口；不撤 bus/legacy，不代表已发布 |
+| D5 | TUI 启用由 cc-footer 展示，core modes footer 实际安装时由它展示；off 恢复 stock，没有自动交回 |
+| D6 | **B，用户 2026-10-08**：无 UI first-seen 继续拒绝，补具体预置规则提示；不扩父会话转发 |
 
-## 建议实施顺序
+## 下一轮约定
 
-1. core P0-1、P0-3、P0-2 的 CORE-05 drafting 复位；TUI P0-1 可独立推进。
-2. core P1-1 的 instance/footer/契约 → TUI P0-2 联合验收两种加载顺序、reload、native footer 与 off 的真实槽位；reader 变更另等 D4。
-3. TUI P1-1 与 P1-2 第一步；core P2-4 → TUI P1-2 第二步。
-4. D3 确认并同批落地 P0-2 锁策略 + G3 后做 goal lifecycle；permission 在 P0-1 后；drain 在 P0-3 后；ReplicaSession 在 TUI 两份 P0 后。
-5. P3 独立小项按收益插入，S3 等 D6；共享文件重构串行落地，避免并发搬移互相覆盖。
-
-## 验收约定
-
-- “规格已补齐”不等于用户批准全部建议或代码已实现。实施后才填实际 commit、测试日志和未完成的真机项。
-- 跨包面先登记 `test/contracts/README.md` 再写测试；本轮仅给出拟登记内容，不提前改生效契约。
-- bug 先在冻结基线证实红因，再修绿；纯重构用行为 trace/golden 等价验证，不要求无意义的红测试。
-- core 三门走 `bun run check`、`bun run test`、`bun run contracts`；TUI 双门走 `npm test`、`npm run typecheck`。不直接调用 tsc/vitest 绕过 core 脚本。
-- 未获得宿主事实的契约用带目标批次的 test.todo；真机视觉项独立记录，不能用 fake 测试冒充。
-- 代码实施时同步头注释、中英架构文档、CHANGELOG 与 PROGRESS；偏离历史 spec 登记 DEVIATIONS。本批只写 spec，不提前宣称这些交付已发生。
+- 默认 C1 → C2 → C3 → C4 → C5；C4 冻结在 C3 后，C5 冻结在 C1 后，避免对拍误消除本轮已批准变化。
+- 跨包面先登记契约再写测试；正式入口 type-only import 与 runtime 删除负例纳入 D4 验收。
+- core 三门使用 bun run check/test/contracts；TUI 双门使用 npm test/typecheck。2026-10-08 基线全部退出 0，详细数量与日志见后续规格。
+- 实现、自动化、真实宿主验收分开记；保留 3 个现有 host todo 的各自证据状态。TUI 已完成 usage 第二步，不再等待其“开始实施”。
+- 每批独立只读审查与修复；同步实际文档和台账，未完成项写具体恢复步骤。提交已在本地存在，push/发布另行安排。

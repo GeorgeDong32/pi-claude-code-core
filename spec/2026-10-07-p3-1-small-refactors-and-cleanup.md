@@ -1,8 +1,8 @@
 # SPEC P3-1：小型重构与清理批
 
-状态：规格已补齐；S3 待用户 D6，其余可独立实施
+状态：S1/S2/S4/S5/S6 已实施；**D6=B 已由用户确认（2026-10-08），仅 S3 待实施**。续做见 [2026-10-08 剩余任务](2026-10-08-followup-execution.md)。
 
-> **实施记录（2026-10-07）**：S1/S2/S4/S5/S6 已完成（commits 221ff55/07f7a62/edb1e5b；详见 PROGRESS.md）。**S3（firstSeenPrompt 无 UI 行为）待 D6 决策未实施**——现行 fail-closed 行为原样保留。可选项与 D6 项之外全部落地。
+> **实施记录（2026-10-07）**：S1/S2/S4/S5/S6 已完成（commits 221ff55/07f7a62/edb1e5b；详见 PROGRESS.md）。**S3（firstSeenPrompt 无 UI 行为）在此提交时待 D6，2026-10-08 已选 B，尚未实施**——现行 fail-closed 行为原样保留。可选项与 D6 项之外全部落地。
 日期：2026-10-07
 分支：main
 来源：2026-10-07 联合架构审查，清单项 CORE-06 / CORE-16 / CORE-17（第一步）/ CORE-19
@@ -13,7 +13,7 @@
 |---|---|---|---|
 | S1 | review 的三份命令执行 adapter 合一 | 重构 | `review/src/review-report.ts:144-175`、`target-workspace.ts:28-62`、`review-run.ts:383-420, 575` |
 | S2 | plan→auto 执行转移合一（`startPlanExecution`） | 重构 | `modes/index.ts:1043-1060`、`1161-1182`、`1964-1981` |
-| S3 | firstSeenPrompt 在无 UI 时的行为（**需决策 D6**） | 功能 | `modes/index.ts:911-917`（对照 `395-446`） |
+| S3 | firstSeenPrompt 在无 UI 时的行为（**D6=B 已确认**） | 功能 | `modes/index.ts:911-917`（对照 `395-446`） |
 | S4 | web-gov / mcp-gov 的 JSON 读取改走 `lib/settings.ts`，并缓存 | 不变量 10 | `web-gov/index.ts:43-56, 113`、`mcp-gov/panel.ts:22-30` |
 | S5 | review：删除不可达的 `diff-file` target；去掉重复的 `git status` | 死代码 / 性能 | `cli-args.ts:30-36`（`--diff` 已列为废弃 flag）、`review-run.ts:234-238, 294, 549`、`target-workspace.ts:103, 122-129`、`types.ts:177-188` |
 | S6 | 死代码与未用 import | 清理 | 见 §2.6 |
@@ -37,9 +37,11 @@
 | 候选 | 做法 | 风险 |
 |---|---|---|
 | A | 复用 `promptWithPermissionOptions` 的父会话转发分支 | 父会话的"Allow always"会经 `suggestAllowRuleForToolCall` 生成规则，而该函数面向内置工具，对 MCP canonicalId 需要单独适配 |
-| **B（推荐）** | 维持 fail-closed，block reason 补一句"可在父会话预置 `<suggestedRule>` 规则"，并写进 docs | 子代理首次调用 MCP 仍会被拒，但用户能看到如何解决 |
+| **B（已选，用户 2026-10-08）** | 维持 fail-closed，block reason 补一句"可在父会话预置 `<suggestedRule>` 规则"，并写进 docs | 子代理首次调用 MCP 仍会被拒，但用户能看到如何解决 |
 
-推荐 B。若选 A，另立 spec，与转发协议（P0-CT-05）一起评估。
+按 B 实施，A 的父会话转发不属于本批。仅改变未授权 family first-seen 且 `!ctx.hasUI` 时的拒绝说明，保留既有原因前缀，追加由 family `suggestAllowRule` 生成的原样规则与“在父会话/交互会话预置后重试”的指引；规则获取沿用权威 registry，不自行拼 canonicalId。
+
+已有 allow / session grant、显式 deny / ask、bypass、交互 first-seen 的四种选择和 broker mirror 行为保持。该无 UI 分支不写授权、不弹窗、不创建父会话转发请求。新增 headless 与 subagent 无 UI 两类回归，断言拒绝 + 正确 suggestedRule + 零新增授权/转发；同时钉已有 allow 不被新文案路径阻塞。
 
 ### 2.4 S4 JSON 读取
 
