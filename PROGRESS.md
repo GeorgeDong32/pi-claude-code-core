@@ -2,6 +2,14 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## 2026-10-08 C5-Step1：goal-lifecycle module — pool/focus 所有权迁入（P2-2 1/4）
+
+- **实现**:`goal-lifecycle.ts`(L1=A factory/L2=B 全所有权/L3=B ports/L4=B focused() getter/L5=B TransitionReport)——私有 pool Map + focusedId;两个写动词 `setGoal`/`focus` 携带完整副作用集(与 goal.ts 原实现逐行对应,verb effect 表在头注释);静默原语 replacePool/setFocusedSilently/removeFromPool/adopt 承载 reconcile/loadState/state-setter 的裸数据搬移(无动词副作用,同旧直接赋值)。ports 十项(haltContinuation/pauseClock/forgetCarry/resetNudge/releaseStaleTweakGate/appendFocusEntry/appendLedger/persist/syncTools/updateUI/nowIso),ledger 保持 best-effort try/catch。
+- **goal.ts 接线(过渡 adapter,spec §4.3 步骤 1 允许)**:闭包 `goalsById/focusedGoalId` 与 state 代理替换为 lifecycle 持有;`setGoal`/`setFocusedGoalId` 退化为动词薄壳(调用方零改动);reconcile/loadState/complete-内联的 9 个 focusedGoalId 写点与 5 个整池替换全部改走原语;读点经 `lifecycle.focusedId`。
+- **测试**:goal-lifecycle.test.ts 6 例记录式转移表(setGoal A→B 全序/null 清焦点 forget carry+双 clear/complete forget vs paused 保留/同 id 无焦点效应/focus 有效-无效-无变化/静默原语零副作用);**现有 502 node:test 零改动全过**(行为冻结验证,goal 套件 30/180 抽验)。
+- **门禁**:check 0;vitest 935;node:test 508;contracts 43+3todo。
+- **待续**:Step 2(complete 内联块/clear/abort 改动词)、Step 3(drafting intents/turn flags 封闭事件入口)、Step 4(撤过渡代理+重复测试删减清单)。drafting 意图目前经 releaseStaleTweakGate port 回写闭包——Step 3 迁入后撤。
+
 ## 2026-10-08 C4-Step3：classifier-retry seam + flaky 测试确定性化（P2-1 3/3）
 
 - **实现**:`classifier-retry.ts`——`ClassifierClock`(now/setTimer/clearTimer 注入,默认 real)+ `fakeClassifierClock`(advance 手动驱动、cleared 不触发)+ `runClassifierAttempts`(可见重试层机制:任意 transport 错误重试至 attempts 次,verdict 业务留在 gate)。`classifyToolCall` 的 per-attempt 超时 envelope、verdict cache 时间戳、abort listener 全部走注入 clock,finally 释放不变;`approveAutoTier3` 循环改用 runClassifierAttempts(重试条件/次数/fail-closed/降级语义逐字保留)。

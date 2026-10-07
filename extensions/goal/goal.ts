@@ -120,6 +120,7 @@ import {
 	validateResumeGoal,
 } from "./goal-policy.ts";
 import { createContinuationLoop } from "./goal-continuation.ts";
+import { createGoalLifecycle } from "./goal-lifecycle.ts";
 import { createPendingAchievementSlot, runCompletionAudit } from "./goal-audit-flow.ts";
 import type { runGoalCompletionAuditor } from "./goal-auditor.ts";
 
@@ -316,34 +317,47 @@ function isMeaningfulProgressToolCall(toolName: string, args: unknown): boolean 
 // ---------- extension entry point ----------
 
 export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => number; auditor?: typeof runGoalCompletionAuditor } = {}): void {
-	let goalsById = new Map<string, GoalRecord>();
-	let focusedGoalId: string | null = null;
-	// B3: the three session-local singletons live INSIDE the factory now —
-	// the module previously kept them at file scope, which made the real
-	// interface of goalExtension() larger than its signature and leaked state
-	// across factory invocations (test isolation).
+	// P2-2 Step 1: the goal POOL and FOCUS pointer are owned by the
+	// lifecycle module (goal-lifecycle.ts) — the writer verbs with their full
+	// effect sets live there. `goalsById` below is a TRANSITIONAL alias onto
+	// the lifecycle's live pool for the read paths that have not migrated
+	// yet (spec §4.3 step 1 allows the adapter; step 4 removes it). The
+	// B3 isolation note still applies: all of it lives inside the factory.
+	const lifecycle = createGoalLifecycle({
+		haltContinuation: () => clearContinuationState(),
+		pauseClock: () => clearActiveAccounting(),
+		forgetCarry: (goalId: string) => clock.forget(goalId),
+		resetNudge: (goalId: string | null | undefined) => resetGetGoalNudgeState(goalId),
+		releaseStaleTweakGate: (focusedId: string | null | undefined) => {
+			if (tweakDraftingFor !== null && tweakDraftingFor !== focusedId) tweakDraftingFor = null;
+		},
+		appendFocusEntry: (goalId: string | null, reason: GoalFocusReason) => appendFocusEntry(goalId, reason),
+		appendLedger: (ctx, event) => appendGoalEvent(ctx as ExtensionContext, event as Parameters<typeof appendGoalEvent>[1]),
+		persist: (ctx) => persist(ctx as ExtensionContext),
+		syncTools: () => syncGoalTools(),
+		updateUI: (ctx) => updateUI(ctx as ExtensionContext),
+		nowIso,
+	});
+	const goalsById = lifecycle.pool as Map<string, GoalRecord>;
 	// When non-null, /goal-tweak drafting is in progress for this goal id and
 	// the agent is allowed to call apply_goal_tweak. Cleared after the tweak
 	// is applied or when a user-driven turn arrives without a follow-through
 	// (schema-level affordance gate against "tweaking" via arbitrary writes).
+	// (Step 3 migrates the drafting intents into the lifecycle module.)
 	let tweakDraftingFor: string | null = null;
 	// Approved-audit message held until the finishing turn ends, so "Goal
 	// achieved" lands after the model's closing summary (transcript bottom).
 	let confirmationIntent: GoalConfirmationIntent | null = null;
 	// B7 step 3: the approved-audit hold lives in the audit domain module.
 	const pendingAchievement = createPendingAchievementSlot();
+	// L4 transitional alias: reads go through the lifecycle's focused()
+	// getter; bare writes keep the old silent setter semantics (adopt).
 	const state = {
 		get goal(): GoalRecord | null {
-			return focusedGoalFromPool(goalsById, focusedGoalId);
+			return lifecycle.focused();
 		},
 		set goal(next: GoalRecord | null) {
-			if (next) {
-				goalsById.set(next.id, next);
-				focusedGoalId = next.id;
-				return;
-			}
-			if (focusedGoalId) goalsById.delete(focusedGoalId);
-			focusedGoalId = null;
+			lifecycle.adopt(next);
 		},
 	};
 	// DC4b part-3: the presentation half lives in ./ui.ts — closed-over
@@ -351,7 +365,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 	const goalUi = createGoalUi({
 		getDisplayGoal: () => goalForDisplay() ?? state.goal,
 		getOpenGoalCount: () => openGoals().length,
-		getOtherOpenGoalCount: () => otherOpenGoalCount(goalsById, focusedGoalId),
+		getOtherOpenGoalCount: () => otherOpenGoalCount(goalsById, lifecycle.focusedId),
 		isGoalActive: () => state.goal?.status === "active",
 		shouldPauseOnEscape: () => state.goal?.status === "active" && !!state.goal.autoContinue,
 		// INTERRUPT SAFETY (fix): Escape only pauses while the agent is idle;
@@ -505,11 +519,11 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		if (isSubagentChildProcess()) return true;
 		const current = state.goal;
 		const fresh = readActiveGoalPool(ctx);
-		if (!focusedGoalId) {
-			goalsById = fresh;
+		if (!lifecycle.focusedId) {
+			lifecycle.replacePool(fresh);
 			return true;
 		}
-		const diskGoal = fresh.get(focusedGoalId) ?? null;
+		const diskGoal = fresh.get(lifecycle.focusedId) ?? null;
 		// AR1005-GO-B: hand the JUST-PARSED focused disk goal to the caller's
 		// same synchronous segment (persist must not re-read/re-parse it).
 		// The capture is per-event, never path-keyed, never cached across
@@ -517,13 +531,13 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		if (opts.captureDiskGoal) opts.captureDiskGoal.goal = diskGoal;
 		if (!diskGoal) {
 			if (current && !current.activePath) {
-				goalsById = fresh;
+				lifecycle.replacePool(fresh);
 				goalsById.set(current.id, current);
-				focusedGoalId = current.id;
+				lifecycle.setFocusedSilently(current.id);
 				return true;
 			}
-			goalsById = fresh;
-			focusedGoalId = null;
+			lifecycle.replacePool(fresh);
+			lifecycle.setFocusedSilently(null);
 			clearStoppedRuntimeState();
 			if (current) resetGetGoalNudgeState(current.id);
 			if (tweakDraftingFor !== null) tweakDraftingFor = null;
@@ -534,9 +548,9 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		const reconciled = current && opts.preserveMemoryUsage
 			? mergeFocusedGoalWithDisk({ memoryGoal: current, diskGoal })
 			: diskGoal;
-		goalsById = fresh;
+		lifecycle.replacePool(fresh);
 		goalsById.set(reconciled.id, reconciled);
-		focusedGoalId = reconciled.id;
+		lifecycle.setFocusedSilently(reconciled.id);
 		if (reconciled.status !== "active" || !reconciled.autoContinue) clearContinuationState();
 		if (reconciled.status !== "active") clearActiveAccounting();
 		return true;
@@ -547,28 +561,9 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 	}
 
 	function setFocusedGoalId(goalId: string | null, ctx: ExtensionContext, reason: GoalFocusReason): void {
-		const previousGoalId = focusedGoalId;
-		focusedGoalId = goalId && goalsById.has(goalId) ? goalId : null;
-		if (previousGoalId !== focusedGoalId) {
-			clearContinuationState();
-			clearActiveAccounting();
-			resetGetGoalNudgeState(previousGoalId);
-			resetGetGoalNudgeState(focusedGoalId);
-			if (tweakDraftingFor !== null && tweakDraftingFor !== focusedGoalId) tweakDraftingFor = null;
-		}
-		appendFocusEntry(focusedGoalId, reason);
-		// Append ledger event for focus changes
-		try {
-			if (focusedGoalId) {
-				appendGoalEvent(ctx, { type: "goal_focused", goalId: focusedGoalId, reason, at: nowIso() });
-			} else if (previousGoalId) {
-				appendGoalEvent(ctx, { type: "goal_unfocused", reason, at: nowIso() });
-			}
-		} catch {
-			// Ledger append failure should not crash focus change
-		}
-		syncGoalTools();
-		updateUI(ctx);
+		// P2-2 Step 1: the focus verb (with its full effect set) lives in
+		// goal-lifecycle.ts; this is the transitional adapter.
+		lifecycle.focus(goalId, ctx, reason);
 	}
 
 	function armFocusedContinuation(ctx: ExtensionContext): void {
@@ -770,7 +765,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		}
 
 		const displayGoal = goalForDisplay() ?? state.goal;
-		const otherCount = otherOpenGoalCount(goalsById, focusedGoalId);
+		const otherCount = otherOpenGoalCount(goalsById, lifecycle.focusedId);
 		publishGoalChannel({
 			focus: "focused",
 			statusLine: `${footerStatus(displayGoal)}${otherCount > 0 ? ` (+${otherCount} open)` : ""}`,
@@ -796,8 +791,8 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		// participate in the goal lifecycle. The session-branch reconciliation
 		// below is naturally empty in fresh child sessions and stays as-is.
 		const childSession = isSubagentChildProcess();
-		goalsById = childSession ? new Map<string, GoalRecord>() : readActiveGoalPool(ctx);
-		focusedGoalId = null;
+		lifecycle.replacePool(childSession ? new Map<string, GoalRecord>() : readActiveGoalPool(ctx));
+		lifecycle.setFocusedSilently(null);
 		let focusEntry: GoalFocusEntry | null = null;
 		let legacyGoal: GoalRecord | null = null;
 		let legacyStateSeen = false;
@@ -817,10 +812,10 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		if (legacyGoal && legacyGoal.status !== "complete") {
 			legacyGoal = sanitizeGoalPaths(ctx, mergeGoalPromptFromDisk(ctx, legacyGoal));
 		}
-		focusedGoalId = resolveSessionFocus({ pool: goalsById, focusEntry, legacyGoal });
-		if (!focusEntry && focusedGoalId) {
+		lifecycle.setFocusedSilently(resolveSessionFocus({ pool: goalsById, focusEntry, legacyGoal }));
+		if (!focusEntry && lifecycle.focusedId) {
 			try {
-				appendFocusEntry(focusedGoalId, legacyGoal?.id === focusedGoalId ? "migrated" : "selected");
+				appendFocusEntry(lifecycle.focusedId, legacyGoal?.id === lifecycle.focusedId ? "migrated" : "selected");
 			} catch {}
 		}
 		for (const [id, current] of goalsById) {
@@ -835,35 +830,9 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 	}
 
 	function setGoal(next: GoalRecord | null, ctx: ExtensionContext, shouldPersist = true, focusReason?: GoalFocusReason): void {
-		const previousGoalId = state.goal?.id ?? null;
-		state.goal = next;
-		const focusChanged = previousGoalId !== focusedGoalId;
-		if (focusChanged) {
-			clearContinuationState();
-			clearActiveAccounting();
-			resetGetGoalNudgeState(previousGoalId);
-			resetGetGoalNudgeState(focusedGoalId);
-		}
-		if (focusReason && focusChanged) appendFocusEntry(focusedGoalId, focusReason);
-		if (!state.goal || (state.goal.status !== "active") || !state.goal.autoContinue) {
-			clearContinuationState();
-		}
-		if (!state.goal || state.goal.status === "paused" || state.goal.status === "complete") {
-			clearActiveAccounting();
-		}
-		// GO-A: a goal that is gone (cleared/aborted) or completed can never
-		// consume its sub-second carry again — release it. Paused goals KEEP
-		// theirs (resume continues accumulating fragments).
-		if (previousGoalId && (!state.goal || state.goal.status === "complete")) {
-			clock.forget(previousGoalId);
-		}
-		if (!state.goal || state.goal.id !== previousGoalId) {
-			// Drop any stale tweak-edit-gate that didn't belong to this goal.
-			if (tweakDraftingFor !== null && tweakDraftingFor !== state.goal?.id) tweakDraftingFor = null;
-		}
-		if (shouldPersist) persist(ctx);
-		else syncGoalTools();
-		updateUI(ctx);
+		// P2-2 Step 1: the setGoal verb (with its full effect set) lives in
+		// goal-lifecycle.ts; this is the transitional adapter.
+		lifecycle.setGoal(next, ctx, { persist: shouldPersist, focusReason });
 	}
 
 	function archiveCurrentGoal(ctx: ExtensionContext, reason: StopReason | undefined): GoalRecord | null {
@@ -1059,7 +1028,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			uiNotify(ctx, buildUnfocusedOpenGoalsSummary(open.length), "warning");
 			return null;
 		}
-		const labels = open.map((item) => goalSelectorLabel(item, focusedGoalId));
+		const labels = open.map((item) => goalSelectorLabel(item, lifecycle.focusedId));
 		const byLabel = new Map(labels.map((label, index) => [label, open[index]?.id]));
 		const selected = await ctx.ui.select(title, labels);
 		const selectedId = selected ? byLabel.get(selected) : undefined;
@@ -1086,10 +1055,10 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			return;
 		}
 		if (!ctx.hasUI) {
-			uiNotify(ctx, buildGoalListText(goalsById, focusedGoalId), "info");
+			uiNotify(ctx, buildGoalListText(goalsById, lifecycle.focusedId), "info");
 			return;
 		}
-		const labels = open.map((item) => goalSelectorLabel(item, focusedGoalId));
+		const labels = open.map((item) => goalSelectorLabel(item, lifecycle.focusedId));
 		const byLabel = new Map(labels.map((label, index) => [label, open[index]?.id]));
 		const selected = await ctx.ui.select("Focus open goal", labels);
 		const selectedId = selected ? byLabel.get(selected) : undefined;
@@ -1131,7 +1100,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		reconcileFocusedGoalFromDisk(ctx);
 		if (state.goal) syncGoalPromptFromDisk(ctx);
 		const view = goalForDisplay() ?? state.goal;
-		const otherCount = otherOpenGoalCount(goalsById, focusedGoalId);
+		const otherCount = otherOpenGoalCount(goalsById, lifecycle.focusedId);
 		const extra = view && otherCount > 0 ? `\nOther open goals: ${otherCount} (run /goal-list or /goal-focus)` : "";
 		const text = view ? `${detailedSummary(view)}${extra}` : openGoals().length > 0 ? buildUnfocusedOpenGoalsSummary(openGoals().length) : detailedSummary(null);
 		uiNotify(ctx, text, "info");
@@ -1368,7 +1337,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		description: "List all open pi goals and show which one this session is focused on.",
 		handler: async (_rawArgs, ctx) => {
 			reconcileFocusedGoalFromDisk(ctx);
-			uiNotify(ctx, buildGoalListText(goalsById, focusedGoalId), "info");
+			uiNotify(ctx, buildGoalListText(goalsById, lifecycle.focusedId), "info");
 			updateUI(ctx);
 		},
 	});
@@ -1517,7 +1486,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			if (state.goal) syncGoalPromptFromDisk(ctx);
 			syncGoalTools();
 			const view = goalForDisplay() ?? state.goal;
-			const otherCount = otherOpenGoalCount(goalsById, focusedGoalId);
+			const otherCount = otherOpenGoalCount(goalsById, lifecycle.focusedId);
 			let nudge = "";
 			if (view && view.status === "active" && view.id) {
 				const prior = activeGetGoalTurnsByGoalId.get(view.id) ?? 0;
@@ -1778,8 +1747,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			turnStoppedFor = completedGoal?.id ?? null;
 			if (completedGoal) {
 				resetGetGoalNudgeState(completedGoal.id);
-				goalsById.delete(completedGoal.id);
-				focusedGoalId = null;
+				lifecycle.removeFromPool(completedGoal.id);
 				appendFocusEntry(null, "completed");
 				syncGoalTools();
 				updateUI(ctx);
@@ -2384,7 +2352,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			// Use deterministic compaction summary instead of generic reminder
 			try {
 				const ledger = readGoalLedger(ctx);
-				const compaction = buildCompactionSummary({ goalsById, focusedGoalId, ledgerEvents: ledger.events });
+				const compaction = buildCompactionSummary({ goalsById, focusedGoalId: lifecycle.focusedId, ledgerEvents: ledger.events });
 				prompt = `${prompt}\n\n[POST-COMPACTION RESYNC goalId=${activeGoal.id}]\n${compaction}`;
 			} catch {
 				prompt = `${prompt}\n\n[POST-COMPACTION RESYNC goalId=${state.goal.id}]\nThe conversation was just compacted. Re-read the objective and continue from the actual artifacts/state; do not rely on memory of the prior chat.`;
