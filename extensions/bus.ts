@@ -15,9 +15,19 @@
  * refresh, add an `onChange?: () => void` DATA field to a v2 snapshot (the
  * subscription point itself is data, version-gated) — do NOT bolt on an
  * event system.
+ *
+ * SPEC 2026-10-07 P1-1 (XPKG-03): every snapshot carries `instance` — a
+ * random id minted once per bus instance. pi loads extensions with jiti
+ * `moduleCache:false`, so `/reload` builds a NEW bus; until the new bus's
+ * first publish, `globalThis.__piClaudeCodeCore` still holds the OLD bus's
+ * snapshot (its onChange points at the old listener set). Consumers detect
+ * the swap by comparing `instance` — on a change, re-subscribe via the new
+ * snapshot's onChange. Old cores without the field: fall back to comparing
+ * the onChange function identity. Patches can never overwrite `instance`.
  */
 // Type-only import of the published declarations: erased at transform, so
 // bundlers never resolve the .d.mts at runtime.
+import { randomUUID } from "node:crypto";
 import type { CoreSnapshot, CoreStatus, CoreCommand, CoreCommandResult } from "../types/index.d.mts";
 
 export type { CoreSnapshot, CoreStatus, CoreCommand, CoreCommandResult };
@@ -90,10 +100,11 @@ export interface CoreBus {
 	dispose(): void;
 }
 
-function initialSnapshot(): CoreSnapshot {
+function initialSnapshot(instance: string): CoreSnapshot {
 	return {
 		version: 1,
 		revision: 0,
+		instance,
 		modes: { mode: "", workingStats: null },
 		effort: { level: null, source: "model-default" },
 		goal: { active: false, summary: null },
@@ -114,7 +125,10 @@ function deepFreeze<T>(value: T): T {
 const g = globalThis as Record<string, unknown>;
 
 export function createCoreBus(): CoreBus {
-	let current: CoreSnapshot = deepFreeze(initialSnapshot());
+	// XPKG-03: minted once per bus instance; survives every publish and
+	// dispose (a disposed bus is terminal — tests reset to a NEW bus).
+	const instance = randomUUID();
+	let current: CoreSnapshot = deepFreeze(initialSnapshot(instance));
 	const commandHandlers = new Map<string, CommandHandler>();
 	// P1-BUS-10 / DC5: the subscription point is DATA on the v2 snapshot —
 	// snapshot.onChange(listener) registers, returns an unsubscribe. The
@@ -154,6 +168,7 @@ export function createCoreBus(): CoreBus {
 			current = deepFreeze({
 				...current,
 				...patch,
+				instance,
 				version: 2,
 				onChange: onChangeRegister,
 				revision: current.revision + 1,
@@ -181,7 +196,9 @@ export function createCoreBus(): CoreBus {
 			delete g.__piClaudeCodeCore;
 			delete g.__piClaudeCodeCoreCmd;
 			listeners.clear();
-			current = deepFreeze(initialSnapshot());
+			// terminal state keeps THIS bus's instance id (never reused for a
+			// restart — tests build a new bus via resetCoreBusForTests)
+			current = deepFreeze(initialSnapshot(instance));
 			commandHandlers.clear();
 		},
 	};

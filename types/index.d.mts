@@ -15,6 +15,10 @@ export interface LegacyPmCapability {
 export interface CoreSnapshot {
 	version: number;
 	revision: number;
+	/** XPKG-03 (2026-10-07 P1-1): per-bus-instance random id; constant across
+	 * that instance's publishes, different after /reload. Consumers use it to
+	 * detect a bus swap and re-subscribe; old snapshots may lack the field. */
+	instance?: string;
 	/** DC5 (P1-BUS-10): data-carried subscription point — snapshot.onChange(fn) registers, returns unsubscribe. v2+ only. */
 	onChange?: (fn: () => void) => () => void;
 	modes: {
@@ -25,7 +29,7 @@ export interface CoreSnapshot {
 		meta?: Readonly<Record<string, { icon: string; label: string; role: string }>>;
 	};
 	effort: { level: string | null; source: "env" | "session" | "profile" | "model-default" };
-	goal: { active: boolean; paused?: boolean; summary: string | null; widget?: { focus: "focused" | "unfocused" | "none"; statusLine: string; goal?: { objective: string; status: string; sisyphus: boolean; stopReason?: string; pauseReason?: string; pauseSuggestedAction?: string; activePath?: string; archivedPath?: string; tokensUsed: number; activeSeconds: number }; openGoalCount?: number } };
+	goal: { active: boolean; paused?: boolean; summary: string | null; widget?: { focus: "focused" | "unfocused" | "none"; statusLine: string; goal?: { objective: string; status: string; sisyphus: boolean; stopReason?: string; pauseReason?: string; pauseSuggestedAction?: string; activePath?: string; archivedPath?: string; tokensUsed: number; activeSeconds: number; costUsed?: number }; openGoalCount?: number } };
 	review: { status: "idle" | "running" | "done"; lastRunAt: number | null };
 	/** DC3: bounded notification tail queue (monotonic ids, newest last, cap 20). */
 	notifications?: ReadonlyArray<{ id: number; level: "info" | "warning" | "error"; msg: string }>;
@@ -49,6 +53,8 @@ export interface CoreCommandResult {
 export interface CoreStatus {
 	version: number;
 	revision: number;
+	/** XPKG-03 (2026-10-07 P1-1): per-bus-instance random id (see CoreSnapshot). */
+	instance?: string;
 	/** DC5 (P1-BUS-10): data-carried subscription point — snapshot.onChange(fn) registers, returns unsubscribe. v2+ only. */
 	onChange?: (fn: () => void) => () => void;
 	modes: {
@@ -58,7 +64,7 @@ export interface CoreStatus {
 		meta?: Readonly<Record<string, { icon: string; label: string; role: string }>>;
 	};
 	effort: { level: string | null; source: string };
-	goal: { active: boolean; paused?: boolean; summary: string | null; widget?: { focus: "focused" | "unfocused" | "none"; statusLine: string; goal?: { objective: string; status: string; sisyphus: boolean; stopReason?: string; pauseReason?: string; pauseSuggestedAction?: string; activePath?: string; archivedPath?: string; tokensUsed: number; activeSeconds: number }; openGoalCount?: number } };
+	goal: { active: boolean; paused?: boolean; summary: string | null; widget?: { focus: "focused" | "unfocused" | "none"; statusLine: string; goal?: { objective: string; status: string; sisyphus: boolean; stopReason?: string; pauseReason?: string; pauseSuggestedAction?: string; activePath?: string; archivedPath?: string; tokensUsed: number; activeSeconds: number; costUsed?: number }; openGoalCount?: number } };
 	review: { status: string; lastRunAt: number | null };
 	/** DC3: bounded notification tail queue (monotonic ids, newest last, cap 20). */
 	notifications?: ReadonlyArray<{ id: number; level: "info" | "warning" | "error"; msg: string }>;

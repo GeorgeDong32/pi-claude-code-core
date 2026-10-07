@@ -155,3 +155,31 @@ describe("P1-BUS-06 snapshot invariants", () => {
 		expect(bus.publish(ok).modes.mode).toBe("auto");
 	});
 });
+
+// ---- SPEC 2026-10-07 P1-1: snapshot.instance (XPKG-03, B1) ------------------
+describe("P1-1 instance identity", () => {
+	it("B1: two createCoreBus() instances differ; one bus keeps a constant instance across publishes; the initial snapshot carries it", () => {
+		const a = createCoreBus();
+		const b = createCoreBus();
+		const initial = a.snapshot();
+		expect(typeof initial.instance).toBe("string");
+		expect(initial.instance).toBeTruthy();
+		expect(a.snapshot().instance).toBe(initial.instance);
+		const after = a.publish({ modes: { mode: "plan", workingStats: null } });
+		expect(after.instance).toBe(initial.instance);
+		const after2 = a.publish({ display: { footer: ["x"] } });
+		expect(after2.instance).toBe(initial.instance);
+		expect(b.snapshot().instance).not.toBe(initial.instance);
+		a.dispose();
+		b.dispose();
+	});
+
+	it("B1: a patch cannot overwrite instance; dispose keeps the terminal instance (never reused for a restart)", () => {
+		const a = createCoreBus();
+		const id = a.snapshot().instance!;
+		const forged = a.publish({ instance: "forged" } as unknown as Parameters<typeof a.publish>[0]);
+		expect(forged.instance).toBe(id);
+		a.dispose();
+		expect(a.snapshot().instance).toBe(id); // terminal state, same id
+	});
+});
