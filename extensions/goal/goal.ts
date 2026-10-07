@@ -388,18 +388,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 	// settle). Injectable clock seam for tests; production is monotonic.
 	const clock = createGoalAccounting({ now: deps.now });
 
-	const draftingHiddenWorkTools = [
-		"bash",
-		"read",
-		"write",
-		"edit",
-		"grep",
-		"find",
-		"ls",
-		SISYPHUS_STEP_TOOL_NAME,
-		TWEAK_APPLY_TOOL_NAME,
-		CREATE_GOAL_TOOL_NAME,
-	] as const;
+	// P3-1 S6: draftingHiddenWorkTools deleted (zero references).
 	const goalExecutionWorkTools = ["read", "bash", "edit", "write"] as const;
 
 	function syncGoalTools(): void {
@@ -580,33 +569,9 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		updateUI(ctx);
 	}
 
-	function updateFocusedGoal(next: GoalRecord, ctx: ExtensionContext, shouldPersist = true): void {
-		const previousGoalId = focusedGoalId;
-		goalsById.set(next.id, next);
-		focusedGoalId = next.id;
-		if (previousGoalId !== focusedGoalId) {
-			resetGetGoalNudgeState(previousGoalId);
-			resetGetGoalNudgeState(focusedGoalId);
-		}
-		if (shouldPersist) persist(ctx);
-		else syncGoalTools();
-		updateUI(ctx);
-	}
-
 	function armFocusedContinuation(ctx: ExtensionContext): void {
 		beginAccounting();
 		if (state.goal?.status === "active" && state.goal.autoContinue) queueContinuation(ctx, true);
-	}
-
-	function removeFocusedGoal(ctx: ExtensionContext, reason: GoalFocusReason): void {
-		const previousGoalId = focusedGoalId;
-		if (focusedGoalId) goalsById.delete(focusedGoalId);
-		focusedGoalId = null;
-		clearStoppedRuntimeState();
-		resetGetGoalNudgeState(previousGoalId);
-		appendFocusEntry(null, reason);
-		syncGoalTools();
-		updateUI(ctx);
 	}
 
 	function beginAccounting(): void {
@@ -1555,7 +1520,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			if (view && view.status === "active" && view.id) {
 				const prior = activeGetGoalTurnsByGoalId.get(view.id) ?? 0;
 				if (prior >= 2) {
-					nudge = "\n\n[NUDGE] You have called get_goal multiple times this turn. Prefer concrete work tools (write/read/bash/edit) to advance the goal.";
+					nudge = "\n\n[NUDGE] You have called get_goal multiple times recently. Prefer concrete work tools (write/read/bash/edit) to advance the goal.";
 				}
 			}
 			const lifecycleHint = view && (view.status === "active" || view.status === "paused")

@@ -63,8 +63,6 @@ import { recallTransparencyLine, sessionRecall } from "./session-recall.ts";
 import { readSessionProjection } from "../modes/session-branch.ts";
 import { renderSessionRecallCall, sessionRecallResultRows, type SessionRecallArgs } from "./renderers.ts";
 import { renderRows } from "../../lib/tool-render.ts";
-import { MEMORY_INDEX_MAX } from "../../lib/context-budget.ts";
-import { USER_INDEX_MAX } from "./policy.ts";
 import { ConsolidationTrigger, CONSOLIDATE_DIRECTIVE_TYPE, registerConsolidation } from "./consolidate.ts";
 import { setupAutomation, loadMemorySettings, DEFAULT_RECALL_WAIT_MS, type AutomationState, type MemorySettings } from "./automation.ts";
 import { importFromClaude, importFromHermes, importHermesFull } from "./importers.ts";

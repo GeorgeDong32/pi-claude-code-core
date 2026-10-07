@@ -9,7 +9,8 @@
  * allow without any rule; the list is overridable via
  * ~/.pi/agent/pi-core-web.json.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { statSync } from "node:fs";
+import { readJson } from "../../lib/settings.ts";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -40,19 +41,39 @@ export const BUILTIN_PREAPPROVED = [
 	"stackoverflow.com",
 ];
 
+// P3-1 S4 (SPEC 2026-10-07): the override read goes through lib/settings'
+// readJson (invariant 10 — malformed input never throws) with a stat-
+// fingerprint cache (absPath + mtimeMs + size + ino). A hit skips the
+// read/parse entirely; missing falls back to the builtin list silently.
+// Limit (disclosed): mtime-preserving in-place edits of the SAME length are
+// invisible until the next stat-visible change.
+const preapprovedCache = new Map<string, { fingerprint: string; value: string[] }>();
+
+function overrideFingerprint(path: string): string | null {
+	try {
+		const st = statSync(path);
+		return `${st.mtimeMs}:${st.size}:${st.ino}`;
+	} catch {
+		return null; // missing → builtin, silently
+	}
+}
+
 export function loadPreapprovedDomains(home = homedir()): string[] {
 	const override = join(home, ".pi", "agent", "pi-core-web.json");
-	if (existsSync(override)) {
-		try {
-			const parsed = JSON.parse(readFileSync(override, "utf-8")) as { preapprovedDomains?: unknown };
-			if (Array.isArray(parsed.preapprovedDomains)) {
-				return parsed.preapprovedDomains.filter((d): d is string => typeof d === "string");
-			}
-		} catch {
-			/* unreadable override → builtin list */
+	const fp = overrideFingerprint(override);
+	if (fp === null) return BUILTIN_PREAPPROVED;
+	const cached = preapprovedCache.get(override);
+	if (cached && cached.fingerprint === fp) return cached.value;
+	const parsed = readJson<{ preapprovedDomains?: unknown }>(override, {} as { preapprovedDomains?: unknown }, (reason) => {
+		if (reason === "malformed" || reason === "non-object") {
+			console.warn(`[web-gov] Failed to read ${override}: invalid JSON — using the builtin preapproved list`);
 		}
-	}
-	return BUILTIN_PREAPPROVED;
+	});
+	const value = Array.isArray(parsed.preapprovedDomains)
+		? parsed.preapprovedDomains.filter((d): d is string => typeof d === "string")
+		: BUILTIN_PREAPPROVED;
+	preapprovedCache.set(override, { fingerprint: fp, value });
+	return value;
 }
 
 /** Exact host or any subdomain of it (`docs.github.com` ⊆ `github.com`). */

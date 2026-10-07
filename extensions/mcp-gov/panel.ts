@@ -6,9 +6,10 @@
  * green = connected|cached AND an allow rule exists; absent → hint.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { readJson } from "../../lib/settings.ts";
 import type { McpEventPort } from "./broker.ts";
 
 export interface McpPanelSection {
@@ -16,22 +17,34 @@ export interface McpPanelSection {
 	lines: string[];
 }
 
+// P3-1 S4 (SPEC 2026-10-07): mcp.json goes through lib/settings readJson
+// (invariant 10) with a stat-fingerprint cache — same discipline as
+// web-gov's pi-core-web.json (disclosed limit: mtime-preserving same-length
+// in-place edits stay invisible until the next stat-visible change).
+const inventoryCache = new Map<string, { fingerprint: string; servers: string[]; sources: string[] }>();
+
 export function readStaticMcpInventory(home = homedir()): { servers: string[]; sources: string[] } {
+	const mcpJson = join(home, ".pi", "agent", "mcp.json");
+	let fp: string | null = null;
+	try {
+		const st = statSync(mcpJson);
+		fp = `${st.mtimeMs}:${st.size}:${st.ino}`;
+	} catch {
+		return { servers: [], sources: [] }; // missing → empty, silently
+	}
+	const cached = inventoryCache.get(mcpJson);
+	if (cached && cached.fingerprint === fp) return { servers: cached.servers, sources: cached.sources };
 	const servers: string[] = [];
 	const sources: string[] = [];
-	const mcpJson = join(home, ".pi", "agent", "mcp.json");
-	if (existsSync(mcpJson)) {
-		try {
-			const parsed = JSON.parse(readFileSync(mcpJson, "utf-8")) as { mcpServers?: Record<string, unknown> };
-			const names = Object.keys(parsed.mcpServers ?? {});
-			if (names.length > 0) {
-				servers.push(...names);
-				sources.push(`mcp.json (${names.length})`);
-			}
-		} catch {
-			sources.push("mcp.json (unreadable)");
-		}
+	const parsed = readJson<{ mcpServers?: Record<string, unknown> }>(mcpJson, {} as { mcpServers?: Record<string, unknown> }, (reason) => {
+		if (reason === "malformed" || reason === "non-object") sources.push("mcp.json (unreadable)");
+	});
+	const names = Object.keys(parsed.mcpServers ?? {});
+	if (names.length > 0) {
+		servers.push(...names);
+		sources.push(`mcp.json (${names.length})`);
 	}
+	inventoryCache.set(mcpJson, { fingerprint: fp, servers: [...servers], sources: [...sources] });
 	return { servers, sources };
 }
 

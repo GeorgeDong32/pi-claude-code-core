@@ -1,5 +1,6 @@
 /**
- * memory/session-recall.ts — the module's ONLY tool (P3-ME-07).
+ * memory/session-recall.ts — the module's only REGISTERED tool
+ * (P3-ME-07; memory_consolidate is registered separately by consolidate.ts).
  *
  * Read-only search over pi session JSONL files for a cwd: AND-matched query
  * tokens against user/assistant TEXT blocks only (toolResult payloads are

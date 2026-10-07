@@ -629,3 +629,60 @@ describe("P0-1 D2: family-governed MCP in plan mode", () => {
 		}
 	});
 });
+
+// ---- SPEC 2026-10-07 P3-1 S4: settings-JSON reads with stat-fingerprint caches
+describe("P3-1 S4: web-gov override via readJson + cache", () => {
+	it("malformed override warns ONCE and falls back to the builtin list; an unchanged stat fingerprint skips the file re-read", async () => {
+		const home = mkdtempSync(join(tmpdir(), "web-s4-"));
+		mkdirSync(join(home, ".pi", "agent"), { recursive: true });
+		const file = join(home, ".pi", "agent", "pi-core-web.json");
+		writeFileSync(file, "not json at all");
+		const warns: string[] = [];
+		const origWarn = console.warn;
+		console.warn = (m: string) => warns.push(m);
+		try {
+			const first = loadPreapprovedDomains(home);
+			expect(first).toEqual(BUILTIN_PREAPPROVED); // fallback, never a throw
+			expect(warns.length).toBe(1);
+			const second = loadPreapprovedDomains(home);
+			expect(second).toEqual(BUILTIN_PREAPPROVED);
+			// stat hit → the bad file is not re-parsed: no second warn
+			expect(warns.length).toBe(1);
+		} finally {
+			console.warn = origWarn;
+		}
+		// a stat-visible change (rewrite) invalidates and warns again
+		writeFileSync(file, JSON.stringify({ preapprovedDomains: ["fresh.example"] }));
+		expect(loadPreapprovedDomains(home)).toEqual(["fresh.example"]);
+	});
+
+	it("missing override falls back silently (no warn)", () => {
+		const home = mkdtempSync(join(tmpdir(), "web-s4b-"));
+		const warns: string[] = [];
+		const origWarn = console.warn;
+		console.warn = (m: string) => warns.push(m);
+		try {
+			expect(loadPreapprovedDomains(home)).toEqual(BUILTIN_PREAPPROVED);
+			expect(warns).toEqual([]);
+		} finally {
+			console.warn = origWarn;
+		}
+	});
+
+	it("mcp-gov panel mcp.json goes through the same discipline (unreadable → source note, cached thereafter)", async () => {
+		const { readStaticMcpInventory } = await import("../../extensions/mcp-gov/panel.ts");
+		const home = mkdtempSync(join(tmpdir(), "mcp-s4-"));
+		mkdirSync(join(home, ".pi", "agent"), { recursive: true });
+		const file = join(home, ".pi", "agent", "mcp.json");
+		writeFileSync(file, "]]] broken");
+		const first = readStaticMcpInventory(home);
+		expect(first.servers).toEqual([]);
+		expect(first.sources).toContain("mcp.json (unreadable)");
+		// cached path returns the same verdict without re-reading
+		const second = readStaticMcpInventory(home);
+		expect(second.sources).toContain("mcp.json (unreadable)");
+		writeFileSync(file, JSON.stringify({ mcpServers: { exa: {} } }));
+		const third = readStaticMcpInventory(home);
+		expect(third.servers).toEqual(["exa"]);
+	});
+});
