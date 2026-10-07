@@ -103,6 +103,7 @@ import {
 	type ToolCallRequest,
 } from "./adjudicate.ts";
 import { interpretDecision } from "./interpret.ts";
+import { runClassifierAttempts } from "./classifier-retry.ts";
 import { OutsideWriteSnapshot, listTrackedOutsideWrites, popTrackedOutsideWrite, restoreOutsideWrite, trackOutsideWrite } from "./outside-writes.ts";
 import { commandReferencesSensitivePath, findProjectRoot, isOutsideCwd, isSensitivePath } from "./path-safety.ts";
 import { TodoItem, ensurePlanFile, extractPlanSection, extractTodoItems, filterSubstantivePlanItems, getPlanFilePath, hashPlan, isPlanFilePath, markCompletedSteps, readPlanFile, resolveWorkspacePath, shouldSyncAssistantPlanToFile, writePlanFile } from "./plan.ts";
@@ -595,8 +596,19 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       // Single visible retry layer (plan2 B2): the classifier call disables
       // SDK-level retries (maxRetries: 0) and enforces timeoutMs per attempt,
       // so the worst-case wait here is timeoutMs × MAX_CLASSIFIER_FAILURES.
-      for (let attempt = 1; attempt <= MAX_CLASSIFIER_FAILURES; attempt++) {
-        try {
+      // P2-1 Step 3: the retry mechanism lives in classifier-retry.ts; only
+      // the verdict business (denial accounting / fallback / fail-closed)
+      // stays in this gate.
+      const outcome = await runClassifierAttempts({
+        attempts: MAX_CLASSIFIER_FAILURES,
+        onRetry: (n, err) => {
+          if (process.env.PERMISSION_MODES_CLASSIFIER_DEBUG === "1") {
+            console.debug(
+              `[permission-modes] Classifier retry (${n}/${MAX_CLASSIFIER_FAILURES}): ${classifierErrorMessage(err)}`,
+            );
+          }
+        },
+        attempt: async () => {
           const verdict = await classifyToolCall({
             modelRef: classifierConfig.model,
             session: collectClassifierSessionContext(ctx, reviewHint),
@@ -628,25 +640,19 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
           }
           classifierDenialState = recordClassifierSuccess(classifierDenialState);
           return finishAutoTier3Allow(ctx, tool, input);
-        } catch (err) {
-          if (attempt < MAX_CLASSIFIER_FAILURES) {
-            if (process.env.PERMISSION_MODES_CLASSIFIER_DEBUG === "1") {
-              console.debug(
-                `[permission-modes] Classifier retry (${attempt}/${MAX_CLASSIFIER_FAILURES}): ${classifierErrorMessage(err)}`,
-              );
-            }
-            continue;
-          }
-          logClassifierUnavailable(err, attempt);
-          if (classifierConfig.failClosed !== false) {
-            return classifierDenyBlock(
-              tool,
-              buildClassifierUnavailableMessage(tool, classifierConfig.model),
-            );
-          }
-          break;
-        }
+        },
+      });
+      if (outcome.ok) {
+        return outcome.value as Block;
       }
+      logClassifierUnavailable(outcome.error, outcome.attempts);
+      if (classifierConfig.failClosed !== false) {
+        return classifierDenyBlock(
+          tool,
+          buildClassifierUnavailableMessage(tool, classifierConfig.model),
+        );
+      }
+      // fail-open: fall through to the local tier-3 fallback below
     }
 
     const local = resolveLocalAutoTier3(tool, input, riskInput, ctx.cwd);

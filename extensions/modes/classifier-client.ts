@@ -37,6 +37,7 @@ import {
 	type TranscriptEntry,
 } from "./classifier-transcript.ts"
 import { toClassifierInput } from "./classifier-tool-projection.ts"
+import { realClassifierClock, type ClassifierClock } from "./classifier-retry.ts";
 
 export type ClassifierVerdict = {
 	allow: boolean
@@ -699,7 +700,11 @@ export async function classifyToolCall(opts: {
 	stage?: ClassifierStage
 	includeAgentsMd?: boolean
 	debug?: boolean
+	/** P2-1 Step 3: injectable clock — the per-attempt timeout, the verdict
+	 *  cache timestamps and the abort envelope all run on it. Default: real. */
+	clock?: ClassifierClock
 }): Promise<ClassifierVerdict> {
+	const clock = opts.clock ?? realClassifierClock;
 	const encoded = toClassifierInput(
 		opts.pendingTool.name,
 		(opts.pendingTool.input ?? {}) as Record<string, unknown>,
@@ -713,7 +718,7 @@ export async function classifyToolCall(opts: {
 
 	const cacheKey = verdictCacheKey(opts)
 	const cached = verdictCache.get(cacheKey)
-	if (cached && Date.now() - cached.at < VERDICT_CACHE_TTL_MS) {
+	if (cached && clock.now() - cached.at < VERDICT_CACHE_TTL_MS) {
 		return cached.verdict
 	}
 
@@ -727,7 +732,7 @@ export async function classifyToolCall(opts: {
 
 	const controller = new AbortController()
 	const abortMeta = { timedOut: false, parentSignal: opts.signal }
-	const timeout = setTimeout(() => {
+	const timeout = clock.setTimer(() => {
 		abortMeta.timedOut = true
 		controller.abort()
 	}, opts.timeoutMs)
@@ -791,10 +796,10 @@ export async function classifyToolCall(opts: {
 			// Map preserves insertion order: drop the oldest entry.
 			verdictCache.delete(verdictCache.keys().next().value as string)
 		}
-		verdictCache.set(cacheKey, { verdict, at: Date.now() })
+		verdictCache.set(cacheKey, { verdict, at: clock.now() })
 		return verdict
 	} finally {
-		clearTimeout(timeout)
+		clock.clearTimer(timeout)
 		if (parentAbortHandler && opts.signal) {
 			opts.signal.removeEventListener("abort", parentAbortHandler)
 		}

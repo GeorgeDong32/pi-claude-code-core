@@ -2,6 +2,13 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## 2026-10-08 C4-Step3：classifier-retry seam + flaky 测试确定性化（P2-1 3/3）
+
+- **实现**:`classifier-retry.ts`——`ClassifierClock`(now/setTimer/clearTimer 注入,默认 real)+ `fakeClassifierClock`(advance 手动驱动、cleared 不触发)+ `runClassifierAttempts`(可见重试层机制:任意 transport 错误重试至 attempts 次,verdict 业务留在 gate)。`classifyToolCall` 的 per-attempt 超时 envelope、verdict cache 时间戳、abort listener 全部走注入 clock,finally 释放不变;`approveAutoTier3` 循环改用 runClassifierAttempts(重试条件/次数/fail-closed/降级语义逐字保留)。
+- **测试替换**:index.test.ts「classifier retry loop is bounded(plan2 B2)」(AR1005-R3 flaky,真实 40ms 计时断言)删除;classifier-retry.test.ts 6 例确定性替代——attempts×timeout 逐次触发、timers 全部 cleared、abort-transport 按 SDK 语义 resolve(aborted)、冻结 wall clock 下超时仍生效。
+- **验证**:check 0;vitest 928(+6-1);contracts 43+3todo;parity 零差异(golden 未动)。
+- **台账**:DEVIATIONS #116 补记⑥;docs 模块表。C4 三步至此 3/3,待独立审查。
+
 ## 2026-10-08 C4-Step2：auto tier 梯子迁入 decide（P2-1 2/3）
 
 - **实现**:decide 新增 auto 分支——embedded auto 扫描(sensitive/tier prompt)、tool_search/read/edit 敏感路径、edit cwd 内放行、bash tier1→1.5 allow(复合命令全段安全约束)→1.5b soft_deny→tier2,其余 defers to `classify` 决策(classifier seam);legacyAutoGate 整体删除(4514 字节旧代码离场)。采集层新增 embeddedAuto/bashTiers/commandSensitive/autoAllowMatched/autoSoftDenyMatched/tier3ReviewLabel 探测(全部内存纯函数)。
