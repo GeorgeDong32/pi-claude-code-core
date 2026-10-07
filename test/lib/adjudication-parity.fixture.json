@@ -1,0 +1,919 @@
+{
+	"bypass/edit inside": {
+		"result": "allow",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"bypass/bash dangerous": {
+		"result": "allow",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"ask/deny rule blocks read": {
+		"result": "block: Denied by permission rule [global]: Read(src/**)",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {
+				"deny": [
+					"Read(src/**)"
+				]
+			},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"ask/allow rule passes edit": {
+		"result": "allow",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {
+				"allow": [
+					"Edit(src/**)"
+				]
+			},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"ask/ask rule prompts edit (ui Block)": {
+		"result": "block: edit blocked by user",
+		"uiSelects": [
+			{
+				"label": "Allow edit? permission rule requires approval: Edit(src/**)",
+				"options": [
+					"Allow",
+					"Allow always (this project)",
+					"Allow always (global)",
+					"Block"
+				]
+			}
+		],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {
+				"ask": [
+					"Edit(src/**)"
+				]
+			},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"ask/ask rule prompts edit (headless)": {
+		"result": "block: edit needs approval: no UI available. permission rule requires approval: Edit(src/**)",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {
+				"ask": [
+					"Edit(src/**)"
+				]
+			},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"ask/ask rule prompts edit (ui Allow)": {
+		"result": "allow",
+		"uiSelects": [
+			{
+				"label": "Allow edit? permission rule requires approval: Edit(src/**)",
+				"options": [
+					"Allow",
+					"Allow always (this project)",
+					"Allow always (global)",
+					"Block"
+				]
+			}
+		],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {
+				"ask": [
+					"Edit(src/**)"
+				]
+			},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"plan/edit non-plan file blocked despite allow rule": {
+		"result": "block: Plan mode: only <CWD>/.pi/projects/<PID>/plan.md may be edited.",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {
+				"allow": [
+					"Edit(src/**)"
+				]
+			},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"plan/plan file edit allowed": {
+		"result": "allow",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"plan/read passes": {
+		"result": "allow",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"plan/bash dangerous blocked": {
+		"result": "block: Plan mode: read-only commands only.\n  Command: rm -rf /tmp/x",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"plan/bash read-only passes": {
+		"result": "allow",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"plan/tool_search passes": {
+		"result": "allow",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"ask/mcp first-seen ui Block": {
+		"result": "block: mcp_exa_search blocked by user",
+		"uiSelects": [
+			{
+				"label": "Allow mcp_exa_search?",
+				"options": [
+					"Allow once",
+					"Allow for this session",
+					"Allow always (mcp_exa_*)",
+					"Block"
+				]
+			}
+		],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"ask/mcp first-seen ui Allow once": {
+		"result": "allow",
+		"uiSelects": [
+			{
+				"label": "Allow mcp_exa_search?",
+				"options": [
+					"Allow once",
+					"Allow for this session",
+					"Allow always (mcp_exa_*)",
+					"Block"
+				]
+			}
+		],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {
+			"mcp_exa_search": "allow-once"
+		},
+		"outsideWriteCount": 0
+	},
+	"ask/mcp first-seen ui Allow for this session": {
+		"result": "allow",
+		"uiSelects": [
+			{
+				"label": "Allow mcp_exa_search?",
+				"options": [
+					"Allow once",
+					"Allow for this session",
+					"Allow always (mcp_exa_*)",
+					"Block"
+				]
+			}
+		],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {
+			"mcp_exa_search": "session-grant"
+		},
+		"outsideWriteCount": 0
+	},
+	"ask/mcp first-seen ui Allow always": {
+		"result": "allow",
+		"uiSelects": [
+			{
+				"label": "Allow mcp_exa_search?",
+				"options": [
+					"Allow once",
+					"Allow for this session",
+					"Allow always (mcp_exa_*)",
+					"Block"
+				]
+			}
+		],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {
+				"allow": [
+					"mcp_exa_*"
+				]
+			},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {
+			"mcp_exa_search": "rule-allow"
+		},
+		"outsideWriteCount": 0
+	},
+	"ask/mcp first-seen headless (D6=B suggested rule)": {
+		"result": "block: mcp__exa__search (mcp_exa_search) needs approval: no UI available. Pre-approve it by adding the rule `mcp_exa_*` to your permission rules in a parent/interactive session, then retry this call.",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"ask/mcp family allow rule passes headless": {
+		"result": "allow",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {
+				"allow": [
+					"mcp_exa_*"
+				]
+			},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {
+			"mcp_exa_search": "rule-allow"
+		},
+		"outsideWriteCount": 0
+	},
+	"ask/mcp session grant passes headless": {
+		"result": "allow",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [
+			"mcp_exa_search"
+		],
+		"adjudications": {
+			"mcp_exa_search": "session-grant"
+		},
+		"outsideWriteCount": 0
+	},
+	"ask/mcp explicit ask rule prompts (not first-seen)": {
+		"result": "block: mcp__exa__search blocked by user",
+		"uiSelects": [
+			{
+				"label": "Allow mcp__exa__search? permission rule requires approval: mcp_exa_search",
+				"options": [
+					"Allow",
+					"Allow always (this project)",
+					"Allow always (global)",
+					"Block"
+				]
+			}
+		],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {
+				"ask": [
+					"mcp_exa_search"
+				]
+			},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"ask/read inside passes": {
+		"result": "allow",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"ask/read outside prompts (ui Block)": {
+		"result": "block: read blocked by user",
+		"uiSelects": [
+			{
+				"label": "Allow read? outside cwd on \"/tmp/parity-outside-target.txt\"",
+				"options": [
+					"Allow",
+					"Allow always (this project)",
+					"Allow always (global)",
+					"Block"
+				]
+			}
+		],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"ask/read outside headless fails closed": {
+		"result": "block: read needs approval: no UI available. outside cwd on \"/tmp/parity-outside-target.txt\"",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"ask/edit inside ui Block": {
+		"result": "block: edit blocked by user on src/a.ts",
+		"uiSelects": [
+			{
+				"label": "Allow edit on src/a.ts?",
+				"options": [
+					"Allow",
+					"Allow always (this project)",
+					"Allow always (global)",
+					"Allow all (enable bypass)",
+					"Block"
+				]
+			}
+		],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"ask/edit inside ui Allow": {
+		"result": "allow",
+		"uiSelects": [
+			{
+				"label": "Allow edit on src/a.ts?",
+				"options": [
+					"Allow",
+					"Allow always (this project)",
+					"Allow always (global)",
+					"Allow all (enable bypass)",
+					"Block"
+				]
+			}
+		],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"ask/edit inside ui Allow always project": {
+		"result": "allow",
+		"uiSelects": [
+			{
+				"label": "Allow edit on src/a.ts?",
+				"options": [
+					"Allow",
+					"Allow always (this project)",
+					"Allow always (global)",
+					"Allow all (enable bypass)",
+					"Block"
+				]
+			}
+		],
+		"notifications": [
+			"Tip: add .pi/projects/<PID>/permissions.local.json to .gitignore to keep personal permission rules private",
+			"Added allow rule (project local): Edit(./src/**)"
+		],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"ask/edit inside ui Allow always global": {
+		"result": "allow",
+		"uiSelects": [
+			{
+				"label": "Allow edit on src/a.ts?",
+				"options": [
+					"Allow",
+					"Allow always (this project)",
+					"Allow always (global)",
+					"Allow all (enable bypass)",
+					"Block"
+				]
+			}
+		],
+		"notifications": [
+			"Added allow rule (global): Edit(./src/**)"
+		],
+		"persistedRules": {
+			"permissions": {
+				"allow": [
+					"Edit(./src/**)"
+				]
+			},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"ask/edit inside ui Allow all bypass": {
+		"result": "allow",
+		"uiSelects": [
+			{
+				"label": "Allow edit on src/a.ts?",
+				"options": [
+					"Allow",
+					"Allow always (this project)",
+					"Allow always (global)",
+					"Allow all (enable bypass)",
+					"Block"
+				]
+			}
+		],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"ask/edit inside headless fails closed": {
+		"result": "block: edit needs approval: no UI available. on src/a.ts",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"ask/edit memory dir passes (carve-out)": {
+		"result": "allow",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"ask/bash safe passes": {
+		"result": "allow",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"ask/bash unsafe prompts (ui Block)": {
+		"result": "block: bash blocked by user",
+		"uiSelects": [
+			{
+				"label": "Allow bash? \"npm install\"",
+				"options": [
+					"Allow",
+					"Allow always (this project)",
+					"Allow always (global)",
+					"Block"
+				]
+			}
+		],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"ask/unknown tool passes": {
+		"result": "allow",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"ask/edit with then_run unsafe prompts": {
+		"result": "block: edit blocked by user",
+		"uiSelects": [
+			{
+				"label": "Allow edit? \"npm install\"",
+				"options": [
+					"Allow",
+					"Allow always (this project)",
+					"Allow always (global)",
+					"Block"
+				]
+			}
+		],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"ask/edit with then_run safe falls through to edit dialog": {
+		"result": "block: edit blocked by user on src/a.ts",
+		"uiSelects": [
+			{
+				"label": "Allow edit on src/a.ts?",
+				"options": [
+					"Allow",
+					"Allow always (this project)",
+					"Allow always (global)",
+					"Allow all (enable bypass)",
+					"Block"
+				]
+			}
+		],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"auto/read inside passes": {
+		"result": "allow",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"auto/read sensitive prompts (ui Block)": {
+		"result": "allow",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"auto/edit inside passes": {
+		"result": "allow",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"auto/bash tier1 passes": {
+		"result": "allow",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"auto/bash tier2 passes": {
+		"result": "allow",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"auto/bash dangerous prompts via local tier3 (ui Block)": {
+		"result": "block: bash blocked by user",
+		"uiSelects": [
+			{
+				"label": "Allow bash? Risky bash (delete): rm -rf /tmp/x",
+				"options": [
+					"Allow",
+					"Allow always (this project)",
+					"Allow always (global)",
+					"Block"
+				]
+			}
+		],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"auto/bash dangerous headless fails closed": {
+		"result": "block: bash needs approval: no UI available. Risky bash (delete): rm -rf /tmp/x",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"auto/tool_search passes": {
+		"result": "allow",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"auto/unknown tool tier3 prompts (ui Block)": {
+		"result": "block: my_custom_tool blocked by user",
+		"uiSelects": [
+			{
+				"label": "Allow my_custom_tool? Tool \"my_custom_tool\" is not auto-approved in auto mode. Enable classifier or switch to bypass.",
+				"options": [
+					"Allow",
+					"Allow always (this project)",
+					"Allow always (global)",
+					"Block"
+				]
+			}
+		],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"auto/edit with then_run dangerous prompts (ui Block)": {
+		"result": "block: edit blocked by user",
+		"uiSelects": [
+			{
+				"label": "Allow edit? File write/edit requires tier-3 review.",
+				"options": [
+					"Allow",
+					"Allow always (this project)",
+					"Allow always (global)",
+					"Block"
+				]
+			}
+		],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"auto/mcp family allow passes": {
+		"result": "allow",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {
+				"allow": [
+					"mcp_exa_*"
+				]
+			},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {
+			"mcp_exa_search": "rule-allow"
+		},
+		"outsideWriteCount": 0
+	}
+}
