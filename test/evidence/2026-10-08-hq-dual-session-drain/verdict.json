@@ -1,0 +1,14 @@
+{
+ "exitA": 0,
+ "exitB": 0,
+ "samples": 8,
+ "doubleClaims": [],
+ "strandedClaimsAtEnd": [],
+ "finalReady": 0,
+ "finalPending": 0,
+ "finalFiles": [],
+ "verdict": {
+  "singleLiveOwnerPerRecord": true,
+  "noStrandedClaimAfterBothSessions": true
+ }
+}

@@ -1,0 +1,1 @@
+828c5c6 refactor(goal): lifecycle module step 1 — pool/focus ownership + setGoal/focus verbs (P2-2 1/4)

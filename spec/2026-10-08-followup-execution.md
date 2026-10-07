@@ -85,7 +85,7 @@
 
 ## 4. 真实验收分工
 
-- Core 负责 H-Q：隔离 agentDir / 项目 / 测试记录下启动两个真实 pi session，制造 session_start drain 重叠；保留日志和队列转移证据，确认同一记录仅一位 live owner，cap 之后候选仍可消费，失败/结束后无搁浅活 claim。已有子进程原语测试继续保留，不能代替真实宿主生命周期证据。
+- Core 负责 H-Q：隔离 agentDir / 项目 / 测试记录下启动两个真实 pi session，制造 session_start drain 重叠；保留日志和队列转移证据，确认同一记录仅一位 live owner，cap 之后候选仍可消费，失败/结束后无搁浅活 claim。已有子进程原语测试继续保留，不能代替真实宿主生命周期证据。**已验收(2026-10-08,PASS)**：四项全过，证据在 `test/evidence/2026-10-08-hq-dual-session-drain/`(脚本 `scripts/hq-drain-evidence.sh` 可复现;mismatch 记录最终去向一条 open note)。
 - TUI agent 负责真实 footer、通知、usage 显示及 widget 顺序；详见配对后续规格。core 提供明确可消费 revision 与契约，读取其验收结果后更新本仓状态，不跨仓改写它的记录。
 - 确实没有可用终端/模型或宿主能力时，写明已尝试命令、缺少的具体条件、可复现步骤和恢复方式；“需真机”本身不是停止尝试的理由。
 - 原有 AR1005-RU-HOST / ST-HOST 与 XPKG-09-HOST 三个 todo 分别记账，不能用新 fixture 抵扣未取证事实；本批不宣称旧宿主 todo 自动关闭。

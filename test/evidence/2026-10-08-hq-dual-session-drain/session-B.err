@@ -1,0 +1,1 @@
+pi-review: pi-review requires pi-subagents: pi install npm:pi-subagents

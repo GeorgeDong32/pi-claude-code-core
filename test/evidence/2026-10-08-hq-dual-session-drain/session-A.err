@@ -1,0 +1,2 @@
+[permission-modes] Created /tmp/hq-drain-run/home/.pi/agent/model-profiles.json with defaults
+pi-review: pi-review requires pi-subagents: pi install npm:pi-subagents

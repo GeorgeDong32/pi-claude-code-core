@@ -2,6 +2,13 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## 2026-10-08 H-Q：隔离双真实 pi session drain 验收 — PASS
+
+- **环境**：真实 pi 1.0.2(PATH),`-p` 非交互双进程并发(间隔 0.4s);隔离 HOME + PI_CODING_AGENT_DIR + 项目目录(/tmp);被测实现 = 本仓 `git clone --no-hardlinks` 预置进隔离 agentDir 的 git 包布局经 settings packages 真实加载(加载证据:permission-modes 启动行 + review 模块 banner);凭据/models 从真实 agentDir 拷贝(留在隔离副本内)。macOS /tmp→/private/tmp realpath 陷阱已定位并修正(预置 record 的 projectsDir 必须按 canonical 路径 sanitize)。
+- **四项验收(verdict.json)**:①同一记录仅一位 live owner——全快照 doubleClaims=[](claim 文件名含 pid,可区分 owner);②cap 之后候选仍可消费——A 首轮恰 claim 5(QUEUE_DRAIN_MAX)剩 2 条 ready,B 接走全部;③失败/结束无搁浅活 claim——strandedClaimsAtEnd=[],t≈4.6s 全部 settle,双进程 exit 0;④转移证据保留——queue-timeline.json(25ms 采样:5-claim → 7-claim 双 owner → 单调 settle → 空)+ 双 session 日志 + core revision。
+- **失败路径实测**:routing mismatch(projectsDir 不符)→ claim→skip→释放回 pending(attempts 不动)零搁浅;极短 -p session 的 shutdown 取消 → 记录回 pending 可重试。1 条故意 mismatch 的最终状态(pending vs GC)未在采样窗口内捕获,记 open note(不影响任何验收项)。
+- **可复现**:`bash scripts/hq-drain-evidence.sh`;证据目录 `test/evidence/2026-10-08-hq-dual-session-drain/`。既有子进程原语测试(memory-queue-claim 等)保留未动;本验收为真实宿主生命周期证据,二者分记。
+
 ## 2026-10-08 C5-Step1：goal-lifecycle module — pool/focus 所有权迁入（P2-2 1/4）
 
 - **实现**:`goal-lifecycle.ts`(L1=A factory/L2=B 全所有权/L3=B ports/L4=B focused() getter/L5=B TransitionReport)——私有 pool Map + focusedId;两个写动词 `setGoal`/`focus` 携带完整副作用集(与 goal.ts 原实现逐行对应,verb effect 表在头注释);静默原语 replacePool/setFocusedSilently/removeFromPool/adopt 承载 reconcile/loadState/state-setter 的裸数据搬移(无动词副作用,同旧直接赋值)。ports 十项(haltContinuation/pauseClock/forgetCarry/resetNudge/releaseStaleTweakGate/appendFocusEntry/appendLedger/persist/syncTools/updateUI/nowIso),ledger 保持 best-effort try/catch。
