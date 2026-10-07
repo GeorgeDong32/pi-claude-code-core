@@ -67,6 +67,26 @@ describe("extractEmbeddedCommandInputs", () => {
 	it("script is deliberately NOT whitelisted (adjudication 2026-09-13)", () => {
 		expect(extractEmbeddedCommandInputs("t", { script: "rm -rf /" })).toEqual([])
 	})
+
+	// FUS-SHAPE (SPEC 2026-10-07 P0-1): action-fusion registers the REAL
+	// `then_run: { command, ... }` object — tests must use that shape.
+	it("then_run object with a .command string is extracted (FUS-SHAPE)", () => {
+		expect(
+			extractEmbeddedCommandInputs("edit", { path: "a.ts", then_run: { command: "npm install x" } }),
+		).toEqual([{ field: "then_run", command: "npm install x" }])
+	})
+
+	it("then_run object with non-string / missing / empty command is skipped", () => {
+		expect(extractEmbeddedCommandInputs("t", { then_run: { command: 42 } })).toEqual([])
+		expect(extractEmbeddedCommandInputs("t", { then_run: { cmd: "rm -rf /" } })).toEqual([])
+		expect(extractEmbeddedCommandInputs("t", { then_run: { command: "   " } })).toEqual([])
+		expect(extractEmbeddedCommandInputs("t", { then_run: {} })).toEqual([])
+	})
+
+	it("object forms under other whitelist fields are still NOT scanned", () => {
+		expect(extractEmbeddedCommandInputs("t", { run: { command: "rm -rf /" } })).toEqual([])
+		expect(extractEmbeddedCommandInputs("t", { cmd: { command: "rm -rf /" } })).toEqual([])
+	})
 })
 
 describe("declaredCommandFields", () => {

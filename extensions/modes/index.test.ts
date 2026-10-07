@@ -3019,6 +3019,72 @@ describe("plan precedence: rules vs hard limits (SPEC P0-1)", () => {
 		expect(String((result as { reason?: string }).reason)).toContain("Plan mode: read-only commands only")
 	})
 
+	it("T14a: ask mode — unsafe then_run OBJECT prompts (previously silently passed)", async () => {
+		let selectCalls = 0
+		pi.flags["permission-mode"] = "ask"
+		await pi.simulateSessionStart(realProjectRoot)
+		const result = await callToolCall("edit", {
+			path: "src/a.ts",
+			content: "x",
+			then_run: { command: "npm install x" },
+		}, {
+			select: async () => {
+				selectCalls++
+				return "Block"
+			},
+		})
+		expect(result).toMatchObject({ block: true })
+		expect(selectCalls).toBe(1)
+	})
+
+	it("T14b: auto mode — unsafe then_run OBJECT enters the tier prompt (no classifier)", async () => {
+		let selectCalls = 0
+		pi.flags["permission-mode"] = "auto"
+		await pi.simulateSessionStart(realProjectRoot)
+		const result = await callToolCall("edit", {
+			path: "src/a.ts",
+			content: "x",
+			then_run: { command: "npm install x" },
+		}, {
+			select: async () => {
+				selectCalls++
+				return "Block"
+			},
+		})
+		expect(result).toMatchObject({ block: true })
+		expect(selectCalls).toBe(1)
+	})
+
+	it("T14c: bypass mode — unsafe then_run object passes with zero prompts", async () => {
+		let selectCalls = 0
+		pi.flags["permission-mode"] = "bypass"
+		await pi.simulateSessionStart(realProjectRoot)
+		const result = await callToolCall("edit", {
+			path: "src/a.ts",
+			content: "x",
+			then_run: { command: "npm install x" },
+		}, {
+			select: async () => {
+				selectCalls++
+				return "Block"
+			},
+		})
+		expect(result).toBeUndefined()
+		expect(selectCalls).toBe(0)
+	})
+
+	it("T14d: non-plan modes — an explicit allow rule keeps its existing precedence over the embedded scan", async () => {
+		await switchModeWithRules("ask", { allow: ["Edit(src/**)"] })
+		const result = await callToolCall("edit", {
+			path: "src/a.ts",
+			content: "x",
+			then_run: { command: "npm install x" },
+		})
+		// allow short-circuits BEFORE the embedded scan outside plan (pinned
+		// behavior; only plan flips this order — see T6)
+		expect(result).toBeUndefined()
+	})
+
 	it("T11: plan + deny Read rule still denies first (deny beats plan passthrough)", async () => {
 		await switchModeWithRules("plan", { deny: ["Read(./secret)"] })
 		const result = await callToolCall("read", { path: "./secret" })

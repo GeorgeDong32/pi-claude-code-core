@@ -15,6 +15,12 @@
  * tests). The only name-based rule: the PRIMARY command field of the two
  * shell tools themselves (`bash`/`powershell` `input.command`) is already
  * governed end-to-end by the bash tier ladder and must not be double-handled.
+ *
+ * FUS-SHAPE (SPEC 2026-10-07 P0-1): top-level `then_run` may be the OBJECT
+ * action-fusion actually registers — `{ command: string, ... }`. Its
+ * `.command` string is surfaced like the plain-string form. Object forms
+ * under other whitelist fields stay unscanned; arbitrary nested objects are
+ * still not walked.
  */
 
 /** Fields whose values are treated as embedded shell commands (user adjudication
@@ -35,10 +41,12 @@ function isCommandFieldExcluded(toolName: string, field: string): boolean {
 	return field === "command" && PRIMARY_SHELL_TOOLS.has(toolName)
 }
 
-/** Table-driven: whitelist fields of the top-level input object, in whitelist
- *  order, then input-key order. Values may be a string or a string[]; empty
- *  strings are skipped. Nested objects are NOT scanned (fields inside child
- *  objects are not commands any real fusion tool ships today). */
+/** Whitelist fields of the top-level input object, in whitelist order, then
+ *  input-key order. Values may be a string, a string[], or (top-level
+ *  `then_run` only, FUS-SHAPE 2026-10-07) an object carrying a `.command`
+ *  string — the real shape action-fusion registers. Empty strings are
+ *  skipped. Nested objects under OTHER keys are NOT scanned (fields inside
+ *  child objects are not commands any real fusion tool ships today). */
 export function extractEmbeddedCommandInputs(
 	toolName: string,
 	input: Record<string, unknown> | null | undefined,
@@ -49,6 +57,17 @@ export function extractEmbeddedCommandInputs(
 		if (isCommandFieldExcluded(toolName, field)) continue
 		if (!(field in input)) continue
 		const value = input[field]
+		// FUS-SHAPE: action-fusion's real override registers
+		// `then_run: { command, ... }` — surface its .command string. Object
+		// forms under the other whitelist fields stay unscanned (no evidence
+		// any tool ships them) and `script` remains out of the whitelist.
+		if (field === "then_run" && value && typeof value === "object" && !Array.isArray(value)) {
+			const cmd = (value as { command?: unknown }).command
+			if (typeof cmd === "string" && cmd.trim()) {
+				found.push({ field, command: cmd.trim() })
+			}
+			continue
+		}
 		const values = Array.isArray(value) ? value : [value]
 		for (const v of values) {
 			if (typeof v !== "string") continue
