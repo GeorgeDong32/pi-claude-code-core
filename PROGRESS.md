@@ -9,6 +9,7 @@
 - **验收**：goal-lifecycle.test.ts 重写 41 例——封装组 5 例钉全部绕过路线失败（修复前红证据：独立脚本对 c8429f4 六项复现全 leak=true，记于测试头注释）+ 转移表/每 tag 事件/新动词次序（applyTweak 钉 merge port 零调用=不被旧盘面覆写；activate 钉无 ledger/clock/nudge；pauseByAgent 钉无 pause ledger）+ 失败注入（write port 抛错传播新增）。**既有 goal FakeHost 套件零改动全绿**（D3=A/G3、四真停、pause carry、tweak 权威写、审计目标校验、storage 失败传播、格式冻结的行为证据）。
 - **门禁**：check 0；vitest 935 + node:test 550 全 0 fail；contracts 43+3todo。
 - **TUI 联验批（同日，TUI 仓 LEDGER 2026-10-09 批）**：固定联验 revision = **core `c4dab5f`**（本批）。①bare MCP 退化输入验收 H-T2j PASS（T 级，auto+force 双模真机）：工具名恰为 `mcp` 且 args.tool 缺失/空/不可解析均通用行、无徽标、不误标、不抛错，有效对照正确识别 `dummy - echo_search (MCP)`；TUI 单测补齐退化输入（并入 R-T4）。②XPKG-09-HOST 时序因果勘误：宿主源码证实 emit 按扩展加载序逐个 await handler（「await 期间注册」不可能）、setWidget 为插入序 Map（重复 set 移尾、末位紧贴编辑器）；契约注释已按此改写（bus-cross-package.test.ts）；goal-above-spinner 恒定性的真实机制=goal 同步 remount vs spinner 宏任务 requeue。③经济降级行复核后仍 OPEN：version 输入装配层硬穿无覆盖、TUI 在 pi<0.87 无 resolver API（旧宿主非有效目标）、factory 级降级接线已由 compat-degrade.test.ts 钉住——真机行级结构性不可达，恢复条件已写明（用户重裁 seam 或未来宿主面）。
+- **独立对抗审查（同日 read-only subagent）**：双任务 PASS 零 P1/P2——14+4 项真实攻击零穿透、adapter 无第二写权、六项冻结语义源码证实；P3×4 已处置（两处内部纯度依赖改防御性克隆+只读契约注释；两处记录在案不改动）。审查详情记 DEVIATIONS #120。
 
 ## 2026-10-08 C5-Step4：撤过渡代理 + 补齐动词终态；DEVIATIONS #73 关闭（P2-2 4/4 完成）
 

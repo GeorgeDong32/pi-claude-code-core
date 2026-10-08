@@ -837,7 +837,11 @@ export function createGoalLifecycle(ports: GoalLifecyclePorts): GoalLifecycle {
 			replacePoolInternal(input.childSession ? new Map<string, GoalRecord>() : ports.readActiveGoalPool(ctx));
 			setFocusedInternal(null);
 			const resolved = resolveSessionFocus({
-				pool: goalsById,
+				// Shallow Map copy + read-only contract: goal-pool's resolver
+				// must never retain or mutate pool entries (review A1-3,
+				// 2026-10-09) — the copy keeps even a future violation from
+				// reaching the owned pool.
+				pool: new Map(goalsById),
 				focusEntry: input.focusEntry,
 				legacyGoal: input.legacyGoal,
 				adoptLegacyGoal: (g) => adoptInternal(g),
@@ -910,7 +914,7 @@ export function createGoalLifecycle(ports: GoalLifecyclePorts): GoalLifecycle {
 				return false;
 			}
 			const reconciled = current && opts.preserveMemoryUsage
-				? mergeFocusedGoalWithDisk({ memoryGoal: current, diskGoal })
+				? mergeFocusedGoalWithDisk({ memoryGoal: cloneOut(current), diskGoal })
 				: diskGoal;
 			replacePoolInternal(fresh);
 			adoptInternal(reconciled);
