@@ -43,6 +43,7 @@
 - **H-T3 等待态（T 级）**：受控慢脚本稳定捕获 in-flight 窗口（无脚本行/无错误行/右组持有）;超时变体（`cmd failed (timeout)`）与引号坑（exit 127）一并入账;sleep 1 有效脚本行+右组塌缩在新配对复验。
 - **H-T5 macrotask 行（T 级）**：跨 macrotask 的后挂 session_start handler 双序验证——pi 顺序 await handlers,aboveEditor widget 按注册完成序堆叠,goal/spinner 相邻性双序保持;尽力排序边界如实描述。**XPKG-09-HOST 表行回填证据状态,todo 收窄至「非 session_start 时刻的任意异步注册」**（未覆盖不关闭）;AR1005-RU-HOST/ST-HOST 两个 host todo 未因本轮自动关闭。
 - **仍 OPEN**：TUI 经济模块降级行——probe 仅 `pi<0.87` 门控且装配硬穿真实 VERSION 无覆盖入口;恢复条件=pi<0.87 宿主 core-only 会话或 core 侧测试 seam（仅为验收加开关已裁定为反模式）。渲染路径由 joint C6+表测覆盖。
+- **两仓独立审查（read-only subagent,同日）**：PASS-with-nits,四轴全过（通知协商语义未被修复触碰、legacy 腿保持、无其他 dual-write、TUI 无掩蔽性 dedup、资源释放清点、证据逐文件重 grep 支持、文档一致;notify-display 回归在 pre-fix 克隆实证 6红1绿）。3×P3 处置：①H-Q 文档 t=3710 措辞漂移已修正;②effort toHost 死 notify 绑定已删;③memory/review 模块仍直写 ctx.ui.notify（单次显示非 dual-write,字面无回归,但通知不进 tail queue——后续统一到共享入口的候选,记此不展开）。
 - **门禁**：core check 0/contracts 43+3todo（本批后复跑）;TUI npm test 278+typecheck 0（TUI 仓 eb3bb11）。
 
 ## 2026-10-08 C5 终态独立审查（read-only subagent）— PASS-with-nits，P2 已修复
@@ -56,7 +57,7 @@
 
 - **环境**：真实 pi 1.0.2(PATH),`-p` 非交互双进程并发(间隔 0.4s);隔离 HOME + PI_CODING_AGENT_DIR + 项目目录(/tmp);被测实现 = 本仓 `git clone --no-hardlinks` @ **4b0f8d9**(含 C5 全部与通知修复)预置进隔离 agentDir 经 settings packages 真实加载;凭据/models 留在隔离副本内;/tmp realpath 陷阱按 canonical 路径 sanitize。
 - **证据复审发现并修复三缺陷后重跑**（2026-10-08 执行 prompt 第三层要求）：①旧造数 `Date.now()+i` 文件名跨毫秒边界碰撞——mismatch 文件(T0+8)被 loop i=7(T1+7,T1=T0+1)覆盖,**旧最终 run 的 mismatch 记录从未入队**（原「第 8 条去向未捕获」open note 的真相）;改单调 staging 时钟 + 入队后 8 文件唯一性/计数断言 + staging-manifest.json。②sampler 原在双 session 之后启动,丢失 staged-ready 基线与首盲窗;改先行启动。③README/PROGRESS 数字漂移(「9 samples」vs JSON 8 条;「4.6s settle」vs 实际 2.8s)。
-- **重跑四项验收(verdict.json,9 samples 全对齐)**:①同一记录仅一位 live owner——doubleClaims=[];②cap 之后候选仍可消费——t=486ms A(pid 33074)恰 5 claims 剩 2 ready,t=729ms B(pid 33081)接走;③无搁浅活 claim——strandedClaimsAtEnd=[],t=3710ms 最后一条 claim 消失,双进程 exit 0;④转移证据保留——queue-timeline.json(8-ready 基线→5-claim cap+1 pending→7-claim 双 owner→单调 settle→仅剩 mismatch pending)+ 双 session 日志 + manifest + core revision。
+- **重跑四项验收(verdict.json,9 samples 全对齐)**:①同一记录仅一位 live owner——doubleClaims=[];②cap 之后候选仍可消费——t=486ms A(pid 33074)恰 5 claims 剩 2 ready,t=729ms B(pid 33081)接走;③无搁浅活 claim——strandedClaimsAtEnd=[],claim 自 t=2423ms 起单调清空,最后一条活 claim 见于 t=3710ms、t=5733ms 仅剩 mismatch pending,双进程 exit 0;④转移证据保留——queue-timeline.json(8-ready 基线→5-claim cap+1 pending→7-claim 双 owner→单调 settle→仅剩 mismatch pending)+ 双 session 日志 + manifest + core revision。
 - **原 open note 闭环**:mismatch 记录轨迹 t=27 ready→t=486 被 A claim 后释放回 pending→t=729 被 B 再 claim 再释放(新 nonce)→**最终态 pending**(finalPending=1,内容存 final-pending-record.json:attempts=0 未动、错误 projectsDir 保留)——可重试、无搁浅、无不明 GC。
 - **可复现**:`bash scripts/hq-drain-evidence.sh`;证据目录 `test/evidence/2026-10-08-hq-dual-session-drain/`。既有子进程原语测试保留未动;本验收为真实宿主生命周期证据,二者分记。
 

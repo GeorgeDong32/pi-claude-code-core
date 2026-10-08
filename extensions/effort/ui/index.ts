@@ -32,13 +32,14 @@ export interface EffortCtxLike {
 	};
 }
 
-/** Internal fan-out surface (kept private; fakes build EffortCtxLike). */
+/** Internal fan-out surface (kept private; fakes build EffortCtxLike).
+ * No notify member since DC5b completed: display negotiation lives in the
+ * shared ui/notify entry, not the host fan-out. */
 interface EffortHost {
 	hasUI: boolean;
 	model: EffortModel | null | undefined;
 	setStatus(key: string, value: string | undefined): void;
 	setWorkingMessage(message: string | undefined): void;
-	notify(message: string, level: "info" | "warning" | "error"): void;
 	select?(title: string, options: readonly string[]): Promise<string | undefined>;
 	overlayCtx?: CustomOverlayContext;
 }
@@ -49,7 +50,6 @@ function toHost(ctx: EffortCtxLike): EffortHost {
 		model: (ctx.model ?? null) as EffortModel | null,
 		setStatus: (k, v) => ctx.ui.setStatus(k, v),
 		setWorkingMessage: (m) => ctx.ui.setWorkingMessage(m),
-		notify: (m, l) => ctx.ui.notify(m, l),
 		select: ctx.ui.select ? (t, o) => ctx.ui.select!(t, o) : undefined,
 		overlayCtx: ctx.hasUI ? (ctx as unknown as CustomOverlayContext) : undefined,
 	};

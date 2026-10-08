@@ -42,7 +42,7 @@ and fixed in the runner before this re-run:
 |---|---|---|
 | 同一记录仅一位 live owner | PASS | `doubleClaims: []` across all 9 samples; every `.claim.<pid>.…` basename appears at most once per original at any sampled instant |
 | cap(QUEUE_DRAIN_MAX=5)之后候选仍可消费 | PASS | t=486 ms: session A (pid 33074) holds exactly 5 claims, 2 records stay ready; t=729 ms: session B (pid 33081) claims those 2 — the surplus stays consumable by another session |
-| 失败/结束后无搁浅活 claim | PASS | `strandedClaimsAtEnd: []`; last claim gone by t=3710 ms, t=5733 ms shows only the pending mismatch record; exitA=exitB=0 |
+| 失败/结束后无搁浅活 claim | PASS | `strandedClaimsAtEnd: []`; claims shrink monotonically from t=2423, the last live claim is visible at t=3710 ms and the queue shows only the pending mismatch record by t=5733 ms; exitA=exitB=0 |
 | 队列转移证据保留 | PASS | `queue-timeline.json` (9 samples: 8-ready baseline → 5-claim cap + 1 pending → 7-claim two-owner → monotonic settle → mismatch-only pending), `session-{A,B}.{out,err}`, `staging-manifest.json`, `core-revision.txt` |
 | 失败记录的最终归宿（原 open note） | **PASS — explicit** | The mismatch record: ready at t=27 → claimed and released to `<ready>.pending.<nonce>` at t=486 (session A's drain) → re-claimed and re-released under a NEW nonce at t=729 (session B's drain) → **final state: pending** (`finalPending: 1`, content in `final-pending-record.json` with `attempts: 0` untouched and the wrong projectsDir preserved) — retryable by a future session, never a stranded claim, never GC'd without explanation |
 
