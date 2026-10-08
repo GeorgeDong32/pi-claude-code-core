@@ -5,7 +5,10 @@
  * the FOCUS pointer live here; the two writer verbs with their FULL effect
  * sets (setGoal / setFocusedGoalId) migrated verbatim from goal.ts. The
  * adapter in goal.ts keeps transitional aliases (spec §4.3 allows them in
- * step 1; step 4 removes them).
+ * step 1; step 4 removes them). Step 2 adds the terminal verbs: complete
+ * (the update_goal=approved inline block) and terminate(kind) (the
+ * /goal-clear + /goal-abort common core, plus the agent abort_goal tool
+ * variant via by:"agent").
  *
  * Verb effect table (pinned by goal-lifecycle.test.ts recording ports —
  * migrated line-for-line from the goal.ts implementations):
@@ -19,12 +22,22 @@
  *                             + next) · release stale tweak gate(cond) ·
  *                             focus entry(always) · ledger focused/unfocused
  *                             · tool-sync · UI sync
+ *  complete(goal)             merge-from-disk → stamp complete/agent →
+ *                             setGoal effects (halt · pause · forget carry ·
+ *                             persist=archive · UI) → nudge reset → pool
+ *                             removal → focus entry(null, completed) ·
+ *                             tool-sync · UI sync · ledger goal_completed
+ *  terminate(kind,{by,note})  archive(disk, stopReason=by) · ledger
+ *                             goal_aborted(user kind note / agent reason) ·
+ *                             nudge reset · setGoal(null) effects ·
+ *                             persist · UI sync
  *
  * The silent primitives (replacePool / setFocusedSilently / removeFromPool /
  * adopt) are reconciliation/loadState internals — they move data WITHOUT the
  * verb effect sets, exactly like the old direct assignments did.
  */
 import type { GoalRecord } from "./goal-record.ts";
+import { buildAbortedByAgentGoal } from "./goal-policy.ts";
 
 /** Narrow structural context — the lifecycle module never imports pi. */
 export interface LifecycleCtx {
@@ -32,6 +45,7 @@ export interface LifecycleCtx {
 }
 
 export type GoalFocusReason = import("./goal-record.ts").GoalFocusReason;
+export type StopReason = import("./goal-record.ts").StopReason;
 
 export interface GoalLifecyclePorts {
 	/** Halt the continuation loop (goal-continuation.halt). */
@@ -60,12 +74,21 @@ export interface GoalLifecyclePorts {
 	updateUI(ctx: LifecycleCtx): void;
 	/** ISO timestamp source (nowIso in the adapter). */
 	nowIso(): string;
+	/** storage: merge the disk prompt into a record (goal-files). */
+	mergeGoalPromptFromDisk(ctx: LifecycleCtx, goal: GoalRecord): GoalRecord;
+	/** storage: archive a record to the archive area (goal-files). */
+	archiveGoal(ctx: LifecycleCtx, goal: GoalRecord): GoalRecord;
 }
 
 export interface TransitionReport {
-	kind: "setGoal" | "focus";
+	kind: "setGoal" | "focus" | "complete" | "terminate";
 	previousGoalId: string | null;
 	nextGoalId: string | null;
+	/**
+	 * The terminal record (post-archive) for complete/terminate — read-only
+	 * display material (archivedPath, final usage), never a to-do list.
+	 */
+	record?: GoalRecord;
 	/** Read-only description of the effects the verb executed. */
 	effects: string[];
 }
@@ -80,6 +103,22 @@ export interface GoalLifecycle {
 
 	setGoal(next: GoalRecord | null, ctx: LifecycleCtx, opts?: { persist?: boolean; focusReason?: GoalFocusReason }): TransitionReport;
 	focus(goalId: string | null, ctx: LifecycleCtx, reason: GoalFocusReason): TransitionReport;
+	/**
+	 * complete(goal): archive the audited goal as complete (the update_goal
+	 * approved-verdict inline block). `goal` is the audited target — the
+	 * verdict's original goal, never a post-await refocus.
+	 */
+	complete(goal: GoalRecord, ctx: LifecycleCtx): TransitionReport;
+	/**
+	 * terminate(kind): the /goal-clear + /goal-abort common core (by:"user")
+	 * and the agent abort_goal tool variant (by:"agent"). Drafting-cancel
+	 * branches stay with the adapter (Step 3 migrates the intents).
+	 */
+	terminate(
+		kind: "clear" | "abort",
+		ctx: LifecycleCtx,
+		opts?: { by?: "user" | "agent"; note?: string; reason?: string },
+	): TransitionReport;
 
 	/** Reconciliation primitives (no verb effects — data movement only). */
 	replacePool(fresh: ReadonlyMap<string, GoalRecord>): void;
@@ -211,6 +250,81 @@ export function createGoalLifecycle(ports: GoalLifecyclePorts): GoalLifecycle {
 			}
 			if (focusedGoalId) goalsById.delete(focusedGoalId);
 			focusedGoalId = null;
+		},
+		complete(goal, ctx) {
+			// The old inline block routed through stopActiveGoal: merge the
+			// disk prompt into the audited target, stamp complete, then the
+			// setGoal verb carries halt/pause/forget/persist(=archive).
+			const merged = ports.mergeGoalPromptFromDisk(ctx, goal);
+			const completed = { ...merged, status: "complete" as const, stopReason: "agent" as StopReason, updatedAt: ports.nowIso() };
+			const effects: string[] = [];
+			const setReport = this.setGoal(completed, ctx);
+			// persist (inside setGoal) archived the record and adopted it
+			// back — focused() is the post-archive terminal record.
+			const terminal = focused() ?? completed;
+			ports.resetNudge(terminal.id);
+			effects.push(`nudge-reset:${terminal.id}`);
+			this.removeFromPool(terminal.id);
+			effects.push(`remove-from-pool:${terminal.id}`);
+			ports.appendFocusEntry(null, "completed");
+			effects.push("focus-entry:null:completed");
+			ports.syncTools();
+			ports.updateUI(ctx);
+			effects.push("sync-tools", "update-ui");
+			try {
+				ports.appendLedger(ctx, {
+					type: "goal_completed",
+					goalId: terminal.id,
+					archivePath: terminal.archivedPath,
+					at: ports.nowIso(),
+				});
+				effects.push("ledger:goal_completed");
+			} catch {
+				// Ledger append failure should not crash completion
+			}
+			return { kind: "complete", previousGoalId: setReport.previousGoalId, nextGoalId: null, record: terminal, effects: [...setReport.effects, ...effects] };
+		},
+		terminate(kind, ctx, opts = {}) {
+			const by = opts.by ?? "user";
+			const effects: string[] = [];
+			const current = focused();
+			let archived: GoalRecord | null = null;
+			if (current) {
+				// archiveCurrentGoal: merge, map the archival status, stamp the
+				// stop reason; the agent variant first builds the aborted
+				// record (pauseReason carries the raw reason).
+				const merged = ports.mergeGoalPromptFromDisk(ctx, current);
+				const stamped = by === "agent" && kind === "abort"
+					? buildAbortedByAgentGoal(merged, { reason: opts.reason ?? "", updatedAt: ports.nowIso() })
+					: { ...merged, stopReason: by as StopReason };
+				const forArchive = {
+					...stamped,
+					status: stamped.status === "complete" ? ("complete" as const) : ("paused" as const),
+					stopReason: by as StopReason,
+				};
+				archived = ports.archiveGoal(ctx, forArchive);
+				effects.push("archive");
+			}
+			// appendUserTerminationEvent (user) / the tool's ledger append
+			// (agent) — both best-effort goal_aborted events.
+			try {
+				ports.appendLedger(ctx, {
+					type: "goal_aborted",
+					goalId: archived?.id ?? current?.id ?? "unknown",
+					reason: by === "agent" ? (opts.reason ?? "").trim() : opts.note?.trim() ? `user ${kind}: ${opts.note.trim()}` : `user ${kind}`,
+					archivePath: archived?.archivedPath,
+					at: ports.nowIso(),
+				});
+				effects.push("ledger:goal_aborted");
+			} catch {
+				// Ledger append failure should not crash termination
+			}
+			if (current) {
+				ports.resetNudge(current.id);
+				effects.push(`nudge-reset:${current.id}`);
+			}
+			const setReport = this.setGoal(null, ctx, { focusReason: kind === "clear" ? "cleared" : "aborted" });
+			return { kind: "terminate", previousGoalId: current?.id ?? null, nextGoalId: null, record: archived ?? undefined, effects: [...effects, ...setReport.effects] };
 		},
 	};
 }

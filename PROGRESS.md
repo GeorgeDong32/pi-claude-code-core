@@ -2,6 +2,14 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## 2026-10-08 C5-Step2：goal 终结动词 complete/terminate 迁入 lifecycle（P2-2 2/4）
+
+- **实现**：goal-lifecycle.ts 新增两动词（ports 增 storage 两项 mergeGoalPromptFromDisk/archiveGoal；TransitionReport 增 kind 与只读 record 字段=归档后终态记录）。`complete(goal)`=update_goal 审计通过后的内联块（merge→stamp complete/agent→setGoal 效果集→persist 归档→nudge 复位→出池→focus entry(null,completed)→sync/UI→ledger goal_completed），审计目标显式传入、await 后新焦点不替代旧目标；`terminate(kind,{by,note,reason})`=/goal-clear 与 /goal-abort 共同行为（归档→user/agent 两种 ledger 措辞→nudge 复位→setGoal(null) unfocus persist），abort_goal 工具走 by:"agent" 变体（buildAbortedByAgentGoal 进动词）。drafting 取消分支、归档状态映射与 clear/abort 提示差异留在 adapter。
+- **接线**：update_goal execute 内联块、handleGoalClear/handleGoalAbort 共同段、abort_goal 工具核心三处改调动词；appendUserTerminationEvent 死代码删除（逻辑入动词）；turnStoppedFor 仍由调用方设置（Step 3 随 turn flags 迁入）。
+- **测试**：goal-lifecycle.test.ts +4 例（complete 同 id 终态全序/terminate user 全序含 entry:-:cleared（旧 setGoal 本有）/terminate agent 记录与 ledger 原文/无焦点 terminate 形状）；**既有 goal 26 文件套件零改动全绿**（行为冻结），FakeHost 端到端（statemachine/turn-lock/ledger/notes 等）未动。
+- **门禁**：check 0；vitest 935 + node:test 全 0 fail（exit 0）；contracts 43+3todo。
+- **台账**：本条；docs/{en,zh}/goal.md 模块表随 Step 4 统一更新。
+
 ## 2026-10-08 通知修复：effort 双写收敛为单一显示（第一层）
 
 - **缺陷**：`effort/ui/index.ts#createEffortUi.notify` 保留 DC3 双写（`publishNotification` + 无条件 `ctx.ui.notify`），DC5b 接通真实消费者后每条 effort 告警显示两次——现代 TUI（队列消费 + 直写）与 core-only（fallback 适配器 + 直写）均 2 次，真实终端有/无 TUI 双双实测复现（TUI 仓 H-T1b 对照记录）。

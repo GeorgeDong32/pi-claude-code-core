@@ -337,6 +337,8 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		syncTools: () => syncGoalTools(),
 		updateUI: (ctx) => updateUI(ctx as ExtensionContext),
 		nowIso,
+		mergeGoalPromptFromDisk: (ctx, goal) => mergeGoalPromptFromDisk(ctx as ExtensionContext, goal),
+		archiveGoal: (ctx, goal) => archiveGoalFile(ctx as ExtensionContext, goal),
 	});
 	const goalsById = lifecycle.pool as Map<string, GoalRecord>;
 	// When non-null, /goal-tweak drafting is in progress for this goal id and
@@ -1256,11 +1258,10 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			const selected = await chooseOpenGoal(ctx, "Clear which open goal?");
 			if (!selected) return;
 		}
-		const archived = archiveCurrentGoal(ctx, "user");
-		const didArchive = !!archived;
-		appendUserTerminationEvent(ctx, "cleared", archived, rawNote);
-		resetGetGoalNudgeState(state.goal?.id);
-		setGoal(null, ctx, true, "cleared");
+		// P2-2 Step 2: archive + user-termination ledger + nudge reset +
+		// unfocus persist as ONE lifecycle verb (the old inline sequence).
+		const report = lifecycle.terminate("clear", ctx, { note: rawNote });
+		const didArchive = !!report.record;
 		// Phase 5 D: also abort any in-flight drafting so the agent's next turn
 		// doesn't try to propose into a cleared slot.
 		const wasDrafting = confirmationIntent !== null;
@@ -1284,11 +1285,8 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			const selected = await chooseOpenGoal(ctx, "Abort which open goal?");
 			if (!selected) return;
 		}
-		const archived = archiveCurrentGoal(ctx, "user");
-		const didArchive = !!archived;
-		appendUserTerminationEvent(ctx, "aborted", archived, rawNote);
-		resetGetGoalNudgeState(state.goal?.id);
-		setGoal(null, ctx, true, "aborted");
+		const report = lifecycle.terminate("abort", ctx, { note: rawNote });
+		const didArchive = !!report.record;
 		const wasDrafting = confirmationIntent !== null;
 		confirmationIntent = null;
 		syncGoalTools();
@@ -1424,22 +1422,8 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		},
 	});
 
-	// goal-notes: audit trail for USER-initiated termination — the agent's
-	// abort tool already ledgers; the /goal-abort and /goal-clear paths did
-	// not. The trailing note (if any) rides the reason.
-	function appendUserTerminationEvent(ctx: ExtensionContext, kind: "aborted" | "cleared", archived: { id: string; archivedPath?: string } | null, note?: string): void {
-		try {
-			appendGoalEvent(ctx, {
-				type: "goal_aborted",
-				goalId: archived?.id ?? state.goal?.id ?? "unknown",
-				reason: note?.trim() ? `user ${kind}: ${note.trim()}` : `user ${kind}`,
-				archivePath: archived?.archivedPath,
-				at: nowIso(),
-			});
-		} catch {
-			// Ledger append failure should not crash termination
-		}
-	}
+	// goal-notes: audit trail for USER-initiated termination lived here; the
+	// append moved into the lifecycle terminate verb (P2-2 Step 2).
 
 	// /goal-note: attach or clear a STANDING user note that rides every goal
 	// and checkpoint prompt (goal-notes; consumed by prompts, never written
@@ -1741,28 +1725,15 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 				},
 			});
 			state.goal = auditTarget;
-			stopActiveGoal("complete", "agent", ctx);
-			const completedGoal = state.goal;
+			// P2-2 Step 2: the terminal transition (merge → stamp complete →
+			// archive via persist → pool removal → focus entry → ledger) is
+			// the lifecycle complete verb. The audited target is passed
+			// explicitly — a post-await refocus never replaces the audit's
+			// subject.
+			const report = lifecycle.complete(auditTarget, ctx);
+			const completedGoal = report.record ?? null;
 			// C9 fix: mark turn-stopped so subsequent in-turn tool calls are blocked.
 			turnStoppedFor = completedGoal?.id ?? null;
-			if (completedGoal) {
-				resetGetGoalNudgeState(completedGoal.id);
-				lifecycle.removeFromPool(completedGoal.id);
-				appendFocusEntry(null, "completed");
-				syncGoalTools();
-				updateUI(ctx);
-				// Append ledger: goal completed
-				try {
-					appendGoalEvent(ctx, {
-						type: "goal_completed",
-						goalId: completedGoal.id,
-						archivePath: completedGoal.archivedPath,
-						at: nowIso(),
-					});
-				} catch {
-					// Ledger append failure should not crash completion
-				}
-			}
 			return {
 				content: [{
 					type: "text",
@@ -1878,30 +1849,18 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 
 			// Account for any remaining elapsed time before abandoning the run.
 			accountProgress(ctx);
-			state.goal = mergeGoalPromptFromDisk(ctx, state.goal);
-			state.goal = buildAbortedByAgentGoal(state.goal, { reason, updatedAt: nowIso() });
-			const archived = archiveCurrentGoal(ctx, "agent");
-			resetGetGoalNudgeState(abortedGoalId);
-			setGoal(null, ctx, true, "aborted");
+			// P2-2 Step 2: merge → buildAbortedByAgentGoal → archive → ledger
+			// (raw agent reason) → nudge reset → unfocus persist = the
+			// terminate verb's by:"agent" variant.
+			const report = lifecycle.terminate("abort", ctx, { by: "agent", reason });
+			const archived = report.record ?? null;
 			turnStoppedFor = abortedGoalId;
 
 			const archiveLine = archived?.archivedPath ? `\nArchive: ${archived.archivedPath}` : "";
-			uiNotify(ctx, 
+			uiNotify(ctx,
 				`Goal aborted by agent.\nReason: ${truncateText(reason, 200)}${archiveLine}`,
 				"warning",
 			);
-			// Append ledger event for abort
-			try {
-				appendGoalEvent(ctx, {
-					type: "goal_aborted",
-					goalId: abortedGoalId,
-					reason,
-					archivePath: archived?.archivedPath,
-					at: nowIso(),
-				});
-			} catch {
-				// Ledger append failure should not crash abort
-			}
 			return {
 				content: [{
 					type: "text",

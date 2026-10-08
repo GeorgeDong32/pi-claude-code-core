@@ -25,6 +25,11 @@ function recordingPorts() {
 		syncTools: () => calls.push("sync"),
 		updateUI: () => calls.push("ui"),
 		nowIso: () => "2026-10-08T00:00:00.000Z",
+		mergeGoalPromptFromDisk: (_ctx, goal) => goal,
+		archiveGoal: (_ctx, goal) => {
+			calls.push("archive");
+			return { ...goal, archivedPath: `.pi/goals/archive/${goal.id}.md` };
+		},
 	};
 	return { ports, calls };
 }
@@ -146,4 +151,101 @@ test("silent primitives move data without verb effects", () => {
 	lc.removeFromPool(a.id);
 	assert.equal(lc.focusedId, null, "removeFromPool drops a dangling focus");
 	assert.deepEqual(calls, []);
+});
+
+// ---------- P2-2 Step 2: complete / terminate ----------
+
+test("complete: the update_goal approved-verdict effect order (same-id terminal)", () => {
+	const { ports, calls } = recordingPorts();
+	const lc = createGoalLifecycle(ports);
+	const a = goal("cmp");
+	lc.adopt(a);
+	calls.length = 0;
+	const report = lc.complete(a, ctx);
+	assert.equal(report.kind, "complete");
+	assert.equal(report.previousGoalId, a.id);
+	assert.equal(report.nextGoalId, null);
+	assert.ok(report.record, "report carries the terminal record for display");
+	assert.equal(report.record!.status, "complete");
+	assert.equal(report.record!.stopReason, "agent");
+	// setGoal leg (no focus change): halt + pause via the complete-status
+	// conditions, carry forgotten, persist(=archive in the adapter), ui;
+	// then the inline-block tail: nudge, pool removal, focus entry, sync,
+	// ui, ledger.
+	assert.deepEqual(calls, [
+		"halt", "pause-clock", `forget:${a.id}`, "persist", "ui",
+		`nudge:${a.id}`, `entry:-:completed`, "sync", "ui", "ledger:goal_completed",
+	]);
+	assert.equal(lc.focusedId, null, "the completed goal leaves the pool");
+	assert.equal(lc.pool.has(a.id), false);
+	calls.length = 0;
+	// A second complete with nothing focused: still a no-crash no-op shape
+	// (setGoal(null-destined) leg only). Guarded by the adapter's gate.
+	const bare = lc.complete(goal("bare"), ctx);
+	assert.equal(bare.previousGoalId, null);
+	assert.ok(calls.includes("ledger:goal_completed"));
+});
+
+test("terminate clear (user): archive → ledger(user cleared) → nudge → setGoal(null) effects", () => {
+	const events: Array<Record<string, unknown>> = [];
+	const { ports, calls } = recordingPorts();
+	ports.appendLedger = (_ctx, event) => {
+		events.push(event);
+		calls.push(`ledger:${(event as { type: string }).type}`);
+	};
+	const lc = createGoalLifecycle(ports);
+	const a = goal("tc");
+	lc.adopt(a);
+	calls.length = 0;
+	const report = lc.terminate("clear", ctx, { note: "done with it" });
+	assert.equal(report.kind, "terminate");
+	assert.equal(report.previousGoalId, a.id);
+	assert.ok(report.record, "archived record rides the report");
+	assert.equal(report.record!.status, "paused", "user clear archives non-complete as paused");
+	assert.equal(report.record!.stopReason, "user");
+	assert.equal(events[0]?.type, "goal_aborted");
+	assert.equal(events[0]?.reason, "user clear: done with it");
+	assert.deepEqual(calls, [
+		"archive", "ledger:goal_aborted", `nudge:${a.id}`,
+		"halt", "pause-clock", `nudge:${a.id}`, "nudge:-",
+		"entry:-:cleared",
+		"halt", "pause-clock", `forget:${a.id}`, "gate:-",
+		"persist", "ui",
+	]);
+	assert.equal(lc.focusedId, null);
+});
+
+test("terminate abort (agent): aborted record built, raw reason ledger, focus reason aborted", () => {
+	const events: Array<Record<string, unknown>> = [];
+	const { ports, calls } = recordingPorts();
+	ports.appendLedger = (_ctx, event) => {
+		events.push(event);
+		calls.push(`ledger:${(event as { type: string }).type}`);
+	};
+	const lc = createGoalLifecycle(ports);
+	const a = goal("ta");
+	lc.adopt(a);
+	calls.length = 0;
+	const report = lc.terminate("abort", ctx, { by: "agent", reason: "objective obsolete" });
+	assert.ok(report.record);
+	assert.equal(report.record!.pauseReason, "Aborted: objective obsolete");
+	assert.equal(report.record!.stopReason, "agent");
+	assert.equal(report.record!.autoContinue, false);
+	assert.equal(events[0]?.reason, "objective obsolete", "agent ledger keeps the raw reason");
+	assert.ok(calls.includes("archive"));
+	assert.ok(calls.includes("ledger:goal_aborted"));
+});
+
+test("terminate with nothing focused: ledger still records, no archive/nudge", () => {
+	const events: Array<Record<string, unknown>> = [];
+	const { ports, calls } = recordingPorts();
+	ports.appendLedger = (_ctx, event) => {
+		events.push(event);
+		calls.push(`ledger:${(event as { type: string }).type}`);
+	};
+	const lc = createGoalLifecycle(ports);
+	const report = lc.terminate("clear", ctx);
+	assert.equal(report.record, undefined);
+	assert.equal(events[0]?.goalId, "unknown");
+	assert.deepEqual(calls, ["ledger:goal_aborted", "halt", "pause-clock", "gate:-", "persist", "ui"]);
 });
