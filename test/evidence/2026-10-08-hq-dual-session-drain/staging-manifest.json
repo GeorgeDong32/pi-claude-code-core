@@ -1,0 +1,54 @@
+{
+ "staged": [
+  {
+   "name": "hq-sessi-1791457266305.json",
+   "sessionId": "hq-session-08-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+   "mismatch": true
+  },
+  {
+   "name": "hq-sessi-1791457266306.json",
+   "sessionId": "hq-session-01-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+   "mismatch": false
+  },
+  {
+   "name": "hq-sessi-1791457266307.json",
+   "sessionId": "hq-session-02-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+   "mismatch": false
+  },
+  {
+   "name": "hq-sessi-1791457266308.json",
+   "sessionId": "hq-session-03-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+   "mismatch": false
+  },
+  {
+   "name": "hq-sessi-1791457266309.json",
+   "sessionId": "hq-session-04-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+   "mismatch": false
+  },
+  {
+   "name": "hq-sessi-1791457266310.json",
+   "sessionId": "hq-session-05-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+   "mismatch": false
+  },
+  {
+   "name": "hq-sessi-1791457266311.json",
+   "sessionId": "hq-session-06-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+   "mismatch": false
+  },
+  {
+   "name": "hq-sessi-1791457266312.json",
+   "sessionId": "hq-session-07-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+   "mismatch": false
+  }
+ ],
+ "onDisk": [
+  "hq-sessi-1791457266305.json",
+  "hq-sessi-1791457266306.json",
+  "hq-sessi-1791457266307.json",
+  "hq-sessi-1791457266308.json",
+  "hq-sessi-1791457266309.json",
+  "hq-sessi-1791457266310.json",
+  "hq-sessi-1791457266311.json",
+  "hq-sessi-1791457266312.json"
+ ]
+}

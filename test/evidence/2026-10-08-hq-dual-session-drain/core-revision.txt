@@ -1,1 +1,1 @@
-828c5c6 refactor(goal): lifecycle module step 1 — pool/focus ownership + setGoal/focus verbs (P2-2 1/4)
+4b0f8d9 refactor(goal): lifecycle step 4 — transitional proxies withdrawn, full verb surface, DEVIATIONS #73 closed (P2-2 4/4)

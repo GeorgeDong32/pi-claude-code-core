@@ -1,12 +1,36 @@
 {
  "exitA": 0,
  "exitB": 0,
- "samples": 8,
+ "samples": 9,
  "doubleClaims": [],
  "strandedClaimsAtEnd": [],
+ "mismatchRecord": {
+  "name": "hq-sessi-1791457266305.json",
+  "trajectory": [
+   {
+    "t": 27,
+    "file": "hq-sessi-1791457266305.json",
+    "state": "ready"
+   },
+   {
+    "t": 486,
+    "file": "hq-sessi-1791457266305.json.pending.10fb7b99-4a5e-49af-9942-b7335c17b39d",
+    "state": "pending"
+   },
+   {
+    "t": 729,
+    "file": "hq-sessi-1791457266305.json.pending.be2b377f-ce6d-4d5f-90fe-856f566606c9",
+    "state": "pending"
+   }
+  ],
+  "finalState": "pending"
+ },
+ "stagedCount": 8,
  "finalReady": 0,
- "finalPending": 0,
- "finalFiles": [],
+ "finalPending": 1,
+ "finalFiles": [
+  "hq-sessi-1791457266305.json.pending.be2b377f-ce6d-4d5f-90fe-856f566606c9"
+ ],
  "verdict": {
   "singleLiveOwnerPerRecord": true,
   "noStrandedClaimAfterBothSessions": true

@@ -35,12 +35,13 @@
 - **门禁**：check 0；vitest 935 + node:test 全 0 fail（exit 0,本轮实际取得 node:test 通过结果,补上前次沙箱缺失项）；contracts 43 passed + 3 todo。
 - **台账**：CHANGELOG Unreleased、docs/{en,zh}/ui.md 测试节、本条。真实终端复验归第五层统一执行（修复 revision 见本条 commit）。
 
-## 2026-10-08 H-Q：隔离双真实 pi session drain 验收 — PASS
+## 2026-10-08 H-Q：隔离双真实 pi session drain 验收 — PASS（证据复审后重跑,闭环原 open note）
 
-- **环境**：真实 pi 1.0.2(PATH),`-p` 非交互双进程并发(间隔 0.4s);隔离 HOME + PI_CODING_AGENT_DIR + 项目目录(/tmp);被测实现 = 本仓 `git clone --no-hardlinks` 预置进隔离 agentDir 的 git 包布局经 settings packages 真实加载(加载证据:permission-modes 启动行 + review 模块 banner);凭据/models 从真实 agentDir 拷贝(留在隔离副本内)。macOS /tmp→/private/tmp realpath 陷阱已定位并修正(预置 record 的 projectsDir 必须按 canonical 路径 sanitize)。
-- **四项验收(verdict.json)**:①同一记录仅一位 live owner——全快照 doubleClaims=[](claim 文件名含 pid,可区分 owner);②cap 之后候选仍可消费——A 首轮恰 claim 5(QUEUE_DRAIN_MAX)剩 2 条 ready,B 接走全部;③失败/结束无搁浅活 claim——strandedClaimsAtEnd=[],t≈4.6s 全部 settle,双进程 exit 0;④转移证据保留——queue-timeline.json(25ms 采样:5-claim → 7-claim 双 owner → 单调 settle → 空)+ 双 session 日志 + core revision。
-- **失败路径实测**:routing mismatch(projectsDir 不符)→ claim→skip→释放回 pending(attempts 不动)零搁浅;极短 -p session 的 shutdown 取消 → 记录回 pending 可重试。1 条故意 mismatch 的最终状态(pending vs GC)未在采样窗口内捕获,记 open note(不影响任何验收项)。
-- **可复现**:`bash scripts/hq-drain-evidence.sh`;证据目录 `test/evidence/2026-10-08-hq-dual-session-drain/`。既有子进程原语测试(memory-queue-claim 等)保留未动;本验收为真实宿主生命周期证据,二者分记。
+- **环境**：真实 pi 1.0.2(PATH),`-p` 非交互双进程并发(间隔 0.4s);隔离 HOME + PI_CODING_AGENT_DIR + 项目目录(/tmp);被测实现 = 本仓 `git clone --no-hardlinks` @ **4b0f8d9**(含 C5 全部与通知修复)预置进隔离 agentDir 经 settings packages 真实加载;凭据/models 留在隔离副本内;/tmp realpath 陷阱按 canonical 路径 sanitize。
+- **证据复审发现并修复三缺陷后重跑**（2026-10-08 执行 prompt 第三层要求）：①旧造数 `Date.now()+i` 文件名跨毫秒边界碰撞——mismatch 文件(T0+8)被 loop i=7(T1+7,T1=T0+1)覆盖,**旧最终 run 的 mismatch 记录从未入队**（原「第 8 条去向未捕获」open note 的真相）;改单调 staging 时钟 + 入队后 8 文件唯一性/计数断言 + staging-manifest.json。②sampler 原在双 session 之后启动,丢失 staged-ready 基线与首盲窗;改先行启动。③README/PROGRESS 数字漂移(「9 samples」vs JSON 8 条;「4.6s settle」vs 实际 2.8s)。
+- **重跑四项验收(verdict.json,9 samples 全对齐)**:①同一记录仅一位 live owner——doubleClaims=[];②cap 之后候选仍可消费——t=486ms A(pid 33074)恰 5 claims 剩 2 ready,t=729ms B(pid 33081)接走;③无搁浅活 claim——strandedClaimsAtEnd=[],t=3710ms 最后一条 claim 消失,双进程 exit 0;④转移证据保留——queue-timeline.json(8-ready 基线→5-claim cap+1 pending→7-claim 双 owner→单调 settle→仅剩 mismatch pending)+ 双 session 日志 + manifest + core revision。
+- **原 open note 闭环**:mismatch 记录轨迹 t=27 ready→t=486 被 A claim 后释放回 pending→t=729 被 B 再 claim 再释放(新 nonce)→**最终态 pending**(finalPending=1,内容存 final-pending-record.json:attempts=0 未动、错误 projectsDir 保留)——可重试、无搁浅、无不明 GC。
+- **可复现**:`bash scripts/hq-drain-evidence.sh`;证据目录 `test/evidence/2026-10-08-hq-dual-session-drain/`。既有子进程原语测试保留未动;本验收为真实宿主生命周期证据,二者分记。
 
 ## 2026-10-08 C5-Step1：goal-lifecycle module — pool/focus 所有权迁入（P2-2 1/4）
 
