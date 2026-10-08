@@ -86,12 +86,10 @@ import {
 import {
 	buildGoalListText,
 	buildUnfocusedOpenGoalsSummary,
-	focusedGoalFromPool,
 	goalSelectorLabel,
 	mergeFocusedGoalWithDisk,
 	openGoalsFromPool,
 	otherOpenGoalCount,
-	resolveSessionFocus,
 } from "./goal-pool.ts";
 import {
 	auditorRejectionBlock,
@@ -107,10 +105,8 @@ import { createGoalUi } from "./ui.ts";
 
 import {
 	abortGoalCommandMessage,
-	buildAbortedByAgentGoal,
 	buildCompletionReport,
 	buildGoalCreatedReport,
-	buildPausedByAgentGoal,
 	clearGoalCommandMessage,
 	shouldArmPostCompactReminder,
 	shouldInjectPostCompactReminder,
@@ -316,21 +312,23 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		forgetCarry: (goalId: string) => clock.forget(goalId),
 		appendFocusEntry: (goalId: string | null, reason: GoalFocusReason) => appendFocusEntry(goalId, reason),
 		appendLedger: (ctx, event) => appendGoalEvent(ctx as ExtensionContext, event as Parameters<typeof appendGoalEvent>[1]),
-		persist: (ctx) => persist(ctx as ExtensionContext),
 		syncTools: () => syncGoalTools(),
 		updateUI: (ctx) => updateUI(ctx as ExtensionContext),
 		nowIso,
 		mergeGoalPromptFromDisk: (ctx, goal) => mergeGoalPromptFromDisk(ctx as ExtensionContext, goal),
 		archiveGoal: (ctx, goal) => archiveGoalFile(ctx as ExtensionContext, goal),
+		writeActiveGoalFile: (ctx, goal) => writeActiveGoalFile(ctx as ExtensionContext, goal),
 		readActiveGoalPool: (ctx) => readActiveGoalPool(ctx as ExtensionContext),
+		appendStateEntry: (goal) => pi.appendEntry(STATE_ENTRY, goalDetails(goal)),
 		beginClock: () => beginAccounting(),
 	});
 
 	// B7 step 3: the approved-audit hold lives in the audit domain module.
 	const pendingAchievement = createPendingAchievementSlot();
-	// P2-2 Step 4: the transitional proxies are gone — reads go through
-	// lifecycle.focused() / lifecycle.pool (read-only), record refreshes
-	// through the adopt primitive, transitions through the verbs.
+	// P2-2 Step 4 + C5 follow-up: reads go through lifecycle.focused() /
+	// lifecycle.pool (defensive copies), transitions and record refreshes
+	// through business verbs and the closed event entry only — the adapter
+	// holds no second write authority into the owned state.
 	// DC4b part-3: the presentation half lives in ./ui.ts — closed-over
 	// business state enters as getters, so the state machine stays fakeable.
 	const goalUi = createGoalUi({
@@ -456,11 +454,6 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		clock.pause(); // segment dropped; per-goal carries are kept for resume
 	}
 
-	function clearStoppedRuntimeState(): void {
-		clearContinuationState();
-		clearActiveAccounting();
-	}
-
 
 	function openGoals(): GoalRecord[] {
 		return openGoalsFromPool(lifecycle.pool);
@@ -551,53 +544,23 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		const cost = Math.max(0, opts.completedTurnCost ?? 0);
 		if (tokens === 0 && cost === 0 && elapsedSeconds === 0) return;
 
-		const next = cloneGoal(lifecycle.focused()!);
-		next.usage.tokensUsed += tokens;
-		next.usage.costUsed += cost;
-		next.usage.activeSeconds += elapsedSeconds;
-		next.updatedAt = nowIso();
-		lifecycle.adopt(next);
+		// C5 follow-up: the accounting result adoption (clone + delta +
+		// updatedAt stamp) and the persist leg are lifecycle verbs — the
+		// adapter no longer assembles the record or writes the pool.
+		lifecycle.applyUsage({ tokens, cost, seconds: elapsedSeconds });
 		persist(ctx, readCtx);
 	}
 
 	function syncGoalPromptFromDisk(ctx: ExtensionContext, readCtx?: { goal: GoalRecord | null }): boolean {
-		const current = lifecycle.focused();
-		if (!current || current.status === "complete") return false;
-		const previousObjective = current.objective;
-		// AR1005-GO-B: within one accounting event's synchronous segment the
-		// objective comes from the ALREADY-PARSED pool read (snapshot at event
-		// start — no cross-process transactionality is implied). Every other
-		// caller (commands, refresh paths, post-await continuations) still
-		// takes the fresh disk read below.
-		const next = readCtx ? (readCtx.goal ? { ...current, objective: readCtx.goal.objective } : current) : mergeGoalPromptFromDisk(ctx, current);
-		if (next !== current) lifecycle.adopt(next);
-		return (lifecycle.focused()?.objective ?? previousObjective) !== previousObjective;
+		return lifecycle.syncObjectiveFromDisk(ctx, readCtx);
 	}
 
 	function persist(ctx?: ExtensionContext, readCtx?: { goal: GoalRecord | null }): void {
-		const current = lifecycle.focused();
-		if (current) {
-			lifecycle.adopt({ ...current, updatedAt: nowIso() });
-			if (ctx) {
-				syncGoalPromptFromDisk(ctx, readCtx);
-				const next = lifecycle.focused();
-				if (next) lifecycle.adopt(next.status === "complete" ? archiveGoalFile(ctx, next) : writeActiveGoalFile(ctx, next));
-			}
-		}
-		pi.appendEntry(STATE_ENTRY, goalDetails(lifecycle.focused()));
-		syncGoalTools();
-		if (ctx) updateUI(ctx);
+		lifecycle.persistRecord(ctx, readCtx);
 	}
 
 	function refreshGoalDisplayFromDisk(ctx: ExtensionContext): void {
-		const current = lifecycle.focused();
-		if (!current || current.status === "complete") return;
-		if (syncGoalPromptFromDisk(ctx)) {
-			lifecycle.adopt({ ...(lifecycle.focused() ?? current), updatedAt: nowIso() });
-			pi.appendEntry(STATE_ENTRY, goalDetails(lifecycle.focused()));
-		}
-		syncGoalTools();
-		updateUI(ctx);
+		lifecycle.refreshDisplayFromDisk(ctx);
 	}
 
 	/**
@@ -708,12 +671,12 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		// arms a continuation timer whose <pi_goal_continuation> message occupies
 		// the child's agent loop before the dispatched task prompt can be
 		// delivered ("already processing" spawn failures). Children never
-		// participate in the goal lifecycle. The session-branch reconciliation
-		// below is naturally empty in fresh child sessions and stays as-is.
-		lifecycle.handle({ tag: "restore" });
+		// participate in the goal lifecycle (the childSession flag the restore
+		// verb consumes).
 		const childSession = isSubagentChildProcess();
-		lifecycle.replacePool(childSession ? new Map<string, GoalRecord>() : readActiveGoalPool(ctx));
-		lifecycle.setFocusedSilently(null);
+		// The adapter scans the session entries (external event wiring) and
+		// sanitizes the legacy record; pool replacement, focus resolution,
+		// complete-record cleanup, and the runtime clears are the restore verb.
 		let focusEntry: GoalFocusEntry | null = null;
 		let legacyGoal: GoalRecord | null = null;
 		let legacyStateSeen = false;
@@ -733,52 +696,20 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		if (legacyGoal && legacyGoal.status !== "complete") {
 			legacyGoal = sanitizeGoalPaths(ctx, mergeGoalPromptFromDisk(ctx, legacyGoal));
 		}
-		lifecycle.setFocusedSilently(resolveSessionFocus({
-			pool: lifecycle.pool,
-			focusEntry,
-			legacyGoal,
-			adoptLegacyGoal: (g) => lifecycle.adopt(g),
-		}));
-		if (!focusEntry && lifecycle.focusedId) {
-			try {
-				appendFocusEntry(lifecycle.focusedId, legacyGoal?.id === lifecycle.focusedId ? "migrated" : "selected");
-			} catch {}
-		}
-		for (const [id, current] of lifecycle.pool) {
-			if (current.status === "complete") {
-				lifecycle.removeFromPool(id);
-			}
-		}
-		clearStoppedRuntimeState();
+		lifecycle.restore(ctx, { childSession, focusEntry, legacyGoal });
 		runningGoalId = null;
-		syncGoalTools();
-		updateUI(ctx);
-	}
-
-	function archiveCurrentGoal(ctx: ExtensionContext, reason: StopReason | undefined): GoalRecord | null {
-		const current = lifecycle.focused();
-		if (!current) return null;
-		let archived = mergeGoalPromptFromDisk(ctx, current);
-		archived = { ...archived, status: archived.status === "complete" ? "complete" : "paused", stopReason: reason };
-		return archiveGoalFile(ctx, archived);
 	}
 
 	function pauseActiveGoal(ctx: ExtensionContext, note?: string): void {
 		const current = lifecycle.focused();
 		if (!current || current.status !== "active") return;
-		const pausedGoalId = current.id;
 		// User-initiated pause (Esc / aborted turn). Clear any stale AGENT pause
 		// reason; a /goal-pause note becomes the user-labeled pause reason
 		// (shown to the agent in the paused system prompt, cleared on resume).
+		// C5 follow-up: merge → stamp paused("user") + note → setGoal → pause
+		// ledger → nudge reset is the lifecycle pause verb.
 		const userNote = note?.trim();
-		// P2-2 Step 4: merge → stamp paused("user") → setGoal → pause ledger
-		// is the lifecycle pause verb; nudge reset stays here (same order).
-		lifecycle.pause(
-			{ ...current, autoContinue: false, pauseReason: userNote ? `user: ${userNote}` : undefined, pauseSuggestedAction: undefined },
-			ctx,
-			"user",
-		);
-		lifecycle.handle({ tag: "nudge-reset", goalId: pausedGoalId });
+		lifecycle.pause(ctx, { note: userNote });
 		uiNotify(ctx, userNote ? "Goal paused (note attached)." : "Goal paused.", "info");
 	}
 
@@ -959,8 +890,9 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		if (opts.replace) {
 			const replacementTarget = await chooseOpenGoal(ctx, "Replace which open goal?");
 			if (openGoals().length > 0 && !replacementTarget) return;
-			archiveCurrentGoal(ctx, "user");
-			lifecycle.setGoal(null, ctx, { persist: true, focusReason: "cleared" });
+			// C5 follow-up: the archive+clear combo (no goal_aborted ledger —
+			// historical boundary #119⑤) is the retireForReplacement verb.
+			lifecycle.retireForReplacement(ctx);
 		}
 		startGoalDrafting(topic, focus, ctx);
 	}
@@ -1033,9 +965,10 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		}
 		const resumeTarget = lifecycle.focused();
 		if (!resumeTarget) throw new Error("Goal disappeared during resume validation.");
-		// P2-2 Step 4: stamp active + setGoal + clock + nudge + ledger is the
-		// resume verb; the resume note and continuation queue stay here.
-		lifecycle.resume(resumeTarget, ctx);
+		// C5 follow-up: stamp active + setGoal + clock + nudge + ledger is the
+		// resume verb (reads the owned record internally); the resume note and
+		// continuation queue stay here.
+		lifecycle.resume(ctx);
 		const note = rawNote?.trim() || null;
 		pendingResumeNote = note;
 		uiNotify(ctx, note ? "Goal resumed (note attached to the next checkpoint)." : "Goal resumed.", "info");
@@ -1302,11 +1235,11 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 					uiNotify(ctx, "No user note set.", "info");
 					return;
 				}
-				lifecycle.setGoal({ ...lifecycle.focused()!, userNote: undefined }, ctx);
+				lifecycle.setUserNote(ctx, undefined);
 				uiNotify(ctx, "User note cleared.", "info");
 				return;
 			}
-			lifecycle.setGoal({ ...lifecycle.focused()!, userNote: arg }, ctx);
+			lifecycle.setUserNote(ctx, arg);
 			uiNotify(ctx, `User note set: ${truncateText(arg, 80)}`, "info");
 		},
 	});
@@ -1536,8 +1469,10 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			// so the count survives a rejected audit and process restarts.
 			const auditAttemptNo = (auditSource.auditAttempts ?? 0) + 1;
 			const auditTarget = { ...mergeGoalPromptFromDisk(ctx, auditSource), auditAttempts: auditAttemptNo };
-			lifecycle.adopt({ ...auditSource, auditAttempts: auditAttemptNo });
-			persist(ctx);
+			// C5 follow-up: stamp auditAttempts + persist is the
+			// recordAuditAttempt verb (the adopted record keeps the in-memory
+			// values; the disk write carries the merged objective).
+			lifecycle.recordAuditAttempt(ctx, auditAttemptNo);
 			const outcome = await runCompletionAudit({
 				ctx,
 				goal: auditTarget,
@@ -1585,12 +1520,11 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 						: {}),
 				},
 			});
-			lifecycle.adopt(auditTarget);
-			// P2-2 Step 2: the terminal transition (merge → stamp complete →
-			// archive via persist → pool removal → focus entry → ledger) is
-			// the lifecycle complete verb. The audited target is passed
-			// explicitly — a post-await refocus never replaces the audit's
-			// subject.
+			// C5 follow-up: the terminal transition (adopt the audited target
+			// → merge → stamp complete → archive via persist → pool removal →
+			// focus entry → ledger) is the lifecycle complete verb. The
+			// audited target is passed explicitly — a post-await refocus
+			// never replaces the audit's subject.
 			const report = lifecycle.complete(auditTarget, ctx);
 			const completedGoal = report.record ?? null;
 			// C9 fix: mark turn-stopped so subsequent in-turn tool calls are blocked.
@@ -1649,16 +1583,10 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 
 			// Account for any remaining elapsed time before stopping the run.
 			accountProgress(ctx);
-			const pauseSource = lifecycle.focused();
-			if (!pauseSource) throw new Error("Goal disappeared during pause validation.");
-			const next = buildPausedByAgentGoal(mergeGoalPromptFromDisk(ctx, pauseSource), { reason, suggestedAction: suggested, updatedAt: nowIso() });
-			// The tool path composes the policy builder with the setGoal verb
-			// (it never emitted the pause ledger — see the pause verb note).
-			lifecycle.setGoal(next, ctx);
-			lifecycle.handle({ tag: "nudge-reset", goalId: next.id });
-			// C9 fix: mark turn-stopped so subsequent in-turn tool calls are blocked.
-			// This is the schema-level closure of "agent kept writing files after pause_goal".
-			lifecycle.handle({ tag: "turn-stopped", goalId: next.id });
+			// C5 follow-up: the tool path's policy builder + setGoal + nudge
+			// reset + turn-stopped (never emitted the pause ledger — pinned
+			// behavioral parity) is the pauseByAgent verb.
+			lifecycle.pauseByAgent(ctx, { reason, suggestedAction: suggested });
 
 			const suggestionLine = suggested ? `\nSuggested: ${truncateText(suggested, 160)}` : "";
 			uiNotify(ctx, 
@@ -1820,34 +1748,15 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			if (!newObjective) throw new Error("apply_goal_tweak requires a non-empty newObjective.");
 			const changeSummary = params.changeSummary.trim();
 			if (!changeSummary) throw new Error("apply_goal_tweak requires a non-empty changeSummary.");
-			const next: GoalRecord = {
-				...tweakGoal,
-				objective: newObjective,
-				updatedAt: nowIso(),
-				// Clear any prior agent pause reason — the user has redefined the work.
-				pauseReason: undefined,
-				pauseSuggestedAction: undefined,
-			};
-			// IMPORTANT: bypass setGoal() / persist() here. persist() calls
-			// syncGoalPromptFromDisk() which would RE-READ the stale objective
-			// from the still-old goal file on disk and clobber our new objective
-			// before writing. apply_goal_tweak is the authoritative source for
-			// objective changes — the disk is downstream, not upstream. Do the
-			// minimal state update manually:
-			//   1) write the new record to disk authoritatively
-			//   2) update in-memory `goal` to the canonical post-write record
-			//   3) append the state entry and re-sync tools
-			//   4) clear the tweak drafting gate so apply_goal_tweak can't be re-used
-			lifecycle.adopt(writeActiveGoalFile(ctx, next));
-			pi.appendEntry(STATE_ENTRY, goalDetails(lifecycle.focused()));
-			lifecycle.handle({ tag: "draft-applied", kind: "tweak" });
+			// C5 follow-up: the authoritative write (build → write disk →
+			// adopt canonical → state entry → clear tweak gate → fresh nudge
+			// chain → turn-stopped → tool-sync → UI) is the applyTweak verb.
+			// It deliberately bypasses the persist sequence — persist would
+			// re-read the stale disk objective and clobber the new one (the
+			// tweak write is upstream of the disk).
+			lifecycle.applyTweak(ctx, newObjective);
 			// Reset autoContinue counter — plan changed, agent gets a fresh chain.
 			const tweakedGoal = lifecycle.focused();
-			lifecycle.handle({ tag: "nudge-reset", goalId: tweakedGoal!.id });
-			// C9 fix: mark turn-stopped so subsequent in-turn tool calls are blocked.
-			lifecycle.handle({ tag: "turn-stopped", goalId: tweakedGoal!.id });
-			syncGoalTools();
-			updateUI(ctx);
 			uiNotify(ctx, `Goal tweaked: ${truncateText(changeSummary, 160)}`, "info");
 			// Append ledger event for tweak
 			try {
@@ -2027,9 +1936,10 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		if (event.reason === "resume" && lifecycle.focused()?.status === "paused" && ctx.hasUI) {
 			const current = lifecycle.focused()!;
 			const shouldResume = await ctx.ui.confirm("Resume paused goal?", `Goal: ${current.objective}`);
-			if (shouldResume) {
-				lifecycle.setGoal({ ...current, status: "active", autoContinue: true, stopReason: undefined, pauseReason: undefined, pauseSuggestedAction: undefined }, ctx);
-			}
+			// C5 follow-up: the session-resume confirmation's inline
+			// activation (no merge, no goal_resumed ledger — historical
+			// shape) is the activate verb.
+			if (shouldResume) lifecycle.activate(ctx);
 		}
 		beginAccounting();
 		queueContinuation(ctx, true);

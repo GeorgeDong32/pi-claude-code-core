@@ -2,7 +2,16 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## 2026-10-09 C5 封装收口：读入口泄漏 + 公开静默原语修复（P2-2 真终态；#73 重开再关，见 DEVIATIONS #120）
+
+- **缺口（对 c8429f4 真实调用复现 6/6）**：`focused().objective=…`、`pool.get(id).usage.tokensUsed=…`、`confirmationIntent.originalTopic=…` 直改内部状态；输入记录别名入池后仍可改；`adopt/replacePool/setFocusedSilently/removeFromPool` 公开且被 restore/persist/accounting/tweak/audit 生产路径调用；persist port 回调再经公开 adopt 写回——「外部写权已撤除」不成立，2026-10-08 的关闭作废（#119 审查教训：未做主动绕过尝试）。
+- **修复**：读投影（focused/pool/confirmationIntent/TransitionReport.record）全部 cloneGoal 出境（嵌套 usage 覆盖）；入池边界（静默收养/盘面读入/storage port 返回值）一律克隆，port 调用传出用副本；四原语 + setGoal 转模块内部；按生产路径补 restore/applyUsage/recordAuditAttempt/applyTweak/persistRecord/syncObjectiveFromDisk/refreshDisplayFromDisk/pauseByAgent/activate/setUserNote/retireForReplacement 语义动词（#119⑤ 两条边界由 applyTweak/retireForReplacement 承接）；pause/resume 改读内部记录；complete 折入 auditTarget 预收养；persist port 撤除（ports +writeActiveGoalFile/appendStateEntry）；restore 事件 tag 并入 restore 动词。
+- **验收**：goal-lifecycle.test.ts 重写 41 例——封装组 5 例钉全部绕过路线失败（修复前红证据：独立脚本对 c8429f4 六项复现全 leak=true，记于测试头注释）+ 转移表/每 tag 事件/新动词次序（applyTweak 钉 merge port 零调用=不被旧盘面覆写；activate 钉无 ledger/clock/nudge；pauseByAgent 钉无 pause ledger）+ 失败注入（write port 抛错传播新增）。**既有 goal FakeHost 套件零改动全绿**（D3=A/G3、四真停、pause carry、tweak 权威写、审计目标校验、storage 失败传播、格式冻结的行为证据）。
+- **门禁**：check 0；vitest 935 + node:test 550 全 0 fail；contracts 43+3todo。
+
 ## 2026-10-08 C5-Step4：撤过渡代理 + 补齐动词终态；DEVIATIONS #73 关闭（P2-2 4/4 完成）
+
+**〔2026-10-09 勘误〕**本条「外部写权收口、#73 关闭」结论不成立——读入口泄漏活引用 + 静默原语仍公开（DEVIATIONS #120），已由 2026-10-09 批重做；本条四步的动词/事件入口迁移本身仍有效。
 
 - **动词终态**：goal-lifecycle.ts 九动词齐备——create（replaceGoal 核心：setGoal+beginClock+nudge+draft-applied+ledger goal_created）/focus/unfocus（focus(null) 命名形）/pause（pauseActiveGoal→stopActiveGoal 核心：merge→stamp paused→setGoal→ledger goal_paused；pause_goal 工具保持 policy+setGoal 组合,该路径历史上无 pause ledger,行为保真）/resume（/goal-resume 核心）/complete/terminate/reconcileFromDisk（池重读+焦点修复+陈旧 gate 清理,子会话 env 守卫留 adapter）+底层 setGoal;ports 增 readActiveGoalPool/beginClock。
 - **代理撤除**：goalsById 池别名、state 读写代理、setGoal/setFocusedGoalId 薄壳全部删除——读经 lifecycle.focused()/lifecycle.pool（goal-pool 五函数签名放宽 ReadonlyMap,类型级只读）、记录刷新经 adopt 原语、转移经动词;resolveSessionFocus legacy 收养改注入回调。goal.ts 退为参数校验+动词/事件调用+输出格式化。

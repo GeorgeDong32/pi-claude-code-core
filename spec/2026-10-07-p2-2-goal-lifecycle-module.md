@@ -1,6 +1,6 @@
 # SPEC P2-2：goal lifecycle module（B7 收尾：转移动词持有完整副作用集）
 
-状态：**已实施（2026-10-08，四步全部落地：Step1 828c5c6 / Step2 f13c2bb / Step3 11eafde / Step4 本批）**；D3=A 已确认；DEVIATIONS #73 已关闭。见 [2026-10-08 剩余任务](2026-10-08-followup-execution.md)与 DEVIATIONS #117/#118。
+状态：**2026-10-09 C5 封装收口批（见下）；此前 2026-10-08 的「4/4 完成、#73 关闭」结论被用户真实调用复现推翻后重做**。原四步（Step1 828c5c6 / Step2 f13c2bb / Step3 11eafde / Step4 4b0f8d9）落地了动词与事件入口，但读入口泄漏内部活引用（`focused().objective`/`pool.get(id).usage`/`confirmationIntent.originalTopic` 可直改 owned state）、`adopt/replacePool/setFocusedSilently/removeFromPool` 静默原语仍在公开 interface、restore/persist/accounting/tweak/audit 生产路径仍经其回写（含 persist port 回调经公开 setter 写内部状态的环路）。2026-10-09 批：读入口与出/入池边界全部防御性副本、静默原语与 setGoal 转模块内部、按生产路径补 restore/applyUsage/recordAuditAttempt/applyTweak/persistRecord/syncObjectiveFromDisk/refreshDisplayFromDisk/pauseByAgent/activate/setUserNote/retireForReplacement 语义动词（#119⑤ 两条边界由 applyTweak/retireForReplacement 承接）、persist port 撤除；既有 FakeHost 套件零改动全绿（行为冻结），封装验收测试钉全部绕过路线失败。详见 DEVIATIONS #120（#73 重开再关记录）。
 日期：2026-10-07
 分支：main
 来源：2026-10-07 联合架构审查，报告 C2 卡片；清单项 CORE-13。PROGRESS「架构优化 8-batch」B7 与 DEVIATIONS #73 记录的"状态机核心 + confirmation 粘合仍在 goal.ts、thin adapter 终态未达"
