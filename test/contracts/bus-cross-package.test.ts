@@ -151,11 +151,22 @@ describe("XPKG-05 then_run param shape (B4 of P0-1, pinned as contract)", () => 
 
 describe("XPKG-09-HOST aboveEditor widget ordering", () => {
 	// Host sequencing evidence DELIVERED (2026-10-08 follow-up batch, core
-	// e98ce4a + TUI eb3bb11 on real pi 1.0.2, PTY): both load orders, late
-	// mounting, live turn updates, and a post-macrotask session_start handler
-	// all verified — pi awaits session_start handlers sequentially; widgets
-	// stack by registration-completion order; the goal/spinner adjacency
-	// held in both orders (TUI repo docs/evidence/2026-10-08-host run/ht4a,
-	// ht4b, ht5m-*). Remaining UNCOVERED async surface keeps this todo open:
+	// e98ce4a + TUI eb3bb11 on real pi 1.0.2, PTY; causal narrative
+	// corrected 2026-10-09 against the host source, TUI LEDGER correction
+	// batch): both load orders, late mounting, live turn updates, and a
+	// post-macrotask session_start handler all verified. Host facts
+	// (pi 1.0.2 bundle, ExtensionRunner.emit + setExtensionWidget): emit
+	// iterates extensions in LOAD order and AWAITS each handler before the
+	// next starts (nothing registers "during" another handler's await);
+	// setWidget stores into an insertion-ordered Map where re-setting a key
+	// moves it to the tail, and rendering follows insertion order top→bottom
+	// (last inserted = directly above the editor). The invariant that held
+	// in both load orders: the goal block above the cc-status spinner slot
+	// (goal remounts synchronously inside its session_start handler; the
+	// spinner re-registers via a macrotask callback). A macrotask-crossing
+	// handler only reorders itself against TIMER-deferred registrations
+	// (like that requeue), never against other session_start handlers
+	// (TUI repo docs/evidence/2026-10-08-host run/ht4a, ht4b, ht5m-*,
+	// ht2j-*). Remaining UNCOVERED async surface keeps this todo open:
 	it.todo("arbitrary async widget registration OUTSIDE session_start (e.g. a timer firing mid-agent-turn) — ordering under it is still best-effort and needs its own host evidence batch");
 });

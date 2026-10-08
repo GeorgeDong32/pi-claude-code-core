@@ -1,26 +1,24 @@
 # spec/ — core 实现规格
 
-2026-10-08 更新：原批次 **core 9 份 + TUI 6 份** 已完成大部分实现。用户已确认 **D3=A、D4=B、D6=B**，不再作为待用户决策阻塞。
+2026-10-09 更新：**C1–C5 全部完成**（C5 经封装收口批重做为真终态，DEVIATIONS #120）；bare MCP 退化输入验收（TUI 侧 H-T2j）与 XPKG-09-HOST 时序因果勘误已由 TUI 2026-10-09 批取证，配对 revision core `c4dab5f`。用户已确认 **D3=A、D4=B、D6=B**。
 
-下一轮从 [剩余任务执行规格](2026-10-08-followup-execution.md) 与 [core 执行 prompt](2026-10-08-execution-prompt.md) 开始；配对 [TUI 索引](../../pi-claude-code-tui/spec/README.md)。原审查与两轮规格核对保留在 [核对记录](2026-10-07-spec-review.md)。
-
-当前核对 revision：core `2ebd226`，TUI `1bf9b7f`，宿主依赖 pi 1.0.1。原规格背景行号属于 core `09c2dcb` / TUI `7192d9f`，实施定位以函数与当前源码为准。
+历史执行入口：[剩余任务执行规格](2026-10-08-followup-execution.md) 与 [core 执行 prompt](2026-10-08-execution-prompt.md)；配对 [TUI 索引](../../pi-claude-code-tui/spec/README.md)。原审查与两轮规格核对保留在 [核对记录](2026-10-07-spec-review.md)。
 
 ## 实际状态与续做范围
 
-| 优先级 | spec | 清单项 | 当前状态 / 下一步 |
+| 优先级 | spec | 清单项 | 当前状态 |
 |---|---|---|---|
-| P0-1 | [plan 权限优先级](2026-10-07-p0-1-plan-gate-precedence.md) | CORE-02 / 03 + FUS-SHAPE | 已实施；后续重构保留 D1/D2 与 MCP 扫描边界回归 |
-| P0-2 | [goal 回合锁](2026-10-07-p0-2-goal-turn-lock.md) | CORE-01 / 05 + G3 | CORE-05 已实施；D3=A 已确认，锁策略 + G3 同批续做（C1） |
-| P0-3 | [memory queue claim](2026-10-07-p0-3-memory-queue-claim.md) | CORE-04 | 已实施并完成复审修复；跨进程自动化绿，真实多 session 验收 open（H-Q） |
-| P1-1 | [bus 跨包面](2026-10-07-p1-1-bus-surface-for-cctui.md) | CORE-07 / 08 / 09 / 10 | instance/footer/契约已实施；D4=B reader 删除待做（C2）；真实 footer 联验 open |
-| P2-1 | [permission 裁决 module](2026-10-07-p2-1-permission-adjudication-module.md) | CORE-12 / 18 | 0/3 步；先 C3 再固定基线迁移（C4），无决策阻塞 |
-| P2-2 | [goal lifecycle module](2026-10-07-p2-2-goal-lifecycle-module.md) | CORE-13 | 未实施；C1 通过后固定基线迁移（C5） |
+| P0-1 | [plan 权限优先级](2026-10-07-p0-1-plan-gate-precedence.md) | CORE-02 / 03 + FUS-SHAPE | 已实施（含 D1/D2 与 MCP 扫描边界回归） |
+| P0-2 | [goal 回合锁](2026-10-07-p0-2-goal-turn-lock.md) | CORE-01 / 05 + G3 | 已实施（D3=A 锁策略 + G3 input 修正，C1 批） |
+| P0-3 | [memory queue claim](2026-10-07-p0-3-memory-queue-claim.md) | CORE-04 | 已实施并完成复审修复；跨进程自动化绿，真实多 session 验收 H-Q 已闭环（双真实 pi session drain PASS） |
+| P1-1 | [bus 跨包面](2026-10-07-p1-1-bus-surface-for-cctui.md) | CORE-07 / 08 / 09 / 10 | instance/footer/契约已实施；D4=B reader 删除已实施（C2）；真实 footer 联验已执行（TUI H-T 批）；XPKG-09-HOST 证据已回填，todo 收窄至「非 session_start 时刻的任意异步注册」（时序因果 2026-10-09 已勘误校正） |
+| P2-1 | [permission 裁决 module](2026-10-07-p2-1-permission-adjudication-module.md) | CORE-12 / 18 | 已实施 3/3（C4，含独立审查修复） |
+| P2-2 | [goal lifecycle module](2026-10-07-p2-2-goal-lifecycle-module.md) | CORE-13 | 已实施（四步 + 2026-10-09 封装收口批＝真终态，DEVIATIONS #120） |
 | P2-3 | [memory writer + drain](2026-10-07-p2-3-memory-writer-and-queue-drain.md) | CORE-14 / 15 | 必做已实施；消息文本扁平化可选未做 |
-| P2-4 | [结构化用量](2026-10-07-p2-4-structured-usage-channel.md) | CORE-11 | core d539346 已发布，TUI 710c9c7/1bf9b7f 已消费；完整生产事件与真机联验 open |
-| P3-1 | [小型重构与清理](2026-10-07-p3-1-small-refactors-and-cleanup.md) | CORE-06 / 16 / 17 / 19 | S1/S2/S4/S5/S6 已实施；D6=B 的 S3 待做（C3） |
+| P2-4 | [结构化用量](2026-10-07-p2-4-structured-usage-channel.md) | CORE-11 | core 已发布，TUI 已消费；完整生产事件联验（J-USAGE）与真机联验均已执行 |
+| P3-1 | [小型重构与清理](2026-10-07-p3-1-small-refactors-and-cleanup.md) | CORE-06 / 16 / 17 / 19 | S1–S6 已实施（含 D6=B 的 S3）；CORE-17 完整 PlanSession 生命周期仍暂缓 |
 
-CORE-01…19 全部有去向。CORE-17 本批只完成 startPlanExecution，完整 PlanSession 仍暂缓；不得在台账中记为完整生命周期重构。
+CORE-01…19 全部有去向。CORE-17 本批只完成 startPlanExecution，完整 PlanSession 仍暂缓；不得在台账中记为完整生命周期重构。剩余 OPEN 项：经济模块降级行真机证据（结构性不可达，见 TUI followup 规格 §10）、AR1005-RU-HOST/ST-HOST 两个 host todo（各自证据状态未变）、XPKG-09-HOST 收窄后的异步面。
 
 ## 已确认决策
 
