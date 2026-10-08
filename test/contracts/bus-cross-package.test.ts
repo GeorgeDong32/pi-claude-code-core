@@ -150,5 +150,12 @@ describe("XPKG-05 then_run param shape (B4 of P0-1, pinned as contract)", () => 
 });
 
 describe("XPKG-09-HOST aboveEditor widget ordering", () => {
-	it.todo("aboveEditor widget order follows registration order; cctui's macrotask re-registration is best-effort — needs real pi-host sequencing evidence (target: TUI P3-1 D5 batch)");
+	// Host sequencing evidence DELIVERED (2026-10-08 follow-up batch, core
+	// e98ce4a + TUI eb3bb11 on real pi 1.0.2, PTY): both load orders, late
+	// mounting, live turn updates, and a post-macrotask session_start handler
+	// all verified — pi awaits session_start handlers sequentially; widgets
+	// stack by registration-completion order; the goal/spinner adjacency
+	// held in both orders (TUI repo docs/evidence/2026-10-08-host run/ht4a,
+	// ht4b, ht5m-*). Remaining UNCOVERED async surface keeps this todo open:
+	it.todo("arbitrary async widget registration OUTSIDE session_start (e.g. a timer firing mid-agent-turn) — ordering under it is still best-effort and needs its own host evidence batch");
 });

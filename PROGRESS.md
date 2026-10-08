@@ -35,6 +35,16 @@
 - **门禁**：check 0；vitest 935 + node:test 全 0 fail（exit 0,本轮实际取得 node:test 通过结果,补上前次沙箱缺失项）；contracts 43 passed + 3 todo。
 - **台账**：CHANGELOG Unreleased、docs/{en,zh}/ui.md 测试节、本条。真实终端复验归第五层统一执行（修复 revision 见本条 commit）。
 
+## 2026-10-08 联验收口批：H-T1–H-T5 复验/补齐 + XPKG-09-HOST 证据回填（与 TUI 第二会话配对）
+
+- **配对 revision**：core 固定联验 `e98ce4a`（含通知修复 25c38b2、C5 全四步、H-Q 重跑与审查修复）；TUI `d846302`→证据批 `eb3bb11`；宿主 pi 1.0.2（PTY+pyte 驱动,证据在 TUI 仓 `docs/evidence/2026-10-08-host/` 跟进批章节）。
+- **通知修复真机复验（H-T4r,T 级）**：core-only 与双 TUI 加载序下 `--effort ultra` 告警每 session_start 恰显示一次（首批为两次——DC3 双写已于 25c38b2 修复）；/reload 再发再显一次；off→on 交接中新告警（goal 模块 warning）off 态经 core fallback 恰一次、on 后同文本再发再显一次（无文本去重掩盖）。
+- **H-T2 纠错与补齐（T 级）**：goal_question/apply_goal_tweak 确在 core（drafting/tweak 门控）——首批「不存在」为 TUI 侧错误结论,真实 /goal-tweak 流程两行均已捕获;obs_recall 真实大数据多页分页头（`2.3KB · 398 lines · start→+2.3KB · more ▸`）+错误原文复验;MCP 四形态齐（native 重捕获 + proxy/direct(env allowlist)/bare 经注明来源的探针走真实渲染路径;宿主事实:mcp.json 默认 codemode exposure 不进模型工具表）。
+- **H-T3 等待态（T 级）**：受控慢脚本稳定捕获 in-flight 窗口（无脚本行/无错误行/右组持有）;超时变体（`cmd failed (timeout)`）与引号坑（exit 127）一并入账;sleep 1 有效脚本行+右组塌缩在新配对复验。
+- **H-T5 macrotask 行（T 级）**：跨 macrotask 的后挂 session_start handler 双序验证——pi 顺序 await handlers,aboveEditor widget 按注册完成序堆叠,goal/spinner 相邻性双序保持;尽力排序边界如实描述。**XPKG-09-HOST 表行回填证据状态,todo 收窄至「非 session_start 时刻的任意异步注册」**（未覆盖不关闭）;AR1005-RU-HOST/ST-HOST 两个 host todo 未因本轮自动关闭。
+- **仍 OPEN**：TUI 经济模块降级行——probe 仅 `pi<0.87` 门控且装配硬穿真实 VERSION 无覆盖入口;恢复条件=pi<0.87 宿主 core-only 会话或 core 侧测试 seam（仅为验收加开关已裁定为反模式）。渲染路径由 joint C6+表测覆盖。
+- **门禁**：core check 0/contracts 43+3todo（本批后复跑）;TUI npm test 278+typecheck 0（TUI 仓 eb3bb11）。
+
 ## 2026-10-08 C5 终态独立审查（read-only subagent）— PASS-with-nits，P2 已修复
 
 - **审查范围**：828c5c6→4b0f8d9 全四步对 SPEC P2-2 终态；核验动词清单/状态所有权/封闭事件入口/效果顺序保真（vs 828c5c6^ 基线逐路径）/测试真实性/check。
