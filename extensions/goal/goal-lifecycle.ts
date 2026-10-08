@@ -654,7 +654,15 @@ export function createGoalLifecycle(ports: GoalLifecyclePorts): GoalLifecycle {
 				ports.appendLedger(ctx, {
 					type: "goal_aborted",
 					goalId: archived?.id ?? current?.id ?? "unknown",
-					reason: by === "agent" ? (opts.reason ?? "").trim() : opts.note?.trim() ? `user ${kind}: ${opts.note.trim()}` : `user ${kind}`,
+					// Ledger wording keeps the OLD user-kind nouns ("cleared"/"aborted" —
+				// the historical appendUserTerminationEvent text); the union's
+				// kind discriminator ("clear"/"abort") must not leak into the
+				// persistent ledger (review P2, 2026-10-08).
+				reason: by === "agent"
+					? (opts.reason ?? "").trim()
+					: opts.note?.trim()
+						? `user ${kind === "clear" ? "cleared" : "aborted"}: ${opts.note.trim()}`
+						: `user ${kind === "clear" ? "cleared" : "aborted"}`,
 					archivePath: archived?.archivedPath,
 					at: ports.nowIso(),
 				});

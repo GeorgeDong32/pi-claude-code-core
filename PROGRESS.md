@@ -35,6 +35,13 @@
 - **门禁**：check 0；vitest 935 + node:test 全 0 fail（exit 0,本轮实际取得 node:test 通过结果,补上前次沙箱缺失项）；contracts 43 passed + 3 todo。
 - **台账**：CHANGELOG Unreleased、docs/{en,zh}/ui.md 测试节、本条。真实终端复验归第五层统一执行（修复 revision 见本条 commit）。
 
+## 2026-10-08 C5 终态独立审查（read-only subagent）— PASS-with-nits，P2 已修复
+
+- **审查范围**：828c5c6→4b0f8d9 全四步对 SPEC P2-2 终态；核验动词清单/状态所有权/封闭事件入口/效果顺序保真（vs 828c5c6^ 基线逐路径）/测试真实性/check。
+- **结论**：九动词全部真实副作用集且生产可达；owned state 在 goal.ts **零残留写路径**（全文检索排除 lifecycle. 前缀后为空）；12 事件 tag 全有生产来源（四真停工具 turn-stopped 齐备）；complete/clear/abort/pause/resume/reconcile 效果顺序对拍成立；#73 关闭条件成立。
+- **发现与修复**：P2×1——terminate 用户路径 ledger 文案漂移（"user clear/abort" vs 旧 "user cleared/aborted",持久化产物）已修（模板映射,测试钉旧串）;P3×4——by:agent ledger 次序增补 #118 清单、补 storage 抛错传播奇偶性+ledger 抛错 best-effort+orphan-memory 分支三组失败序列测试（27 例全绿）、unfocus 具名别名与两处 adapter 边界（apply_goal_tweak adopt 绕过/replace 分支组合）如实记 DEVIATIONS #119。
+- **门禁**：check 0；goal-lifecycle 27/27；全仓三绿见终批。
+
 ## 2026-10-08 H-Q：隔离双真实 pi session drain 验收 — PASS（证据复审后重跑,闭环原 open note）
 
 - **环境**：真实 pi 1.0.2(PATH),`-p` 非交互双进程并发(间隔 0.4s);隔离 HOME + PI_CODING_AGENT_DIR + 项目目录(/tmp);被测实现 = 本仓 `git clone --no-hardlinks` @ **4b0f8d9**(含 C5 全部与通知修复)预置进隔离 agentDir 经 settings packages 真实加载;凭据/models 留在隔离副本内;/tmp realpath 陷阱按 canonical 路径 sanitize。

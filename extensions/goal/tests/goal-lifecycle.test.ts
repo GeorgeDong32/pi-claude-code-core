@@ -216,7 +216,7 @@ test("terminate clear (user): archive → ledger(user cleared) → nudge → set
 	assert.equal(report.record!.status, "paused", "user clear archives non-complete as paused");
 	assert.equal(report.record!.stopReason, "user");
 	assert.equal(events[0]?.type, "goal_aborted");
-	assert.equal(events[0]?.reason, "user clear: done with it");
+	assert.equal(events[0]?.reason, "user cleared: done with it", "old appendUserTerminationEvent wording preserved");
 	assert.deepEqual(calls, [
 		"archive", "ledger:goal_aborted",
 		"halt", "pause-clock",
@@ -511,4 +511,57 @@ test("reconcileFromDisk: vanish path clears stale gate + halts; memory-usage mer
 	// Vanish left no focus behind: a fresh reconcile only swaps the pool.
 	assert.equal(lc.reconcileFromDisk(ctx), true);
 	assert.equal(lc.focusedId, null, "no focus re-pick — focus resolution belongs to loadState");
+});
+
+// ---------- review P2/P3 follow-ups: failure injection + orphan branch ----------
+
+test("storage failure: a throwing archive port propagates out of terminate (old parity)", () => {
+	// The pre-refactor archiveCurrentGoal called archiveGoalFile unwrapped —
+	// an atomicWriteGoalFile failure crashed the clear/abort path mid-way.
+	// The verb keeps that contract (spec §4.2: 与现状对拍; never report a
+	// failed disk write as success), so we pin the PROPAGATION plus the
+	// intermediate state (no unfocus, no ledger, no persist happened yet).
+	const { ports, calls } = recordingPorts();
+	ports.archiveGoal = () => {
+		throw new Error("disk full");
+	};
+	const lc = createGoalLifecycle(ports);
+	const a = goal("tf");
+	lc.adopt(a);
+	assert.throws(() => lc.terminate("clear", ctx, { note: "n" }), /disk full/);
+	assert.equal(lc.focusedId, a.id, "no unfocus on a failed archive");
+	assert.deepEqual(calls.filter((c) => c.startsWith("ledger") || c === "persist" || c === "ui"), []);
+});
+
+test("verbs survive a throwing ledger port (best-effort pinned)", () => {
+	const { ports, calls } = recordingPorts();
+	ports.appendLedger = () => {
+		throw new Error("ledger io");
+	};
+	const lc = createGoalLifecycle(ports);
+	const a = goal("lf");
+	lc.adopt(a);
+	assert.doesNotThrow(() => lc.complete(a, ctx));
+	assert.equal(lc.focusedId, null);
+	calls.length = 0;
+	lc.adopt(goal("lf2"));
+	assert.doesNotThrow(() => lc.terminate("abort", ctx, { by: "agent", reason: "r" }));
+	assert.doesNotThrow(() => lc.create({ objective: "=== Goal ===\nObjective: x", autoContinue: true, sisyphus: false }, ctx));
+	assert.doesNotThrow(() => {
+		const g = lc.focused();
+		if (g) lc.pause(g, ctx, "user");
+	});
+});
+
+test("reconcileFromDisk orphan-memory branch keeps an activePath-less focused record", () => {
+	const { ports, setDisk } = recordingPorts();
+	const lc = createGoalLifecycle(ports);
+	// No activePath → the disk pool losing it must NOT unfocus (the record
+	// only ever lived in memory; keep it focused in the fresh pool).
+	const orphan = goal("orphan-no-path");
+	lc.adopt(orphan);
+	setDisk(new Map<string, GoalRecord>()); // disk pool empty
+	assert.equal(lc.reconcileFromDisk(ctx), true);
+	assert.equal(lc.focusedId, orphan.id, "orphan memory goal stays focused");
+	assert.ok(lc.pool.has(orphan.id));
 });
