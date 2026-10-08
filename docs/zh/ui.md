@@ -41,4 +41,6 @@ ui 包装后(如 `effort/ui`),业务流因此可以对 fake await。
 ## 测试
 
 `test/lib/fallback-adapter.test.ts`、`notify.test.ts`(vitest);effort 的
-适配器交互另见 `extensions/effort/tests/ui.test.ts`。
+适配器交互另见 `extensions/effort/tests/ui.test.ts`;effort 的「恰好显示一次」
+合同(真实入口 + 真实 bus + 真实 fallback 适配器,含旧 cctui 直写分支与
+off/on 交接)由 `extensions/effort/tests/notify-display.test.ts` 钉住。

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed (effort notifications displayed twice — DC5b completion, 2026-10-08)
+- **Every effort notice now displays exactly once, in every wiring.** `createEffortUi().notify` had kept the DC3 dual write (tail-queue publish + an unconditional direct `ctx.ui.notify`), so after DC5b wired the real consumers each effort warning showed TWICE — with a modern cctui (queue consumer + direct write) and core-only (fallback adapter + direct write) alike; observed live on a real terminal in both TUI and non-TUI sessions. The wrapper now delegates to the shared presenter-facing `ui/notify.ts` entry: queue publish always, direct forward only for legacy cctui installs without the `notificationsConsumer` capability. Legacy-TUI display, headless quietness, repeatable same-text warnings, queue cap/freeze invariants, and off/on handover are pinned by `extensions/effort/tests/notify-display.test.ts` (real entry + real bus + real fallback adapter). No consumer-side dedup was added anywhere.
+
 ### Breaking (type-only `./types` subpath — spec 2026-10-07 P1-1, D4=B)
 - **`@georgedong32/pi-claude-code-core/types` no longer provides a runtime export.** The `readCoreStatus()` total reader (`types/core-status.mjs`) and the `CoreStatus` interface are withdrawn; the subpath keeps only the `CoreSnapshot` / `CoreCommand` / `CoreCommandResult` type declarations (`types/index.d.mts`). A runtime `import ... from ".../types"` now fails with `ERR_PACKAGE_PATH_NOT_EXPORTED`; type-only imports are unaffected. Consumers should duck-type the snapshot on `globalThis.__piClaudeCodeCore` (or subscribe via `snapshot.onChange`) — the bus, the legacy `__piPermissionModes` / `__pmWorkingStats` aliases and cctui's own fallback reads are unchanged. No runtime consumer was found in the searched workspace; ship as a minor-version breaking bump (0.3.0 → ≥0.4.0).
 

@@ -513,11 +513,17 @@ test("bare /effort cancel does not change thinking level", async () => {
     // ctx.ui.custom resolves with cancel without invoking factory meaningfully.
     ctx.ui.custom = async () => ({ action: "cancel" });
 
+    // DC5b single display: the message lands on the real bus queue (the
+    // fallback adapter owns the screen in a full assembly); the wrapper
+    // itself must not direct-write ctx.ui.notify here.
+    const { coreBus } = await import("../../bus.ts");
+    const before = (coreBus().snapshot().notifications ?? []).length;
     await command.handler("", ctx);
 
-    // The cancel notification should have been emitted.
-    const cancelNotice = notifications.find((n) => /cancelled/i.test(n.message));
-    assert.ok(cancelNotice, `expected a Cancelled notification, got: ${JSON.stringify(notifications)}`);
+    const queued = (coreBus().snapshot().notifications ?? []).slice(before);
+    const cancelNotice = queued.find((n) => /cancelled/i.test(n.msg));
+    assert.ok(cancelNotice, `expected a Cancelled notification, got: ${JSON.stringify(queued)}`);
+    assert.deepEqual(notifications, []);
   } finally {
     cleanupSession(previousAgentDir);
   }
@@ -543,11 +549,16 @@ test("bare /effort on a non-reasoning model notifies and returns", async () => {
       return { action: "cancel" };
     };
 
+    // DC5b single display: the error rides the bus queue, not a direct write.
+    const { coreBus } = await import("../../bus.ts");
+    const before = (coreBus().snapshot().notifications ?? []).length;
     await command.handler("", ctx);
 
     assert.equal(customCalled, false, "picker must not be opened when model has no thinking levels");
-    const errorNotice = notifications.find((n) => /not available/i.test(n.message));
-    assert.ok(errorNotice, `expected an error notification, got: ${JSON.stringify(notifications)}`);
+    const queued = (coreBus().snapshot().notifications ?? []).slice(before);
+    const errorNotice = queued.find((n) => /not available/i.test(n.msg));
+    assert.ok(errorNotice, `expected an error notification, got: ${JSON.stringify(queued)}`);
+    assert.deepEqual(notifications, []);
   } finally {
     cleanupSession(previousAgentDir);
   }

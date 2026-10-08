@@ -7,14 +7,15 @@
  * extensions/effort/index.ts calls this small interface and stays fakeable.
  *
  * Until DC3 swaps the internals, notify() forwards straight to
- * ctx.ui.notify; the signature is already the notification tail-queue
- * shape (msg + level) so the swap is an implementation change only.
+ * ctx.ui.notify; since DC5b it delegates to the shared presenter-facing
+ * notify (extensions/ui/notify.ts) — queue publish + legacy-cctui direct
+ * forward — so each message displays exactly once in every wiring.
  */
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { EffortModel } from "../effort.js";
 import { createEffortPickerComponent, type EffortPickerResult } from "../effort-picker.js";
 import { showComponentOverlay, type CustomOverlayContext } from "../../../lib/overlay.js";
-import { publishNotification, type NotificationLevel } from "../../ui/notify.js";
+import { notify as notifyOnce, type NotificationLevel } from "../../ui/notify.js";
 
 /**
  * Minimum context shape the wrapper touches (duck-typed so unit tests can
@@ -65,7 +66,7 @@ export type EffortPickResult =
 export interface EffortUi {
 	/** Status slots + loader line (was updateEffortUi). */
 	sync(ctx: EffortCtxLike, current: string, fastMode: boolean, updateWorkingMessage: boolean): void;
-	/** Notification passthrough; becomes a bus tail-queue publish at DC3. */
+	/** Single-display notification (shared ui/notify entry; DC5b). */
 	notify(ctx: EffortCtxLike, message: string, level: NotifyLevel): void;
 	/** TUI overlay picker; non-TUI falls back to select. Null = cancelled. */
 	pickEffort(
@@ -95,10 +96,12 @@ export function createEffortUi(): EffortUi {
 			}
 		},
 		notify(ctx, message, level) {
-			// DC3: dual write — tail queue for future adapters + direct
-			// forward until DC5 wires the adapters (screen behaviour unchanged).
-			publishNotification(level, message);
-			ctx.ui.notify(message, level);
+			// DC5b end state: delegate to the shared presenter-facing notify —
+			// queue publish + the version-negotiated direct forward (legacy
+			// cctui only). Effort must not keep a second, unconditional write
+			// leg: that dual-wrote every warning to the screen twice in both
+			// the core-only and the modern-TUI wiring.
+			notifyOnce(ctx, message, level);
 		},
 		async pickEffort(ctx, levels, currentLevel) {
 			const host = toHost(ctx);

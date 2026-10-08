@@ -46,4 +46,7 @@ against a fake.
 ## Tests
 
 `test/lib/fallback-adapter.test.ts`, `notify.test.ts` (vitest); effort's
-adapter interaction is covered in `extensions/effort/tests/ui.test.ts`.
+adapter interaction is covered in `extensions/effort/tests/ui.test.ts`, and
+effort's single-display contract (real entry + real bus + real fallback
+adapter, incl. the legacy-cctui leg and off/on handover) in
+`extensions/effort/tests/notify-display.test.ts`.

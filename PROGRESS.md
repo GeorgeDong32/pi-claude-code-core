@@ -2,6 +2,15 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## 2026-10-08 通知修复：effort 双写收敛为单一显示（第一层）
+
+- **缺陷**：`effort/ui/index.ts#createEffortUi.notify` 保留 DC3 双写（`publishNotification` + 无条件 `ctx.ui.notify`），DC5b 接通真实消费者后每条 effort 告警显示两次——现代 TUI（队列消费 + 直写）与 core-only（fallback 适配器 + 直写）均 2 次，真实终端有/无 TUI 双双实测复现（TUI 仓 H-T1b 对照记录）。
+- **修复**：notify 委托共享 `ui/notify.ts#notify()`——队列恒发布 + 仅旧 cctui（无 `notificationsConsumer` 能力声明）直写兜底；effort 不再保有第二份无条件写腿。未在任何消费端新增文本去重。
+- **回归**：`extensions/effort/tests/notify-display.test.ts` 7 例——真实 effort 通知入口 + 真实 bus + 真实 fallback 适配器（按 modes session_start 同款接线）+ 现代 cctui 消费者镜像（attach 快进 + id diff）。覆盖 core-only 恰一次/同文本重复仍显示（id 而非文本为身份）/现代 TUI 仅队列零直写/旧 TUI 直写恰一次/headless 零显示队列仍记录/两种 off 交接（下一条恰一次、无历史重放）。基线红取证：修复前 6 红 1 绿（旧 TUI 兼容分支本就正确,须保持）；修复后 7/7 绿。
+- **既有测试迁移**：ui.test.ts「forwards verbatim」改钉「无 cctui 无直写」；integration.test.ts 两例（cancel/non-reasoning 通知）改断言真实 bus 队列 + 零直写（显示所有权归 fallback 适配器,单模块 session 无显示是预期）。
+- **门禁**：check 0；vitest 935 + node:test 全 0 fail（exit 0,本轮实际取得 node:test 通过结果,补上前次沙箱缺失项）；contracts 43 passed + 3 todo。
+- **台账**：CHANGELOG Unreleased、docs/{en,zh}/ui.md 测试节、本条。真实终端复验归第五层统一执行（修复 revision 见本条 commit）。
+
 ## 2026-10-08 H-Q：隔离双真实 pi session drain 验收 — PASS
 
 - **环境**：真实 pi 1.0.2(PATH),`-p` 非交互双进程并发(间隔 0.4s);隔离 HOME + PI_CODING_AGENT_DIR + 项目目录(/tmp);被测实现 = 本仓 `git clone --no-hardlinks` 预置进隔离 agentDir 的 git 包布局经 settings packages 真实加载(加载证据:permission-modes 启动行 + review 模块 banner);凭据/models 从真实 agentDir 拷贝(留在隔离副本内)。macOS /tmp→/private/tmp realpath 陷阱已定位并修正(预置 record 的 projectsDir 必须按 canonical 路径 sanitize)。
