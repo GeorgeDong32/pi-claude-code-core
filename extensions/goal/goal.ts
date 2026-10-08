@@ -135,7 +135,6 @@ const CONTINUATION_IDLE_RETRY_MS = 50;
  * turn ends without any of these having been called, we DO NOT queue the next
  * autoContinue — the agent was just chatting. This stops infinite chat loops.
  */
-const GOAL_PROGRESS_TOOL_SET = new Set<string>(GOAL_PROGRESS_TOOL_NAMES);
 
 
 /**
@@ -143,7 +142,6 @@ const GOAL_PROGRESS_TOOL_SET = new Set<string>(GOAL_PROGRESS_TOOL_NAMES);
  * abort_goal, update_goal=complete, or apply_goal_tweak fires, the agent should
  * yield the turn; we block all subsequent tool calls except these read-only inspections.
  */
-const POST_STOP_ALLOWED_TOOL_SET = new Set<string>(POST_STOP_ALLOWED_TOOLS);
 
 /**
  * Thin session-local confirmation intent for /goals and /sisyphus.
@@ -301,19 +299,6 @@ function toolExecutionUsage(event: unknown): { tokens: number; cost: number } | 
 	return { tokens, cost };
 }
 
-function isMeaningfulProgressToolCall(toolName: string, args: unknown): boolean {
-	if (!GOAL_PROGRESS_TOOL_SET.has(toolName)) return false;
-		if (toolName === "read") {
-			const path = asRecord(args)?.path;
-			if (typeof path === "string" && (path === ".pi/goals" || path.startsWith(".pi/goals/"))) return false;
-		}
-		if (toolName === "bash") {
-			const command = asRecord(args)?.command;
-			if (typeof command === "string" && /^\s*echo\b/.test(command)) return false;
-		}
-	return true;
-}
-
 // ---------- extension entry point ----------
 
 export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => number; auditor?: typeof runGoalCompletionAuditor } = {}): void {
@@ -323,14 +308,13 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 	// the lifecycle's live pool for the read paths that have not migrated
 	// yet (spec §4.3 step 1 allows the adapter; step 4 removes it). The
 	// B3 isolation note still applies: all of it lives inside the factory.
+	// P2-2 Step 3: the drafting intents, per-turn flags, and get_goal nudge
+	// counters also live in the lifecycle — read through its read-only
+	// projections, written ONLY through the closed event entry handle().
 	const lifecycle = createGoalLifecycle({
 		haltContinuation: () => clearContinuationState(),
 		pauseClock: () => clearActiveAccounting(),
 		forgetCarry: (goalId: string) => clock.forget(goalId),
-		resetNudge: (goalId: string | null | undefined) => resetGetGoalNudgeState(goalId),
-		releaseStaleTweakGate: (focusedId: string | null | undefined) => {
-			if (tweakDraftingFor !== null && tweakDraftingFor !== focusedId) tweakDraftingFor = null;
-		},
 		appendFocusEntry: (goalId: string | null, reason: GoalFocusReason) => appendFocusEntry(goalId, reason),
 		appendLedger: (ctx, event) => appendGoalEvent(ctx as ExtensionContext, event as Parameters<typeof appendGoalEvent>[1]),
 		persist: (ctx) => persist(ctx as ExtensionContext),
@@ -341,15 +325,6 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		archiveGoal: (ctx, goal) => archiveGoalFile(ctx as ExtensionContext, goal),
 	});
 	const goalsById = lifecycle.pool as Map<string, GoalRecord>;
-	// When non-null, /goal-tweak drafting is in progress for this goal id and
-	// the agent is allowed to call apply_goal_tweak. Cleared after the tweak
-	// is applied or when a user-driven turn arrives without a follow-through
-	// (schema-level affordance gate against "tweaking" via arbitrary writes).
-	// (Step 3 migrates the drafting intents into the lifecycle module.)
-	let tweakDraftingFor: string | null = null;
-	// Approved-audit message held until the finishing turn ends, so "Goal
-	// achieved" lands after the model's closing summary (transcript bottom).
-	let confirmationIntent: GoalConfirmationIntent | null = null;
 	// B7 step 3: the approved-audit hold lives in the audit domain module.
 	const pendingAchievement = createPendingAchievementSlot();
 	// L4 transitional alias: reads go through the lifecycle's focused()
@@ -384,18 +359,6 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 	});
 	let runningGoalId: string | null = null;
 
-
-	// Per-turn flags reset in turn_start (#4, C9 fix).
-	// goalWorkToolCalledThisTurn: tracks whether a real goal-work tool was called.
-	//   If false at turn_end, we don't queue another autoContinue (empty chat turn).
-	// turnStoppedFor: set ONLY by the four real stop tools' successful execute —
-	//   pause_goal / abort_goal / update_goal=complete / apply_goal_tweak (D3=A,
-	//   spec 2026-10-07 P0-2). Once set, pi.on("tool_call") blocks all subsequent
-	//   in-turn tool calls except POST_STOP_ALLOWED_TOOLS. Non-progress tool calls
-	//   are progress-neutral: allowed, no credit, no lock.
-	let goalWorkToolCalledThisTurn = false;
-	let turnStoppedFor: string | null = null;
-
 	// #5 post-compaction resync: when a compaction just happened, the next agent
 	// turn gets an extra reminder block. Set in session_compact, consumed
 	// (cleared) in before_agent_start.
@@ -416,7 +379,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			active.delete(QUESTION_TOOL_NAME);
 			active.delete(QUESTIONNAIRE_TOOL_NAME);
 			for (const name of ACTIVE_GOAL_TOOL_NAMES) active.delete(name);
-			const phase = confirmationIntent !== null ? "drafting" : tweakDraftingFor !== null ? "tweakDrafting" : "normal";
+			const phase = lifecycle.confirmationIntent !== null ? "drafting" : lifecycle.tweakDraftingFor !== null ? "tweakDrafting" : "normal";
 			const lifecycleTools = lifecycleToolNamesForGoalStatus(state.goal?.status, phase);
 			for (const name of lifecycleTools) active.add(name);
 			// Sisyphus is now a prompt/criteria style, not a separate step-counter
@@ -425,7 +388,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			active.delete(SISYPHUS_STEP_TOOL_NAME);
 			// apply_goal_tweak is only available during a /goal-tweak drafting flow.
 			// Note: tweak drafting can run against active OR paused goals.
-			if (state.goal && tweakDraftingFor === state.goal.id) {
+			if (state.goal && lifecycle.tweakDraftingFor === state.goal.id) {
 				active.add(TWEAK_APPLY_TOOL_NAME);
 				active.add(QUESTION_TOOL_NAME);
 				active.add(QUESTIONNAIRE_TOOL_NAME);
@@ -438,7 +401,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			active.add(PROPOSE_DRAFT_TOOL_NAME);
 			// create_goal stays hidden — hard invariant: user must confirm via propose_goal_draft.
 			active.delete(CREATE_GOAL_TOOL_NAME);
-			if (confirmationIntent !== null) {
+			if (lifecycle.confirmationIntent !== null) {
 				active.add(QUESTION_TOOL_NAME);
 				active.add(QUESTIONNAIRE_TOOL_NAME);
 			} else if (state.goal?.status === "active") {
@@ -458,7 +421,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 	// every call site in this file unchanged.
 	const continuationLoop = createContinuationLoop({
 		getGoal: () => state.goal,
-		isDrafting: () => confirmationIntent !== null || tweakDraftingFor !== null,
+		isDrafting: () => lifecycle.isDrafting,
 		isSubagentChild: isSubagentChildProcess,
 		promptFor: (goal) => continuationPrompt(goal, pendingResumeNote ?? undefined),
 		sendFollowUp: (prompt, goal) => {
@@ -501,14 +464,6 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 	}
 
 
-	const activeGetGoalTurnsByGoalId = new Map<string, number>();
-
-	function resetGetGoalNudgeState(goalId: string | null | undefined): void {
-		if (goalId) {
-			activeGetGoalTurnsByGoalId.delete(goalId);
-		}
-	}
-
 	function openGoals(): GoalRecord[] {
 		return openGoalsFromPool(goalsById);
 	}
@@ -541,8 +496,8 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			lifecycle.replacePool(fresh);
 			lifecycle.setFocusedSilently(null);
 			clearStoppedRuntimeState();
-			if (current) resetGetGoalNudgeState(current.id);
-			if (tweakDraftingFor !== null) tweakDraftingFor = null;
+			if (current) lifecycle.handle({ tag: "nudge-reset", goalId: current.id });
+			lifecycle.handle({ tag: "draft-cancel", kind: "tweak" });
 			syncGoalTools();
 			updateUI(ctx);
 			return false;
@@ -574,7 +529,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 	}
 
 	function beginAccounting(): void {
-		if (confirmationIntent !== null || tweakDraftingFor !== null) {
+		if (lifecycle.isDrafting) {
 			clearActiveAccounting();
 			return;
 		}
@@ -607,7 +562,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 	 * (74,482 of 6.55M on the pi-1.0 goal), and any consumption after the
 	 * goal archives (auditor runs, post-completion turns). Neither is fixed. */
 	function accountProgress(ctx: ExtensionContext, opts: { completedTurnTokens?: number; completedTurnCost?: number } = {}): void {
-		if (confirmationIntent !== null || tweakDraftingFor !== null) {
+		if (lifecycle.isDrafting) {
 			clearActiveAccounting();
 			return;
 		}
@@ -792,6 +747,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		// delivered ("already processing" spawn failures). Children never
 		// participate in the goal lifecycle. The session-branch reconciliation
 		// below is naturally empty in fresh child sessions and stays as-is.
+		lifecycle.handle({ tag: "restore" });
 		const childSession = isSubagentChildProcess();
 		lifecycle.replacePool(childSession ? new Map<string, GoalRecord>() : readActiveGoalPool(ctx));
 		lifecycle.setFocusedSilently(null);
@@ -875,7 +831,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		const userNote = note?.trim();
 		state.goal = { ...state.goal, autoContinue: false, pauseReason: userNote ? `user: ${userNote}` : undefined, pauseSuggestedAction: undefined };
 		stopActiveGoal("paused", "user", ctx);
-		resetGetGoalNudgeState(pausedGoalId);
+		lifecycle.handle({ tag: "nudge-reset", goalId: pausedGoalId });
 		uiNotify(ctx, userNote ? "Goal paused (note attached)." : "Goal paused.", "info");
 	}
 
@@ -886,10 +842,10 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 	function replaceGoal(config: GoalCreationConfig, ctx: ExtensionContext, startNow = true): void {
 		setGoal(createGoal(config), ctx, true, "created");
 		beginAccounting();
-		// Reset continuation nudge state — this is a fresh goal.
-		resetGetGoalNudgeState(state.goal?.id);
-		// A goal was committed — clear pending confirmation intent if any.
-		confirmationIntent = null;
+		// Reset continuation nudge state — this is a fresh goal; a committed
+		// goal also clears any pending confirmation intent.
+		lifecycle.handle({ tag: "nudge-reset", goalId: state.goal?.id });
+		lifecycle.handle({ tag: "draft-applied", kind: "goal" });
 		uiNotify(ctx, buildGoalRunningNotification(config), "info");
 		if (startNow && state.goal?.autoContinue) queueContinuation(ctx, true);
 		// Append ledger event for durable history
@@ -937,7 +893,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		const sisyphusOn = focused.sisyphus;
 		const label = sisyphusOn ? "Sisyphus tweak drafting" : "Goal tweak drafting";
 		// Activate the tweak edit-gate so apply_goal_tweak is callable.
-		tweakDraftingFor = focused.id;
+		lifecycle.handle({ tag: "draft-start", kind: "tweak", goalId: focused.id });
 		syncGoalTools();
 		uiNotify(ctx, 
 			`${label} started${trimmed ? `: ${truncateText(trimmed, 60)}` : ""}. The agent will interview you and then call apply_goal_tweak.`,
@@ -961,7 +917,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 				{ triggerTurn: true, deliverAs: ctx.isIdle() ? "followUp" : "steer" },
 			);
 		} catch (err) {
-			tweakDraftingFor = null;
+			lifecycle.handle({ tag: "draft-cancel", kind: "tweak" });
 			syncGoalTools();
 			uiNotify(ctx, `Could not start goal tweak: ${(err as Error).message}`, "error");
 		}
@@ -980,11 +936,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			"info",
 		);
 
-		confirmationIntent = {
-			focus,
-			originalTopic: trimmed,
-			startedAt: Date.now(),
-		};
+		lifecycle.handle({ tag: "draft-start", kind: "goal", focus, topic: trimmed, startedAt: Date.now() });
 		syncGoalTools();
 		try {
 			// Custom message keeps the full drafting prompt as LLM-visible user
@@ -1009,7 +961,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			// the drafting gate — same shape as the tweak path's catch — or the
 			// tool set stays in drafting form and accounting/turn handlers
 			// keep early-returning for a draft that never started.
-			confirmationIntent = null;
+			lifecycle.handle({ tag: "draft-cancel", kind: "goal" });
 			syncGoalTools();
 			uiNotify(ctx, `Could not start ${label.toLowerCase()}: ${(err as Error).message}`, "error");
 		}
@@ -1093,7 +1045,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		}
 		clearContinuationState();
 		clearActiveAccounting();
-		confirmationIntent = null;
+		lifecycle.handle({ tag: "draft-applied", kind: "goal" });
 		syncGoalTools();
 		replaceGoal({ objective, autoContinue: true, sisyphus: focus === "sisyphus" }, ctx, true);
 	}
@@ -1163,7 +1115,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			ctx,
 		);
 		beginAccounting();
-		resetGetGoalNudgeState(state.goal.id);
+		lifecycle.handle({ tag: "nudge-reset", goalId: state.goal.id });
 		const note = rawNote?.trim() || null;
 		pendingResumeNote = note;
 		uiNotify(ctx, note ? "Goal resumed (note attached to the next checkpoint)." : "Goal resumed.", "info");
@@ -1245,9 +1197,8 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 	}
 
 	async function handleGoalClear(ctx: ExtensionContext, rawNote?: string): Promise<void> {
-		if (confirmationIntent !== null || tweakDraftingFor !== null) {
-			confirmationIntent = null;
-			tweakDraftingFor = null;
+		if (lifecycle.isDrafting) {
+			lifecycle.handle({ tag: "draft-cancel" });
 			syncGoalTools();
 			updateUI(ctx);
 			uiNotify(ctx, clearGoalCommandMessage({ archived: false, wasDrafting: true }), "info");
@@ -1264,17 +1215,16 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		const didArchive = !!report.record;
 		// Phase 5 D: also abort any in-flight drafting so the agent's next turn
 		// doesn't try to propose into a cleared slot.
-		const wasDrafting = confirmationIntent !== null;
-		confirmationIntent = null;
+		const wasDrafting = lifecycle.confirmationIntent !== null;
+		lifecycle.handle({ tag: "draft-applied", kind: "goal" });
 		syncGoalTools();
 		const msg = clearGoalCommandMessage({ archived: didArchive, wasDrafting });
 		uiNotify(ctx, msg, didArchive || wasDrafting ? "info" : "warning");
 	}
 
 	async function handleGoalAbort(ctx: ExtensionContext, rawNote?: string): Promise<void> {
-		if (confirmationIntent !== null || tweakDraftingFor !== null) {
-			confirmationIntent = null;
-			tweakDraftingFor = null;
+		if (lifecycle.isDrafting) {
+			lifecycle.handle({ tag: "draft-cancel" });
 			syncGoalTools();
 			updateUI(ctx);
 			uiNotify(ctx, abortGoalCommandMessage({ archived: false, wasDrafting: true }), "info");
@@ -1287,8 +1237,8 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		}
 		const report = lifecycle.terminate("abort", ctx, { note: rawNote });
 		const didArchive = !!report.record;
-		const wasDrafting = confirmationIntent !== null;
-		confirmationIntent = null;
+		const wasDrafting = lifecycle.confirmationIntent !== null;
+		lifecycle.handle({ tag: "draft-applied", kind: "goal" });
 		syncGoalTools();
 		const msg = abortGoalCommandMessage({ archived: didArchive, wasDrafting });
 		uiNotify(ctx, msg, didArchive || wasDrafting ? "info" : "warning");
@@ -1473,7 +1423,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			const otherCount = otherOpenGoalCount(goalsById, lifecycle.focusedId);
 			let nudge = "";
 			if (view && view.status === "active" && view.id) {
-				const prior = activeGetGoalTurnsByGoalId.get(view.id) ?? 0;
+				const prior = lifecycle.getGoalNudgeCount(view.id);
 				if (prior >= 2) {
 					nudge = "\n\n[NUDGE] You have called get_goal multiple times recently. Prefer concrete work tools (write/read/bash/edit) to advance the goal.";
 				}
@@ -1559,7 +1509,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		executionMode: "sequential",
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const validation = validateGoalDraftProposal({
-				intent: confirmationIntent,
+				intent: lifecycle.confirmationIntent,
 				hasUnfinishedGoal: !!state.goal && state.goal.status !== "complete",
 				objective: params.objective,
 				sisyphus: params.sisyphus,
@@ -1567,7 +1517,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			});
 			if (!validation.ok) {
 				if (validation.clearDrafting) {
-					confirmationIntent = null;
+					lifecycle.handle({ tag: "draft-cancel", kind: "goal" });
 					syncGoalTools();
 				}
 				return {
@@ -1575,7 +1525,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 					details: goalDetails(state.goal),
 				};
 			}
-			const activeIntent = confirmationIntent;
+			const activeIntent = lifecycle.confirmationIntent;
 			if (!activeIntent) throw new Error("Goal confirmation intent disappeared during proposal validation.");
 
 			// All schema gates passed. Decide how to confirm.
@@ -1615,7 +1565,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 					autoContinue: autoContinueFlag,
 					sisyphus: sisyphusFlag,
 				};
-				confirmationIntent = null;
+				lifecycle.handle({ tag: "draft-applied", kind: "goal" });
 				replaceGoal(config, ctx, false);
 				syncGoalTools();
 				return {
@@ -1733,7 +1683,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			const report = lifecycle.complete(auditTarget, ctx);
 			const completedGoal = report.record ?? null;
 			// C9 fix: mark turn-stopped so subsequent in-turn tool calls are blocked.
-			turnStoppedFor = completedGoal?.id ?? null;
+			lifecycle.handle({ tag: "turn-stopped", goalId: completedGoal?.id ?? null });
 			return {
 				content: [{
 					type: "text",
@@ -1791,10 +1741,10 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			state.goal = mergeGoalPromptFromDisk(ctx, state.goal);
 			const next = buildPausedByAgentGoal(state.goal, { reason, suggestedAction: suggested, updatedAt: nowIso() });
 			setGoal(next, ctx);
-			resetGetGoalNudgeState(next.id);
+			lifecycle.handle({ tag: "nudge-reset", goalId: next.id });
 			// C9 fix: mark turn-stopped so subsequent in-turn tool calls are blocked.
 			// This is the schema-level closure of "agent kept writing files after pause_goal".
-			turnStoppedFor = state.goal.id;
+			lifecycle.handle({ tag: "turn-stopped", goalId: state.goal.id });
 
 			const suggestionLine = suggested ? `\nSuggested: ${truncateText(suggested, 160)}` : "";
 			uiNotify(ctx, 
@@ -1854,7 +1804,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			// terminate verb's by:"agent" variant.
 			const report = lifecycle.terminate("abort", ctx, { by: "agent", reason });
 			const archived = report.record ?? null;
-			turnStoppedFor = abortedGoalId;
+			lifecycle.handle({ tag: "turn-stopped", goalId: abortedGoalId });
 
 			const archiveLine = archived?.archivedPath ? `\nArchive: ${archived.archivedPath}` : "";
 			uiNotify(ctx,
@@ -1933,7 +1883,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 					details: goalDetails(state.goal),
 				};
 			}
-			if (tweakDraftingFor !== state.goal.id) {
+			if (lifecycle.tweakDraftingFor !== state.goal.id) {
 				return {
 					content: [{
 						type: "text",
@@ -1974,11 +1924,11 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			//   4) clear the tweak drafting gate so apply_goal_tweak can't be re-used
 			state.goal = writeActiveGoalFile(ctx, next);
 			pi.appendEntry(STATE_ENTRY, goalDetails(state.goal));
-			tweakDraftingFor = null;
+			lifecycle.handle({ tag: "draft-applied", kind: "tweak" });
 			// Reset autoContinue counter — plan changed, agent gets a fresh chain.
-			resetGetGoalNudgeState(state.goal.id);
+			lifecycle.handle({ tag: "nudge-reset", goalId: state.goal.id });
 			// C9 fix: mark turn-stopped so subsequent in-turn tool calls are blocked.
-			turnStoppedFor = state.goal.id;
+			lifecycle.handle({ tag: "turn-stopped", goalId: state.goal.id });
 			syncGoalTools();
 			updateUI(ctx);
 			uiNotify(ctx, `Goal tweaked: ${truncateText(changeSummary, 160)}`, "info");
@@ -2050,52 +2000,29 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 	});
 
 	pi.on("turn_start", async (_event, ctx) => {
-		// Per-turn flag resets (#4 + C9 fix).
-		goalWorkToolCalledThisTurn = false;
-		turnStoppedFor = null;
+		// Per-turn flag resets (#4 + C9 fix) — Step 3: through the closed
+		// event entry (the flags live in the lifecycle).
+		lifecycle.handle({ tag: "turn-start" });
 		beginAccounting();
 		updateUI(ctx);
 	});
 
 	// #4 + C9 fix + Phase 5 C3: gate in-turn tool calls based on lifecycle state.
-	pi.on("tool_call", async (event, ctx) => {
-		// Post-stop in-turn block (C9 0ad8 fix): after pause_goal / abort_goal /
-		// update_goal=complete / apply_goal_tweak fires in this turn, block all subsequent tool calls except
-		// read-only inspection. Forces the agent to yield the turn instead of "fixing"
-		// the situation by creating extra files etc.
-		if (turnStoppedFor !== null && !POST_STOP_ALLOWED_TOOL_SET.has(event.toolName)) {
-			return {
-				block: true,
-				reason: `The goal was already stopped earlier in this turn (goalId=${turnStoppedFor}). ` +
-					`Do not call more tools; end the turn with a brief summary and yield to the user.`,
-			};
+	pi.on("tool_call", async (event) => {
+		// P2-2 Step 3: the post-stop block verdict, the get_goal nudge
+		// counting, and the meaningful-progress credit all live behind the
+		// lifecycle's closed tool-call event (D3=A: non-progress tools are
+		// progress-neutral — allowed, no credit, no lock; the G3
+		// `event.input` read is the lifecycle's isMeaningfulProgressToolCall).
+		const verdict = lifecycle.handle({ tag: "tool-call", toolName: event.toolName, input: event.input });
+		if (verdict && verdict.blocked) {
+			return { block: true, reason: verdict.reason };
 		}
-		// Phase 5 soft gate relaxation: active-goal question block and repeated get_goal
-		// block are removed. The agent is trusted to prefer work tools; prompts nudge
-		// toward concrete work without hard-stopping the turn.
-		if (confirmationIntent === null && tweakDraftingFor === null && state.goal?.status === "active") {
-			if (event.toolName === "get_goal") {
-				const prior = activeGetGoalTurnsByGoalId.get(state.goal.id) ?? 0;
-				activeGetGoalTurnsByGoalId.set(state.goal.id, prior + 1);
-				// Nudge only: do not hard-block, but warn in tool response via get_goal execute
-			}
-		}
-		// Track for #4 empty-turn gate. G3 fix (P0-2 spec 2026-10-07): the host
-		// tool_call event carries `input` (pi ToolCallEvent since 0.87) — the old
-		// `event.args` read never matched, so the echo / .pi/goals exceptions in
-		// isMeaningfulProgressToolCall were dead until now.
-		if (isMeaningfulProgressToolCall(event.toolName, event.input)) {
-			if (state.goal?.id) activeGetGoalTurnsByGoalId.delete(state.goal.id);
-			goalWorkToolCalledThisTurn = true;
-		}
-		// D3=A (user 2026-10-08): non-progress tools are progress-neutral —
-		// allowed, no progress credit, and NO turn lock. The old else-branch
-		// mis-locked obs_recall / subagent / MCP / codemode turns; continuation
-		// is driven by agent_end, not by this lock.
 		return;
 	});
 
 	pi.on("tool_execution_end", async (_event, ctx) => {
+		lifecycle.handle({ tag: "usage-accounted" });
 		accountProgress(ctx);
 	});
 
@@ -2109,12 +2036,14 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 	pi.on("tool_result", async (event, ctx) => {
 		const usage = toolExecutionUsage(event);
 		if (!usage) return;
+		lifecycle.handle({ tag: "usage-accounted" });
 		accountProgress(ctx, { completedTurnTokens: usage.tokens, completedTurnCost: usage.cost });
 	});
 
 	pi.on("turn_end", async (event, ctx) => {
 		const message = event.message as AssistantMessageLike;
-		if (confirmationIntent !== null || tweakDraftingFor !== null) return;
+		if (lifecycle.isDrafting) return;
+		lifecycle.handle({ tag: "usage-accounted" });
 		const tokens = assistantTurnTokens(message);
 		const cost = assistantTurnCost(message);
 		accountProgress(ctx, { completedTurnTokens: tokens, completedTurnCost: cost });
@@ -2131,7 +2060,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			!isToolUseAssistantMessage(message)
 			&& state.goal?.status === "active"
 			&& state.goal.autoContinue
-			&& goalWorkToolCalledThisTurn
+			&& lifecycle.goalWorkToolCalledThisTurn
 		) {
 			queueContinuation(ctx);
 		}
@@ -2145,6 +2074,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 	// "answered" the marker). One macrotask after agent_settled, isStreaming
 	// is false and the append is display-only.
 	pi.on("agent_settled", async () => {
+		lifecycle.handle({ tag: "agent-settled" });
 		const held = pendingAchievement.flush();
 		if (!held) return;
 		const t = setTimeout(() => {
@@ -2187,11 +2117,12 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 	});
 
 	pi.on("session_before_compact", async (_event, ctx) => {
+		lifecycle.handle({ tag: "usage-accounted" });
 		accountProgress(ctx);
 	});
 
 	pi.on("session_compact", async (_event, ctx) => {
-		if (confirmationIntent !== null || tweakDraftingFor !== null) return;
+		if (lifecycle.isDrafting) return;
 		if (state.goal) persist(ctx);
 		beginAccounting();
 		// Arm a deterministic compaction summary for the next agent turn.
@@ -2214,14 +2145,14 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		const currentSystemPrompt = () => ctx.getSystemPrompt?.() || event.systemPrompt;
 		const incomingGoalId = extractGoalIdFromInjectedMessage(event.prompt ?? "");
 
-		if (confirmationIntent !== null) {
+		if (lifecycle.confirmationIntent !== null) {
 			clearContinuationState();
 			clearActiveAccounting();
 			runningGoalId = null;
 			return { systemPrompt: currentSystemPrompt() };
 		}
 
-		if (tweakDraftingFor !== null) {
+		if (lifecycle.tweakDraftingFor !== null) {
 			clearContinuationState();
 			clearActiveAccounting();
 			runningGoalId = null;
@@ -2247,7 +2178,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			// double-fire after the user's own message returns. Also reset the
 			// autoContinue nudge state so the user always gets a fresh chain.
 			clearContinuationState();
-			resetGetGoalNudgeState(state.goal?.id);
+			lifecycle.handle({ tag: "nudge-reset", goalId: state.goal?.id });
 		}
 
 		if (!state.goal) {
@@ -2321,7 +2252,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 	});
 
 	pi.on("agent_end", async (event, ctx) => {
-		if (confirmationIntent !== null || tweakDraftingFor !== null) return;
+		if (lifecycle.isDrafting) return;
 		const endedGoalId = runningGoalId;
 		runningGoalId = null;
 
@@ -2358,5 +2289,6 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		clearContinuationTimer();
 		goalUi.dispose();
 		if (state.goal) persist(ctx);
+		lifecycle.handle({ tag: "dispose" });
 	});
 }

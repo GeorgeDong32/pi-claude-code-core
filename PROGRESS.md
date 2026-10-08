@@ -2,6 +2,14 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## 2026-10-08 C5-Step3：drafting intents/turn flags/nudge 迁入封闭事件入口（P2-2 3/4）
+
+- **实现**：goal-lifecycle.ts 增封闭事件入口 `handle(event)`（union：restore/turn-start/turn-stopped/tool-call/usage-accounted/draft-start(goal|tweak)/draft-cancel/applied/nudge-reset/agent-settled/dispose）；confirmationIntent、tweakDraftingFor、goalWorkToolCalledThisTurn、turnStoppedFor、activeGetGoalTurnsByGoalId 全部成为模块内私有状态——只经只读投影（confirmationIntent/tweakDraftingFor/isDrafting/turnStoppedFor/goalWorkToolCalledThisTurn/getGoalNudgeCount）读、只经事件写，无任意 setter。**撤除 releaseStaleTweakGate/resetNudge 两写回端口**（setGoal/focus 内部直接清理，谓词 isMeaningfulProgressToolCall 与 POST_STOP/GOAL_PROGRESS 集合随迁 lifecycle，goal.ts 删除模块级副本）。
+- **goal.ts 接线**：tool_call handler 全块（post-stop 拦截裁决返回 blocked+reason、get_goal 计数、有意义进度计分含 G3 echo/.pi/goals 例外）改为 `lifecycle.handle({tag:"tool-call"})` 单入口；四真停止工具的 turnStoppedFor 写点改 turn-stopped 事件；drafting 六类写点（start/catch/confirm/commit/reconcile-vanish/direct-set）改 draft-* 事件；nudge 复位写点（pause/resume/replace/tweak/user-turn）改 nudge-reset 事件；turn_start/restore/dispose/usage-accounted/agent-settled 各按生产事件来源路由。
+- **行为保真**：restore 只清 turn flags（等价论证：无 tool_call/turn_end 读点可发生于下一 turn_start 复位前），drafting 与 nudge 计数跨 restore 存活（同旧）；usage-accounted/agent-settled 为路由钉（账务/审计状态归各自模块，事件不得触碰 owned 状态——有测试钉住）。
+- **测试**：goal-lifecycle.test.ts 19 例（Step1/2 转移表去掉两端口迹线改状态断言+report effects；新增 9 例事件 interface 测试——每 tag 一条：restore 语义/turn-start/turn-stopped(D3=A)/tool-call 全行为（含 post-stop get_goal 仍计数这一旧事实）/usage-accounted+agent-settled 不动状态/draft 三事件与 kind 语义/nudge-reset/dispose/陈旧 tweak gate 内部释放）。**既有 goal 25 文件套件零改动全绿**（FakeHost 端到端行为冻结）。
+- **门禁**：check 0；vitest 935 + node:test 528 全 0 fail（exit 0）；contracts 43+3todo。
+
 ## 2026-10-08 C5-Step2：goal 终结动词 complete/terminate 迁入 lifecycle（P2-2 2/4）
 
 - **实现**：goal-lifecycle.ts 新增两动词（ports 增 storage 两项 mergeGoalPromptFromDisk/archiveGoal；TransitionReport 增 kind 与只读 record 字段=归档后终态记录）。`complete(goal)`=update_goal 审计通过后的内联块（merge→stamp complete/agent→setGoal 效果集→persist 归档→nudge 复位→出池→focus entry(null,completed)→sync/UI→ledger goal_completed），审计目标显式传入、await 后新焦点不替代旧目标；`terminate(kind,{by,note,reason})`=/goal-clear 与 /goal-abort 共同行为（归档→user/agent 两种 ledger 措辞→nudge 复位→setGoal(null) unfocus persist），abort_goal 工具走 by:"agent" 变体（buildAbortedByAgentGoal 进动词）。drafting 取消分支、归档状态映射与 clear/abort 提示差异留在 adapter。

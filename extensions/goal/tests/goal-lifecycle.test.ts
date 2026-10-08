@@ -4,6 +4,12 @@
  * calls ports only). Each verb's effect sequence is pinned; the end-to-end
  * behavior stays pinned by the existing goal suites (statemachine/pool/core
  * …), which must pass UNCHANGED through the migration.
+ *
+ * Step 3: the drafting intents / turn flags / get_goal nudge counters are
+ * event-owned — the resetNudge and releaseStaleTweakGate ports are gone
+ * (internalized), so their traces moved from port calls to state
+ * assertions (getGoalNudgeCount / tweakDraftingFor) and one interface
+ * test per event tag.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -17,8 +23,6 @@ function recordingPorts() {
 		haltContinuation: () => calls.push("halt"),
 		pauseClock: () => calls.push("pause-clock"),
 		forgetCarry: (id) => calls.push(`forget:${id}`),
-		resetNudge: (id) => calls.push(`nudge:${id ?? "-"}`),
-		releaseStaleTweakGate: (id) => calls.push(`gate:${id ?? "-"}`),
 		appendFocusEntry: (id, reason) => calls.push(`entry:${id ?? "-"}:${reason}`),
 		appendLedger: (_ctx, event) => calls.push(`ledger:${(event as { type: string }).type}`),
 		persist: () => calls.push("persist"),
@@ -53,11 +57,14 @@ test("setGoal A -> B (focus change): full effect order, focus entry only with re
 	assert.equal(report.previousGoalId, a.id);
 	assert.equal(report.nextGoalId, b.id);
 	assert.deepEqual(calls, [
-		"halt", "pause-clock", `nudge:${a.id}`, `nudge:${b.id}`,
+		"halt", "pause-clock",
 		`entry:${b.id}:created`,
-		`gate:${b.id}`,
 		"persist", "ui",
 	]);
+	// Step 3: nudge resets + stale-gate release are internal now — pinned
+	// through the report's effect strings and the state projections.
+	assert.ok(report.effects.includes(`nudge-reset:${a.id}`));
+	assert.ok(report.effects.includes("release-stale-tweak-gate"));
 });
 
 test("setGoal to null (cleared): carry forgotten; sync path when persist=false", () => {
@@ -70,10 +77,9 @@ test("setGoal to null (cleared): carry forgotten; sync path when persist=false",
 	// next=null: the focus-change block AND the inactive/paused conditions
 	// BOTH fire (the old code called the same clears twice — idempotent).
 	assert.deepEqual(calls, [
-		"halt", "pause-clock", `nudge:${a.id}`, "nudge:-",
+		"halt", "pause-clock",
 		"halt", "pause-clock",
 		`forget:${a.id}`,
-		"gate:-",
 		"persist", "ui",
 	]);
 	calls.length = 0;
@@ -125,7 +131,7 @@ test("focus: valid id focuses with ledger; invalid id unfocuses silently-ish; no
 	lc.focus(a.id, ctx, "selected");
 	assert.equal(lc.focusedId, a.id);
 	assert.deepEqual(calls, [
-		"halt", "pause-clock", `nudge:-`, `nudge:${a.id}`, `gate:${a.id}`,
+		"halt", "pause-clock",
 		`entry:${a.id}:selected`, "ledger:goal_focused", "sync", "ui",
 	]);
 	calls.length = 0;
@@ -174,7 +180,7 @@ test("complete: the update_goal approved-verdict effect order (same-id terminal)
 	// ui, ledger.
 	assert.deepEqual(calls, [
 		"halt", "pause-clock", `forget:${a.id}`, "persist", "ui",
-		`nudge:${a.id}`, `entry:-:completed`, "sync", "ui", "ledger:goal_completed",
+		`entry:-:completed`, "sync", "ui", "ledger:goal_completed",
 	]);
 	assert.equal(lc.focusedId, null, "the completed goal leaves the pool");
 	assert.equal(lc.pool.has(a.id), false);
@@ -206,10 +212,10 @@ test("terminate clear (user): archive → ledger(user cleared) → nudge → set
 	assert.equal(events[0]?.type, "goal_aborted");
 	assert.equal(events[0]?.reason, "user clear: done with it");
 	assert.deepEqual(calls, [
-		"archive", "ledger:goal_aborted", `nudge:${a.id}`,
-		"halt", "pause-clock", `nudge:${a.id}`, "nudge:-",
+		"archive", "ledger:goal_aborted",
+		"halt", "pause-clock",
 		"entry:-:cleared",
-		"halt", "pause-clock", `forget:${a.id}`, "gate:-",
+		"halt", "pause-clock", `forget:${a.id}`,
 		"persist", "ui",
 	]);
 	assert.equal(lc.focusedId, null);
@@ -247,5 +253,156 @@ test("terminate with nothing focused: ledger still records, no archive/nudge", (
 	const report = lc.terminate("clear", ctx);
 	assert.equal(report.record, undefined);
 	assert.equal(events[0]?.goalId, "unknown");
-	assert.deepEqual(calls, ["ledger:goal_aborted", "halt", "pause-clock", "gate:-", "persist", "ui"]);
+	assert.deepEqual(calls, ["ledger:goal_aborted", "halt", "pause-clock", "persist", "ui"]);
+});
+
+
+// ---------- P2-2 Step 3: the closed event entry (one interface test per tag) ----------
+
+function eventLifecycle() {
+	const { ports, calls } = recordingPorts();
+	return { lc: createGoalLifecycle(ports), calls };
+}
+
+test("event restore: clears the per-turn flags; drafting + nudge survive (as today)", () => {
+	const { lc } = eventLifecycle();
+	const a = goal("rv");
+	lc.adopt(a);
+	lc.handle({ tag: "tool-call", toolName: "get_goal", input: {} }); // count BEFORE drafting starts
+	lc.handle({ tag: "draft-start", kind: "goal", focus: "goal", topic: "t", startedAt: 1 });
+	lc.handle({ tag: "turn-stopped", goalId: a.id });
+	lc.handle({ tag: "restore" });
+	assert.equal(lc.turnStoppedFor, null);
+	assert.equal(lc.goalWorkToolCalledThisTurn, false);
+	assert.equal(lc.confirmationIntent !== null, true, "drafting survives a restore");
+	assert.equal(lc.getGoalNudgeCount(a.id), 1, "nudge counters survive a restore");
+});
+
+test("event turn-start: resets both per-turn flags", () => {
+	const { lc } = eventLifecycle();
+	lc.handle({ tag: "turn-stopped", goalId: "g1" });
+	lc.handle({ tag: "turn-start" });
+	assert.equal(lc.turnStoppedFor, null);
+	assert.equal(lc.goalWorkToolCalledThisTurn, false);
+});
+
+test("event turn-stopped: pins the four-real-stop lock value (D3=A)", () => {
+	const { lc } = eventLifecycle();
+	lc.handle({ tag: "turn-stopped", goalId: "g9" });
+	assert.equal(lc.turnStoppedFor, "g9");
+	lc.handle({ tag: "turn-stopped", goalId: null });
+	assert.equal(lc.turnStoppedFor, null);
+});
+
+test("event tool-call: post-stop block verdict, nudge counting, progress credit", () => {
+	const { lc } = eventLifecycle();
+	const a = goal("tk");
+	lc.adopt(a);
+	// post-stop block: only read-only inspection passes
+	lc.handle({ tag: "turn-stopped", goalId: a.id });
+	const blocked = lc.handle({ tag: "tool-call", toolName: "write", input: { path: "x" } });
+	assert.equal(blocked && blocked.blocked, true);
+	assert.ok(blocked!.reason!.includes(a.id));
+	const allowed = lc.handle({ tag: "tool-call", toolName: "get_goal", input: {} });
+	assert.equal(allowed && (allowed as { blocked?: boolean }).blocked, undefined);
+	// get_goal nudge counting on an active, non-drafting goal — note the
+	// post-stop get_goal above ALREADY counted (old behavior: the allowed
+	// read-only inspection still passes the nudge-count block).
+	lc.handle({ tag: "turn-start" });
+	lc.handle({ tag: "tool-call", toolName: "get_goal", input: {} });
+	lc.handle({ tag: "tool-call", toolName: "get_goal", input: {} });
+	assert.equal(lc.getGoalNudgeCount(a.id), 3);
+	// meaningful progress clears the counter and raises the work flag
+	lc.handle({ tag: "tool-call", toolName: "edit", input: { path: "f.ts" } });
+	assert.equal(lc.getGoalNudgeCount(a.id), 0);
+	assert.equal(lc.goalWorkToolCalledThisTurn, true);
+	// G3 exceptions: echo bash and .pi/goals reads are NOT progress
+	lc.handle({ tag: "turn-start" });
+	lc.handle({ tag: "tool-call", toolName: "bash", input: { command: "echo hi" } });
+	lc.handle({ tag: "tool-call", toolName: "read", input: { path: ".pi/goals/active_goal_x.md" } });
+	assert.equal(lc.goalWorkToolCalledThisTurn, false);
+	// drafting suspends nudge counting
+	lc.handle({ tag: "draft-start", kind: "goal", focus: "goal", topic: "t", startedAt: 1 });
+	lc.handle({ tag: "tool-call", toolName: "get_goal", input: {} });
+	assert.equal(lc.getGoalNudgeCount(a.id), 0);
+});
+
+test("event usage-accounted / agent-settled: routing pins — owned state untouched", () => {
+	const { lc } = eventLifecycle();
+	const a = goal("ua");
+	lc.adopt(a);
+	lc.handle({ tag: "draft-start", kind: "tweak", goalId: a.id });
+	lc.handle({ tag: "turn-stopped", goalId: a.id });
+	lc.handle({ tag: "tool-call", toolName: "get_goal", input: {} });
+	const before = { tweak: lc.tweakDraftingFor, stopped: lc.turnStoppedFor, nudge: lc.getGoalNudgeCount(a.id), work: lc.goalWorkToolCalledThisTurn };
+	lc.handle({ tag: "usage-accounted" });
+	lc.handle({ tag: "agent-settled" });
+	assert.deepEqual({ tweak: lc.tweakDraftingFor, stopped: lc.turnStoppedFor, nudge: lc.getGoalNudgeCount(a.id), work: lc.goalWorkToolCalledThisTurn }, before);
+});
+
+test("event draft-start/cancel/applied: both intents, kind-specific cancels", () => {
+	const { lc } = eventLifecycle();
+	lc.handle({ tag: "draft-start", kind: "goal", focus: "sisyphus", topic: "the plan", startedAt: 42 });
+	assert.deepEqual(lc.confirmationIntent, { focus: "sisyphus", originalTopic: "the plan", startedAt: 42 });
+	lc.handle({ tag: "draft-start", kind: "tweak", goalId: "g7" });
+	assert.equal(lc.tweakDraftingFor, "g7");
+	assert.equal(lc.isDrafting, true);
+	// kind-specific cancel (CORE-05): only the goal intent clears
+	lc.handle({ tag: "draft-cancel", kind: "goal" });
+	assert.equal(lc.confirmationIntent, null);
+	assert.equal(lc.tweakDraftingFor, "g7");
+	// bare cancel clears both (the /goal-clear drafting branch)
+	lc.handle({ tag: "draft-cancel" });
+	assert.equal(lc.tweakDraftingFor, null);
+	assert.equal(lc.isDrafting, false);
+	// applied variants
+	lc.handle({ tag: "draft-start", kind: "goal", focus: "goal", topic: "x", startedAt: 1 });
+	lc.handle({ tag: "draft-applied", kind: "goal" });
+	assert.equal(lc.confirmationIntent, null);
+	lc.handle({ tag: "draft-start", kind: "tweak", goalId: "g8" });
+	lc.handle({ tag: "draft-applied", kind: "tweak" });
+	assert.equal(lc.tweakDraftingFor, null);
+});
+
+test("event nudge-reset: the adapter-side resets (pause/resume/create/tweak/user-turn)", () => {
+	const { lc } = eventLifecycle();
+	const a = goal("nr");
+	lc.adopt(a);
+	lc.handle({ tag: "tool-call", toolName: "get_goal", input: {} });
+	lc.handle({ tag: "tool-call", toolName: "get_goal", input: {} });
+	assert.equal(lc.getGoalNudgeCount(a.id), 2);
+	lc.handle({ tag: "nudge-reset", goalId: a.id });
+	assert.equal(lc.getGoalNudgeCount(a.id), 0);
+	lc.handle({ tag: "nudge-reset", goalId: undefined });
+	lc.handle({ tag: "nudge-reset", goalId: null });
+});
+
+test("event dispose: clears all event-owned state", () => {
+	const { lc } = eventLifecycle();
+	const a = goal("dp");
+	lc.adopt(a);
+	lc.handle({ tag: "draft-start", kind: "tweak", goalId: a.id });
+	lc.handle({ tag: "turn-stopped", goalId: a.id });
+	lc.handle({ tag: "tool-call", toolName: "get_goal", input: {} });
+	lc.handle({ tag: "dispose" });
+	assert.equal(lc.confirmationIntent, null);
+	assert.equal(lc.tweakDraftingFor, null);
+	assert.equal(lc.turnStoppedFor, null);
+	assert.equal(lc.goalWorkToolCalledThisTurn, false);
+	assert.equal(lc.getGoalNudgeCount(a.id), 0);
+});
+
+test("stale tweak gate: setGoal/focus release it internally (no write-back port)", () => {
+	const { lc, calls } = eventLifecycle();
+	const a = goal("sg-a");
+	const b = goal("sg-b");
+	lc.adopt(a);
+	lc.handle({ tag: "draft-start", kind: "tweak", goalId: a.id });
+	lc.setGoal(b, ctx); // focus moved to b: a's gate is stale
+	assert.equal(lc.tweakDraftingFor, null);
+	lc.handle({ tag: "draft-start", kind: "tweak", goalId: b.id });
+	lc.setGoal({ ...b, usage: { ...b.usage, tokensUsed: 3 } }, ctx); // same id: gate kept
+	assert.equal(lc.tweakDraftingFor, b.id);
+	assert.equal(lc.focusedId, b.id);
+	assert.ok(!calls.some((c) => c.startsWith("gate:")));
 });
