@@ -1,6 +1,6 @@
 # SPEC P2-2：goal lifecycle module（B7 收尾：转移动词持有完整副作用集）
 
-状态：**D3=A 已确认（2026-10-08）**；本规格未实施，依赖 P0-2 锁策略 + G3 通过后进入；已不存在用户决策阻塞。见 [2026-10-08 剩余任务](2026-10-08-followup-execution.md)。
+状态：**已实施（2026-10-08，四步全部落地：Step1 828c5c6 / Step2 f13c2bb / Step3 11eafde / Step4 本批）**；D3=A 已确认；DEVIATIONS #73 已关闭。见 [2026-10-08 剩余任务](2026-10-08-followup-execution.md)与 DEVIATIONS #117/#118。
 日期：2026-10-07
 分支：main
 来源：2026-10-07 联合架构审查，报告 C2 卡片；清单项 CORE-13。PROGRESS「架构优化 8-batch」B7 与 DEVIATIONS #73 记录的"状态机核心 + confirmation 粘合仍在 goal.ts、thin adapter 终态未达"

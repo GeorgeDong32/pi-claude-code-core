@@ -302,12 +302,11 @@ function toolExecutionUsage(event: unknown): { tokens: number; cost: number } | 
 // ---------- extension entry point ----------
 
 export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => number; auditor?: typeof runGoalCompletionAuditor } = {}): void {
-	// P2-2 Step 1: the goal POOL and FOCUS pointer are owned by the
+	// P2-2 Steps 1-4: the goal POOL and FOCUS pointer are owned by the
 	// lifecycle module (goal-lifecycle.ts) — the writer verbs with their full
-	// effect sets live there. `goalsById` below is a TRANSITIONAL alias onto
-	// the lifecycle's live pool for the read paths that have not migrated
-	// yet (spec §4.3 step 1 allows the adapter; step 4 removes it). The
-	// B3 isolation note still applies: all of it lives inside the factory.
+	// effect sets live there. Reads go through lifecycle.focused() /
+	// lifecycle.pool; the B3 isolation note still applies: all of it lives
+	// inside the factory.
 	// P2-2 Step 3: the drafting intents, per-turn flags, and get_goal nudge
 	// counters also live in the lifecycle — read through its read-only
 	// projections, written ONLY through the closed event entry handle().
@@ -323,28 +322,26 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		nowIso,
 		mergeGoalPromptFromDisk: (ctx, goal) => mergeGoalPromptFromDisk(ctx as ExtensionContext, goal),
 		archiveGoal: (ctx, goal) => archiveGoalFile(ctx as ExtensionContext, goal),
+		readActiveGoalPool: (ctx) => readActiveGoalPool(ctx as ExtensionContext),
+		beginClock: () => beginAccounting(),
 	});
-	const goalsById = lifecycle.pool as Map<string, GoalRecord>;
+
 	// B7 step 3: the approved-audit hold lives in the audit domain module.
 	const pendingAchievement = createPendingAchievementSlot();
-	// L4 transitional alias: reads go through the lifecycle's focused()
-	// getter; bare writes keep the old silent setter semantics (adopt).
-	const state = {
-		get goal(): GoalRecord | null {
-			return lifecycle.focused();
-		},
-		set goal(next: GoalRecord | null) {
-			lifecycle.adopt(next);
-		},
-	};
+	// P2-2 Step 4: the transitional proxies are gone — reads go through
+	// lifecycle.focused() / lifecycle.pool (read-only), record refreshes
+	// through the adopt primitive, transitions through the verbs.
 	// DC4b part-3: the presentation half lives in ./ui.ts — closed-over
 	// business state enters as getters, so the state machine stays fakeable.
 	const goalUi = createGoalUi({
-		getDisplayGoal: () => goalForDisplay() ?? state.goal,
+		getDisplayGoal: () => goalForDisplay() ?? lifecycle.focused(),
 		getOpenGoalCount: () => openGoals().length,
-		getOtherOpenGoalCount: () => otherOpenGoalCount(goalsById, lifecycle.focusedId),
-		isGoalActive: () => state.goal?.status === "active",
-		shouldPauseOnEscape: () => state.goal?.status === "active" && !!state.goal.autoContinue,
+		getOtherOpenGoalCount: () => otherOpenGoalCount(lifecycle.pool, lifecycle.focusedId),
+		isGoalActive: () => lifecycle.focused()?.status === "active",
+		shouldPauseOnEscape: () => {
+			const g = lifecycle.focused();
+			return !!g && g.status === "active" && !!g.autoContinue;
+		},
 		// INTERRUPT SAFETY (fix): Escape only pauses while the agent is idle;
 		// while busy it belongs to the interrupt path and passes through.
 		isAgentIdle: (ctx) => {
@@ -380,7 +377,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			active.delete(QUESTIONNAIRE_TOOL_NAME);
 			for (const name of ACTIVE_GOAL_TOOL_NAMES) active.delete(name);
 			const phase = lifecycle.confirmationIntent !== null ? "drafting" : lifecycle.tweakDraftingFor !== null ? "tweakDrafting" : "normal";
-			const lifecycleTools = lifecycleToolNamesForGoalStatus(state.goal?.status, phase);
+			const lifecycleTools = lifecycleToolNamesForGoalStatus(lifecycle.focused()?.status, phase);
 			for (const name of lifecycleTools) active.add(name);
 			// Sisyphus is now a prompt/criteria style, not a separate step-counter
 			// mechanism. Keep step_complete registered for legacy transcripts, but do
@@ -388,7 +385,8 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			active.delete(SISYPHUS_STEP_TOOL_NAME);
 			// apply_goal_tweak is only available during a /goal-tweak drafting flow.
 			// Note: tweak drafting can run against active OR paused goals.
-			if (state.goal && lifecycle.tweakDraftingFor === state.goal.id) {
+			const tweakGateGoal = lifecycle.focused();
+			if (tweakGateGoal && lifecycle.tweakDraftingFor === tweakGateGoal.id) {
 				active.add(TWEAK_APPLY_TOOL_NAME);
 				active.add(QUESTION_TOOL_NAME);
 				active.add(QUESTIONNAIRE_TOOL_NAME);
@@ -404,7 +402,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			if (lifecycle.confirmationIntent !== null) {
 				active.add(QUESTION_TOOL_NAME);
 				active.add(QUESTIONNAIRE_TOOL_NAME);
-			} else if (state.goal?.status === "active") {
+			} else if (lifecycle.focused()?.status === "active") {
 				for (const name of goalExecutionWorkTools) active.add(name);
 			}
 			pi.setActiveTools(Array.from(active));
@@ -420,7 +418,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 	// events — probe + emit seams injected). The three wrappers below keep
 	// every call site in this file unchanged.
 	const continuationLoop = createContinuationLoop({
-		getGoal: () => state.goal,
+		getGoal: () => lifecycle.focused(),
 		isDrafting: () => lifecycle.isDrafting,
 		isSubagentChild: isSubagentChildProcess,
 		promptFor: (goal) => continuationPrompt(goal, pendingResumeNote ?? undefined),
@@ -465,67 +463,26 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 
 
 	function openGoals(): GoalRecord[] {
-		return openGoalsFromPool(goalsById);
+		return openGoalsFromPool(lifecycle.pool);
 	}
 
 	function reconcileFocusedGoalFromDisk(ctx: ExtensionContext, opts: { preserveMemoryUsage?: boolean; captureDiskGoal?: { goal: GoalRecord | null } } = {}): boolean {
 		// GH-02 (continued): children never reconcile from the project's disk
-		// pool. loadState covers session_start; this closes the mid-session
-		// command/tool paths (goal-list, tweak drafting, …) that would otherwise
-		// re-adopt the pool a dispatch task could then focus into state.goal.
+		// pool — the env guard stays adapter-side; the pool/focus repair
+		// itself is the lifecycle reconcileFromDisk verb (P2-2 Step 4).
 		if (isSubagentChildProcess()) return true;
-		const current = state.goal;
-		const fresh = readActiveGoalPool(ctx);
-		if (!lifecycle.focusedId) {
-			lifecycle.replacePool(fresh);
-			return true;
-		}
-		const diskGoal = fresh.get(lifecycle.focusedId) ?? null;
-		// AR1005-GO-B: hand the JUST-PARSED focused disk goal to the caller's
-		// same synchronous segment (persist must not re-read/re-parse it).
-		// The capture is per-event, never path-keyed, never cached across
-		// events or awaits; the next event re-reads the pool as always.
-		if (opts.captureDiskGoal) opts.captureDiskGoal.goal = diskGoal;
-		if (!diskGoal) {
-			if (current && !current.activePath) {
-				lifecycle.replacePool(fresh);
-				goalsById.set(current.id, current);
-				lifecycle.setFocusedSilently(current.id);
-				return true;
-			}
-			lifecycle.replacePool(fresh);
-			lifecycle.setFocusedSilently(null);
-			clearStoppedRuntimeState();
-			if (current) lifecycle.handle({ tag: "nudge-reset", goalId: current.id });
-			lifecycle.handle({ tag: "draft-cancel", kind: "tweak" });
-			syncGoalTools();
-			updateUI(ctx);
-			return false;
-		}
-		const reconciled = current && opts.preserveMemoryUsage
-			? mergeFocusedGoalWithDisk({ memoryGoal: current, diskGoal })
-			: diskGoal;
-		lifecycle.replacePool(fresh);
-		goalsById.set(reconciled.id, reconciled);
-		lifecycle.setFocusedSilently(reconciled.id);
-		if (reconciled.status !== "active" || !reconciled.autoContinue) clearContinuationState();
-		if (reconciled.status !== "active") clearActiveAccounting();
-		return true;
+		return lifecycle.reconcileFromDisk(ctx, opts);
 	}
+
 
 	function appendFocusEntry(goalId: string | null, reason: GoalFocusReason): void {
 		pi.appendEntry(FOCUS_ENTRY, goalFocusDetails(goalId, reason));
 	}
 
-	function setFocusedGoalId(goalId: string | null, ctx: ExtensionContext, reason: GoalFocusReason): void {
-		// P2-2 Step 1: the focus verb (with its full effect set) lives in
-		// goal-lifecycle.ts; this is the transitional adapter.
-		lifecycle.focus(goalId, ctx, reason);
-	}
-
 	function armFocusedContinuation(ctx: ExtensionContext): void {
 		beginAccounting();
-		if (state.goal?.status === "active" && state.goal.autoContinue) queueContinuation(ctx, true);
+		const g = lifecycle.focused();
+		if (g?.status === "active" && g.autoContinue) queueContinuation(ctx, true);
 	}
 
 	function beginAccounting(): void {
@@ -533,24 +490,26 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			clearActiveAccounting();
 			return;
 		}
-		if (!state.goal || (state.goal.status !== "active")) {
+		const clockGoal = lifecycle.focused();
+		if (!clockGoal || clockGoal.status !== "active") {
 			clearActiveAccounting();
 			return;
 		}
 		// GO-A: begin starts a NEW segment (resets the segment start) without
 		// deleting this goal's accumulated carry.
-		clock.begin(state.goal.id);
+		clock.begin(clockGoal.id);
 	}
 
 	function goalForDisplay(): GoalRecord | null {
-		if (!state.goal || state.goal.status !== "active") {
-			return state.goal;
+		const display = lifecycle.focused();
+		if (!display || display.status !== "active") {
+			return display;
 		}
 		// GO-A: read-only preview (segment + carry) — repeated renders never
 		// consume or accumulate seconds.
-		const liveSeconds = clock.preview(state.goal.id);
-		if (liveSeconds === 0) return state.goal;
-		const live = cloneGoal(state.goal);
+		const liveSeconds = clock.preview(display.id);
+		if (liveSeconds === 0) return display;
+		const live = cloneGoal(display);
 		live.usage.activeSeconds += liveSeconds;
 		return live;
 	}
@@ -572,15 +531,16 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		// (the next event re-reads); the zero-usage early return below comes
 		// AFTER the reconcile so external cancel/delete detection never skips.
 		const readCtx: { goal: GoalRecord | null } = { goal: null };
-		if (state.goal?.activePath && !reconcileFocusedGoalFromDisk(ctx, { preserveMemoryUsage: true, captureDiskGoal: readCtx })) return;
-		if (!state.goal || state.goal.status !== "active") {
+		if (lifecycle.focused()?.activePath && !reconcileFocusedGoalFromDisk(ctx, { preserveMemoryUsage: true, captureDiskGoal: readCtx })) return;
+		const settleGoal = lifecycle.focused();
+		if (!settleGoal || settleGoal.status !== "active") {
 			beginAccounting();
 			return;
 		}
 		// GO-A: settle closes the segment delta and re-arms it; the sub-second
 		// remainder stays as the goal's carry (never reset, even on
 		// zero-token/zero-cost events). null = no active segment, begin one.
-		const settled = clock.settle(state.goal.id);
+		const settled = clock.settle(settleGoal.id);
 		if (settled === null) {
 			beginAccounting();
 			return;
@@ -591,47 +551,50 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		const cost = Math.max(0, opts.completedTurnCost ?? 0);
 		if (tokens === 0 && cost === 0 && elapsedSeconds === 0) return;
 
-		const next = cloneGoal(state.goal);
+		const next = cloneGoal(lifecycle.focused()!);
 		next.usage.tokensUsed += tokens;
 		next.usage.costUsed += cost;
 		next.usage.activeSeconds += elapsedSeconds;
 		next.updatedAt = nowIso();
-		state.goal = next;
+		lifecycle.adopt(next);
 		persist(ctx, readCtx);
 	}
 
 	function syncGoalPromptFromDisk(ctx: ExtensionContext, readCtx?: { goal: GoalRecord | null }): boolean {
-		if (!state.goal || state.goal.status === "complete") return false;
-		const previousObjective = state.goal.objective;
+		const current = lifecycle.focused();
+		if (!current || current.status === "complete") return false;
+		const previousObjective = current.objective;
 		// AR1005-GO-B: within one accounting event's synchronous segment the
 		// objective comes from the ALREADY-PARSED pool read (snapshot at event
 		// start — no cross-process transactionality is implied). Every other
 		// caller (commands, refresh paths, post-await continuations) still
 		// takes the fresh disk read below.
-		state.goal = readCtx ? (readCtx.goal ? { ...state.goal, objective: readCtx.goal.objective } : state.goal) : mergeGoalPromptFromDisk(ctx, state.goal);
-		return state.goal.objective !== previousObjective;
+		const next = readCtx ? (readCtx.goal ? { ...current, objective: readCtx.goal.objective } : current) : mergeGoalPromptFromDisk(ctx, current);
+		if (next !== current) lifecycle.adopt(next);
+		return (lifecycle.focused()?.objective ?? previousObjective) !== previousObjective;
 	}
 
 	function persist(ctx?: ExtensionContext, readCtx?: { goal: GoalRecord | null }): void {
-		const current = state.goal;
+		const current = lifecycle.focused();
 		if (current) {
-			state.goal = { ...current, updatedAt: nowIso() };
+			lifecycle.adopt({ ...current, updatedAt: nowIso() });
 			if (ctx) {
 				syncGoalPromptFromDisk(ctx, readCtx);
-				const next = state.goal;
-				if (next) state.goal = next.status === "complete" ? archiveGoalFile(ctx, next) : writeActiveGoalFile(ctx, next);
+				const next = lifecycle.focused();
+				if (next) lifecycle.adopt(next.status === "complete" ? archiveGoalFile(ctx, next) : writeActiveGoalFile(ctx, next));
 			}
 		}
-		pi.appendEntry(STATE_ENTRY, goalDetails(state.goal));
+		pi.appendEntry(STATE_ENTRY, goalDetails(lifecycle.focused()));
 		syncGoalTools();
 		if (ctx) updateUI(ctx);
 	}
 
 	function refreshGoalDisplayFromDisk(ctx: ExtensionContext): void {
-		if (!state.goal || state.goal.status === "complete") return;
+		const current = lifecycle.focused();
+		if (!current || current.status === "complete") return;
 		if (syncGoalPromptFromDisk(ctx)) {
-			state.goal = { ...state.goal, updatedAt: nowIso() };
-			pi.appendEntry(STATE_ENTRY, goalDetails(state.goal));
+			lifecycle.adopt({ ...(lifecycle.focused() ?? current), updatedAt: nowIso() });
+			pi.appendEntry(STATE_ENTRY, goalDetails(lifecycle.focused()));
 		}
 		syncGoalTools();
 		updateUI(ctx);
@@ -686,7 +649,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		// DC4/DC4b: the widget field is presentation-complete — focus,
 		// status-line text, a serializable goal projection, and the open
 		// count, enough to rebuild renderGoalWidgetLines anywhere.
-		const goal = state.goal;
+		const goal = lifecycle.focused();
 		coreBus().publish({
 			goal: {
 				active: !!goal,
@@ -707,13 +670,13 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			return;
 		}
 		const totalOpen = openGoals().length;
-		if (!state.goal && totalOpen === 0) {
+		if (!lifecycle.focused() && totalOpen === 0) {
 			publishGoalChannel({ focus: "none", statusLine: "" });
 			goalUi.clear(ctx);
 			goalUi.stopStatusRefresh();
 			return;
 		}
-		if (!state.goal) {
+		if (!lifecycle.focused()) {
 			publishGoalChannel({ focus: "unfocused", statusLine: `goal: unfocused [${totalOpen} open] - /goal-focus`, openGoalCount: totalOpen });
 			ctx.ui.setStatus("goal", `goal: unfocused [${totalOpen} open] - /goal-focus`);
 			goalUi.registerWidget(ctx);
@@ -721,8 +684,8 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			return;
 		}
 
-		const displayGoal = goalForDisplay() ?? state.goal;
-		const otherCount = otherOpenGoalCount(goalsById, lifecycle.focusedId);
+		const displayGoal = goalForDisplay() ?? lifecycle.focused()!;
+		const otherCount = otherOpenGoalCount(lifecycle.pool, lifecycle.focusedId);
 		publishGoalChannel({
 			focus: "focused",
 			statusLine: `${footerStatus(displayGoal)}${otherCount > 0 ? ` (+${otherCount} open)` : ""}`,
@@ -732,7 +695,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		ctx.ui.setStatus("goal", `${footerStatus(displayGoal)}${otherCount > 0 ? ` (+${otherCount} open)` : ""}`);
 		goalUi.registerWidget(ctx);
 
-		if (state.goal.status === "complete") {
+		if (displayGoal.status === "complete") {
 			goalUi.stopStatusRefresh();
 		} else {
 			goalUi.syncStatusRefresh(ctx);
@@ -770,15 +733,20 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		if (legacyGoal && legacyGoal.status !== "complete") {
 			legacyGoal = sanitizeGoalPaths(ctx, mergeGoalPromptFromDisk(ctx, legacyGoal));
 		}
-		lifecycle.setFocusedSilently(resolveSessionFocus({ pool: goalsById, focusEntry, legacyGoal }));
+		lifecycle.setFocusedSilently(resolveSessionFocus({
+			pool: lifecycle.pool,
+			focusEntry,
+			legacyGoal,
+			adoptLegacyGoal: (g) => lifecycle.adopt(g),
+		}));
 		if (!focusEntry && lifecycle.focusedId) {
 			try {
 				appendFocusEntry(lifecycle.focusedId, legacyGoal?.id === lifecycle.focusedId ? "migrated" : "selected");
 			} catch {}
 		}
-		for (const [id, current] of goalsById) {
+		for (const [id, current] of lifecycle.pool) {
 			if (current.status === "complete") {
-				goalsById.delete(id);
+				lifecycle.removeFromPool(id);
 			}
 		}
 		clearStoppedRuntimeState();
@@ -787,50 +755,29 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		updateUI(ctx);
 	}
 
-	function setGoal(next: GoalRecord | null, ctx: ExtensionContext, shouldPersist = true, focusReason?: GoalFocusReason): void {
-		// P2-2 Step 1: the setGoal verb (with its full effect set) lives in
-		// goal-lifecycle.ts; this is the transitional adapter.
-		lifecycle.setGoal(next, ctx, { persist: shouldPersist, focusReason });
-	}
-
 	function archiveCurrentGoal(ctx: ExtensionContext, reason: StopReason | undefined): GoalRecord | null {
-		if (!state.goal) return null;
-		let archived = mergeGoalPromptFromDisk(ctx, state.goal);
+		const current = lifecycle.focused();
+		if (!current) return null;
+		let archived = mergeGoalPromptFromDisk(ctx, current);
 		archived = { ...archived, status: archived.status === "complete" ? "complete" : "paused", stopReason: reason };
 		return archiveGoalFile(ctx, archived);
 	}
 
-	function stopActiveGoal(status: Exclude<GoalStatus, "active">, reason: StopReason | undefined, ctx: ExtensionContext): void {
-		if (!state.goal) return;
-		let next = mergeGoalPromptFromDisk(ctx, state.goal);
-		next = { ...next, status, stopReason: reason, updatedAt: nowIso() };
-		setGoal(next, ctx);
-		// Append ledger event for pauses (user or agent initiated)
-		if (status === "paused") {
-			try {
-				appendGoalEvent(ctx, {
-					type: "goal_paused",
-					goalId: next.id,
-					reason: reason ?? "unknown",
-					suggestedAction: next.pauseSuggestedAction,
-					status,
-					at: next.updatedAt,
-				});
-			} catch {
-				// Ledger append failure should not crash pause
-			}
-		}
-	}
-
 	function pauseActiveGoal(ctx: ExtensionContext, note?: string): void {
-		if (!state.goal || state.goal.status !== "active") return;
-		const pausedGoalId = state.goal.id;
+		const current = lifecycle.focused();
+		if (!current || current.status !== "active") return;
+		const pausedGoalId = current.id;
 		// User-initiated pause (Esc / aborted turn). Clear any stale AGENT pause
 		// reason; a /goal-pause note becomes the user-labeled pause reason
 		// (shown to the agent in the paused system prompt, cleared on resume).
 		const userNote = note?.trim();
-		state.goal = { ...state.goal, autoContinue: false, pauseReason: userNote ? `user: ${userNote}` : undefined, pauseSuggestedAction: undefined };
-		stopActiveGoal("paused", "user", ctx);
+		// P2-2 Step 4: merge → stamp paused("user") → setGoal → pause ledger
+		// is the lifecycle pause verb; nudge reset stays here (same order).
+		lifecycle.pause(
+			{ ...current, autoContinue: false, pauseReason: userNote ? `user: ${userNote}` : undefined, pauseSuggestedAction: undefined },
+			ctx,
+			"user",
+		);
 		lifecycle.handle({ tag: "nudge-reset", goalId: pausedGoalId });
 		uiNotify(ctx, userNote ? "Goal paused (note attached)." : "Goal paused.", "info");
 	}
@@ -840,37 +787,18 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 	}
 
 	function replaceGoal(config: GoalCreationConfig, ctx: ExtensionContext, startNow = true): void {
-		setGoal(createGoal(config), ctx, true, "created");
-		beginAccounting();
-		// Reset continuation nudge state — this is a fresh goal; a committed
-		// goal also clears any pending confirmation intent.
-		lifecycle.handle({ tag: "nudge-reset", goalId: state.goal?.id });
-		lifecycle.handle({ tag: "draft-applied", kind: "goal" });
+		// P2-2 Step 4: the create verb owns create+focus+clock+nudge+intent
+		// clear+ledger; presentation (notify) and continuation (queue) stay.
+		lifecycle.create(config, ctx);
 		uiNotify(ctx, buildGoalRunningNotification(config), "info");
-		if (startNow && state.goal?.autoContinue) queueContinuation(ctx, true);
-		// Append ledger event for durable history
-		const created = state.goal;
-		if (created) {
-			try {
-				appendGoalEvent(ctx, {
-					type: "goal_created",
-					goalId: created.id,
-					objective: created.objective,
-					sisyphus: created.sisyphus,
-					autoContinue: created.autoContinue,
-					at: created.createdAt,
-				});
-			} catch {
-				// Ledger append failure should not crash creation
-			}
-		}
+		if (startNow && lifecycle.focused()?.autoContinue) queueContinuation(ctx, true);
 	}
 
 	async function startGoalTweakDrafting(hint: string, ctx: ExtensionContext): Promise<void> {
 		reconcileFocusedGoalFromDisk(ctx);
 		clearContinuationState();
 		clearActiveAccounting();
-		if (!state.goal) {
+		if (!lifecycle.focused()) {
 			if (openGoals().length > 0) {
 				const selected = await chooseOpenGoal(ctx, "Tweak which open goal?");
 				if (!selected) return;
@@ -879,7 +807,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 				return;
 			}
 		}
-		const currentGoal = state.goal;
+		const currentGoal = lifecycle.focused();
 		if (!currentGoal) return;
 		if (currentGoal.status === "complete") {
 			uiNotify(ctx, "Goal is complete. Use /goals to discuss a new one or /goals-set to start immediately.", "warning");
@@ -888,7 +816,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		syncGoalPromptFromDisk(ctx);
 		persist(ctx);
 		const trimmed = hint.trim();
-		const focused = state.goal;
+		const focused = lifecycle.focused();
 		if (!focused) return;
 		const sisyphusOn = focused.sisyphus;
 		const label = sisyphusOn ? "Sisyphus tweak drafting" : "Goal tweak drafting";
@@ -969,14 +897,15 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 
 	async function chooseOpenGoal(ctx: ExtensionContext, title: string): Promise<GoalRecord | null> {
 		reconcileFocusedGoalFromDisk(ctx);
-		if (state.goal && state.goal.status !== "complete") return state.goal;
+		const chooseCurrent = lifecycle.focused();
+		if (chooseCurrent && chooseCurrent.status !== "complete") return chooseCurrent;
 		const open = openGoals();
 		if (open.length === 0) return null;
 		if (open.length === 1) {
 			const only = open[0];
 			if (!only) return null;
-			setFocusedGoalId(only.id, ctx, "selected");
-			return state.goal;
+			lifecycle.focus(only.id, ctx, "selected");
+			return lifecycle.focused();
 		}
 		if (!ctx.hasUI) {
 			uiNotify(ctx, buildUnfocusedOpenGoalsSummary(open.length), "warning");
@@ -990,8 +919,8 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			uiNotify(ctx, "Goal focus unchanged.", "info");
 			return null;
 		}
-		setFocusedGoalId(selectedId, ctx, "selected");
-		return state.goal;
+		lifecycle.focus(selectedId, ctx, "selected");
+		return lifecycle.focused();
 	}
 
 	async function focusGoalCommand(ctx: ExtensionContext): Promise<void> {
@@ -1003,13 +932,13 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		if (open.length === 1) {
 			const only = open[0];
 			if (!only) return;
-			setFocusedGoalId(only.id, ctx, "selected");
+			lifecycle.focus(only.id, ctx, "selected");
 			armFocusedContinuation(ctx);
 			uiNotify(ctx, `Focused goal: ${oneLineSummary(only)}`, "info");
 			return;
 		}
 		if (!ctx.hasUI) {
-			uiNotify(ctx, buildGoalListText(goalsById, lifecycle.focusedId), "info");
+			uiNotify(ctx, buildGoalListText(lifecycle.pool, lifecycle.focusedId), "info");
 			return;
 		}
 		const labels = open.map((item) => goalSelectorLabel(item, lifecycle.focusedId));
@@ -1020,9 +949,9 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			uiNotify(ctx, "Goal focus unchanged.", "info");
 			return;
 		}
-		setFocusedGoalId(selectedId, ctx, "selected");
+		lifecycle.focus(selectedId, ctx, "selected");
 		armFocusedContinuation(ctx);
-		uiNotify(ctx, `Focused goal: ${oneLineSummary(state.goal)}`, "info");
+		uiNotify(ctx, `Focused goal: ${oneLineSummary(lifecycle.focused())}`, "info");
 	}
 
 	async function handleGoalCommandTopic(rawTopic: string, ctx: ExtensionContext, focus: DraftingFocus, opts: { replace: boolean }): Promise<void> {
@@ -1031,7 +960,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			const replacementTarget = await chooseOpenGoal(ctx, "Replace which open goal?");
 			if (openGoals().length > 0 && !replacementTarget) return;
 			archiveCurrentGoal(ctx, "user");
-			setGoal(null, ctx, true, "cleared");
+			lifecycle.setGoal(null, ctx, { persist: true, focusReason: "cleared" });
 		}
 		startGoalDrafting(topic, focus, ctx);
 	}
@@ -1052,9 +981,9 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 
 	async function showGoalStatus(ctx: ExtensionContext): Promise<void> {
 		reconcileFocusedGoalFromDisk(ctx);
-		if (state.goal) syncGoalPromptFromDisk(ctx);
-		const view = goalForDisplay() ?? state.goal;
-		const otherCount = otherOpenGoalCount(goalsById, lifecycle.focusedId);
+		if (lifecycle.focused()) syncGoalPromptFromDisk(ctx);
+		const view = goalForDisplay() ?? lifecycle.focused();
+		const otherCount = otherOpenGoalCount(lifecycle.pool, lifecycle.focusedId);
 		const extra = view && otherCount > 0 ? `\nOther open goals: ${otherCount} (run /goal-list or /goal-focus)` : "";
 		const text = view ? `${detailedSummary(view)}${extra}` : openGoals().length > 0 ? buildUnfocusedOpenGoalsSummary(openGoals().length) : detailedSummary(null);
 		uiNotify(ctx, text, "info");
@@ -1063,7 +992,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 
 	async function handleGoalPause(ctx: ExtensionContext, rawNote?: string): Promise<void> {
 		reconcileFocusedGoalFromDisk(ctx);
-		if (!state.goal) {
+		if (!lifecycle.focused()) {
 			if (openGoals().length > 0) {
 				const selected = await chooseOpenGoal(ctx, "Pause which open goal?");
 				if (!selected) return;
@@ -1072,7 +1001,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 				return;
 			}
 		}
-		const currentGoal = state.goal;
+		const currentGoal = lifecycle.focused();
 		if (!currentGoal) return;
 		if (currentGoal.status === "complete") {
 			uiNotify(ctx, "Goal is complete.", "warning");
@@ -1087,7 +1016,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 
 	async function handleGoalResume(ctx: ExtensionContext, rawNote?: string): Promise<void> {
 		reconcileFocusedGoalFromDisk(ctx);
-		if (!state.goal && openGoals().length > 0) {
+		if (!lifecycle.focused() && openGoals().length > 0) {
 			const selected = await chooseOpenGoal(ctx, "Resume or focus open goal");
 			if (!selected) return;
 			if (selected.status === "active") {
@@ -1096,41 +1025,21 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 				return;
 			}
 		}
-		const resumeGate = validateResumeGoal(state.goal);
+		const resumeGate = validateResumeGoal(lifecycle.focused());
 		if (!resumeGate.ok) {
 			const level = resumeGate.message.includes("already running") ? "info" : "warning";
 			uiNotify(ctx, resumeGate.message, level);
 			return;
 		}
-		if (!state.goal) throw new Error("Goal disappeared during resume validation.");
-		setGoal(
-			{
-				...mergeGoalPromptFromDisk(ctx, state.goal),
-				status: "active",
-				autoContinue: true,
-				stopReason: undefined,
-				pauseReason: undefined,
-				pauseSuggestedAction: undefined,
-			},
-			ctx,
-		);
-		beginAccounting();
-		lifecycle.handle({ tag: "nudge-reset", goalId: state.goal.id });
+		const resumeTarget = lifecycle.focused();
+		if (!resumeTarget) throw new Error("Goal disappeared during resume validation.");
+		// P2-2 Step 4: stamp active + setGoal + clock + nudge + ledger is the
+		// resume verb; the resume note and continuation queue stay here.
+		lifecycle.resume(resumeTarget, ctx);
 		const note = rawNote?.trim() || null;
 		pendingResumeNote = note;
 		uiNotify(ctx, note ? "Goal resumed (note attached to the next checkpoint)." : "Goal resumed.", "info");
 		queueContinuation(ctx, true);
-		// Append ledger event for resumption
-		try {
-			appendGoalEvent(ctx, {
-				type: "goal_resumed",
-				goalId: state.goal.id,
-				reason: "user",
-				at: nowIso(),
-			});
-		} catch {
-			// Ledger append failure should not crash resume
-		}
 	}
 
 	function auditorConfigValue(config: GoalAuditorConfig, key: keyof GoalAuditorConfig): string {
@@ -1205,7 +1114,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			return;
 		}
 		reconcileFocusedGoalFromDisk(ctx);
-		if (!state.goal && openGoals().length > 0) {
+		if (!lifecycle.focused() && openGoals().length > 0) {
 			const selected = await chooseOpenGoal(ctx, "Clear which open goal?");
 			if (!selected) return;
 		}
@@ -1231,7 +1140,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			return;
 		}
 		reconcileFocusedGoalFromDisk(ctx);
-		if (!state.goal && openGoals().length > 0) {
+		if (!lifecycle.focused() && openGoals().length > 0) {
 			const selected = await chooseOpenGoal(ctx, "Abort which open goal?");
 			if (!selected) return;
 		}
@@ -1285,7 +1194,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		description: "List all open pi goals and show which one this session is focused on.",
 		handler: async (_rawArgs, ctx) => {
 			reconcileFocusedGoalFromDisk(ctx);
-			uiNotify(ctx, buildGoalListText(goalsById, lifecycle.focusedId), "info");
+			uiNotify(ctx, buildGoalListText(lifecycle.pool, lifecycle.focusedId), "info");
 			updateUI(ctx);
 		},
 	});
@@ -1382,21 +1291,22 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		description: "Attach a standing user note to the active goal (/goal-note <text>) or clear it (/goal-note clear).",
 		handler: async (rawArgs, ctx) => {
 			reconcileFocusedGoalFromDisk(ctx);
-			if (!state.goal || state.goal.status === "complete") {
+			const noteGoal = lifecycle.focused();
+			if (!noteGoal || noteGoal.status === "complete") {
 				uiNotify(ctx, "No active goal to attach a note to.", "warning");
 				return;
 			}
 			const arg = (typeof rawArgs === "string" ? rawArgs : "").trim();
 			if (!arg || arg === "clear" || arg === "off") {
-				if (!state.goal.userNote) {
+				if (!noteGoal.userNote) {
 					uiNotify(ctx, "No user note set.", "info");
 					return;
 				}
-				setGoal({ ...state.goal, userNote: undefined }, ctx);
+				lifecycle.setGoal({ ...lifecycle.focused()!, userNote: undefined }, ctx);
 				uiNotify(ctx, "User note cleared.", "info");
 				return;
 			}
-			setGoal({ ...state.goal, userNote: arg }, ctx);
+			lifecycle.setGoal({ ...lifecycle.focused()!, userNote: arg }, ctx);
 			uiNotify(ctx, `User note set: ${truncateText(arg, 80)}`, "info");
 		},
 	});
@@ -1417,10 +1327,10 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		parameters: Type.Object({}),
 		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
 			reconcileFocusedGoalFromDisk(ctx);
-			if (state.goal) syncGoalPromptFromDisk(ctx);
+			if (lifecycle.focused()) syncGoalPromptFromDisk(ctx);
 			syncGoalTools();
-			const view = goalForDisplay() ?? state.goal;
-			const otherCount = otherOpenGoalCount(goalsById, lifecycle.focusedId);
+			const view = goalForDisplay() ?? lifecycle.focused();
+			const otherCount = otherOpenGoalCount(lifecycle.pool, lifecycle.focusedId);
 			let nudge = "";
 			if (view && view.status === "active" && view.id) {
 				const prior = lifecycle.getGoalNudgeCount(view.id);
@@ -1468,7 +1378,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			return {
 				content: [{ type: "text", text: "create_goal REJECTED: direct agent creation is disabled. Use /goals or /sisyphus with propose_goal_draft for confirmation, or have the user invoke /goals-set or /sisyphus-set for immediate creation." }],
-				details: goalDetails(state.goal),
+				details: goalDetails(lifecycle.focused()),
 			};
 		},
 		renderCall(args, theme) {
@@ -1510,7 +1420,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const validation = validateGoalDraftProposal({
 				intent: lifecycle.confirmationIntent,
-				hasUnfinishedGoal: !!state.goal && state.goal.status !== "complete",
+				hasUnfinishedGoal: (() => { const g = lifecycle.focused(); return !!g && g.status !== "complete"; })(),
 				objective: params.objective,
 				sisyphus: params.sisyphus,
 				draftId: params.draftId,
@@ -1522,7 +1432,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 				}
 				return {
 					content: [{ type: "text", text: validation.message }],
-					details: goalDetails(state.goal),
+					details: goalDetails(lifecycle.focused()),
 				};
 			}
 			const activeIntent = lifecycle.confirmationIntent;
@@ -1554,7 +1464,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 					uiNotify(ctx, message, "error");
 					return {
 						content: [{ type: "text", text: message }],
-						details: goalDetails(state.goal),
+						details: goalDetails(lifecycle.focused()),
 					};
 				}
 			}
@@ -1569,8 +1479,8 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 				replaceGoal(config, ctx, false);
 				syncGoalTools();
 				return {
-					content: [{ type: "text", text: buildGoalCreatedReport({ objective, detailedSummary: detailedSummary(state.goal), autoContinue: state.goal?.autoContinue, sisyphus: state.goal?.sisyphus }) }],
-					details: goalDetails(state.goal, "created"),
+					content: [{ type: "text", text: buildGoalCreatedReport({ objective, detailedSummary: detailedSummary(lifecycle.focused()), autoContinue: lifecycle.focused()?.autoContinue, sisyphus: lifecycle.focused()?.sisyphus }) }],
+					details: goalDetails(lifecycle.focused(), "created"),
 					terminate: true,
 				};
 			}
@@ -1580,7 +1490,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 					type: "text",
 					text: "User clicked 'Continue Chatting'. The goal was NOT created. Ask the user what they want to change about the draft (objective, scope, criteria, steps), then revise and call propose_goal_draft again. Do not call propose_goal_draft again with the same content — wait for the user's input first.",
 				}],
-				details: goalDetails(state.goal),
+				details: goalDetails(lifecycle.focused()),
 			};
 		},
 		renderCall(args, theme) {
@@ -1613,19 +1523,20 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			reconcileFocusedGoalFromDisk(ctx);
 			if (params.status !== COMPLETE_STATUS) throw new Error("update_goal only supports status=complete.");
-			const completionGate = validateGoalCompletion({ goal: state.goal, runningGoalId });
+			const completionGate = validateGoalCompletion({ goal: lifecycle.focused(), runningGoalId });
 			if (!completionGate.ok) {
 				return {
 					content: [{ type: "text", text: completionGate.message }],
-					details: goalDetails(state.goal),
+					details: goalDetails(lifecycle.focused()),
 				};
 			}
-			if (!state.goal) throw new Error("Goal disappeared during completion validation.");
+			const auditSource = lifecycle.focused();
+			if (!auditSource) throw new Error("Goal disappeared during completion validation.");
 			// Which audit attempt this is (1 = first try) — persisted up front
 			// so the count survives a rejected audit and process restarts.
-			const auditAttemptNo = (state.goal.auditAttempts ?? 0) + 1;
-			const auditTarget = { ...mergeGoalPromptFromDisk(ctx, state.goal), auditAttempts: auditAttemptNo };
-			state.goal = { ...state.goal, auditAttempts: auditAttemptNo };
+			const auditAttemptNo = (auditSource.auditAttempts ?? 0) + 1;
+			const auditTarget = { ...mergeGoalPromptFromDisk(ctx, auditSource), auditAttempts: auditAttemptNo };
+			lifecycle.adopt({ ...auditSource, auditAttempts: auditAttemptNo });
 			persist(ctx);
 			const outcome = await runCompletionAudit({
 				ctx,
@@ -1653,13 +1564,13 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			if (outcome.verdict === "rejected") {
 				return {
 					content: [{ type: "text", text: outcome.rejectionText }],
-					details: goalDetails(state.goal, "rejected"),
+					details: goalDetails(lifecycle.focused(), "rejected"),
 				};
 			}
 			// Account for any remaining elapsed time first so the compact
 				// "goal achieved" line carries the final usage numbers.
 			accountProgress(ctx);
-			const finalUsage = state.goal ? { ...state.goal.usage } : null;
+			const finalUsage = lifecycle.focused() ? { ...lifecycle.focused()!.usage } : null;
 			// In-place audit verdict marker was emitted by the flow; the summary
 				// line below is deferred to the end of this finishing turn so the
 				// model's closing summary renders first and "Goal achieved" last.
@@ -1674,7 +1585,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 						: {}),
 				},
 			});
-			state.goal = auditTarget;
+			lifecycle.adopt(auditTarget);
 			// P2-2 Step 2: the terminal transition (merge → stamp complete →
 			// archive via persist → pool removal → focus entry → ledger) is
 			// the lifecycle complete verb. The audited target is passed
@@ -1726,25 +1637,28 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			reconcileFocusedGoalFromDisk(ctx);
 			const reason = params.reason.trim();
 			if (!reason) throw new Error("pause_goal requires a non-empty reason.");
-			const pauseGate = validatePauseGoal({ goal: state.goal, runningGoalId, reason });
+			const pauseGate = validatePauseGoal({ goal: lifecycle.focused(), runningGoalId, reason });
 			if (!pauseGate.ok) {
 				return {
 					content: [{ type: "text", text: pauseGate.message }],
-					details: goalDetails(state.goal),
+					details: goalDetails(lifecycle.focused()),
 				};
 			}
-			if (!state.goal) throw new Error("Goal disappeared during pause validation.");
+			if (!lifecycle.focused()) throw new Error("Goal disappeared during pause validation.");
 			const suggested = params.suggestedAction?.trim() || undefined;
 
 			// Account for any remaining elapsed time before stopping the run.
 			accountProgress(ctx);
-			state.goal = mergeGoalPromptFromDisk(ctx, state.goal);
-			const next = buildPausedByAgentGoal(state.goal, { reason, suggestedAction: suggested, updatedAt: nowIso() });
-			setGoal(next, ctx);
+			const pauseSource = lifecycle.focused();
+			if (!pauseSource) throw new Error("Goal disappeared during pause validation.");
+			const next = buildPausedByAgentGoal(mergeGoalPromptFromDisk(ctx, pauseSource), { reason, suggestedAction: suggested, updatedAt: nowIso() });
+			// The tool path composes the policy builder with the setGoal verb
+			// (it never emitted the pause ledger — see the pause verb note).
+			lifecycle.setGoal(next, ctx);
 			lifecycle.handle({ tag: "nudge-reset", goalId: next.id });
 			// C9 fix: mark turn-stopped so subsequent in-turn tool calls are blocked.
 			// This is the schema-level closure of "agent kept writing files after pause_goal".
-			lifecycle.handle({ tag: "turn-stopped", goalId: state.goal.id });
+			lifecycle.handle({ tag: "turn-stopped", goalId: next.id });
 
 			const suggestionLine = suggested ? `\nSuggested: ${truncateText(suggested, 160)}` : "";
 			uiNotify(ctx, 
@@ -1756,7 +1670,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 					type: "text",
 					text: `Goal paused. Reason: ${reason}${suggested ? `\nSuggested: ${suggested}` : ""}\nWaiting for user to /goal-resume, /goal-tweak, or /goal-clear. Stop now; do not start another tool call.`,
 				}],
-				details: goalDetails(state.goal, "paused"),
+				details: goalDetails(lifecycle.focused(), "paused"),
 				terminate: true,
 			};
 		},
@@ -1787,15 +1701,16 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			reconcileFocusedGoalFromDisk(ctx);
 			const reason = params.reason.trim();
 			if (!reason) throw new Error("abort_goal requires a non-empty reason.");
-			const abortGate = validateGoalAbort({ goal: state.goal, runningGoalId, reason });
+			const abortGate = validateGoalAbort({ goal: lifecycle.focused(), runningGoalId, reason });
 			if (!abortGate.ok) {
 				return {
 					content: [{ type: "text", text: abortGate.message }],
-					details: goalDetails(state.goal),
+					details: goalDetails(lifecycle.focused()),
 				};
 			}
-			if (!state.goal) throw new Error("Goal disappeared during abort validation.");
-			const abortedGoalId = state.goal.id;
+			const abortSource = lifecycle.focused();
+			if (!abortSource) throw new Error("Goal disappeared during abort validation.");
+			const abortedGoalId = abortSource.id;
 
 			// Account for any remaining elapsed time before abandoning the run.
 			accountProgress(ctx);
@@ -1816,7 +1731,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 					type: "text",
 					text: `Goal aborted. Reason: ${reason}${archiveLine}\nThe goal has been archived and cleared. Stop now; do not start another tool call.`,
 				}],
-				details: goalDetails(state.goal, "aborted"),
+				details: goalDetails(lifecycle.focused(), "aborted"),
 				terminate: true,
 			};
 		},
@@ -1846,7 +1761,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
 			return {
 				content: [{ type: "text", text: "step_complete is no longer required. Sisyphus is now a prompt/criteria style that uses the normal goal lifecycle. Continue working from the objective, or call update_goal(status=complete) only when the full objective is satisfied." }],
-				details: goalDetails(state.goal),
+				details: goalDetails(lifecycle.focused()),
 			};
 		},
 		renderCall(args, theme) {
@@ -1877,13 +1792,14 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		executionMode: "sequential",
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			reconcileFocusedGoalFromDisk(ctx);
-			if (!state.goal) {
+			const tweakGoal = lifecycle.focused();
+			if (!tweakGoal) {
 				return {
 					content: [{ type: "text", text: "No goal is set; apply_goal_tweak is a no-op." }],
-					details: goalDetails(state.goal),
+					details: goalDetails(null),
 				};
 			}
-			if (lifecycle.tweakDraftingFor !== state.goal.id) {
+			if (lifecycle.tweakDraftingFor !== tweakGoal.id) {
 				return {
 					content: [{
 						type: "text",
@@ -1891,13 +1807,13 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 							"This tool can only be called during a /goal-tweak drafting interview that the user initiated. " +
 							"If you want to change the goal, ask the user to run /goal-tweak.",
 					}],
-					details: goalDetails(state.goal),
+					details: goalDetails(lifecycle.focused()),
 				};
 			}
-			if (state.goal.status !== "active" && state.goal.status !== "paused") {
+			if (tweakGoal.status !== "active" && tweakGoal.status !== "paused") {
 				return {
-					content: [{ type: "text", text: `Goal is ${statusLabel(state.goal)}; cannot apply a tweak.` }],
-					details: goalDetails(state.goal),
+					content: [{ type: "text", text: `Goal is ${statusLabel(tweakGoal)}; cannot apply a tweak.` }],
+					details: goalDetails(tweakGoal),
 				};
 			}
 			const newObjective = params.newObjective.trim();
@@ -1905,7 +1821,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			const changeSummary = params.changeSummary.trim();
 			if (!changeSummary) throw new Error("apply_goal_tweak requires a non-empty changeSummary.");
 			const next: GoalRecord = {
-				...state.goal,
+				...tweakGoal,
 				objective: newObjective,
 				updatedAt: nowIso(),
 				// Clear any prior agent pause reason — the user has redefined the work.
@@ -1922,13 +1838,14 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			//   2) update in-memory `goal` to the canonical post-write record
 			//   3) append the state entry and re-sync tools
 			//   4) clear the tweak drafting gate so apply_goal_tweak can't be re-used
-			state.goal = writeActiveGoalFile(ctx, next);
-			pi.appendEntry(STATE_ENTRY, goalDetails(state.goal));
+			lifecycle.adopt(writeActiveGoalFile(ctx, next));
+			pi.appendEntry(STATE_ENTRY, goalDetails(lifecycle.focused()));
 			lifecycle.handle({ tag: "draft-applied", kind: "tweak" });
 			// Reset autoContinue counter — plan changed, agent gets a fresh chain.
-			lifecycle.handle({ tag: "nudge-reset", goalId: state.goal.id });
+			const tweakedGoal = lifecycle.focused();
+			lifecycle.handle({ tag: "nudge-reset", goalId: tweakedGoal!.id });
 			// C9 fix: mark turn-stopped so subsequent in-turn tool calls are blocked.
-			lifecycle.handle({ tag: "turn-stopped", goalId: state.goal.id });
+			lifecycle.handle({ tag: "turn-stopped", goalId: tweakedGoal!.id });
 			syncGoalTools();
 			updateUI(ctx);
 			uiNotify(ctx, `Goal tweaked: ${truncateText(changeSummary, 160)}`, "info");
@@ -1936,9 +1853,9 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			try {
 				appendGoalEvent(ctx, {
 					type: "goal_tweaked",
-					goalId: state.goal.id,
+					goalId: tweakedGoal!.id,
 					changeSummary,
-					at: state.goal.updatedAt,
+					at: tweakedGoal!.updatedAt,
 				});
 			} catch {
 				// Ledger append failure should not crash tweak
@@ -1948,7 +1865,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 					type: "text",
 					text: `Goal tweak applied. ${changeSummary}\nStop now; the next continuation will arrive automatically if the goal is active.`,
 				}],
-				details: goalDetails(state.goal),
+				details: goalDetails(lifecycle.focused()),
 				terminate: true,
 			};
 		},
@@ -1975,24 +1892,25 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			const candidate = message as { customType?: string; details?: unknown; content?: unknown };
 			const queuedGoalId = goalEventMessageId(candidate);
 			if (!queuedGoalId) return message;
+			const ctxGoal = lifecycle.focused();
 			if (
-				state.goal?.id === queuedGoalId
-				&& (state.goal.status === "active")
-				&& state.goal.autoContinue
+				ctxGoal?.id === queuedGoalId
+				&& ctxGoal.status === "active"
+				&& ctxGoal.autoContinue
 				&& latestGoalEventIndex.get(queuedGoalId) === index
 			) return message;
 			changed = true;
 			const details = asRecord(candidate.details) ?? {};
 			return {
 				...message,
-				content: staleContinuationPrompt(queuedGoalId, state.goal),
+				content: staleContinuationPrompt(queuedGoalId, lifecycle.focused()),
 				display: false,
 				details: {
 					...details,
 					kind: "stale",
 					goalId: queuedGoalId,
-					currentGoalId: state.goal?.id ?? null,
-					currentStatus: state.goal?.status ?? null,
+					currentGoalId: lifecycle.focused()?.id ?? null,
+					currentStatus: lifecycle.focused()?.status ?? null,
 				},
 			} as typeof message;
 		});
@@ -2056,10 +1974,11 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		// If the assistant ended a turn without queuing more tool calls, push a continuation right away.
 		// #4: only queue if some real work was done this turn — otherwise the model is
 		// just chatting and we should not keep firing turns on noise.
+		const turnEndGoal = lifecycle.focused();
 		if (
 			!isToolUseAssistantMessage(message)
-			&& state.goal?.status === "active"
-			&& state.goal.autoContinue
+			&& turnEndGoal?.status === "active"
+			&& turnEndGoal.autoContinue
 			&& lifecycle.goalWorkToolCalledThisTurn
 		) {
 			queueContinuation(ctx);
@@ -2101,15 +2020,15 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		// above the spinner row) and survives session-invalidated TUI maps.
 		if (ctx.hasUI) goalUi.remountWidget(ctx);
 		goalUi.syncTerminalInputPause(ctx);
-		if (event.reason === "resume" && !state.goal && openGoals().length > 1 && ctx.hasUI) {
+		if (event.reason === "resume" && !lifecycle.focused() && openGoals().length > 1 && ctx.hasUI) {
 			await focusGoalCommand(ctx);
 		}
 		// Codex behavior: prompt before reactivating a paused goal on resume.
-		if (event.reason === "resume" && state.goal?.status === "paused" && ctx.hasUI) {
-			const current = state.goal;
+		if (event.reason === "resume" && lifecycle.focused()?.status === "paused" && ctx.hasUI) {
+			const current = lifecycle.focused()!;
 			const shouldResume = await ctx.ui.confirm("Resume paused goal?", `Goal: ${current.objective}`);
 			if (shouldResume) {
-				setGoal({ ...current, status: "active", autoContinue: true, stopReason: undefined, pauseReason: undefined, pauseSuggestedAction: undefined }, ctx);
+				lifecycle.setGoal({ ...current, status: "active", autoContinue: true, stopReason: undefined, pauseReason: undefined, pauseSuggestedAction: undefined }, ctx);
 			}
 		}
 		beginAccounting();
@@ -2123,11 +2042,11 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 
 	pi.on("session_compact", async (_event, ctx) => {
 		if (lifecycle.isDrafting) return;
-		if (state.goal) persist(ctx);
+		if (lifecycle.focused()) persist(ctx);
 		beginAccounting();
 		// Arm a deterministic compaction summary for the next agent turn.
 		// This replaces the generic reminder with artifact-backed state.
-		if (shouldArmPostCompactReminder(state.goal)) {
+		if (shouldArmPostCompactReminder(lifecycle.focused())) {
 			postCompactReminderPending = true;
 		}
 		queueContinuation(ctx, true);
@@ -2164,13 +2083,14 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		// model act on a stale instruction.
 		if (incomingGoalId !== null) {
 			clearContinuationState();
-			if (!state.goal || state.goal.id !== incomingGoalId || (state.goal.status !== "active") || !state.goal.autoContinue) {
+			const checkpointGoal = lifecycle.focused();
+			if (!checkpointGoal || checkpointGoal.id !== incomingGoalId || checkpointGoal.status !== "active" || !checkpointGoal.autoContinue) {
 				try {
 					ctx.abort?.();
 				} catch {}
 				updateUI(ctx);
 				return {
-					systemPrompt: `${currentSystemPrompt()}\n\n${staleContinuationPrompt(incomingGoalId, state.goal)}`,
+					systemPrompt: `${currentSystemPrompt()}\n\n${staleContinuationPrompt(incomingGoalId, lifecycle.focused())}`,
 				};
 			}
 		} else {
@@ -2178,10 +2098,10 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			// double-fire after the user's own message returns. Also reset the
 			// autoContinue nudge state so the user always gets a fresh chain.
 			clearContinuationState();
-			lifecycle.handle({ tag: "nudge-reset", goalId: state.goal?.id });
+			lifecycle.handle({ tag: "nudge-reset", goalId: lifecycle.focused()?.id });
 		}
 
-		if (!state.goal) {
+		if (!lifecycle.focused()) {
 			runningGoalId = null;
 			const openCount = openGoals().length;
 			if (openCount > 0) {
@@ -2190,16 +2110,18 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			return;
 		}
 		reconcileFocusedGoalFromDisk(ctx);
-		if (!state.goal) {
+		if (!lifecycle.focused()) {
 			runningGoalId = null;
 			const openCount = openGoals().length;
 			if (openCount > 0) return { systemPrompt: `${currentSystemPrompt()}\n\n${unfocusedOpenGoalsPrompt(openCount)}` };
 			return;
 		}
-		runningGoalId = state.goal.status === "active" ? state.goal.id : null;
-		if (state.goal.status === "complete") return;
-		if (state.goal.status === "paused") {
-			const current = state.goal;
+		const promptGoal = lifecycle.focused()!;
+		runningGoalId = promptGoal.status === "active" ? promptGoal.id : null;
+		if (promptGoal.status === "complete") return;
+		const pausedGoalNarrowed = promptGoal;
+		if (pausedGoalNarrowed?.status === "paused") {
+			const current = pausedGoalNarrowed;
 			const pauseExtras: string[] = [];
 			if (current.stopReason === "agent") {
 				pauseExtras.push("");
@@ -2225,7 +2147,9 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 				systemPrompt: `${currentSystemPrompt()}\n\n[PI GOAL PAUSED goalId=${current.id}]\n${untrustedObjectiveBlock(current)}${pauseExtras.join("\n")}${auditorExtra}\n\nThe goal is paused. Do not autonomously continue substantive work unless the user resumes it with /goal-resume. If the user explicitly asks to finish or abandon the paused goal, or the objective is already satisfied based on available evidence, you may call update_goal(status=complete) or abort_goal without resuming. Do not call pause_goal again.`,
 			};
 		}
-		const activeGoal = state.goal;
+		const activeGoalNarrowed = lifecycle.focused();
+		if (!activeGoalNarrowed || activeGoalNarrowed.status === "complete") return;
+		const activeGoal = activeGoalNarrowed;
 		let prompt = goalPrompt(activeGoal);
 		// Inject durable auditor feedback if the latest result was a rejection
 		try {
@@ -2242,10 +2166,10 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			// Use deterministic compaction summary instead of generic reminder
 			try {
 				const ledger = readGoalLedger(ctx);
-				const compaction = buildCompactionSummary({ goalsById, focusedGoalId: lifecycle.focusedId, ledgerEvents: ledger.events });
+				const compaction = buildCompactionSummary({ goalsById: lifecycle.pool, focusedGoalId: lifecycle.focusedId, ledgerEvents: ledger.events });
 				prompt = `${prompt}\n\n[POST-COMPACTION RESYNC goalId=${activeGoal.id}]\n${compaction}`;
 			} catch {
-				prompt = `${prompt}\n\n[POST-COMPACTION RESYNC goalId=${state.goal.id}]\nThe conversation was just compacted. Re-read the objective and continue from the actual artifacts/state; do not rely on memory of the prior chat.`;
+				prompt = `${prompt}\n\n[POST-COMPACTION RESYNC goalId=${activeGoal.id}]\nThe conversation was just compacted. Re-read the objective and continue from the actual artifacts/state; do not rely on memory of the prior chat.`;
 			}
 		}
 		return { systemPrompt: `${currentSystemPrompt()}\n\n${prompt}` };
@@ -2267,13 +2191,14 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 				}),
 				{ tokens: 0, cost: 0 },
 			);
-		if ((aborted.tokens > 0 || aborted.cost > 0) && endedGoalId && state.goal?.id === endedGoalId) {
+		if ((aborted.tokens > 0 || aborted.cost > 0) && endedGoalId && lifecycle.focused()?.id === endedGoalId) {
 			accountProgress(ctx, { completedTurnTokens: aborted.tokens, completedTurnCost: aborted.cost });
 		}
 
 		continuationLoop.clearQueued();
-		if (!state.goal || state.goal.status !== "active" || !state.goal.autoContinue) return;
-		if (endedGoalId && state.goal.id !== endedGoalId) return;
+		const endGoal = lifecycle.focused();
+		if (!endGoal || endGoal.status !== "active" || !endGoal.autoContinue) return;
+		if (endedGoalId && endGoal.id !== endedGoalId) return;
 		if (!reconcileFocusedGoalFromDisk(ctx)) return;
 		if (hasAbortedAssistantMessage(event.messages) || ctx.signal?.aborted) {
 			pauseActiveGoal(ctx);
@@ -2288,7 +2213,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		accountProgress(ctx);
 		clearContinuationTimer();
 		goalUi.dispose();
-		if (state.goal) persist(ctx);
+		if (lifecycle.focused()) persist(ctx);
 		lifecycle.handle({ tag: "dispose" });
 	});
 }

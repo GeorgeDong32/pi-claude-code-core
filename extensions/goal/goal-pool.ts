@@ -16,7 +16,7 @@ export function goalPoolFromGoals(goals: Iterable<GoalRecord>): Map<string, Goal
 	return pool;
 }
 
-export function openGoalsFromPool(pool: Map<string, GoalRecord>): GoalRecord[] {
+export function openGoalsFromPool(pool: ReadonlyMap<string, GoalRecord>): GoalRecord[] {
 	return Array.from(pool.values())
 		.filter((goal) => goal.status !== "complete")
 		.sort((a, b) => {
@@ -25,20 +25,21 @@ export function openGoalsFromPool(pool: Map<string, GoalRecord>): GoalRecord[] {
 		});
 }
 
-export function focusedGoalFromPool(pool: Map<string, GoalRecord>, focusedGoalId: string | null): GoalRecord | null {
+export function focusedGoalFromPool(pool: ReadonlyMap<string, GoalRecord>, focusedGoalId: string | null): GoalRecord | null {
 	if (!focusedGoalId) return null;
 	const goal = pool.get(focusedGoalId) ?? null;
 	return goal;
 }
 
-export function otherOpenGoalCount(pool: Map<string, GoalRecord>, focusedGoalId: string | null): number {
+export function otherOpenGoalCount(pool: ReadonlyMap<string, GoalRecord>, focusedGoalId: string | null): number {
 	return openGoalsFromPool(pool).filter((goal) => goal.id !== focusedGoalId).length;
 }
 
 export function resolveSessionFocus(args: {
-	pool: Map<string, GoalRecord>;
+	pool: ReadonlyMap<string, GoalRecord>;
 	focusEntry?: GoalFocusEntry | null;
 	legacyGoal?: GoalRecord | null;
+	adoptLegacyGoal?: (goal: GoalRecord) => void;
 }): string | null {
 	const focusedGoalId = args.focusEntry?.focusedGoalId ?? null;
 	const focused = focusedGoalId ? focusedGoalFromPool(args.pool, focusedGoalId) : null;
@@ -50,7 +51,9 @@ export function resolveSessionFocus(args: {
 	}
 	if (args.legacyGoal && args.legacyGoal.status !== "complete") {
 		if (args.pool.has(args.legacyGoal.id)) return args.legacyGoal.id;
-		args.pool.set(args.legacyGoal.id, cloneGoal(args.legacyGoal));
+		// The pool is read-only here — the caller adopts the legacy record
+		// into its owned pool through the injected callback (P2-2 Step 4).
+		args.adoptLegacyGoal?.(cloneGoal(args.legacyGoal));
 		return args.legacyGoal.id;
 	}
 	const open = openGoalsFromPool(args.pool);
@@ -64,7 +67,7 @@ export function goalSelectorLabel(goal: GoalRecord, focusedGoalId: string | null
 	return `${marker} ${goal.id} | ${statusLabel(goal)} | ${mode} | ${truncateText(displayObjectiveTitle(goal.objective), 72)}${path}`;
 }
 
-export function buildGoalListText(pool: Map<string, GoalRecord>, focusedGoalId: string | null): string {
+export function buildGoalListText(pool: ReadonlyMap<string, GoalRecord>, focusedGoalId: string | null): string {
 	const open = openGoalsFromPool(pool);
 	if (open.length === 0) return "No open goals. Use /goals <topic> or /sisyphus <topic> to discuss, or /goals-set <objective> / /sisyphus-set <objective> to start immediately.";
 	const lines = [`Open goals: ${open.length}`, ""];

@@ -32,6 +32,7 @@
 
 | 文件 | 说明 |
 |---|---|
+| `goal-lifecycle.ts` | pool/focus/drafting 状态所有者（P2-2 四步全部落地）：九个转移动词——`create`/`focus`/`unfocus`/`pause`/`resume`/`complete`/`terminate(kind, by)`/`reconcileFromDisk`（加底层 `setGoal`）——各携完整副作用集经注入 ports（clock/continuation/entries/ledger/storage/UI）执行；drafting intents（`confirmationIntent`、`tweakDraftingFor`）、每轮 flags（`goalWorkToolCalledThisTurn`、`turnStoppedFor`）与 get_goal nudge 计数为模块私有，仅可经封闭事件入口 `handle(event)` 写入（restore/turn-start/turn-stopped/tool-call/usage-accounted/draft-start·cancel·applied/nudge-reset/agent-settled/dispose）。`TransitionReport` 是只读描述（含归档后终态记录）——不是待执行清单 |
 | `goal.ts` | 主装配:工具、命令、widget、stop-hook 续跑循环。回合内停止锁只由四个真停止工具的成功 execute 设置(`pause_goal` / `abort_goal` / `update_goal=complete` / `apply_goal_tweak`,D3=A,spec 2026-10-07 P0-2);其余工具调用一律进度中性——放行、不计进度、不锁回合(进度例外读取宿主真实的 `event.input` 字段)。用量记帐对全部四个 token 通道求和(`input`/`output`/`cacheRead`/`cacheWrite`——cache-inclusive,DEVIATIONS #69),并累计 provider 报告的美元费用(`usage.cost.total`);带执行用量的 `tool_result` 事件(subagent 运行、codemode 的 `models.classify`/`generateImages`)同样入帐——goal 台帐因此包含委派出去的模型开销,而不只 parent 主线程 |
 | `goal-core.ts` | 渲染/状态助手(footer 状态、时长/token 格式化、单行摘要) |
 | `renderers.ts` | 消息渲染器(result / event / audit-event)——自 wiring 拆出(arch review C6),不经工厂即可测 |

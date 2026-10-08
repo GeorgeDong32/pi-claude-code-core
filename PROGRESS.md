@@ -2,6 +2,14 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## 2026-10-08 C5-Step4：撤过渡代理 + 补齐动词终态；DEVIATIONS #73 关闭（P2-2 4/4 完成）
+
+- **动词终态**：goal-lifecycle.ts 九动词齐备——create（replaceGoal 核心：setGoal+beginClock+nudge+draft-applied+ledger goal_created）/focus/unfocus（focus(null) 命名形）/pause（pauseActiveGoal→stopActiveGoal 核心：merge→stamp paused→setGoal→ledger goal_paused；pause_goal 工具保持 policy+setGoal 组合,该路径历史上无 pause ledger,行为保真）/resume（/goal-resume 核心）/complete/terminate/reconcileFromDisk（池重读+焦点修复+陈旧 gate 清理,子会话 env 守卫留 adapter）+底层 setGoal;ports 增 readActiveGoalPool/beginClock。
+- **代理撤除**：goalsById 池别名、state 读写代理、setGoal/setFocusedGoalId 薄壳全部删除——读经 lifecycle.focused()/lifecycle.pool（goal-pool 五函数签名放宽 ReadonlyMap,类型级只读）、记录刷新经 adopt 原语、转移经动词;resolveSessionFocus legacy 收养改注入回调。goal.ts 退为参数校验+动词/事件调用+输出格式化。
+- **测试**：goal-lifecycle.test.ts 24 例（新增 5：create/pause/resume/unfocus/reconcileFromDisk 含 vanish 与 merge 双分支+无焦点不重选）;goal-pool.test.ts 1 例改钉收养回调契约。**既有 FakeHost 套件零删减零改动全绿**（核对结论=无与转移表纯重复的用例,它们钉真实入口接线,规格明令保留——删减清单记 DEVIATIONS #118④）。
+- **门禁**：check 0;vitest 935 + node:test 533 全 0 fail;contracts 43+3todo。
+- **台账**：DEVIATIONS #73 关闭+#118 登记、docs/{en,zh}/goal.md 模块表、FORK.md 结构声明扩展、spec P2-2 状态行、本条。C5 全部四步完成。
+
 ## 2026-10-08 C5-Step3：drafting intents/turn flags/nudge 迁入封闭事件入口（P2-2 3/4）
 
 - **实现**：goal-lifecycle.ts 增封闭事件入口 `handle(event)`（union：restore/turn-start/turn-stopped/tool-call/usage-accounted/draft-start(goal|tweak)/draft-cancel/applied/nudge-reset/agent-settled/dispose）；confirmationIntent、tweakDraftingFor、goalWorkToolCalledThisTurn、turnStoppedFor、activeGetGoalTurnsByGoalId 全部成为模块内私有状态——只经只读投影（confirmationIntent/tweakDraftingFor/isDrafting/turnStoppedFor/goalWorkToolCalledThisTurn/getGoalNudgeCount）读、只经事件写，无任意 setter。**撤除 releaseStaleTweakGate/resetNudge 两写回端口**（setGoal/focus 内部直接清理，谓词 isMeaningfulProgressToolCall 与 POST_STOP/GOAL_PROGRESS 集合随迁 lifecycle，goal.ts 删除模块级副本）。

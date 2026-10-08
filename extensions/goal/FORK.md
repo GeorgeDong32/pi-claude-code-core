@@ -38,7 +38,7 @@ handoff 2026-09-20 称「npm 最新 0.1.7、本地领先」。**实测(registry.
 
 ## 上游跟进策略(P2-GO-06)
 
-> **结构性 fork 自持声明（arch B7，2026-10-02）**：core 侧重构批（B3 kind 字段化、B7 continuation/audit 模块拆分）之后，goal.ts 与上游 capyup/main 的文件映射已断裂——上游 bugfix 无法再干净 cherry-pick 到本树。自本批起放弃「逐字节一致」白名单维护，改为：上游 diff 仅作人工评估参考（同类 bug 在本树独立修复），不再执行机械 cherry-pick。
+> **结构性 fork 自持声明（arch B7，2026-10-02；P2-2 lifecycle 扩展，2026-10-08）**：core 侧重构批（B3 kind 字段化、B7 continuation/audit 模块拆分）之后，goal.ts 与上游 capyup/main 的文件映射已断裂——上游 bugfix 无法再干净 cherry-pick 到本树。自 B7 批起放弃「逐字节一致」白名单维护，改为：上游 diff 仅作人工评估参考（同类 bug 在本树独立修复），不再执行机械 cherry-pick。P2-2（goal-lifecycle.ts：九动词 + 封闭事件入口 + pool/focus/drafting/turn-flags/nudge 所有权）进一步把状态机核心迁出 goal.ts，goal.ts 退为参数校验 + 动词/事件调用 + 输出格式的装配层（DEVIATIONS #73 至此关闭）。
 
 - 历史条款（0.2.0 前）：季度 diff capyup/main，仅 cherry-pick bugfix——随结构性 fork 自持声明失效。
 - `.pi/goals/` 磁盘格式上游 break → 不再适用（无同步义务）；格式冻结由 P0-CT-09 契约测试独立保障。

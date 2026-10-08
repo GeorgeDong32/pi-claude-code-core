@@ -56,8 +56,10 @@ test("resolveSessionFocus prefers valid branch focus, then legacy goal, then sin
 	assert.equal(resolveSessionFocus({ pool: goalPoolFromGoals([goal("only")]), focusEntry: { version: 1, focusedGoalId: "missing", reason: "selected" } }), null);
 
 	const legacyPool = goalPoolFromGoals([goal("g1")]);
-	assert.equal(resolveSessionFocus({ pool: legacyPool, legacyGoal: goal("legacy") }), "legacy");
-	assert.equal(legacyPool.has("legacy"), true);
+	const adopted: GoalRecord[] = [];
+	assert.equal(resolveSessionFocus({ pool: legacyPool, legacyGoal: goal("legacy"), adoptLegacyGoal: (g) => adopted.push(g) }), "legacy");
+	assert.equal(adopted.length, 1, "legacy adoption flows through the injected callback (P2-2 Step 4)");
+	assert.equal(adopted[0]?.id, "legacy");
 	const diskWinsPool = goalPoolFromGoals([goal("g1", { objective: "disk wins", usage: { tokensUsed: 50, activeSeconds: 3, costUsed: 0 } })]);
 	assert.equal(resolveSessionFocus({ pool: diskWinsPool, legacyGoal: goal("g1", { objective: "stale legacy" }) }), "g1");
 	assert.equal(diskWinsPool.get("g1")?.objective, "disk wins");

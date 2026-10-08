@@ -65,8 +65,9 @@
  * adopt) are reconciliation/loadState internals — they move data WITHOUT the
  * verb effect sets, exactly like the old direct assignments did.
  */
-import { asRecord, type DraftingFocus, type GoalRecord } from "./goal-record.ts";
+import { asRecord, createGoal, type DraftingFocus, type GoalCreationConfig, type GoalRecord } from "./goal-record.ts";
 import { buildAbortedByAgentGoal } from "./goal-policy.ts";
+import { mergeFocusedGoalWithDisk } from "./goal-pool.ts";
 import { GOAL_PROGRESS_TOOL_NAMES, POST_STOP_ALLOWED_TOOLS } from "./goal-tool-names.ts";
 
 /** Narrow structural context — the lifecycle module never imports pi. */
@@ -132,10 +133,14 @@ export interface GoalLifecyclePorts {
 	mergeGoalPromptFromDisk(ctx: LifecycleCtx, goal: GoalRecord): GoalRecord;
 	/** storage: archive a record to the archive area (goal-files). */
 	archiveGoal(ctx: LifecycleCtx, goal: GoalRecord): GoalRecord;
+	/** storage: read the on-disk active pool (goal-files). */
+	readActiveGoalPool(ctx: LifecycleCtx): ReadonlyMap<string, GoalRecord>;
+	/** accounting: begin a segment for the focused active goal (goal-accounting via the adapter's beginAccounting). */
+	beginClock(): void;
 }
 
 export interface TransitionReport {
-	kind: "setGoal" | "focus" | "complete" | "terminate";
+	kind: "setGoal" | "focus" | "complete" | "terminate" | "create" | "pause" | "resume";
 	previousGoalId: string | null;
 	nextGoalId: string | null;
 	/**
@@ -174,6 +179,37 @@ export interface GoalLifecycle {
 
 	setGoal(next: GoalRecord | null, ctx: LifecycleCtx, opts?: { persist?: boolean; focusReason?: GoalFocusReason }): TransitionReport;
 	focus(goalId: string | null, ctx: LifecycleCtx, reason: GoalFocusReason): TransitionReport;
+	/** Named form of focus(null): drop the focus pointer with full effects. */
+	unfocus(ctx: LifecycleCtx, reason: GoalFocusReason): TransitionReport;
+	/**
+	 * create(config): the replaceGoal core — create + focus + begin the
+	 * clock + fresh nudge state + clear a pending goal intent + ledger
+	 * goal_created. Notify/queueContinuation stay with the adapter
+	 * (presentation / continuation module).
+	 */
+	create(config: GoalCreationConfig, ctx: LifecycleCtx): TransitionReport;
+	/**
+	 * pause(record, {stopReason}): the pauseActiveGoal/stopActiveGoal("paused")
+	 * core — the caller pre-builds the record (user note / agent pause
+	 * fields); the verb merges, stamps paused, runs setGoal, and ledgers
+	 * goal_paused. The pause_goal TOOL path keeps its policy-builder +
+	 * setGoal composition (it never emitted the pause ledger).
+	 */
+	pause(record: GoalRecord, ctx: LifecycleCtx, stopReason: StopReason): TransitionReport;
+	/**
+	 * resume(goal): the /goal-resume core — stamp active/autoContinue,
+	 * setGoal, begin the clock, fresh nudge state, ledger goal_resumed.
+	 */
+	resume(goal: GoalRecord, ctx: LifecycleCtx): TransitionReport;
+	/**
+	 * reconcileFromDisk: the reconcileFocusedGoalFromDisk core (pool re-read,
+	 * focus repair, silent writes, stale-gate cleanup). The child-session
+	 * guard stays with the adapter (env concern).
+	 */
+	reconcileFromDisk(ctx: LifecycleCtx, opts?: {
+		preserveMemoryUsage?: boolean;
+		captureDiskGoal?: { goal: GoalRecord | null };
+	}): boolean;
 	/**
 	 * complete(goal): archive the audited goal as complete (the update_goal
 	 * approved-verdict inline block). `goal` is the audited target — the
@@ -425,6 +461,119 @@ export function createGoalLifecycle(ports: GoalLifecyclePorts): GoalLifecycle {
 			return { kind: "focus", previousGoalId, nextGoalId: focusedGoalId, effects };
 		},
 
+		unfocus(ctx, reason) {
+			return this.focus(null, ctx, reason);
+		},
+		create(config, ctx) {
+			const created = createGoal(config);
+			const effects: string[] = [];
+			const report = this.setGoal(created, ctx, { focusReason: "created" });
+			ports.beginClock();
+			effects.push("begin-clock");
+			resetNudge(created.id);
+			effects.push(`nudge-reset:${created.id}`);
+			this.handle({ tag: "draft-applied", kind: "goal" });
+			effects.push("draft-applied:goal");
+			try {
+				ports.appendLedger(ctx, {
+					type: "goal_created",
+					goalId: created.id,
+					objective: created.objective,
+					sisyphus: created.sisyphus,
+					autoContinue: created.autoContinue,
+					at: created.createdAt,
+				});
+				effects.push("ledger:goal_created");
+			} catch {
+				// Ledger append failure should not crash creation
+			}
+			return { ...report, kind: "create", effects: [...report.effects, ...effects] };
+		},
+		pause(record, ctx, stopReason) {
+			// stopActiveGoal("paused", …) migrated verbatim: merge the
+			// caller-prepared record, stamp paused, setGoal, then the pause
+			// ledger (best-effort).
+			const merged = ports.mergeGoalPromptFromDisk(ctx, record);
+			const next = { ...merged, status: "paused" as const, stopReason, updatedAt: ports.nowIso() };
+			const effects: string[] = [];
+			const report = this.setGoal(next, ctx);
+			try {
+				ports.appendLedger(ctx, {
+					type: "goal_paused",
+					goalId: next.id,
+					reason: stopReason,
+					suggestedAction: next.pauseSuggestedAction,
+					status: next.status,
+					at: next.updatedAt,
+				});
+				effects.push("ledger:goal_paused");
+			} catch {
+				// Ledger append failure should not crash pause
+			}
+			return { ...report, kind: "pause", effects: [...report.effects, ...effects] };
+		},
+		resume(goal, ctx) {
+			const merged = ports.mergeGoalPromptFromDisk(ctx, goal);
+			const next = {
+				...merged,
+				status: "active" as const,
+				autoContinue: true,
+				stopReason: undefined,
+				pauseReason: undefined,
+				pauseSuggestedAction: undefined,
+			};
+			const effects: string[] = [];
+			const report = this.setGoal(next, ctx);
+			ports.beginClock();
+			effects.push("begin-clock");
+			resetNudge(next.id);
+			effects.push(`nudge-reset:${next.id}`);
+			try {
+				ports.appendLedger(ctx, { type: "goal_resumed", goalId: next.id, reason: "user", at: ports.nowIso() });
+				effects.push("ledger:goal_resumed");
+			} catch {
+				// Ledger append failure should not crash resume
+			}
+			return { ...report, kind: "resume", effects: [...report.effects, ...effects] };
+		},
+		reconcileFromDisk(ctx, opts = {}) {
+			const current = focused();
+			const fresh = ports.readActiveGoalPool(ctx);
+			if (!focusedGoalId) {
+				this.replacePool(fresh);
+				return true;
+			}
+			const diskGoal = fresh.get(focusedGoalId) ?? null;
+			// AR1005-GO-B: hand the JUST-PARSED focused disk goal to the
+			// caller's same synchronous segment (persist must not re-read it).
+			if (opts.captureDiskGoal) opts.captureDiskGoal.goal = diskGoal;
+			if (!diskGoal) {
+				if (current && !current.activePath) {
+					this.replacePool(fresh);
+					goalsById.set(current.id, current);
+					this.setFocusedSilently(current.id);
+					return true;
+				}
+				this.replacePool(fresh);
+				this.setFocusedSilently(null);
+				ports.haltContinuation();
+				ports.pauseClock();
+				if (current) resetNudge(current.id);
+				this.handle({ tag: "draft-cancel", kind: "tweak" });
+				ports.syncTools();
+				ports.updateUI(ctx);
+				return false;
+			}
+			const reconciled = current && opts.preserveMemoryUsage
+				? mergeFocusedGoalWithDisk({ memoryGoal: current, diskGoal })
+				: diskGoal;
+			this.replacePool(fresh);
+			goalsById.set(reconciled.id, reconciled);
+			this.setFocusedSilently(reconciled.id);
+			if (reconciled.status !== "active" || !reconciled.autoContinue) ports.haltContinuation();
+			if (reconciled.status !== "active") ports.pauseClock();
+			return true;
+		},
 		replacePool(fresh) {
 			goalsById.clear();
 			for (const [id, g] of fresh) goalsById.set(id, g);

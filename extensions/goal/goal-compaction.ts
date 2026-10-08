@@ -72,7 +72,7 @@ export function buildGoalCompactSummary(goal: GoalRecord, events: GoalLedgerEven
 }
 
 export function buildCompactionSummary(args: {
-  goalsById: Map<string, GoalRecord>;
+  goalsById: ReadonlyMap<string, GoalRecord>;
   focusedGoalId: string | null;
   ledgerEvents: GoalLedgerEvent[];
   capOpenGoals?: number;

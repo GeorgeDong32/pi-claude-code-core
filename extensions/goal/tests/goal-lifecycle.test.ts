@@ -34,8 +34,14 @@ function recordingPorts() {
 			calls.push("archive");
 			return { ...goal, archivedPath: `.pi/goals/archive/${goal.id}.md` };
 		},
+		readActiveGoalPool: () => diskPool,
+		beginClock: () => calls.push("begin-clock"),
 	};
-	return { ports, calls };
+	let diskPool = new Map<string, GoalRecord>();
+	const setDisk = (m: Map<string, GoalRecord>) => {
+		diskPool = m;
+	};
+	return { ports, calls, setDisk };
 }
 
 function goal(idSeed: string, opts: { status?: "active" | "paused" | "complete"; autoContinue?: boolean } = {}): GoalRecord {
@@ -405,4 +411,104 @@ test("stale tweak gate: setGoal/focus release it internally (no write-back port)
 	assert.equal(lc.tweakDraftingFor, b.id);
 	assert.equal(lc.focusedId, b.id);
 	assert.ok(!calls.some((c) => c.startsWith("gate:")));
+});
+
+// ---------- P2-2 Step 4: create / pause / resume / unfocus / reconcileFromDisk ----------
+
+test("create: setGoal leg + begin-clock + nudge + intent clear + ledger goal_created", () => {
+	const { ports, calls } = recordingPorts();
+	const lc = createGoalLifecycle(ports);
+	lc.handle({ tag: "draft-start", kind: "goal", focus: "goal", topic: "pending", startedAt: 1 });
+	calls.length = 0;
+	const report = lc.create({ objective: "=== Goal ===\nObjective: new", autoContinue: true, sisyphus: false }, ctx);
+	assert.equal(report.kind, "create");
+	assert.equal(lc.focusedId, report.nextGoalId);
+	assert.ok(lc.focused() !== null);
+	assert.ok(calls.includes("begin-clock"));
+	assert.ok(calls.includes("ledger:goal_created"));
+	assert.equal(lc.confirmationIntent, null, "committed goal clears a pending intent");
+	assert.equal(lc.getGoalNudgeCount(report.nextGoalId!), 0);
+});
+
+test("pause(user): merge → stamp paused/user → setGoal → ledger goal_paused", () => {
+	const events: Array<Record<string, unknown>> = [];
+	const { ports, calls } = recordingPorts();
+	ports.appendLedger = (_ctx, event) => {
+		events.push(event);
+		calls.push(`ledger:${(event as { type: string }).type}`);
+	};
+	const lc = createGoalLifecycle(ports);
+	const a = goal("pz");
+	lc.adopt(a);
+	calls.length = 0;
+	const report = lc.pause({ ...a, autoContinue: false, pauseReason: "user: blocked" }, ctx, "user");
+	assert.equal(report.kind, "pause");
+	assert.equal(lc.focused()!.status, "paused");
+	assert.equal(lc.focused()!.stopReason, "user");
+	assert.equal(events[0]?.type, "goal_paused");
+	assert.equal(events[0]?.reason, "user");
+	assert.ok(calls.includes("persist"));
+});
+
+test("resume: stamp active + setGoal + begin-clock + nudge + ledger goal_resumed", () => {
+	const { ports, calls } = recordingPorts();
+	const lc = createGoalLifecycle(ports);
+	const a = goal("rs", { status: "paused" });
+	lc.adopt(a);
+	lc.handle({ tag: "tool-call", toolName: "get_goal", input: {} });
+	calls.length = 0;
+	const report = lc.resume(a, ctx);
+	assert.equal(report.kind, "resume");
+	assert.equal(lc.focused()!.status, "active");
+	assert.equal(lc.focused()!.autoContinue, true);
+	assert.ok(calls.includes("begin-clock"));
+	assert.ok(calls.includes("ledger:goal_resumed"));
+	assert.equal(lc.getGoalNudgeCount(a.id), 0);
+});
+
+test("unfocus: the named focus(null) form (entry + unfocused ledger)", () => {
+	const { ports, calls } = recordingPorts();
+	const lc = createGoalLifecycle(ports);
+	const a = goal("uf");
+	lc.adopt(a);
+	calls.length = 0;
+	const report = lc.unfocus(ctx, "cleared");
+	assert.equal(report.kind, "focus");
+	assert.equal(lc.focusedId, null);
+	assert.ok(calls.includes("ledger:goal_unfocused"));
+	assert.ok(calls.includes(`entry:-:cleared`));
+});
+
+test("reconcileFromDisk: vanish path clears stale gate + halts; memory-usage merge keeps counters", () => {
+	const { ports, calls, setDisk } = recordingPorts();
+	const lc = createGoalLifecycle(ports);
+	// An activePath-holding record whose disk file has gone away — the
+	// orphan-memory branch (no activePath) would keep it instead.
+	const a = { ...goal("rc-a"), activePath: ".pi/goals/active_goal_rc-a.md" };
+	lc.adopt(a);
+	lc.handle({ tag: "draft-start", kind: "tweak", goalId: a.id });
+	calls.length = 0;
+	// Disk pool no longer has the focused goal and the record holds an
+	// activePath → the vanish branch: silent unfocus + halt + gate clear.
+	setDisk(new Map<string, GoalRecord>());
+	assert.equal(lc.reconcileFromDisk(ctx), false);
+	assert.equal(lc.focusedId, null);
+	assert.equal(lc.tweakDraftingFor, null, "vanish path clears the stale tweak gate");
+	assert.ok(calls.includes("halt"));
+	assert.ok(calls.includes("sync"));
+	assert.ok(calls.includes("ui"));
+
+	// Separate lifecycle: focused + disk goal present + preserveMemoryUsage —
+	// the merge branch keeps the memory-side monotonic usage counters.
+	const lc2 = createGoalLifecycle(ports);
+	const mem = { ...goal("rc-a"), activePath: ".pi/goals/active_goal_rc-a.md", usage: { tokensUsed: 50, activeSeconds: 9, costUsed: 0 } };
+	lc2.adopt(mem);
+	const freshGoal = { ...mem, usage: { tokensUsed: 7, activeSeconds: 2, costUsed: 0 } };
+	setDisk(new Map([[freshGoal.id, freshGoal]]));
+	assert.equal(lc2.reconcileFromDisk(ctx, { preserveMemoryUsage: true }), true);
+	assert.equal(lc2.focusedId, mem.id);
+	assert.equal(lc2.focused()!.usage.tokensUsed, 50, "memory usage survives the disk merge");
+	// Vanish left no focus behind: a fresh reconcile only swaps the pool.
+	assert.equal(lc.reconcileFromDisk(ctx), true);
+	assert.equal(lc.focusedId, null, "no focus re-pick — focus resolution belongs to loadState");
 });
