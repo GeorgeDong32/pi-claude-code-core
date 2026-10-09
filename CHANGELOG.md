@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Changed (devDeps: pi 1.0.1 → 1.1.0 matrix upgrade, 2026-10-09)
+- **All four pi devDependencies bumped together: `pi-agent-core` / `pi-ai` / `pi-coding-agent` / `pi-tui` 1.0.1 → 1.1.0.** Zero code changes required: 1.1.0 adds no new mandatory ExtensionAPI methods (unlike 1.0.1's `registerToolRenderer`), the `pi-host-semantics` contract suite (which imports the real installed package types) stays green as the upgrade acceptance signal, and the `classifier-client` check `model.api === "azure-openai-responses"` remains correct — 1.1.0 renamed only the Azure **provider id** to `azure`, the `model.api` value is unchanged. New optional 1.1.0 surfaces (render-context `durationMs`/`outputPad`, `ToolLoadout.getPromptGuidelines`, `agent_settled.aborted`, `tool_execution_end.durationMs`) are noted as future enhancement seams; nothing consumes them yet. Three gates green on 1.1.0: check exit 0, unit tests 935/935, contracts 43 passed / 3 todo.
+
 ### Fixed (effort notifications displayed twice — DC5b completion, 2026-10-08)
 - **Every effort notice now displays exactly once, in every wiring.** `createEffortUi().notify` had kept the DC3 dual write (tail-queue publish + an unconditional direct `ctx.ui.notify`), so after DC5b wired the real consumers each effort warning showed TWICE — with a modern cctui (queue consumer + direct write) and core-only (fallback adapter + direct write) alike; observed live on a real terminal in both TUI and non-TUI sessions. The wrapper now delegates to the shared presenter-facing `ui/notify.ts` entry: queue publish always, direct forward only for legacy cctui installs without the `notificationsConsumer` capability. Legacy-TUI display, headless quietness, repeatable same-text warnings, queue cap/freeze invariants, and off/on handover are pinned by `extensions/effort/tests/notify-display.test.ts` (real entry + real bus + real fallback adapter). No consumer-side dedup was added anywhere.
 
