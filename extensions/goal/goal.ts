@@ -1972,7 +1972,12 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 	pi.on("before_agent_start", async (event, ctx) => {
 		syncGoalTools();
 		const currentSystemPrompt = () => ctx.getSystemPrompt?.() || event.systemPrompt;
-		const incomingGoalId = extractGoalIdFromInjectedMessage(event.prompt ?? "");
+		// pi 1.2.0: before_agent_start is a union on messageType — custom-message
+		// runs (sendMessage triggerTurn:true: continuations, directives) carry no
+		// `prompt`; only user runs do. Empty text is inert for the marker regexes
+		// (no DRAFTING/TWEAK/continuation markers can match), so custom runs fall
+		// through to the non-goal branch exactly as a plain user message does.
+		const incomingGoalId = extractGoalIdFromInjectedMessage(event.messageType === "user" ? event.prompt : "");
 
 		if (lifecycle.confirmationIntent !== null) {
 			clearContinuationState();

@@ -2076,6 +2076,7 @@ describe("skill filtering in before_agent_start", () => {
 		if (handlers.length === 0) return undefined
 		const event = {
 			type: "before_agent_start" as const,
+			messageType: "user" as const,
 			prompt: "user",
 			systemPrompt: prompt,
 			systemPromptOptions: { cwd: realProjectRoot },

@@ -146,7 +146,7 @@ test("GO-T01 (wiring): 8 Ã— 250 ms tool_execution_end events persist 2 s; +1 s â
 	const f = setupWiring();
 	try {
 		await f.host.fire("session_start", { reason: "new" }, f.ctx);
-		await f.host.fire("before_agent_start", { systemPrompt: "BASE", prompt: "work on the goal" }, f.ctx);
+		await f.host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "work on the goal" }, f.ctx);
 		for (let i = 0; i < 8; i++) {
 			f.clk.advance(250);
 			await f.host.fire("tool_execution_end", { type: "tool_execution_end", toolCallId: `t${i}` }, f.ctx);
@@ -166,7 +166,7 @@ test("GO-T07 (wiring): a paused goal's disk edits are observed by the next event
 	const f = setupWiring();
 	try {
 		await f.host.fire("session_start", { reason: "new" }, f.ctx);
-		await f.host.fire("before_agent_start", { systemPrompt: "BASE", prompt: "work" }, f.ctx);
+		await f.host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "work" }, f.ctx);
 		f.clk.advance(1200);
 		await f.host.fire("tool_execution_end", { type: "tool_execution_end", toolCallId: "t0" }, f.ctx);
 		let rec = readActiveGoalFiles({ cwd: f.cwd })[0]!;
@@ -199,7 +199,7 @@ test("GO-T09: one accounting event parses the focused file once; the next event 
 	writeActiveGoalFile({ cwd }, createGoal({ objective: "=== Goal ===\nObjective: third goal", autoContinue: false, sisyphus: false }, Date.UTC(2026, 9, 5)));
 	try {
 		await host.fire("session_start", { reason: "new" }, ctx);
-		await host.fire("before_agent_start", { systemPrompt: "BASE", prompt: "work" }, ctx);
+		await host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "work" }, ctx);
 		const focusedAbs = path.join(cwd, focused.activePath ?? "");
 
 		void focusedAbs;

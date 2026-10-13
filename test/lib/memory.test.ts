@@ -500,7 +500,7 @@ describe("P3-ME-09 resilience", () => {
 				throw new Error("projection exploded");
 			},
 		};
-		const r1 = await host.fire("before_agent_start", { systemPrompt: "BASE", prompt: "hello memory recall test" }, hostile);
+		const r1 = await host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "hello memory recall test" }, hostile);
 		expect(typeof r1 === "object" || r1 === undefined).toBe(true);
 		const r2 = await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: "steer text here" }] } }, hostile);
 		expect(r2).toBeUndefined();
@@ -654,7 +654,7 @@ describe("RV wiring (spec 2026-10-02-memory-recall-v2)", () => {
 		const host = setup();
 		const ctx = host.makeCtx({ cwd: project, ui: true, projectionMessages: [] });
 		await host.fire("session_start", {}, ctx);
-		const r = (await host.fire("before_agent_start", { systemPrompt: "BASE", prompt: "repo convention question" }, ctx)) as { message?: unknown; systemPrompt?: string };
+		const r = (await host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "repo convention question" }, ctx)) as { message?: unknown; systemPrompt?: string };
 		expect(r?.message).toBeUndefined();
 		expect(r?.systemPrompt).toContain("<memory-policy");
 		await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: "steer mid run text" }] } }, ctx);
@@ -668,7 +668,7 @@ describe("RV wiring (spec 2026-10-02-memory-recall-v2)", () => {
 		const host = setupWithSelector(["memory/a.md"], log);
 		const ctx = recallCtx(host);
 		await host.fire("session_start", {}, ctx);
-		const r = (await host.fire("before_agent_start", { systemPrompt: "BASE", prompt: "what is the repo convention" }, ctx)) as {
+		const r = (await host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "what is the repo convention" }, ctx)) as {
 			message?: { customType: string; content: Array<{ text: string }>; display: boolean; details: { v: number; delivery: string; elapsedMs: number } };
 			systemPrompt?: string;
 		};
@@ -679,6 +679,47 @@ describe("RV wiring (spec 2026-10-02-memory-recall-v2)", () => {
 		expect(r!.message!.details.v).toBe(1);
 		expect(r!.message!.details.delivery).toBe("immediate");
 		expect(typeof r!.message!.details.elapsedMs).toBe("number");
+	});
+
+	it("pi 1.2.0 union: custom-message run (sendMessage triggerTurn:true) keeps policy injection but skips recall selection", async () => {
+		writeMemory("a.md", "convention", "repo convention");
+		const log: Array<{ query: string; count: number }> = [];
+		const host = setupWithSelector(["memory/a.md"], log);
+		const ctx = recallCtx(host);
+		await host.fire("session_start", {}, ctx);
+		// pi 1.2.0 fires before_agent_start for custom-message runs too
+		// (messageType "custom", no prompt) — e.g. goal continuation directives.
+		const r = (await host.fire(
+			"before_agent_start",
+			{ type: "before_agent_start", messageType: "custom", systemPrompt: "BASE", message: { role: "user", content: [{ type: "text", text: "<pi_goal_continuation goal_id=\"g1\" kind=\"continue\">" }], customType: "pi-goal-continuation" } },
+			ctx,
+		)) as { message?: unknown; systemPrompt?: string };
+		expect(r?.systemPrompt).toContain("<memory-policy"); // policy/index still injected
+		expect(r?.message).toBeUndefined(); // no recall block on a run without a user prompt
+		expect(log).toHaveLength(0); // and no selector cost either
+	});
+
+	it("pi 1.2.0 union: a mid-run user steer during a custom run still selects (prompt flag not stale)", async () => {
+		writeMemory("a.md", "convention", "repo convention");
+		const log: Array<{ query: string; count: number }> = [];
+		const host = setupWithSelector(["memory/a.md"], log);
+		const ctx = recallCtx(host);
+		await host.fire("session_start", {}, ctx);
+		// custom run starts (goal continuation) — no selection, flag stays unarmed
+		await host.fire(
+			"before_agent_start",
+			{ type: "before_agent_start", messageType: "custom", systemPrompt: "BASE", message: { role: "user", content: [{ type: "text", text: "<pi_goal_continuation goal_id=\"g1\" kind=\"continue\">" }], customType: "pi-goal-continuation" } },
+			ctx,
+		);
+		// the custom message's own message_end: RV-01-filtered, consumes nothing
+		await host.fire("message_end", { message: { role: "user", customType: "pi-goal-continuation", content: [{ type: "text", text: "continue" }] } }, ctx);
+		// real user steer mid-run → the selection MUST still run (regression pin:
+		// a stale promptMessagePending swallowed exactly this on the first 1.2.0
+		// draft — custom run armed the flag, no selection ever consumed it)
+		await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: "mid-run steer about repo convention" }] } }, ctx);
+		await new Promise((r) => setTimeout(r, 10));
+		expect(log).toHaveLength(1);
+		expect(host.sentMessages.filter((m) => m.message.customType === "pi-memory-recall")).toHaveLength(1);
 	});
 
 	it("18 spec v1.2: steer path — message_end(user) parks, delivery fires the moment selection completes (no turn_end gate)", async () => {
@@ -702,7 +743,7 @@ describe("RV wiring (spec 2026-10-02-memory-recall-v2)", () => {
 		const host = setupWithSelector(["memory/a.md"], log);
 		const ctx = recallCtx(host);
 		await host.fire("session_start", {}, ctx);
-		await host.fire("before_agent_start", { systemPrompt: "BASE", prompt: "the repo convention prompt" }, ctx);
+		await host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "the repo convention prompt" }, ctx);
 		expect(log).toHaveLength(1); // selected once at before_agent_start
 		// the persisted user message's own message_end: flag clears, NO second selection
 		await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: "the repo convention prompt" }] } }, ctx);
@@ -715,7 +756,7 @@ describe("RV wiring (spec 2026-10-02-memory-recall-v2)", () => {
 		// through a NEW before_agent_start (clears run-scoped dedup) — simulate
 		// that flow, then a mid-run steer in the new run selects again.
 		await host.fire("agent_end", {}, ctx);
-		await host.fire("before_agent_start", { systemPrompt: "BASE", prompt: "second run prompt about convention" }, ctx); // waitMs>0 + instant fake → immediate
+		await host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "second run prompt about convention" }, ctx); // waitMs>0 + instant fake → immediate
 		expect(log).toHaveLength(2);
 		await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: "the second run prompt about convention" }] } }, ctx); // prompt msg — no select
 		await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: "a mid-run steer in run two" }] } }, ctx);
@@ -732,7 +773,7 @@ describe("RV wiring (spec 2026-10-02-memory-recall-v2)", () => {
 		await host.fire("session_start", {}, ctx);
 		// dynamic yield: the incoming system prompt already carries another
 		// memory policy → the module defers entirely (no message, no selector)
-		const r = await host.fire("before_agent_start", { systemPrompt: `BASE\n\n<memory-policy>\nforeign policy\n</memory-policy>`, prompt: "repo convention question here" }, ctx);
+		const r = await host.fire("before_agent_start", { messageType: "user", systemPrompt: `BASE\n\n<memory-policy>\nforeign policy\n</memory-policy>`, prompt: "repo convention question here" }, ctx);
 		expect((r as { message?: unknown })?.message).toBeUndefined();
 		expect(log).toHaveLength(0);
 		expect(host.sentMessages.filter((m) => m.message.customType === "pi-memory-recall")).toHaveLength(0);
@@ -778,7 +819,7 @@ describe("AR1005-RC wiring lifecycle", () => {
 		gates[0]!.complete({ kind: "selected", keys: ["memory/a.md"], elapsedMs: 1 });
 		await new Promise((r) => setTimeout(r, 5));
 		// prompt path on the NEW machine creates a new gated request
-		const p = host.fire("before_agent_start", { systemPrompt: "BASE", prompt: "convention question after model switch" }, ctx2);
+		const p = host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "convention question after model switch" }, ctx2);
 		await new Promise((r) => setTimeout(r, 5));
 		expect(gates).toHaveLength(2);
 		gates[1]!.complete({ kind: "selected", keys: ["memory/a.md"], elapsedMs: 1 });

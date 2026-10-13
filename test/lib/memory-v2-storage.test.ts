@@ -183,7 +183,7 @@ describe("V2-M1 selection pooling (RV semantics)", () => {
 		const host = setupWithSelector(["user-memory/lang.md"], log);
 		const ctx = recallCtx(host, { cwd: project });
 		await host.fire("session_start", {}, ctx);
-		const r = (await host.fire("before_agent_start", { systemPrompt: "BASE", prompt: "回复语言偏好是什么 language preference" }, ctx)) as {
+		const r = (await host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "回复语言偏好是什么 language preference" }, ctx)) as {
 			message?: { customType: string; content: Array<{ text: string }>; display: boolean; details: { v: number; delivery: string } };
 		};
 		expect(r?.message?.customType).toBe("pi-memory-recall");
@@ -312,7 +312,7 @@ describe("V2 Phase 3 (AD1/AD3/AD4) — injection dedupe + policy text", () => {
 		};
 		const ctx = recallCtx(host, { cwd: project, projectionMessages: [priorRecall] });
 		await host.fire("session_start", {}, ctx);
-		const r = (await host.fire("before_agent_start", { systemPrompt: "BASE", prompt: "回复语言偏好是什么 language preference" }, ctx)) as { message?: unknown };
+		const r = (await host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "回复语言偏好是什么 language preference" }, ctx)) as { message?: unknown };
 		expect(r?.message).toBeUndefined(); // the only candidate is deduped → nothing eligible
 		expect(log.length).toBe(0); // RV-06: dedup happens BEFORE the selector is paid for
 	});
@@ -328,12 +328,12 @@ describe("V2 Phase 3 (AD1/AD3/AD4) — injection dedupe + policy text", () => {
 		];
 		const ctxRead = recallCtx(host, { cwd: project, projectionMessages: readHistory });
 		await host.fire("session_start", {}, ctxRead);
-		const r1 = (await host.fire("before_agent_start", { systemPrompt: "BASE", prompt: "回复语言偏好是什么 language preference" }, ctxRead)) as { message?: unknown };
+		const r1 = (await host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "回复语言偏好是什么 language preference" }, ctxRead)) as { message?: unknown };
 		expect(r1?.message).toBeUndefined();
 		expect(log.length).toBe(0); // read suppression empties the candidate set → no selector call
 		// history without the read (post-compaction rebuild) → selectable again
 		const ctxClean = recallCtx(host, { cwd: project, projectionMessages: [] });
-		const r2 = (await host.fire("before_agent_start", { systemPrompt: "BASE", prompt: "回复语言偏好是什么 language preference" }, ctxClean)) as { message?: unknown };
+		const r2 = (await host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "回复语言偏好是什么 language preference" }, ctxClean)) as { message?: unknown };
 		expect((r2?.message as { content: Array<{ text: string }> } | undefined)?.content?.[0]?.text).toContain("(user-memory/lang2.md)");
 	});
 

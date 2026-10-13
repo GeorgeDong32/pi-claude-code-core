@@ -343,3 +343,45 @@ describe("AR1005-ST-HOST branch identity (2026-10-05-core-architecture-reliabili
 
 	it.todo("⑪ real run loop: message_end fires before SessionManager append (Phase 4 host acceptance — manual: breakpoint/log both in a live session; the modes cache also marks dirty on message_end, so correctness never relies on the ordering alone)");
 });
+
+/* ── PI12-BAS-HOST (pi 1.2.0 upgrade batch, 2026-10-14) ──
+ * pi ≥1.2.0 fires before_agent_start for idle sendMessage(triggerTurn:true)
+ * runs too; the event is a union on messageType. Core's adaptation relies on:
+ * user variant carries `prompt`, custom variant does NOT, both share the base
+ * (systemPrompt / systemPromptOptions) and the same handler-result type.
+ * The pins below are compile-time (the contracts tsc pass turns red if a
+ * future pi reshapes the union) plus runtime shape markers. The FIRING half
+ * (idle sendMessage(triggerTurn:true) runs actually fire the event) is
+ * source-verified against the installed dist (agent-session.js: user ~1663,
+ * custom ~1840) but not runtime-automated — Phase 4 host acceptance, same
+ * class as todos ⑨/⑪: breakpoint/log a live goal-continuation session. */
+import type { BeforeAgentStartEvent } from "@earendil-works/pi-coding-agent";
+
+describe("PI12-BAS-HOST before_agent_start union (pi 1.2.0 upgrade batch 2026-10-14)", () => {
+	it("⑫ the event is a union on messageType — user carries prompt, custom does not, both share the base", () => {
+		type UserEvent = Extract<BeforeAgentStartEvent, { messageType: "user" }>;
+		type CustomEvent = Extract<BeforeAgentStartEvent, { messageType: "custom" }>;
+		const user: UserEvent = {
+			type: "before_agent_start",
+			messageType: "user",
+			systemPrompt: "s",
+			systemPromptOptions: {} as UserEvent["systemPromptOptions"],
+			prompt: "user text",
+		};
+		const custom: CustomEvent = {
+			type: "before_agent_start",
+			messageType: "custom",
+			systemPrompt: "s",
+			systemPromptOptions: {} as CustomEvent["systemPromptOptions"],
+			message: { role: "custom", content: [{ type: "text", text: "directive" }], customType: "pi-x-directive", display: false, timestamp: Date.now() } as CustomEvent["message"],
+		};
+		// custom must NOT carry prompt — if a future pi adds it, the expect-error
+		// below goes unused and the contracts tsc pass turns red (the memory
+		// gating may then be revisited)
+		// @ts-expect-error — property `prompt` does not exist on the custom variant
+		const leaked: string | undefined = custom.prompt;
+		expect(leaked).toBeUndefined();
+		expect(user.prompt).toBe("user text"); // runtime marker: same objects we type-asserted
+		expect([user.messageType, custom.messageType]).toEqual(["user", "custom"]);
+	});
+});

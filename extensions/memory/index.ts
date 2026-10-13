@@ -6,7 +6,11 @@
  *   before_agent_start  dynamic yield probe → policy + two-layer capped index;
  *                       RV prompt path — one recall selection per user message,
  *                       bounded by recallWaitMs; the block persists as a custom
- *                       message right after the user message (request #1 sees it)
+ *                       message right after the user message (request #1 sees it).
+ *                       pi 1.2.0 union: custom-message runs (sendMessage
+ *                       triggerTurn:true — goal continuations, directives)
+ *                       keep policy/index injection but SKIP recall selection
+ *                       (RV-01/03 scopes selection to real user prompts)
  *   message_end         RV steer path — user messages that arrive mid-run select
  *                       with waitMs 0 (parked); custom blocks never trigger (RV-01)
  *   turn_end            RV deferred delivery (first continues=true turn_end;
@@ -269,10 +273,27 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 
 	pi.on("before_agent_start", async (event, ctx: ExtensionContext) => {
 		try {
+			// pi 1.2.0: before_agent_start also fires for custom-message runs
+			// (sendMessage triggerTurn:true — goal continuation, review directive,
+			// modes refinement) with messageType "custom" and no `prompt`. The
+			// aliased discriminant below keeps `event.prompt` narrowed for the
+			// recall call sites; everything run-scoped in this handler stays
+			// scoped to USER runs so custom runs behave exactly as they did on
+			// 1.1.0 (where the event never fired for them).
+			const isUserRun = event.messageType === "user";
 			// RV run boundary (defensive — agent_end owns the real reset; this
-			// covers drivers where agent_end never fired)
-			recallMachine?.abort();
-			promptMessagePending = true;
+			// covers drivers where agent_end never fired). USER runs only: v1.2
+			// supersede is latest-wins at the next USER message — a custom run
+			// must not abort an in-flight deferred selection that 1.1.0 would
+			// still have delivered (caught in the 1.2.0 upgrade review).
+			if (isUserRun) recallMachine?.abort();
+			// The flag means "the prompt path selected for THIS user message".
+			// A custom run runs no selection — leaving it true would make the
+			// message_end short-circuit swallow the first mid-run user steer of
+			// every continuation/directive run (1.2.0 regression caught in
+			// review: the custom message's own message_end is RV-01-filtered and
+			// never clears it).
+			promptMessagePending = isUserRun;
 			const wasYielded = gate.state.yielded;
 			gate.probePrompt(event.systemPrompt ?? "");
 			if (gate.state.yielded !== wasYielded) {
@@ -285,13 +306,18 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 			const dir = memoryDir(ctx);
 			const udir = userMemoryDir(ctx);
 			const waitMs = memorySettings.recallWaitMs ?? DEFAULT_RECALL_WAIT_MS;
+			// Custom runs keep the policy/index injection (their system prompt
+			// is rebuilt through the same setup) but skip recall selection:
+			// RV-01/03 scopes selection to one per REAL user message, and a
+			// selector raced against empty text would only add cost and inject
+			// recall blocks into continuation runs.
 			if (!memoryDirWritable) {
 				notifyOnce(ctx, "memory dir not writable — running policy-only");
 				// policy-only: the index derives from the (unwritable) dir and
 				// cannot be trusted to match, so inject just the policy block.
 				// Recall still runs — it only READS (an unwritable dir simply
 				// yields no candidates).
-				const degradedBlock = await recallBlockFor(event.prompt ?? "", ctx, waitMs);
+				const degradedBlock = isUserRun ? await recallBlockFor(event.prompt, ctx, waitMs) : null;
 				return degradedBlock
 					? { systemPrompt: `${event.systemPrompt ?? ""}\n\n${policyCompact(dir)}`, message: makeRecallMessage(degradedBlock) }
 					: { systemPrompt: `${event.systemPrompt ?? ""}\n\n${policyCompact(dir)}` };
@@ -312,8 +338,9 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 			const systemPrompt = `${event.systemPrompt ?? ""}\n\n${injection}`;
 			// RV-01/03 prompt path: one selection per real user message, bounded
 			// by waitMs; a block persists as a custom message right after the
-			// user message (request #1 sees it — S4).
-			const block = await recallBlockFor(event.prompt ?? "", ctx, waitMs);
+			// user message (request #1 sees it — S4). Custom-message runs skip
+			// selection (see isUserRun above).
+			const block = isUserRun ? await recallBlockFor(event.prompt, ctx, waitMs) : null;
 			return block ? { systemPrompt, message: makeRecallMessage(block) } : { systemPrompt };
 		} catch {
 			return undefined; // injection failure never blocks the turn
