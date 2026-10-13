@@ -43,8 +43,9 @@ const SERVICE_TIER_APIS: ReadonlySet<string> = new Set(["openai-responses", "ope
 
 function isFastModelId(modelId: string): boolean {
   // Substring, not prefix: provider-prefixed ids like "CherryCodex/gpt-5.5"
-  // must still match.
-  return modelId.includes("gpt-5");
+  // must still match. gpt-6 carries the same Responses-API service_tier
+  // semantics as gpt-5 (air machine registers codex/gpt-6-* ids).
+  return modelId.includes("gpt-5") || modelId.includes("gpt-6");
 }
 
 function fastAppliesToModel(model: { id?: string; api?: string } | null | undefined): boolean {

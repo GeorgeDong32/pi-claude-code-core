@@ -44,7 +44,7 @@
 
 - 语义别名与用户可见档位随模型而异——一律经 `effort.ts` 解析,不要硬编码
   档位列表。
-- fast 模式仅对 id 含 `gpt-5`(子串匹配,带 provider 前缀的 id 也能命中)
+- fast 模式仅对 id 含 `gpt-5` 或 `gpt-6`(子串匹配,带 provider 前缀的 id 也能命中)
   且 API 为 `openai-responses` / `openai-codex-responses` 的模型注入
   `service_tier: "priority"` —— 这是该字段仅有的真实线上方言(pi-ai 自身
   的 serviceTier 映射也恰好只有这两个)。其余方言(如 anthropic-messages

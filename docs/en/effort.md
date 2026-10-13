@@ -48,8 +48,8 @@ chain is the only place in core allowed to call it** (P1-EF-07 source scan).
 
 - Semantic aliases and user-facing levels differ per model — always resolve
   through `effort.ts`, never hardcode level lists.
-- Fast mode injects `service_tier: "priority"` only for `gpt-5*`-matching
-  ids (substring, so provider-prefixed ids match) whose API is
+- Fast mode injects `service_tier: "priority"` only for `gpt-5`/`gpt-6`
+  matching ids (substring, so provider-prefixed ids match) whose API is
   `openai-responses` / `openai-codex-responses` — the only wire dialects
   where the field is real (pi-ai maps its own serviceTier option on exactly
   these two). On any other dialect (e.g. an anthropic-messages proxy) the

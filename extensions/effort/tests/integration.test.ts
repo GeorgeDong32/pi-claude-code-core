@@ -230,12 +230,19 @@ test("runtime /fast matches provider-prefixed GPT-5 ids on Responses APIs", asyn
     assert.ok(handlers?.[0]);
 
     // Substring match: "CherryCodex/gpt-5.5" previously failed the gpt-5
-    // PREFIX check and fast mode silently never applied.
+    // PREFIX check and fast mode silently never applied. Also covers the
+    // gpt-6 family (codex/gpt-6-luna on the air machine).
     const ctx = { model: { id: "CherryCodex/gpt-5.5", api: "openai-responses" } };
     const payload = { model: "CherryCodex/gpt-5.5", input: [] };
     const result = await handlers[0]({ type: "before_provider_request", payload }, ctx);
 
     assert.deepEqual(result, { ...payload, service_tier: "priority" });
+
+    const ctx6 = { model: { id: "codex/gpt-6-luna", api: "openai-responses" } };
+    const payload6 = { model: "codex/gpt-6-luna", input: [] };
+    const result6 = await handlers[0]({ type: "before_provider_request", payload: payload6 }, ctx6);
+
+    assert.deepEqual(result6, { ...payload6, service_tier: "priority" });
   } finally {
     cleanupSession(previousAgentDir);
   }
