@@ -23,7 +23,8 @@ chain is the only place in core allowed to call it** (P1-EF-07 source scan).
 ## Key surfaces
 
 - **Commands**: `/effort` (set/cycle thinking level), `/fast` (toggle fast
-  mode for fast-model ids like `gpt-5*`).
+  mode: OpenAI priority tier for `gpt-5*`-matching models on
+  Responses/Codex APIs).
 - **Shortcuts**: alt+t cycles thinking levels (including `off`) and
   ctrl+shift+e cycles effort — BOTH registered by the effort module (arch
   review C5: alt+t moved from modes; now model-aware via
@@ -47,7 +48,14 @@ chain is the only place in core allowed to call it** (P1-EF-07 source scan).
 
 - Semantic aliases and user-facing levels differ per model — always resolve
   through `effort.ts`, never hardcode level lists.
-- Fast mode only applies to fast-model ids (`gpt-5*` prefix check).
+- Fast mode injects `service_tier: "priority"` only for `gpt-5*`-matching
+  ids (substring, so provider-prefixed ids match) whose API is
+  `openai-responses` / `openai-codex-responses` — the only wire dialects
+  where the field is real (pi-ai maps its own serviceTier option on exactly
+  these two). On any other dialect (e.g. an anthropic-messages proxy) the
+  field would be dropped or rejected in transit, so `/fast on` reports a
+  no-op for the current model instead of injecting; the setting still
+  persists globally for the next applicable model.
 - When modes applies a profile with `:effort`, it calls the owner
   (`setFromProfile`), not pi directly.
 

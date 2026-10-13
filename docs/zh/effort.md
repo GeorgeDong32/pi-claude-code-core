@@ -21,8 +21,8 @@
 
 ## 关键表面
 
-- **命令**:`/effort`(设置/循环思考档位)、`/fast`(为 `gpt-5*` 类快速模型
-  开关 fast 模式)。
+- **命令**:`/effort`(设置/循环思考档位)、`/fast`(开关 fast 模式:对
+  Responses/Codex 系 API 上的 `gpt-5*` 匹配模型注入 OpenAI priority 档)。
 - **快捷键**:alt+t 循环思考档位(含 `off`)与 ctrl+shift+e 循环 effort ——
   两者均由 effort 模块注册(arch review C5:alt+t 自 modes 迁入;不再用硬编码表,
   改为 cycleLevel/cycleLevelWithOff 模型感知循环,并带零写入守卫——单档模型
@@ -44,7 +44,12 @@
 
 - 语义别名与用户可见档位随模型而异——一律经 `effort.ts` 解析,不要硬编码
   档位列表。
-- fast 模式只对快速模型 id 生效(`gpt-5*` 前缀判断)。
+- fast 模式仅对 id 含 `gpt-5`(子串匹配,带 provider 前缀的 id 也能命中)
+  且 API 为 `openai-responses` / `openai-codex-responses` 的模型注入
+  `service_tier: "priority"` —— 这是该字段仅有的真实线上方言(pi-ai 自身
+  的 serviceTier 映射也恰好只有这两个)。其余方言(如 anthropic-messages
+  代理)字段会在途中被丢弃或拒绝,故 `/fast on` 会提示对当前模型无效而不
+  注入;设置仍全局持久化,换到适用的模型后生效。
 - modes 应用带 `:effort` 的 profile 时,调用的是所有者(`setFromProfile`),
   不直接调 pi。
 

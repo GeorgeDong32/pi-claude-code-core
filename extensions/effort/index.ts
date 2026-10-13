@@ -32,8 +32,29 @@ function formatAvailableLevels(model: EffortModel | null | undefined): string {
   return getAvailableThinkingLevels(model).join(", ");
 }
 
+// Wire dialects where `service_tier` is a real request field. Mirrors pi-ai's
+// own serviceTier → service_tier mapping (openai-responses.js /
+// openai-codex-responses.js). Any other dialect — notably anthropic-messages
+// proxies — either rejects the unknown field or drops it in translation
+// (verified live against CPA/CLIProxyAPI 2026-10-13), so fast mode must not
+// inject there. openai-completions is deliberately excluded until pi-ai
+// grows a native tier mapping for it.
+const SERVICE_TIER_APIS: ReadonlySet<string> = new Set(["openai-responses", "openai-codex-responses"]);
+
 function isFastModelId(modelId: string): boolean {
-  return modelId.startsWith("gpt-5");
+  // Substring, not prefix: provider-prefixed ids like "CherryCodex/gpt-5.5"
+  // must still match.
+  return modelId.includes("gpt-5");
+}
+
+function fastAppliesToModel(model: { id?: string; api?: string } | null | undefined): boolean {
+  return (
+    model !== null &&
+    model !== undefined &&
+    typeof model.api === "string" &&
+    SERVICE_TIER_APIS.has(model.api) &&
+    isFastModelId(model.id ?? "")
+  );
 }
 
 function applySessionLevel(
@@ -119,8 +140,13 @@ export default function effortExtension(pi: ExtensionAPI): void {
   });
 
   // ─── Provider hook: fast mode maps to OpenAI/Codex priority tier ──
-  pi.on("before_provider_request", (event) => {
+  pi.on("before_provider_request", (event, ctx) => {
     if (!fastMode) return undefined;
+
+    // Dialect gate first: ctx.model is the session model; the payload model
+    // check below still guards side-channel requests (compaction overrides)
+    // whose model differs from the session's.
+    if (!fastAppliesToModel(ctx?.model)) return undefined;
 
     const payload = event.payload;
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
@@ -278,7 +304,11 @@ export default function effortExtension(pi: ExtensionAPI): void {
     }
     fastMode = enabled;
     syncEffortUi(ctx);
-    ui.notify(ctx, `Fast mode ${fastMode ? "enabled" : "disabled"}.`, "info");
+    // Honest no-op note: the setting persists globally, but the current
+    // model's wire dialect can never carry it (see SERVICE_TIER_APIS).
+    const noOp = enabled && ctx.model && !fastAppliesToModel(ctx.model);
+    const note = noOp ? ` (no effect on ${modelName(ctx.model)}: priority tier needs a GPT-5 model on an OpenAI Responses/Codex API)` : "";
+    ui.notify(ctx, `Fast mode ${fastMode ? "enabled" : "disabled"}.${note}`, "info");
   }
 
   // ─── Picker overlay for bare /effort ──────────────────────────────

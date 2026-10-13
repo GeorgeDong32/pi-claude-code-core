@@ -210,8 +210,30 @@ test("runtime /fast injects OpenAI priority service tier for GPT-5 requests", as
     const handlers = extension.handlers.get("before_provider_request");
     assert.ok(handlers?.[0]);
 
+    // Dialect gate: only Responses/Codex APIs carry service_tier on the wire.
+    const ctx = { model: { id: "gpt-5.5", api: "openai-responses" } };
     const payload = { model: "gpt-5.5", input: [], stream: true };
-    const result = await handlers[0]({ type: "before_provider_request", payload }, {});
+    const result = await handlers[0]({ type: "before_provider_request", payload }, ctx);
+
+    assert.deepEqual(result, { ...payload, service_tier: "priority" });
+  } finally {
+    cleanupSession(previousAgentDir);
+  }
+});
+
+test("runtime /fast matches provider-prefixed GPT-5 ids on Responses APIs", async () => {
+  const { session, extension, previousAgentDir } = await createTestSession(xhighModel, "medium", "medium");
+
+  try {
+    await session.prompt("/fast on");
+    const handlers = extension.handlers.get("before_provider_request");
+    assert.ok(handlers?.[0]);
+
+    // Substring match: "CherryCodex/gpt-5.5" previously failed the gpt-5
+    // PREFIX check and fast mode silently never applied.
+    const ctx = { model: { id: "CherryCodex/gpt-5.5", api: "openai-responses" } };
+    const payload = { model: "CherryCodex/gpt-5.5", input: [] };
+    const result = await handlers[0]({ type: "before_provider_request", payload }, ctx);
 
     assert.deepEqual(result, { ...payload, service_tier: "priority" });
   } finally {
@@ -227,7 +249,49 @@ test("runtime /fast preserves explicit service tier overrides", async () => {
     const handlers = extension.handlers.get("before_provider_request");
     assert.ok(handlers?.[0]);
 
+    const ctx = { model: { id: "gpt-5.5", api: "openai-responses" } };
     const payload = { model: "gpt-5.5", service_tier: "default" };
+    const result = await handlers[0]({ type: "before_provider_request", payload }, ctx);
+
+    assert.equal(result, undefined);
+  } finally {
+    cleanupSession(previousAgentDir);
+  }
+});
+
+test("runtime /fast never injects outside OpenAI Responses dialects", async () => {
+  const { session, extension, previousAgentDir } = await createTestSession(xhighModel, "medium", "medium");
+
+  try {
+    await session.prompt("/fast on");
+    const handlers = extension.handlers.get("before_provider_request");
+    assert.ok(handlers?.[0]);
+
+    // 2026-10-13 regression shape: every GPT-5.x model behind the CPA proxy
+    // is anthropic-messages on the wire; service_tier rode the anthropic
+    // body and was silently dropped by the translating proxy — the request
+    // was never fast.
+    const ctx = { model: { id: "gpt-5.6-luna", api: "anthropic-messages" } };
+    const payload = { model: "gpt-5.6-luna", messages: [], max_tokens: 16 };
+    const result = await handlers[0]({ type: "before_provider_request", payload }, ctx);
+
+    assert.equal(result, undefined);
+  } finally {
+    cleanupSession(previousAgentDir);
+  }
+});
+
+test("runtime /fast skips injection when the model is unknown", async () => {
+  const { session, extension, previousAgentDir } = await createTestSession(xhighModel, "medium", "medium");
+
+  try {
+    await session.prompt("/fast on");
+    const handlers = extension.handlers.get("before_provider_request");
+    assert.ok(handlers?.[0]);
+
+    // Fail-safe: no model on the context (side-channel/unknown dialect) —
+    // never inject a field we cannot place on the wire.
+    const payload = { model: "gpt-5.5", input: [] };
     const result = await handlers[0]({ type: "before_provider_request", payload }, {});
 
     assert.equal(result, undefined);
