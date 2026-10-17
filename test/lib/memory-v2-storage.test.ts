@@ -350,6 +350,13 @@ describe("V2 Phase 3 (AD1/AD3/AD4) — injection dedupe + policy text", () => {
 		expect(policy).toContain("PROJECT memory (/home/u/.pi/agent/projects/-Users-x-Coding-repo/memory)");
 		expect(policy).not.toContain("<project>/memory/");
 		expect(policy).toContain("NOT in a memory/");
+		// layer-routing tie-breakers (2026-10-18): prevent B-class pollution —
+		// single-repo facts must not squat in the user layer via the paths
+		// escape hatch; when unsure choose project (the user index is a
+		// machine-global budget)
+		expect(policy).toContain("Scope tie-breakers");
+		expect(policy).toContain("single-repo fact never justifies a USER entry");
+		expect(policy).toContain("When unsure, choose PROJECT");
 	});
 
 	it("AD2: reading a stale memory file gets a staleness note appended to the tool result", async () => {

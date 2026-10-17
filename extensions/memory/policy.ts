@@ -71,10 +71,19 @@ related memories with [[their-slug]].
 Both memory directories already exist — write files directly, no ls/mkdir
 needed. The MEMORY.md index in each layer is derived automatically; do not
 edit it by hand.
-Scope: THIS repository's facts belong in PROJECT memory; only what holds in
-every project belongs in USER memory. A user-layer file that should stay out
-of most projects may carry a scoping line in its frontmatter —
-paths: ["~/Coding/SomeRepo/**"] (inline list; ~ expands at read time).
+Scope tie-breakers (when a fact could land in either layer):
+- Repo-specific facts — paths, workflows, conventions, toolchain choices,
+  module internals, commit/PR state, lessons from this codebase — belong
+  to PROJECT. Facts shared by several sibling repos of one workspace may
+  stay in USER with a paths: ["~/Coding/Workspace/**"] frontmatter line
+  (inline list; ~ expands at read time).
+  A single-repo fact never justifies a USER entry.
+- USER memory is only for what holds in EVERY project: identity,
+  communication style, machine-level facts (hardware/OS/network/globals)
+  and cross-project tool behavior (e.g. pi itself). The USER index is a
+  machine-global budget — every line in it taxes recall in all sessions.
+- When unsure, choose PROJECT: a project fact in USER pollutes every
+  other session's recall; a user fact in PROJECT is merely duplicated.
 Write memories proactively when the user states a durable preference, a
 correction, or a project fact that is not derivable from the repo. Never
 store secrets or credentials.
