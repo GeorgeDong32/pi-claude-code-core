@@ -12,6 +12,15 @@
  * validation rules (filename predicate, frontmatter, secret scan, size
  * cap) and the atomic write primitive all come from store.ts; what stays
  * here is the must-shrink invariant, the mkdir lock, and the trigger.
+ *
+ * Batch-member exclusivity (2026-10-18): writes and deletes may not name
+ * the same file, and write keys must be unique. Both shapes previously
+ * skewed the bytesAfter accounting (content counted for a file that never
+ * lands, or counted twice for one landing) and could produce a false
+ * "does not shrink" rejection; they are now explicit validation failures.
+ * Guard messages carry the name-format and layer hints that field usage
+ * showed models need (a 6-rejected-attempt consolidation run tripped on
+ * exactly these two unstated contracts).
  */
 
 import { existsSync, mkdirSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
@@ -93,8 +102,12 @@ export function runConsolidation(
 	// validate every write BEFORE touching anything
 	const safe = safeMemoryFileName; // S2: the engine's one filename predicate
 	const deleteSet = new Set(deletes);
+	const seenWrites = new Set<string>();
 	for (const w of writes) {
-		if (!safe(w.file)) return fail(`unsafe file name "${w.file}"`);
+		if (!safe(w.file)) return fail(`unsafe file name "${w.file}" (bare kebab-case name ending in .md, not MEMORY.md)`);
+		if (seenWrites.has(w.file)) return fail(`duplicate write key "${w.file}" (one entry per file)`);
+		seenWrites.add(w.file);
+		if (deleteSet.has(w.file)) return fail(`write and delete the same file "${w.file}" in one batch — pick one side`);
 		const fm = parseMemoryFrontmatter(w.content);
 		if (!fm) return fail(`${w.file}: invalid frontmatter (need name/description/type)`);
 		const secret = findSecret(w.content);
@@ -102,9 +115,11 @@ export function runConsolidation(
 		if (Buffer.byteLength(w.content, "utf8") > MEMORY_FILE_TOTAL_MAX) return fail(`${w.file}: exceeds ${MEMORY_FILE_TOTAL_MAX} bytes`);
 	}
 	for (const d of deletes) {
-		if (!safe(d)) return fail(`unsafe delete target "${d}"`);
-		if (!existsSync(join(dir, d)) && !writes.some((w) => w.file === d)) {
-			return fail(`delete target "${d}" not found`);
+		if (!safe(d)) return fail(`unsafe delete target "${d}" (bare kebab-case name ending in .md, not MEMORY.md)`);
+		if (!existsSync(join(dir, d))) {
+			// write/delete overlap was already rejected above, so no write can
+			// supply this name — existence on disk is the only remaining source
+			return fail(`delete target "${d}" not found (check the "layer" argument — it defaults to "project")`);
 		}
 	}
 

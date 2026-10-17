@@ -175,6 +175,30 @@ describe("V2-C runConsolidation (must-shrink transaction)", () => {
 		expect(runConsolidation(dir, [], ["ghost.md"]).ok).toBe(false);
 		expect(existsSync(join(dir, "x.md"))).toBe(false); // nothing applied
 	});
+
+	it("rejects contradictory batch members: write+delete overlap and duplicate write keys", () => {
+		put(dir, "a.md", "alpha", "fact");
+		const fmA = "---\nname: n\ndescription: d\nmetadata:\n  type: project\n---\n\ncontent";
+		// overlap: the named file never lands on disk — its content used to be
+		// counted in bytesAfter anyway, producing a bogus size delta (false reject)
+		const overlap = runConsolidation(dir, [{ file: "new.md", content: fmA }], ["new.md"]);
+		expect(overlap.ok).toBe(false);
+		expect(overlap.message).toContain('write and delete the same file "new.md"');
+		// duplicate keys: one file lands, but both contents used to be counted
+		const dup = runConsolidation(dir, [
+			{ file: "new.md", content: fmA },
+			{ file: "new.md", content: fmA },
+		], []);
+		expect(dup.ok).toBe(false);
+		expect(dup.message).toContain('duplicate write key "new.md"');
+		expect(existsSync(join(dir, "new.md"))).toBe(false); // nothing applied
+	});
+
+	it("guard messages state the name format and the layer default", () => {
+		expect(runConsolidation(dir, [{ file: "NoExt", content: "x" }], []).message).toContain("kebab-case");
+		expect(runConsolidation(dir, [], ["ghost"]).message).toContain("kebab-case");
+		expect(runConsolidation(dir, [], ["ghost.md"]).message).toContain("layer");
+	});
 });
 
 describe("V2-C directive + trigger state machine", () => {
