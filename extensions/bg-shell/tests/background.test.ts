@@ -63,6 +63,18 @@ describe("bash with background: true", () => {
 		assert.match(text(await s.toolCall("TaskList", {})), /exited \(code 0\)/);
 	});
 
+	it("carries the model-given description through the completion, TaskList and status entry (CC parity)", async () => {
+		const s = session();
+		const result = await s.toolCall("bash", { command: "sleep 30", background: true, description: "build the frontend" });
+		const id = text(result).match(/bg-\d+/)![0];
+		procs.of(id).exit(0);
+		await clock.until(() => s.sent.length > 0);
+		assert.match(s.sent[0].message.content, new RegExp(`Background task ${id} \\(build the frontend\\) finished: exited \\(code 0\\)`));
+		assert.match(text(await s.toolCall("TaskList", {})), new RegExp(`${id} · build the frontend \\| exited \\(code 0\\)`));
+		const entry = s.entries[0]!.data as { description?: string };
+		assert.equal(entry.description, "build the frontend");
+	});
+
 	it("sends exactly one follow-up message that names the id, command, exit, runtime and output", async () => {
 		const s = session();
 		const id = await start(s, "echo one; echo two");
@@ -167,6 +179,6 @@ describe("the bash tool's schema", () => {
 		);
 		assert.doesNotMatch(tool.description.slice(builtin.description.length), /until [^;]*; do sleep/);
 		const properties = Object.keys((tool.parameters as { properties: object }).properties);
-		assert.deepEqual(properties.sort(), ["background", "command", "timeout", "waitFor"]);
+		assert.deepEqual(properties.sort(), ["background", "command", "description", "timeout", "waitFor"]);
 	});
 });

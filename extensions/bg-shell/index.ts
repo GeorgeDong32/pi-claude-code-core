@@ -61,13 +61,22 @@ export default function (pi: ExtensionAPI): void {
 			background: Type.Optional(
 				Type.Boolean({ description: "Run the command as a detached background task and return its id" }),
 			),
+			description: Type.Optional(
+				Type.String({
+					description:
+						"A short human-readable label for this command (3-6 words), shown with the task id everywhere tasks are listed. Optional; ids alone are hard to tell apart.",
+				}),
+			),
 		}),
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			setContext(ctx);
 			if (params.waitFor !== undefined && params.background)
 				throw new Error("waitFor applies to foreground calls: drop `background: true`, or drop `waitFor`.");
 			if (!params.background) return runForeground(toolCallId, params, signal, onUpdate, ctx);
-			const task = await startTask(params.command, ctx, { timeout: params.timeout });
+			const task = await startTask(params.command, ctx, {
+				timeout: params.timeout,
+				description: params.description,
+			});
 			return {
 				content: [
 					{

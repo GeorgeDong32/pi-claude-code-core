@@ -34,7 +34,7 @@ renderer——first-wins 下会永久遮蔽 TUI 的。独立 watcher 进程（�
 
 | 工具 | 用途 |
 |---|---|
-| `bash`（覆盖） | 增加 `background` / `waitFor`；不带时即 pi 原生 bash 走同一 wrapper |
+| `bash`（覆盖） | 增加 `background` / `waitFor` / `description`（短人话标签，对齐 CC——随 id 显示在所有任务列表处）；不带时即 pi 原生 bash 走同一 wrapper |
 | `TaskOutput` | 从任务读位置增量读取；`latest` 跳到最新、`filter` 正则过滤 |
 | `TaskStop` | 对进程组 SIGTERM → 宽限 → SIGKILL；随后不再发完成消息 |
 | `TaskList` | 每任务一行：id、状态、时长、命令 |

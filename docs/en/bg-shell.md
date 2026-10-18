@@ -38,7 +38,7 @@ A watcher process (outside the task's group) kills the group if pi dies.
 
 | Tool | Purpose |
 |---|---|
-| `bash` (overridden) | adds `background` / `waitFor`; without them it is pi's own bash over the same wrapper |
+| `bash` (overridden) | adds `background` / `waitFor` / `description` (a short human label, CC parity — shown with the id everywhere tasks are listed); without them it is pi's own bash over the same wrapper |
 | `TaskOutput` | incremental read from the task's read position; `latest`, `filter` regex |
 | `TaskStop` | SIGTERM to the process group → grace → SIGKILL; no completion message follows |
 | `TaskList` | one line per task: id, state, runtime, command |

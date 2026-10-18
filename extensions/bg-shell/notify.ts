@@ -70,9 +70,10 @@ export function runtimeText(task: Task): string {
 	return formatRuntime((task.endedAt ?? Date.now()) - task.startedAt);
 }
 
-/** One line per task for `bash_tasks` and `/tasks`: `id | state | runtime | command`, the command on one line. */
+/** One line per task for `TaskList` and `/tasks`: `id · label? | state | runtime | command`, the command on one line. */
 export function taskLine(task: Task): string {
-	return `${task.id} | ${stateText(task)} | ${runtimeText(task)} | ${oneLine(task.command)}`;
+	const who = task.description === undefined || task.description === "" ? task.id : `${task.id} · ${task.description}`;
+	return `${who} | ${stateText(task)} | ${runtimeText(task)} | ${oneLine(task.command)}`;
 }
 
 /** A command on one line (newlines shown as ⏎), cut to 200 characters. */
@@ -89,8 +90,9 @@ export function oneLine(command: string): string {
  * made the read unnecessary and the visible output row disappeared).
  */
 export function completionText(task: Task): string {
+	const who = task.description === undefined || task.description === "" ? task.id : `${task.id} (${task.description})`;
 	return [
-		`Background task ${task.id} finished: ${stateText(task)}, ran ${runtimeText(task)}.`,
+		`Background task ${who} finished: ${stateText(task)}, ran ${runtimeText(task)}.`,
 		`Command: ${oneLine(task.command)}`,
 		`Output: read it with TaskOutput (id: ${task.id}).`,
 	].join("\n");

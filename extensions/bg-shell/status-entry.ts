@@ -24,6 +24,8 @@ export const STATUS_ENTRY_TYPE = "cc-core-bg-shell-task";
 export interface TaskStatusData {
 	id: string;
 	command: string;
+	/** Optional human label the model gave the call (CC description parity). */
+	description?: string;
 	state: string;
 	exitCode?: number;
 	runtimeMs: number;
@@ -33,6 +35,7 @@ export function statusData(task: Task): TaskStatusData {
 	return {
 		id: task.id,
 		command: oneLine(task.command),
+		description: task.description,
 		state: task.state,
 		exitCode: task.exitCode,
 		runtimeMs: (task.endedAt ?? Date.now()) - task.startedAt,

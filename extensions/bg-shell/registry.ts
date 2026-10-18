@@ -40,6 +40,8 @@ export type KillReason = "killed by agent" | "killed by user" | "timed out" | "l
 export type Task = {
 	id: string;
 	command: string;
+	/** Optional human label the model gave the call (CC description parity); shown wherever the task is listed. */
+	description?: string;
 	cwd: string;
 	logPath: string;
 	pid: number;
@@ -210,13 +212,14 @@ export function release(reservation: Reservation): void {
 /** A running task for a launched process; `startedAt` is when it really began. Not registered yet: see `adopt`. */
 export function makeTask(
 	reservation: Reservation,
-	launched: { command: string; cwd: string; pid: number; startedAt: number; timeout?: number },
+	launched: { command: string; cwd: string; pid: number; startedAt: number; timeout?: number; description?: string },
 ): Task {
 	const { id, logPath, nonce } = reservation;
 	const { command, cwd, pid, startedAt } = launched;
 	return {
 		id,
 		command,
+		description: launched.description,
 		cwd,
 		logPath,
 		pid,
@@ -245,13 +248,13 @@ export function adopt(task: Task): Task {
 export async function startTask(
 	command: string,
 	ctx: ExtensionContext,
-	options: { timeout?: number } = {},
+	options: { timeout?: number; description?: string } = {},
 ): Promise<Task> {
 	getRegistry().ctx = ctx;
 	const reservation = reserve(ctx.sessionManager.getSessionId());
 	const { logPath, nonce } = reservation;
 	const pid = await launchGroup({ command, cwd: ctx.cwd, logPath, nonce, sessionEnv: sessionEnv(ctx) });
-	return adopt(makeTask(reservation, { command, cwd: ctx.cwd, pid, startedAt: Date.now(), timeout: options.timeout }));
+	return adopt(makeTask(reservation, { command, cwd: ctx.cwd, pid, startedAt: Date.now(), timeout: options.timeout, description: options.description }));
 }
 
 /**
