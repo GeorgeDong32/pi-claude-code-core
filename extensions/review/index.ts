@@ -19,6 +19,7 @@
  * and a few read-only git commands, all already permitted in the agent
  * frontmatter.
  */
+import { notify as sharedNotify } from "../ui/notify.ts";
 import { existsSync, readFileSync } from "node:fs";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
@@ -88,8 +89,12 @@ export default function (pi: ExtensionAPI) {
 			return null;
 		},
 		handler: async (args, ctx) => {
+			// C2: UI-visible notices go through the shared entry (bus publish +
+			// cctui negotiation) instead of a bare host notify; the headless
+			// console fallback stays review's own — /review must stay readable
+			// when driven from a terminal without any TUI.
 			const notify = (msg: string, level: "info" | "warning" | "error" = "info") => {
-				if (ctx.hasUI) ctx.ui.notify(msg, level);
+				if (ctx.hasUI) sharedNotify(ctx, msg, level);
 				else console.log(`pi-review: ${msg}`);
 			};
 

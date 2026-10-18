@@ -44,6 +44,7 @@
  * by the next tick. All hooks are suppressed while yielded to hermes.
  */
 
+import { notify as sharedNotify } from "../ui/notify.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { join } from "node:path";
@@ -320,6 +321,20 @@ export interface AutomationArgs {
 	deps?: AutomationDeps;
 }
 
+/**
+ * C2: notices through the shared entry (bus publish + cctui negotiation).
+ * The try/catch stays as defense-in-depth for stale ctx objects the host
+ * hands out after a /new or /resume — a throwing ui accessor must never
+ * break the turn hook. Exported for the coverage test.
+ */
+export function automationNotify(ctx: ExtensionContext, message: string): void {
+	try {
+		sharedNotify(ctx, message, "info");
+	} catch {
+		/* stale ctx */
+	}
+}
+
 export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drainPending: (ctx: ExtensionContext) => void } {
 	const { gate, dirs, trigger, state } = args;
 	const deps = args.deps ?? {};
@@ -414,13 +429,7 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 		return outcome.applied;
 	}
 
-	const notify = (ctx: ExtensionContext, message: string): void => {
-		try {
-			ctx.ui?.notify?.(message, "info");
-		} catch {
-			/* stale ctx */
-		}
-	};
+	const notify = automationNotify;
 
 	pi.on("tool_call", (event, ctx: ExtensionContext) => {
 		try {

@@ -43,6 +43,7 @@
  * Injection failures NEVER block a turn (P3-ME-09): every hook body is
  * try/catch-wrapped at the boundary.
  */
+import { notify as sharedNotify } from "../ui/notify.ts";
 import { accessSync, constants as fsConstants, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -219,8 +220,10 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 	function notifyOnce(ctx: ExtensionContext | undefined, msg: string): void {
 		if (degradedNotified) return;
 		degradedNotified = true;
-		if (ctx?.hasUI) ctx.ui.notify(msg, "warning");
-		else console.log(`pi-memory: ${msg}`);
+		// C2: UI-visible warnings through the shared entry (bus + cctui
+		// negotiation). No headless console branch — headless sessions have
+		// no presentation surface, so the notice is simply not delivered.
+		if (ctx?.hasUI) sharedNotify(ctx, msg, "warning");
 	}
 
 	pi.on("session_start", (_event, ctx: ExtensionContext) => {

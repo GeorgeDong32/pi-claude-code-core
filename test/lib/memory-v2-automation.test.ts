@@ -8,6 +8,7 @@
  * directive-turn exclusion, flush on compact/shutdown, reload skip, and
  * yielded silence. The LLM is always the injected fake — no network.
  */
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,7 +18,8 @@ import { FakeHost, clearCoreGlobals, snapshotCoreGlobals } from "../contracts/fa
 import { resetCoreBusForTests } from "../../extensions/bus.ts";
 import memoryExtension from "../../extensions/memory/index.ts";
 import { parseOperations, completeMemoryOps } from "../../extensions/memory/llm.ts";
-import { conversationParts, isCorrection, loadMemorySettings, resolveSideChannelModel, setupAutomation, type AutomationState } from "../../extensions/memory/automation.ts";
+import {
+	automationNotify, conversationParts, isCorrection, loadMemorySettings, resolveSideChannelModel, setupAutomation, type AutomationState } from "../../extensions/memory/automation.ts";
 import { resolveRecallModel } from "../../extensions/memory/selector.ts";
 import { ConsolidationTrigger } from "../../extensions/memory/consolidate.ts";
 import { resolveMemoryPaths } from "../../extensions/memory/paths.ts";
@@ -35,6 +37,7 @@ let projectsDirStr: string;
 beforeEach(() => {
 	globalsSnapshot = snapshotCoreGlobals();
 	clearCoreGlobals();
+	(globalThis as Record<string, unknown>).__piCcTui = CCTUI_LIVE; // C2: host-notify leg (after globals reset)
 	resetCoreBusForTests();
 	prevHome = process.env.HOME;
 	home = mkdtempSync(join(tmpdir(), "memv2a-home-"));
@@ -53,6 +56,7 @@ beforeEach(() => {
 const testDirs = () => ({ project: dir, user: udir, projectsDir: projectsDirStr, agentDir });
 
 afterEach(() => {
+	delete (globalThis as Record<string, unknown>).__piCcTui;
 	if (prevHome === undefined) delete process.env.HOME;
 	else process.env.HOME = prevHome;
 	rmSync(home, { recursive: true, force: true });
@@ -61,6 +65,11 @@ afterEach(() => {
 
 // ─── llm.ts extraction ───
 
+
+// C2: these assertions observe the host-notify leg of the shared notify
+// entry, which only fires when a cctui replica is live without its own
+// queue consumer (the transitional channel). Plant that state.
+const CCTUI_LIVE = { active: true, notificationsConsumer: false } as const;
 describe("C7 conversationParts backward window", () => {
 	it("returns the LAST n non-empty user/assistant parts — identical to full-walk + slice, empty/non-message skipped", () => {
 		const entries: Array<{ type?: string; message?: unknown }> = [];
@@ -848,4 +857,10 @@ describe("V2 Phase 3 (AD5) — extraction cursor + model-wrote mutex", () => {
 		await host.fire("agent_end", {}, ctx);
 		await until(() => calls.length === 1);
 	});
+
+	it("notify survives a stale ctx whose ui accessor throws (C2 defense-in-depth)", () => {
+		const boom = { hasUI: true, get ui() { throw new Error("stale ctx"); } } as unknown as ExtensionContext;
+		expect(() => automationNotify(boom, "memory note")).not.toThrow();
+	});
+
 });

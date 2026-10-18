@@ -6,7 +6,7 @@
  * functionality is unaffected. With the tool present, /review proceeds
  * past the gate.
  */
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
 
 import {
 	FakeHost,
@@ -21,6 +21,11 @@ let globalsSnapshot: Record<string, unknown>;
 beforeEach(() => {
 	globalsSnapshot = snapshotCoreGlobals();
 	clearCoreGlobals();
+	(globalThis as Record<string, unknown>).__piCcTui = CCTUI_LIVE; // C2: host-notify leg (after globals reset)
+});
+
+afterEach(() => {
+	delete (globalThis as Record<string, unknown>).__piCcTui;
 });
 
 function makeReviewHost(): FakeHost {
@@ -35,6 +40,11 @@ async function runReview(host: FakeHost, ctx: Record<string, unknown>, args = ""
 	await handler(args, ctx);
 }
 
+
+// C2: these assertions observe the host-notify leg of the shared notify
+// entry, which only fires when a cctui replica is live without its own
+// queue consumer (the transitional channel). Plant that state.
+const CCTUI_LIVE = { active: true, notificationsConsumer: false } as const;
 describe("P2-REV-03 pi-subagents degradation", () => {
 	it("without the subagent tool, /review refuses with the install hint and no directive", async () => {
 		const host = makeReviewHost(); // toolInfos empty → subagent missing

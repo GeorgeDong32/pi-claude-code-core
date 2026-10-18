@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Changed (arch review 2026-10-18 C2 — transient notices through the shared entry)
+
+- **notify convergence**: review's inline notifier and memory's two bare `ctx.ui.notify` paths (degraded-mode `notifyOnce`, automation's side-channel notices) now flow through the shared entry in `extensions/ui/notify.ts` (bus publish + cctui negotiation) instead of hand-rolled host calls — every transient notice lands in the bus queue, so any consumer (TUI notice area, future panels) sees them uniformly. Known remaining bare-call sites outside this batch: memory/consolidate.ts manual-merge notices and review's config-edit flow — recorded as scope notes in DEVIATIONS #122. Review's headless console fallback keeps its `pi-review:` prefix semantics. `automationNotify` is exported with its stale-ctx try/catch pinned by a test.
+- **frozen roots stay homedir()-based** (adversarial review R1 P1-1): an attempted agent-dir unification (modes + core-economy onto the host `getAgentDir()`) was reverted — the host honors `PI_CODING_AGENT_DIR`, which would silently relocate existing users' `permission-modes.json`/`core-economy.json` (invariant 7). Lazy path init (imports side-effect free) is kept; the two semantics (frozen core root vs host-following settings.json) are now documented in DEVIATIONS #122.
+
 ### Changed (arch review 2026-10-18 — hot-path read caching + two bug-grade fixes)
 
 - **performance**: `lib/settings.ts` gains `readJsonCached` — an mtime-keyed cached read with automatic invalidation inside `writeJsonAtomic`. The hot paths that re-read the same small JSON every turn now stat instead of readFileSync+parse: effort settings (every `syncEffortUi`), modes project permissions (every tool call via `loadMergedPermissionRules` — the global side had its own mtime cache for years; this closes the gap), and the goal auditor config. Shared read-only result discipline, same as modes' `configCache`. The goal ledger read (`readGoalLedger`) gets the same mtime cache — the before_agent_start prompt hook read the whole JSONL up to three times per turn; `appendGoalEvent` drops the entry on every append, so same-millisecond writes never serve stale history.

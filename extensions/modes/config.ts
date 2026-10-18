@@ -45,10 +45,17 @@ export interface PermissionModesConfig {
 	}
 }
 
-let _configPath = join(homedir(), ".pi", "agent", "permission-modes.json")
+// C2 (arch review 2026-10-18), review R1 P1-1: this file is part of the
+// FROZEN disk layout (~/.pi/agent/permission-modes.json, invariant 7 +
+// P0-CT-09), so the root must stay homedir()-based — NOT the host
+// getAgentDir(), which honors PI_CODING_AGENT_DIR and would silently
+// relocate every existing user's permissions. Lazy init keeps imports
+// side-effect free; the shape stays deliberately different from effort's
+// host-following settings.json (two legal semantics, see DEVIATIONS).
+let _configPath: string | undefined
 
 export function getConfigPath(): string {
-	return _configPath
+	return (_configPath ??= join(homedir(), ".pi", "agent", "permission-modes.json"))
 }
 
 export function setConfigPath(p: string): void {
@@ -103,17 +110,18 @@ const configCache = new Map<string, { mtimeMs: number; config: PermissionModesCo
 
 export function loadPermissionModesConfig(): PermissionModesConfig {
 	try {
-		const stat = statSync(_configPath)
-		const cached = configCache.get(_configPath)
+		const configPath = getConfigPath()
+		const stat = statSync(configPath)
+		const cached = configCache.get(configPath)
 		if (cached && cached.mtimeMs === stat.mtimeMs) return cached.config
 		// shared settings-JSON primitive (P0-LB-01): {} fallback; malformed
 		// files keep the historical console.warn diagnostic
-		const config = readJson<PermissionModesConfig>(_configPath, {}, (reason) => {
+		const config = readJson<PermissionModesConfig>(configPath, {}, (reason) => {
 			if (reason === "malformed" || reason === "non-object") {
-				console.warn(`[permission-modes] Failed to load ${_configPath}: invalid JSON`)
+				console.warn(`[permission-modes] Failed to load ${configPath}: invalid JSON`)
 			}
 		})
-		configCache.set(_configPath, { mtimeMs: stat.mtimeMs, config })
+		configCache.set(configPath, { mtimeMs: stat.mtimeMs, config })
 		return config
 	} catch {
 		return {}

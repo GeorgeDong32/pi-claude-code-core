@@ -50,7 +50,11 @@ describe("P0-CT §4.5 frozen disk layout", () => {
 			new URL("../../extensions/modes/config.ts", import.meta.url),
 			"utf-8",
 		);
-		expect(configSrc).toContain('join(homedir(), ".pi", "agent", "permission-modes.json")');
+					// C2 review R1 P1-1: the frozen root stays homedir()-based on purpose —
+			// the host getAgentDir() honors PI_CODING_AGENT_DIR and would silently
+			// relocate existing users' permissions (invariant 7). config.ts now
+			// resolves this lazily (??=) with the setConfigPath test seam.
+			expect(configSrc).toContain('join(homedir(), ".pi", "agent", "permission-modes.json")');
 		expect(modelsPath).toBe(join(homedir(), ".pi", "agent", "model-profiles.json"));
 	});
 

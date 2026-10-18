@@ -58,6 +58,7 @@ function writeMemory(name: string, title: string, description: string, type = "p
 beforeEach(() => {
 	globalsSnapshot = snapshotCoreGlobals();
 	clearCoreGlobals();
+	(globalThis as Record<string, unknown>).__piCcTui = CCTUI_LIVE; // C2: host-notify leg (after globals reset)
 	resetCoreBusForTests();
 	prevHome = process.env.HOME;
 	home = mkdtempSync(join(tmpdir(), "mem-home-"));
@@ -66,12 +67,18 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	delete (globalThis as Record<string, unknown>).__piCcTui;
 	if (prevHome === undefined) delete process.env.HOME;
 	else process.env.HOME = prevHome;
 	rmSync(home, { recursive: true, force: true });
 	rmSync(project, { recursive: true, force: true });
 });
 
+
+// C2: these assertions observe the host-notify leg of the shared notify
+// entry, which only fires when a cctui replica is live without its own
+// queue consumer (the transitional channel). Plant that state.
+const CCTUI_LIVE = { active: true, notificationsConsumer: false } as const;
 describe("P3-ME-02 index reconciler", () => {
 	it("3 valid + 1 invalid → index has exactly the 3 rows; scan reports skipped:1", () => {
 		writeMemory("a.md", "alpha", "first");

@@ -94,7 +94,7 @@ function applySessionLevel(
 }
 
 export default function effortExtension(pi: ExtensionAPI): void {
-  const settingsPath = join(getAgentDir(), "settings.json");
+  const settingsPath = join(getAgentDir(), "settings.json"); // host file → host root (env-redirectable by design)
   // thinking-level ownership chain (P1-EF-05): every write below arbitrates
   // through this owner; modes' profile application shares the same instance.
   const owner = getSharedEffortOwner(pi);
