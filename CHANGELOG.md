@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Changed (arch review 2026-10-18 — hot-path read caching + two bug-grade fixes)
+
+- **performance**: `lib/settings.ts` gains `readJsonCached` — an mtime-keyed cached read with automatic invalidation inside `writeJsonAtomic`. The hot paths that re-read the same small JSON every turn now stat instead of readFileSync+parse: effort settings (every `syncEffortUi`), modes project permissions (every tool call via `loadMergedPermissionRules` — the global side had its own mtime cache for years; this closes the gap), and the goal auditor config. Shared read-only result discipline, same as modes' `configCache`. The goal ledger read (`readGoalLedger`) gets the same mtime cache — the before_agent_start prompt hook read the whole JSONL up to three times per turn; `appendGoalEvent` drops the entry on every append, so same-millisecond writes never serve stale history.
+- **fix (memory)**: the session-start queue drain was fire-and-forget (`void drainPendingRecords(...)`) — a rejected drain promise escaped the surrounding try (it only guards the synchronous span) and surfaced as an unhandled rejection. It now routes into the same `state.lastError` diagnostic channel the drain's own drops use.
+- **fix (bg-shell)**: the `/tasks` list and output-view refresh timers only stopped on key input — a panel removed by the host kept ticking (and kept requesting renders) until the next open. Both timers now self-terminate three ticks after the host stops calling the component's `render` (the only proof the view is still on screen).
+
 ### Added (bg-shell: background shell tasks — CC parity, 2026-10-18)
 
 - **bg-shell**: the completion notification no longer inlines the output tail (CC `<task_notification>` parity) — it carries exit status, runtime and a `TaskOutput` pointer, so the agent reads the output itself and the read renders as a tool-call row in the TUI.

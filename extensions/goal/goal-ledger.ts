@@ -85,10 +85,38 @@ export function appendGoalEvent(ctx: GoalLedgerContext, event: GoalLedgerEvent):
       // Temp file may not exist; ignore cleanup failure.
     }
   }
+  // C1: the append changed the file — drop the read cache for this ledger
+  // (same-millisecond appends would otherwise still hit the old mtimeMs).
+  if (appended) ledgerReadCache.delete(filePath);
 }
+
+// C1 (arch review 2026-10-18): mtime-keyed cache for the read side. The
+// before_agent_start prompt hook reads the whole ledger up to three times in
+// one turn (paused audit block, active audit block, post-compaction resync)
+// and every read was a full readFileSync + per-line JSON.parse — O(events)
+// each. Same shape as modes' configCache: the result is shared and callers
+// treat events as read-only (they all do — they only feed projections).
+// appendGoalEvent drops the entry explicitly, so same-millisecond appends
+// can never serve stale history.
+const ledgerReadCache = new Map<string, { mtimeMs: number; result: GoalLedgerReadResult }>();
 
 export function readGoalLedger(ctx: GoalLedgerContext): GoalLedgerReadResult {
   const filePath = goalLedgerPath(ctx);
+  let mtimeMs: number;
+  try {
+    mtimeMs = fs.statSync(filePath).mtimeMs;
+  } catch {
+    ledgerReadCache.delete(filePath);
+    return { events: [], malformed: 0 };
+  }
+  const cached = ledgerReadCache.get(filePath);
+  if (cached && cached.mtimeMs === mtimeMs) return cached.result;
+  const result = parseGoalLedgerFile(filePath);
+  ledgerReadCache.set(filePath, { mtimeMs, result });
+  return result;
+}
+
+function parseGoalLedgerFile(filePath: string): GoalLedgerReadResult {
   let content: string;
   try {
     content = fs.readFileSync(filePath, "utf8");

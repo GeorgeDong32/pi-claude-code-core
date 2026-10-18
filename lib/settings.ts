@@ -18,6 +18,7 @@ import {
 	mkdirSync,
 	readFileSync,
 	renameSync,
+	statSync,
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
@@ -98,9 +99,61 @@ export function writeJsonAtomic(
 		}
 		throw error;
 	}
+	// Arch review 2026-10-18 C1: the write side of readJsonCached — a write is
+	// the one event every mtime window could miss, so drop the entry by hand.
+	cachedReads.delete(path);
 }
 
 function basename(path: string): string {
 	const idx = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
 	return idx === -1 ? path : path.slice(idx + 1);
+}
+
+// ─── Cached reads (arch review 2026-10-18 C1) ─────────────────────────────
+
+/**
+ * mtime-keyed cache behind `readJson` for hot paths that re-read the same
+ * small settings file several times per turn (effort settings on every sync,
+ * modes project permissions on every tool call, the goal auditor config).
+ *
+ * Shape follows the two proven in-repo precedents — modes' `configCache`
+ * (mtimeMs key, shared read-only result) and memory's `scanMemoryDirCached`
+ * (explicit invalidation on every internal write path) — collapsed into the
+ * shared primitive so callers cannot forget the write side:
+ *
+ *   - `writeJsonAtomic` drops the cache entry for the path it writes, so
+ *     same-millisecond rewrites cannot serve stale content to automation.
+ *   - A missing file is a miss AND drops the entry (a delete is a change too).
+ *   - The returned object is SHARED: callers treat it as read-only, same
+ *     discipline as modes' configCache. Mutate-then-write call sites keep
+ *     plain `readJson` and build their own object.
+ *   - Reads that throw (a throwing `onInvalid` guard) are never cached, so
+ *     a corrupt file re-reports on every call, exactly like today.
+ */
+const cachedReads = new Map<string, { mtimeMs: number; value: object }>();
+
+export function readJsonCached<T extends object>(
+	path: string,
+	fallback: T,
+	onInvalid?: (reason: "missing" | "empty" | "malformed" | "non-object") => void,
+): T {
+	let mtimeMs: number;
+	try {
+		mtimeMs = statSync(path).mtimeMs;
+	} catch {
+		cachedReads.delete(path);
+		return readJson(path, fallback, onInvalid);
+	}
+	const cached = cachedReads.get(path);
+	if (cached !== undefined && cached.mtimeMs === mtimeMs) {
+		return cached.value as T;
+	}
+	const value = readJson(path, fallback, onInvalid);
+	cachedReads.set(path, { mtimeMs, value });
+	return value;
+}
+
+/** Test seam: drop every cached read (the write side is automatic). */
+export function clearCachedReads(): void {
+	cachedReads.clear();
 }

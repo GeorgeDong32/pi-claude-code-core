@@ -618,7 +618,13 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 				projectKey: projectKeyForDir(dirs(ctx).project),
 				complete: deps.complete as LlmComplete | undefined,
 			};
-			void drainPendingRecords(cap);
+			// C8 (arch review 2026-10-18): the surrounding try only guards the
+			// synchronous span — a rejected drain promise would surface as an
+			// unhandled rejection. Route it into the same diagnostic channel
+			// drainQueue's drops already use, still never blocking session start.
+			drainPendingRecords(cap).catch((err) => {
+				state.lastError = `session-start drain: ${err instanceof Error ? err.message : String(err)}`;
+			});
 		} catch {
 			/* never block session start */
 		}

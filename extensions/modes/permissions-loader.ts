@@ -3,7 +3,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs"
-import { readJson, writeJsonAtomic } from "../../lib/settings.ts"
+import { readJson, readJsonCached, writeJsonAtomic } from "../../lib/settings.ts"
 import path from "node:path"
 import {
 	getConfigPath,
@@ -48,8 +48,12 @@ export function getProjectPermissionsPath(
 
 function readJsonFile(filePath: string): PermissionsConfig | null {
 	// shared settings-JSON primitive (P0-LB-01); shape extraction unchanged,
-	// malformed files keep the historical console.warn diagnostic
-	const parsed = readJson<{ permissions?: PermissionsConfig } & PermissionsConfig>(
+	// malformed files keep the historical console.warn diagnostic.
+	// C1 (arch review 2026-10-18): cached read — this fires on every tool
+	// call via loadMergedPermissionRules; both write paths go through
+	// writeJsonAtomic, which drops the cache entry. (The global side has had
+	// its own mtime cache in config.ts for years — this closes the gap.)
+	const parsed = readJsonCached<{ permissions?: PermissionsConfig } & PermissionsConfig>(
 		filePath,
 		{} as { permissions?: PermissionsConfig } & PermissionsConfig,
 		(reason) => {

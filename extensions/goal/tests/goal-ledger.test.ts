@@ -5,11 +5,11 @@ import * as os from "node:os";
 import test from "node:test";
 
 import {
-  appendGoalEvent,
   goalLedgerPath,
   latestAuditorResultForGoal,
   latestEventsForGoal,
   latestGoalLifecycleEvent,
+  appendGoalEvent,
   readGoalLedger,
   reconstructGoalLedger,
   type GoalLedgerEvent,
@@ -45,6 +45,29 @@ test("appendGoalEvent creates ledger and appends event", () => {
   assert.equal(result.events[0].type, "goal_created");
   assert.equal((result.events[0] as { goalId: string }).goalId, "g1");
   assert.equal(result.malformed, 0);
+  cleanup(ctx);
+});
+
+test("readGoalLedger caches by mtime and appendGoalEvent invalidates (C1)", () => {
+  const ctx = tempCtx();
+  const ev = (id: string) => ({
+    type: "goal_created" as const,
+    goalId: id,
+    objective: "o",
+    sisyphus: false,
+    autoContinue: true,
+    at: new Date().toISOString(),
+  });
+  appendGoalEvent(ctx, ev("g1"));
+  const first = readGoalLedger(ctx);
+  assert.deepEqual(first.events.map((e) => ("goalId" in e ? e.goalId : "?")), ["g1"]);
+  // same file, same mtime → shared object (the prompt hook reads up to 3x/turn)
+  assert.equal(readGoalLedger(ctx), first);
+  // append drops the entry even in the same millisecond
+  appendGoalEvent(ctx, ev("g2"));
+  const second = readGoalLedger(ctx);
+  assert.notEqual(second, first);
+  assert.deepEqual(second.events.map((e) => ("goalId" in e ? e.goalId : "?")), ["g1", "g2"]);
   cleanup(ctx);
 });
 

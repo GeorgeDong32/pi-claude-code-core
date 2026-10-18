@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { after, afterEach, beforeEach, describe, it } from "node:test";
 import { gunzipSync } from "node:zlib";
 
+import { timerIsStale } from "../bg.ts";
+
 import { createBashToolDefinition } from "@earendil-works/pi-coding-agent";
 
 import {
@@ -163,6 +165,15 @@ describe("bash with background: true", () => {
 		procs.of(id).exit(0);
 		await clock.until(() => s.sent.length > 0);
 		assert.deepEqual(s.statuses.at(-1), { key: "bg", text: undefined });
+	});
+});
+
+describe("refresh-timer self-termination (C8)", () => {
+	it("a timer whose view stopped rendering goes stale after 3 ticks", () => {
+		const now = 10_000;
+		assert.equal(timerIsStale(now, now), false); // fresh
+		assert.equal(timerIsStale(now - 2_999, now), false); // 2 ticks quiet
+		assert.equal(timerIsStale(now - 3_001, now), true); // past 3 ticks
 	});
 });
 

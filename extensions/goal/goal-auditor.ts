@@ -1,5 +1,5 @@
 import * as fs from "node:fs";
-import { readJson, writeJsonAtomic } from "../../lib/settings.js";
+import { readJsonCached, writeJsonAtomic } from "../../lib/settings.js";
 import * as path from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
@@ -99,8 +99,10 @@ function asAuditTimeoutMs(value: unknown): number | undefined {
 }
 
 export function loadGoalAuditorFileConfig(cwd: string): GoalAuditorConfig {
-	// shared settings-JSON primitive (P2-GO-03a); parse/canonicalize unchanged
-	const raw = readJson<Record<string, unknown>>(goalAuditorConfigPath(cwd), {});
+	// shared settings-JSON primitive (P2-GO-03a); parse/canonicalize unchanged.
+	// C1 (arch review 2026-10-18): cached read — read-only here; the save side
+	// builds a fresh object and writeJsonAtomic drops the cache entry.
+	const raw = readJsonCached<Record<string, unknown>>(goalAuditorConfigPath(cwd), {});
 	return parseGoalAuditorConfig(raw);
 }
 

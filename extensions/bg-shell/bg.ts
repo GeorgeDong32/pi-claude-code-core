@@ -26,6 +26,16 @@ import { getRegistry, killTask, type Task } from "./registry.ts";
 
 /** How often the open list and output view re-read the registry and the log. */
 const REFRESH_MS = 1000;
+/** C8 (arch review 2026-10-18): a refresh timer self-terminates once the host
+ * stops calling the component's render — the only proof the view is still on
+ * screen. requestRender keeps the loop alive while mounted (the timer asks,
+ * the host renders, the timestamp refreshes); an externally removed panel
+ * stops receiving render calls and the timer goes quiet 3 ticks later. */
+const STALE_MS = 3 * REFRESH_MS;
+
+export function timerIsStale(lastRenderAt: number, now: number): boolean {
+	return now - lastRenderAt > STALE_MS;
+}
 
 type Pick = { task: Task; action: "view" | "kill" };
 
@@ -108,7 +118,12 @@ function taskList(
 		container.addChild(new DynamicBorder(accent));
 	};
 	const current = (): Task | undefined => tasks.find((task) => task.id === list.getSelectedItem()?.value);
+	let lastRenderAt = Date.now();
 	const timer = setInterval(() => {
+		if (timerIsStale(lastRenderAt, Date.now())) {
+			clearInterval(timer); // C8: host stopped rendering this panel
+			return;
+		}
 		build(current()?.id, Math.max(0, tasks.indexOf(current() as Task)));
 		tui.requestRender();
 	}, REFRESH_MS);
@@ -118,7 +133,10 @@ function taskList(
 	};
 	build(selectedId, 0);
 	return {
-		render: (width: number): string[] => container.render(width),
+		render: (width: number): string[] => {
+			lastRenderAt = Date.now();
+			return container.render(width);
+		},
 		invalidate: (): void => container.invalidate(),
 		handleInput(data: string): void {
 			const task = current();
@@ -148,7 +166,12 @@ function outputView(task: Task, tui: TUI, theme: Theme, done: () => void): Compo
 	const clamp = (): void => {
 		top = Math.max(0, Math.min(top, rows.length - height()));
 	};
+	let lastRenderAt = Date.now();
 	const timer = setInterval(() => {
+		if (timerIsStale(lastRenderAt, Date.now())) {
+			clearInterval(timer); // C8: host stopped rendering this view
+			return;
+		}
 		clamp();
 		const atBottom = top >= rows.length - height();
 		({ lines, cut } = read());
@@ -158,6 +181,7 @@ function outputView(task: Task, tui: TUI, theme: Theme, done: () => void): Compo
 	}, REFRESH_MS);
 	return {
 		render(width: number): string[] {
+			lastRenderAt = Date.now();
 			if (width !== wrappedAt) {
 				rows = lines.flatMap((line) => wrapTextWithAnsi(line, width));
 				wrappedAt = width;

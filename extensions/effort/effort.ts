@@ -1,6 +1,6 @@
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import type { Model, ThinkingLevel } from "@earendil-works/pi-ai";
-import { readJson, writeJsonAtomic } from "../../lib/settings.js";
+import { readJson, readJsonCached, writeJsonAtomic } from "../../lib/settings.js";
 
 /**
  * All levels the extension knows about, including "off" (Pi's internal state)
@@ -228,7 +228,10 @@ export function decideCycleShortcut(
 // overwrite it (same guard as pm's permissions-loader, DEVIATIONS #19).
 
 export function readSettingsObject(settingsPath: string): Record<string, unknown> {
-  return readJson<Record<string, unknown>>(settingsPath, {}, (reason) => {
+  // C1 (arch review 2026-10-18): cached read — syncEffortUi fires on every
+  // effort-relevant event and this was a full readFileSync each time. The
+  // throwing guard still re-reports on every call (throws are never cached).
+  return readJsonCached<Record<string, unknown>>(settingsPath, {}, (reason) => {
     if (reason === "malformed" || reason === "non-object") {
       throw new Error("settings.json is not a JSON object");
     }
