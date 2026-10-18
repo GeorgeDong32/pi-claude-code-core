@@ -7,9 +7,9 @@
 
 `@georgedong32/pi-claude-code-core` — the unified core extension package for the
 [pi coding agent](https://github.com/earendil-works/pi-coding-agent). One npm
-package that assembles **twelve modules** behind a single extension entry
+package that assembles **thirteen modules** behind a single extension entry
 (`extensions/index.ts`): permission modes, effort, goal, review, rules, memory,
-mcp-gov, web-gov, action-fusion, observation-pack, the capability bus, and the
+mcp-gov, web-gov, action-fusion, observation-pack, bg-shell, the capability bus, and the
 UI adapter layer.
 
 pi loads exactly one factory per manifest entry (see the `pi` field in
@@ -22,7 +22,7 @@ module factory in a fixed order with the same `ExtensionAPI` instance.
 |---|---|
 | `bun install` | Install dependencies (bun is the package manager) |
 | `bun run check` | Unified tsc gate — two passes: main project (`tsconfig.json`) + contract suite (`tsconfig.contracts.json`). Must be exit 0. |
-| `bun run test` | Unit tests, **per-framework**: vitest for `test/lib/` + `extensions/modes/` (colocated), node:test via tsx for `extensions/{effort,goal,review,action-fusion,observation-pack}/tests/` |
+| `bun run test` | Unit tests, **per-framework**: vitest for `test/lib/` + `extensions/modes/` (colocated), node:test via tsx for `extensions/{effort,goal,review,action-fusion,observation-pack,bg-shell}/tests/` |
 | `bun run contracts` | Cross-package contract suite (`test/contracts/`, own vitest config). Pins globalThis keys, env vars, status slots, session entry types, disk layout. |
 
 All three must be green before a change is considered done. Tests are run via
@@ -45,6 +45,7 @@ extensions/
   mcp-gov/           # MCP rule family + broker mirror + /core panel (P4)
   action-fusion/     # write/edit + then_run fusion (economy, ported from SoL-Pi)
   observation-pack/  # large tool-result projection + obs_recall (economy)
+  bg-shell/          # background shell tasks + /tasks panel (vendored pi-bg-bash)
   ui/                # presentation adapters: cctui primary + core fallback
 lib/                 # shared primitives — must NOT import from extensions/
 test/lib/            # vitest suites for lib/ and cross-module wiring
@@ -131,6 +132,7 @@ Per-module docs live in [docs/en/](docs/en) / [docs/zh/](docs/zh) — start with
 | `PERMISSION_MODES_INHERITED_MODE` | modes | Subagent mode inheritance (produced by pi-subagents, only consumed here) |
 | `PERMISSION_MODES_CLASSIFIER_DEBUG` | modes | Debug logging for the auto-mode classifier |
 | `PI_GOAL_AUTO_CONFIRM` | goal | Auto-confirm goal proposals |
+| `CC_CORE_BG_DEBUG` / `CC_CORE_BG_{PROMOTE,GRACE,LOG_LIMIT}_*` | bg-shell | Debug log + test seams for promote/grace/log-limit thresholds |
 
 `PI_SUBAGENT_*` variables are produced by pi-subagents; core only reads them.
 

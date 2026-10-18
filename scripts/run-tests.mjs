@@ -5,7 +5,7 @@
  * came with (modes → vitest; effort/goal/review → node:test via tsx).
  *
  *   - vitest suites : test/lib, extensions/modes (colocated, P1)
- *   - node:test     : extensions/{effort,goal,review}/tests (P1/P2)
+ *   - node:test     : extensions/{effort,goal,review,action-fusion,observation-pack,bg-shell}/tests
  *
  * Missing directories are skipped so the entry works at every phase.
  * Exit code is non-zero if any suite fails.
@@ -33,6 +33,7 @@ const nodeTestDirs = [
 	join(root, "extensions", "review", "tests"),
 	join(root, "extensions", "action-fusion", "tests"),
 	join(root, "extensions", "observation-pack", "tests"),
+	join(root, "extensions", "bg-shell", "tests"),
 ].filter(existsSync);
 
 let failed = false;

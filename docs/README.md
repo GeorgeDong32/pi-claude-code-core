@@ -25,6 +25,7 @@ The two trees mirror each other file-for-file — keep them in sync.
 | 12 | [en/action-fusion.md](en/action-fusion.md) | [zh/action-fusion.md](zh/action-fusion.md) | then_run fusion / 动作融合 |
 | 13 | [en/observation-pack.md](en/observation-pack.md) | [zh/observation-pack.md](zh/observation-pack.md) | Result projection / 结果投影 |
 | 14 | [en/ui.md](en/ui.md) | [zh/ui.md](zh/ui.md) | UI adapters / 呈现适配层 |
+| 15 | [en/bg-shell.md](en/bg-shell.md) | [zh/bg-shell.md](zh/bg-shell.md) | Background shell tasks / 后台 Shell 任务 |
 
 Related docs outside `docs/`: [test/contracts/README.md](../test/contracts/README.md)
 (contract table), [DEVIATIONS.md](../DEVIATIONS.md), [PROGRESS.md](../PROGRESS.md),

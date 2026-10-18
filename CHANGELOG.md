@@ -1,5 +1,9 @@
 # Changelog
 
+
+### Added
+
+- **bg-shell module**: background shell tasks for the model's `bash` tool (`background: true` / `waitFor`), CC-parity tools `TaskOutput`/`TaskStop`/`TaskList`, a `/tasks` management panel, and automatic completion messages that start a turn when the agent is idle. Vendored from `gvanderclay/pi-bg-bash` v0.2.1 (MIT). Logs live under the new cc-core unified root `~/.pi/agent/cc-core/logs/bg-shell/`.
 ## Unreleased
 
 ### Changed (memory layer-routing guidance hardened — single-repo facts can no longer justify USER entries — 2026-10-18)

@@ -31,6 +31,8 @@ import { createRulesExtension } from "./rules/index.ts";
 import memoryExtension from "./memory/index.ts";
 // P4: governance modules (rule families + broker mirror + /core panel)
 import mcpGovExtension from "./mcp-gov/index.ts";
+// BG: background shell — vendored pi-bg-bash, CC-parity /tasks (BG-D1)
+import bgShell from "./bg-shell/index.ts";
 import { createWebRuleFamily } from "./web-gov/index.ts";
 // Economy modules (SPEC 2026-09-29-solpi-absorption): ported from NVlabs/SoL-Pi
 import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
@@ -59,6 +61,7 @@ const moduleFactories: ModuleFactory[] = [
 		createWebRuleFamily();
 	},
 	mcpGovExtension,
+	bgShell,
 	// SPEC ASM-01: economy modules last — observation-pack must own the FINAL
 	// context projection slot (after modes/memory handlers), action-fusion's
 	// registration order is position-independent but fixed here too.

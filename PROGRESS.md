@@ -647,3 +647,12 @@ spec `../specs/design/DESIGN-MEMORY-V2.md`，报告 `../MEMORY-V2-REPORT.md`（�
 - **现象**：goal 活跃 + agent 卡住（如 update_goal audit 挂起）时按 Esc 无法打断模型——Esc 被 goal 的 Esc-to-pause 绑定吃掉。
 - **根因**（证据链：goal/ui.ts:149 → pi-tui tui.js:681-698）：onTerminalInput listener 同步执行完整 pauseActiveGoal 业务流（写盘/UI 更新），在 TUI 输入分发循环内造成副作用链断裂 → focusedComponent（打断处理）永远收不到 Esc。onTerminalInput 是观察通道，被当成了按键处理通道。
 - **修法**：三重守卫——busy agent 时 Esc 不认领（打断优先，probe 失败按 busy）；pause 分发移 queueMicrotask + try/catch（listener 零副作用）；仅 idle 时保留 Esc-pause 便利绑定。goal-ui-escape.test.ts 5 条直测 pin（busy 放行 / idle 异步分发 / pause 抛错不炸输入链 / 非 Esc 键忽略 / headless 零订阅）。三绿。
+
+## bg-shell 模块批（BG，2026-10-18）—— vendor pi-bg-bash + CC-parity 命名
+
+- **BG-D1** vendor `gvanderclay/pi-bg-bash` v0.2.1（MIT）13 文件至 `extensions/bg-shell/`，attribution 逐文件头保留；装配线位于 mcp-gov 之后、economy 之前（不碰 projection 顺序，ASM-01 不受影响）。
+- **BG-P1** log 根迁至 `~/.pi/agent/cc-core/logs/bg-shell/<sessionId>/`（cc-core 统一 logs 根第一块）；marker/env/symbol/customType 全量换 `CC_BG_*`/`CC_CORE_BG_*` 命名空间。
+- **BG-D3** 工具面 CC-parity：`TaskOutput`（增量读 + latest/filter）/`TaskStop`（进程组 TERM→KILL）/`TaskList`；命令 `/tasks` 三态降级（TUI 面板 → RPC select → 无 UI 文本）；`ctrl+shift+b` 前台转后台、120s 自动 promote、`waitFor` 语义原样保留。
+- **测试** 上游 10 套件 node:test 全量移植（270 tests，framework-follows-origin），适配 HOME 注入（原 XDG_STATE_HOME）与新命名；`run-tests.mjs` 收录 `extensions/bg-shell/tests`。
+- **契约** `BG-DISK-01`（logs 布局）+ `BG-MSG-02`（completion customType `cc-core-bg-shell`）先登记 `test/contracts/README.md` 再落测试。
+- **三门禁** check 0 / 全量 0 fail（含 bg-shell 270）/ contracts 46 pass + 3 todo。

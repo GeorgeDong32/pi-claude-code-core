@@ -18,6 +18,8 @@ import { GOALS_DIR, ARCHIVED_GOALS_DIR, makeActiveGoalPath } from "../../extensi
 import { GOAL_LEDGER_FILE } from "../../extensions/goal/goal-ledger.ts";
 import { writeFastMode } from "../../extensions/effort/effort.js";
 import { loadQueue, queueDir, writeQueueRecord, type QueueRecord } from "../../extensions/memory/queue.ts";
+import { stateRoot } from "../../extensions/bg-shell/launch.ts";
+import { MESSAGE_TYPE } from "../../extensions/bg-shell/notify.ts";
 
 describe("P0-CT §4.5 frozen disk layout", () => {
 	it("P0-CT-09 (pm): project permissions files live at .pi/projects/<id>/permissions{,.local}.json", () => {
@@ -120,5 +122,13 @@ describe("P0-CT §4.5 frozen disk layout", () => {
 			"utf-8",
 		);
 		expect(reviewRunSrc.includes('join(cwd, ".pi", "pi-review", "runs", runId)')).toBe(true);
+	});
+
+	it("BG-DISK-01: bg-shell session logs live under ~/.pi/agent/cc-core/logs/bg-shell — the cc-core unified logs root (BG-P1)", () => {
+		expect(stateRoot()).toBe(join(homedir(), ".pi", "agent", "cc-core", "logs", "bg-shell"));
+	});
+
+	it("BG-MSG-02: completion custom message customType 'cc-core-bg-shell' is frozen (followUp + triggerTurn, details {id, exitCode, state})", () => {
+		expect(MESSAGE_TYPE).toBe("cc-core-bg-shell");
 	});
 });
