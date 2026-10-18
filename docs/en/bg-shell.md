@@ -23,8 +23,13 @@ output itself (CC `<task_notification>` parity: the notification has a
 summary only, so the agent reads the output with `TaskOutput` and the read
 renders as a tool-call row in the TUI) — it starts a turn if the agent is
 idle, so the model never sleeps-and-polls. The notification is agent-side only (CC
-`task_notification` parity): the TUI renders no `[cc-core-bg-shell]` block —
-the turn it triggers is the user-visible face.
+`task_notification` parity): the TUI renders no `[cc-core-bg-shell]` block.
+The user-visible face is the status row (`status-entry.ts`, BG-ENTRY-03):
+every completion and every user kill appends a display-only session entry
+(`pi.appendEntry` — not sent to the LLM) that renders inline as
+`⏺ Task "cmd" completed in background` in dim (CC `task_status`
+attachment parity), shown before the agent's response and replayed on
+resume.
 A watcher process (outside the task's group) kills the group if pi dies.
 
 ## Tool surface (CC-parity names, BG-D3)

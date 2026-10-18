@@ -15,6 +15,7 @@ import { createBashToolDefinition, type ExtensionAPI } from "@earendil-works/pi-
 import { Type } from "typebox";
 
 import { tasksCommand } from "./bg.ts";
+import { registerStatusEntry } from "./status-entry.ts";
 import { rotateDebugLog } from "./debug.ts";
 import { foregroundRuns, PROMOTE_MS, runForeground } from "./foreground.ts";
 import { GRACE_MS } from "./kill.ts";
@@ -35,6 +36,8 @@ const BACKGROUND_DESCRIPTION =
 
 export default function (pi: ExtensionAPI): void {
 	attach(pi);
+	// The user-visible status rows (CC task_status parity, BG-ENTRY-03).
+	registerStatusEntry(pi);
 	// The user can move the running foreground command to the background at once.
 	pi.registerShortcut("ctrl+shift+b", {
 		description: "Move the running foreground command to the background",

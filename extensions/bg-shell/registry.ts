@@ -13,6 +13,7 @@ import { debug, debugError, exitFields, taskFields } from "./debug.ts";
 import type { ForegroundRun } from "./foreground.ts";
 import { killGroup, killGroupNow } from "./kill.ts";
 import { type LaunchOptions, sessionLogDir } from "./launch.ts";
+import { appendStatusEntry } from "./status-entry.ts";
 import { appendLimitMarker, gzipLog, overLogLimit } from "./logs.ts";
 import { locateMarker, type Marker } from "./logview.ts";
 import { sendCompletion } from "./notify.ts";
@@ -382,7 +383,12 @@ export async function killTask(
 	if (task.killing === undefined) {
 		refresh(registry, task);
 		if (task.state !== "running") {
-			if (!options.notify) task.notified = true;
+			if (!options.notify) {
+				task.notified = true;
+				// No completion message follows a user stop, but the status row (a
+				// `stopped` entry) still shows in the stream (BG-ENTRY-03).
+				if (registry.pi !== undefined) appendStatusEntry(registry.pi, task, { state: "killed" });
+			}
 			// An ended task's command may have left processes in its group.
 			task.clearing ??= stopLeftovers(task).finally(() => {
 				task.clearing = undefined;
@@ -398,7 +404,10 @@ export async function killTask(
 		};
 		stopping.then(clear, clear);
 	}
-	if (!options.notify) task.notified = true;
+	if (!options.notify) {
+		task.notified = true;
+		if (registry.pi !== undefined) appendStatusEntry(registry.pi, task, { state: "killed" });
+	}
 	return task.killing;
 }
 
@@ -521,6 +530,9 @@ function notifyOnce(registry: Registry, task: Task): void {
 		task.notified = false;
 		throw error;
 	}
+	// The user-visible status row (CC task_status parity, BG-ENTRY-03): a
+	// display-only session entry, so it can never block the notification path.
+	appendStatusEntry(registry.pi, task);
 	// Gzip only after the message is out (Q21). A group that is still alive (a
 	// `stuck` group, or a child the command left) may still write to the log, so
 	// leave it plain; the 7-day cleanup handles it.

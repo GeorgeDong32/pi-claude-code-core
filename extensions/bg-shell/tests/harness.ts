@@ -65,6 +65,8 @@ export function session(options: { id?: string; hasUI?: boolean } = {}) {
 	const handlers: Record<string, Handler[]> = {};
 	const commands: Record<string, Command> = {};
 	const sent: Sent[] = [];
+	const entries: { type: string; data: unknown }[] = [];
+	const entryRenderers: Record<string, (entry: { data: unknown }, options: unknown, theme: { fg: (c: string, s: string) => string; bold: (s: string) => string }) => unknown> = {};
 	const statuses: { key: string; text: string | undefined }[] = [];
 	const widgets: { key: string; content: string[] | undefined; placement: string | undefined }[] = [];
 	const shortcuts: Record<string, { description?: string; handler: (ctx: unknown) => unknown }> = {};
@@ -104,6 +106,12 @@ export function session(options: { id?: string; hasUI?: boolean } = {}) {
 			faults.sendAttempts++;
 			if (faults.failSend) throw new Error("Extension runtime not initialized");
 			sent.push({ message, options: opts });
+		},
+		appendEntry: (type: string, data: unknown) => {
+			entries.push({ type, data });
+		},
+		registerEntryRenderer: (type: string, renderer: (entry: { data: unknown }, options: unknown, theme: { fg: (c: string, s: string) => string; bold: (s: string) => string }) => unknown) => {
+			entryRenderers[type] = renderer;
 		},
 	};
 	const ui = {
@@ -190,6 +198,10 @@ export function session(options: { id?: string; hasUI?: boolean } = {}) {
 		/** The context Pi passes to tools, for calling another tool the same way. */
 		ctx,
 		sent,
+		/** Every `appendEntry` call: type + data (the status rows). */
+		entries,
+		/** Registered entry renderers by type — tests render them live. */
+		entryRenderers,
 		statuses,
 		widgets,
 		shortcuts,
