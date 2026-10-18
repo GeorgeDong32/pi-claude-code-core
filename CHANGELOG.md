@@ -1,13 +1,14 @@
 # Changelog
 
+## Unreleased
 
-### Added
+### Added (bg-shell: background shell tasks — CC parity, 2026-10-18)
 
 - **bg-shell**: the completion notification no longer inlines the output tail (CC `<task_notification>` parity) — it carries exit status, runtime and a `TaskOutput` pointer, so the agent reads the output itself and the read renders as a tool-call row in the TUI.
-- **bg-shell**: the completion notification is now agent-side only (`display: false`, CC `task_notification` parity) — the TUI no longer renders a `[cc-core-bg-shell]` block; the triggered turn is the visible face.
+- **bg-shell**: the completion notification is now agent-side only (`display: false`, CC `task_notification` parity) — the TUI no longer renders a `[cc-core-bg-shell]` block.
 - **bg-shell**: `TaskOutput` reading a finished task now claims the completion notification (CC `markTaskNotified` parity) — no redundant follow-up message queues behind the turn that did the reading.
+- **bg-shell**: every completion (and user kill) appends a display-only status entry (`cc-core-bg-shell-task`) — rendered by pi-claude-code-tui as a `⏺ Background Task(bg-N)` pseudo tool row with a `⎿` detail gutter (CC `task_status` parity), replayed on resume, never sent to the LLM. core registers no renderer (first-wins would shadow the TUI).
 - **bg-shell module**: background shell tasks for the model's `bash` tool (`background: true` / `waitFor`), CC-parity tools `TaskOutput`/`TaskStop`/`TaskList`, a `/tasks` management panel, and automatic completion messages that start a turn when the agent is idle. Vendored from `gvanderclay/pi-bg-bash` v0.2.1 (MIT). Logs live under the new cc-core unified root `~/.pi/agent/cc-core/logs/bg-shell/`.
-## Unreleased
 
 ### Changed (memory layer-routing guidance hardened — single-repo facts can no longer justify USER entries — 2026-10-18)
 - **The `<memory-policy>` scope line is now a three-rule tie-breaker, and the automation routing prompt aligns with it.** Field usage showed the failure mode concretely: machine-global entries accreting single-repo residue (commit hashes, per-repo toolchain states) because the old one-line scope rule gave no tie-breaker and `paths:` scoping read as an escape hatch. New guidance: repo-specific facts (paths, workflows, conventions, toolchain, module internals, commit/PR state) belong to PROJECT; only facts shared by several sibling repos of one workspace may stay in USER under `paths:` scoping — a single-repo fact never justifies a USER entry; USER is only for what holds in every project (identity, communication style, machine-level facts, cross-project tool behavior), and its index is a machine-global budget every line taxes; when unsure choose PROJECT (a project fact in USER pollutes all sessions' recall, the reverse is merely duplicated context). Pinned by `policyCompact` assertions; no behavioral code change — guidance text only.
