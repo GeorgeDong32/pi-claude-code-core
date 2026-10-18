@@ -54,12 +54,23 @@ export function statusRowText(data: TaskStatusData): string {
 	return `⏺ Task "${oneLine(data.command)}" ${statusWording(data)}`;
 }
 
+/** The dot color for a status row, matching the tool-call dot language (CCTUI DOT_COLOR): success green on exit 0, error red on failure, dim otherwise. */
+export function statusDotColor(data: TaskStatusData): "success" | "error" | "dim" {
+	if (data.state === "exited") return data.exitCode === 0 ? "success" : "error";
+	return "dim";
+}
+
 /** Register the renderer once per process (index.ts calls this at attach). */
 export function registerStatusEntry(pi: ExtensionAPI): void {
 	pi.registerEntryRenderer(STATUS_ENTRY_TYPE, (entry, _options, theme) => {
 		const data = entry.data as TaskStatusData | undefined;
 		if (data === undefined || typeof data !== "object") return undefined;
-		return new Text(theme.fg("dim", statusRowText(data)));
+		// Colored dot (state language, like the tool-call rows) + dim text —
+		// CC GenericTaskStatus paints the whole row dim, but the tool-row dot
+		// language is what the eye tracks; the user asked for the distinction.
+		const dot = theme.fg(statusDotColor(data), "⏺");
+		const rest = theme.fg("dim", ` Task "${oneLine(data.command)}" ${statusWording(data)}`);
+		return new Text(`${dot}${rest}`);
 	});
 }
 

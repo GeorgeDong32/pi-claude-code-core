@@ -25,7 +25,7 @@
 `task_notification`）：TUI 不渲染 `[cc-core-bg-shell]` 块。用户侧可见面是
 状态行（`status-entry.ts`，BG-ENTRY-03）：每次完成与每次用户 kill 都追加
 一条 display-only 的 session entry（`pi.appendEntry`——不进 LLM），流内渲染
-为 dim 的 `⏺ Task "cmd" completed in background`（对齐 CC `task_status`
+`⏺ Task "cmd" completed in background`——状态着色圆点（success/error，工具行圆点同款语言）+ dim 正文（对齐 CC `task_status`
 attachment），先于 agent 回复显示，resume 时重放。独立 watcher 进程（任务组外）在 pi 死亡时杀掉任务组。
 
 ## 工具面（CC-parity 命名，BG-D3）

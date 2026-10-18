@@ -27,7 +27,8 @@ idle, so the model never sleeps-and-polls. The notification is agent-side only (
 The user-visible face is the status row (`status-entry.ts`, BG-ENTRY-03):
 every completion and every user kill appends a display-only session entry
 (`pi.appendEntry` — not sent to the LLM) that renders inline as
-`⏺ Task "cmd" completed in background` in dim (CC `task_status`
+`⏺ Task "cmd" completed in background` — a state-colored dot (success /
+error, the tool-call dot language) plus dim text (CC `task_status`
 attachment parity), shown before the agent's response and replayed on
 resume.
 A watcher process (outside the task's group) kills the group if pi dies.

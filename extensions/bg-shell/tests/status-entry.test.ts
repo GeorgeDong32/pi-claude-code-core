@@ -85,15 +85,17 @@ describe("status entry lifecycle through the real orchestration", () => {
 		const renderer = s.entryRenderers[STATUS_ENTRY_TYPE]!;
 		const painted: string[] = [];
 		const component = renderer({ data: s.entries[0]!.data }, undefined, {
-			fg: (_c: string, text: string) => {
-				painted.push(text);
+			fg: (color: string, text: string) => {
+				painted.push(`${color}:${text}`);
 				return text;
 			},
 			bold: (text: string) => text,
 		}) as { render(width: number): string[] };
 		const rows = component.render(80);
 		assert.match(rows.join("\n"), /Task "echo done" completed in background/);
-		assert.equal(painted.length, 1); // the whole row went through the dim paint
+		// Two paints: the state-colored dot, then the dim text body.
+		assert.match(painted[0]!, /^success:\u23FA$/);
+		assert.match(painted[1]!, /^dim: Task /);
 	});
 
 	it("appendStatusEntry is fail-open: a throwing appendEntry never propagates", () => {
