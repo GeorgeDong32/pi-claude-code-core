@@ -173,7 +173,7 @@ describe("a foreground command", () => {
 		assert.match(text(await s.toolCall("TaskList", {})), /^bg-1 \| running/);
 		writeFileSync(gate, "");
 		await waitFor(() => s.sent.length > 0, "the completion message", 8000);
-		assert.match(s.sent[0].message.content, /finished: exited \(code 0\).*\nLast output:\nstarted\nfinished$/s);
+		assert.match(s.sent[0].message.content, /finished: exited \(code 0\).*\nOutput: read it with TaskOutput \(id: [^)]+\)\.$/s);
 		await waitFor(() => !alive(pid), "the command's end");
 	});
 

@@ -85,7 +85,7 @@ describe("gzip after the completion message", () => {
 		await clock.until(() => s.sent.length > 0);
 		await clock.until(() => gzipped(s, id));
 		assert.equal(s.sent.length, 1);
-		assert.match(s.sent[0].message.content, /Last output:\none\ntwo$/);
+		assert.match(s.sent[0].message.content, /Output: read it with TaskOutput \(id: [^)]+\)\.$/);
 		assert.equal(existsSync(gzPath(s, id)), true);
 		assert.equal(existsSync(plainPath(s, id)), false);
 		assert.equal(statSync(gzPath(s, id)).mode & 0o777, 0o600);

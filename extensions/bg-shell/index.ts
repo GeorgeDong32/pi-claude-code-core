@@ -26,8 +26,9 @@ import { attach, endSession, getRegistry, killTask, setContext, startTask } from
 const BACKGROUND_DESCRIPTION =
 	"Set `background: true` for a command you expect to outlast a minute or two, such as a long build, a deploy or a server, " +
 	"when you have other work to do meanwhile or nothing to do until it ends. " +
-	"The call returns a task id at once; when the command exits, a message with its exit status and last lines of output arrives " +
+	"The call returns a task id at once; when the command exits, a message with its exit status arrives " +
 	"and starts a turn if you are idle, so do not sleep or poll `TaskOutput` to wait for it. " +
+	"Read a finished task's output with `TaskOutput` — the notification itself carries none. " +
 	"To wait for something outside this machine, such as CI, background one command that blocks until it is done, " +
 	"such as `gh run watch <run-id> --exit-status` or `gh pr checks <number> --watch`, instead of running `sleep N` and a check yourself. " +
 	`A foreground command with no \`timeout\` still running after ${PROMOTE_MS / 1000} s (unless it starts with \`sleep\`) moves to the background on its own.`;

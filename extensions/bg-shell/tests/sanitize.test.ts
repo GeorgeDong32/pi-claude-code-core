@@ -71,7 +71,7 @@ describe("agent-facing output is stripped", () => {
 		await clock.until(() => s.sent.length > 0);
 		assert.equal(
 			s.sent[0].message.content,
-			`Background task ${id} finished: exited (code 0), ran 2.0s.\nCommand: job\nLast output:\n${CLEAN}`,
+			`Background task ${id} finished: exited (code 0), ran 2.0s.\nCommand: job\nOutput: read it with TaskOutput (id: ${id}).`,
 		);
 		await clock.until(() => gzipped(s, id));
 		assert.equal(

@@ -76,7 +76,7 @@ describe("bash with background: true", () => {
 		assert.equal(message.display, false); // agent-side only — the TUI renders no notification block
 		assert.equal(
 			message.content,
-			`Background task ${id} finished: exited (code 0), ran 2.0s.\nCommand: echo one; echo two\nLast output:\none\ntwo`,
+			`Background task ${id} finished: exited (code 0), ran 2.0s.\nCommand: echo one; echo two\nOutput: read it with TaskOutput (id: ${id}).`,
 		);
 	});
 
@@ -100,11 +100,12 @@ describe("bash with background: true", () => {
 		procs.of(id).exit(7);
 		await clock.until(() => s.sent.length > 0);
 		assert.match(s.sent[0].message.content, /finished: exited \(code 7\), ran 2\.0s\./);
-		assert.match(s.sent[0].message.content, /Last output:\nboom$/);
+		assert.match(s.sent[0].message.content, new RegExp(`Output: read it with TaskOutput \\(id: ${id}\\).$`));
 		const quiet = await start(s, "exit 1");
 		procs.of(quiet).exit(1);
 		await clock.until(() => s.sent.length > 1);
-		assert.match(s.sent[1].message.content, /\(no output\)$/);
+		// No-output case: same pointer shape (the agent discovers emptiness on read).
+		assert.match(s.sent[1].message.content, /Output: read it with TaskOutput \(id: [^)]+\)\.$/);
 	});
 
 	it("gzipps the log after completion, keeping it private and ending with the exit marker", async () => {

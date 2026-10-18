@@ -185,19 +185,17 @@ describe("TaskOutput", () => {
 		assert.deepEqual(lines(text(await out(s, { id }))), []);
 	});
 
-	it("the completion message says when its tail was cut, and names TaskOutput for the rest", async () => {
+	it("the completion message carries no output at all — the agent reads it via TaskOutput (CC parity)", async () => {
 		const s = session();
 		const id = await finished(s, seq(1, 30));
-		assert.match(
-			s.sent[0].message.content,
-			new RegExp(`Last output, cut to the last 20 lines or 4 KiB; \`TaskOutput ${id}\` reads it all:\n11\n[^]*\n30$`),
-		);
+		assert.doesNotMatch(s.sent[0].message.content, /\n11\n/);
+		assert.match(s.sent[0].message.content, new RegExp(`Output: read it with TaskOutput \\(id: ${id}\\)\\.$`));
 	});
 
-	it("the completion message does not move the read position", async () => {
+	it("the completion message does not move the read position — the first TaskOutput read returns everything", async () => {
 		const s = session();
 		const id = await finished(s, seq(1, 5));
-		assert.match(s.sent[0].message.content, /Last output:\n1\n2\n3\n4\n5$/);
+		assert.match(s.sent[0].message.content, /Output: read it with TaskOutput \(id: [^)]+\)\.$/);
 		assert.deepEqual(lines(text(await out(s, { id }))), ["1", "2", "3", "4", "5"]);
 	});
 
@@ -243,10 +241,11 @@ describe("binary output", () => {
 });
 
 describe("completion tail", () => {
-	it("cuts a byte-capped tail at a character boundary", async () => {
+	it("carries no tail to cut — the notification is output-free (CC parity)", async () => {
 		const s = session();
 		await finished(s, `${"€".repeat(3000)}\n`);
 		assert.doesNotMatch(s.sent[0].message.content, /\uFFFD/);
-		assert.match(s.sent[0].message.content, /Last output, cut to the last 20 lines or 4 KiB; [^\n]*:\n€+$/);
+		assert.doesNotMatch(s.sent[0].message.content, /€/);
+		assert.match(s.sent[0].message.content, /Output: read it with TaskOutput \(id: [^)]+\)\.$/);
 	});
 });

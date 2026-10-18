@@ -314,7 +314,7 @@ describe("a foreground bash call past 120 s", () => {
 		// The command ran 150 s; the poller notices it on its next 2 s tick.
 		assert.match(
 			s.sent[0].message.content,
-			/^Background task bg-1 finished: exited \(code 3\), ran 2m 32s\.\nCommand: slow-build\nLast output:\ndone$/,
+			/^Background task bg-1 finished: exited \(code 3\), ran 2m 32s\.\nCommand: slow-build\nOutput: read it with TaskOutput \(id: bg-1\)\.$/,
 		);
 		assert.deepEqual(s.sent[0].options, { deliverAs: "followUp", triggerTurn: true });
 	});

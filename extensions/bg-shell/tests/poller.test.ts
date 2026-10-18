@@ -187,7 +187,7 @@ describe("the poller survives faults", () => {
 		await clock.until(() => s.sent.length > 0);
 		assert.match(s.sent[0].message.content, /finished: killed \(timed out\)/);
 		assert.doesNotMatch(s.sent[0].message.content, /__CC_BG_EXIT__/);
-		assert.match(s.sent[0].message.content, /Command: long\nLast output:\nreal output$/);
+		assert.match(s.sent[0].message.content, /Command: long\nOutput: read it with TaskOutput \(id: [^)]+\)\.$/);
 		const result = text(await s.toolCall("TaskOutput", { id }));
 		assert.doesNotMatch(result, /__CC_BG_EXIT__/);
 		assert.match(result, /real output/);

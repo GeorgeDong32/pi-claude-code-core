@@ -81,16 +81,18 @@ export function oneLine(command: string): string {
 	return line.length > 200 ? `${line.slice(0, 200)}…` : line;
 }
 
-/** The completion text: id, command, state, runtime and the output's last lines. */
+/**
+ * The completion text: id, command, state, runtime — and a pointer, not the
+ * output (CC parity: CC's <task_notification> carries only a summary and the
+ * output-file path, so the agent reads the output itself with TaskOutput and
+ * the read renders as a tool-call row in the TUI. Shipping the tail inline
+ * made the read unnecessary and the visible output row disappeared).
+ */
 export function completionText(task: Task): string {
-	const { text: tail, cut } = logTail(task);
-	const label = cut
-		? `Last output, cut to the last ${TAIL_LINES} lines or ${TAIL_BYTES / 1024} KiB; \`TaskOutput ${task.id}\` reads it all:`
-		: "Last output:";
 	return [
 		`Background task ${task.id} finished: ${stateText(task)}, ran ${runtimeText(task)}.`,
 		`Command: ${oneLine(task.command)}`,
-		tail === "" ? "(no output)" : `${label}\n${tail}`,
+		`Output: read it with TaskOutput (id: ${task.id}).`,
 	].join("\n");
 }
 
