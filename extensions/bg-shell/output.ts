@@ -47,9 +47,17 @@ export function readOutput(task: Task, options: OutputOptions): string {
 	let body = "";
 	let note: string | undefined;
 	const code = view.marker?.code;
+	// CC-parity suppression (markTaskNotified): when the agent reads the task
+	// through TaskOutput and it is already over — the marker is in the log, or
+	// the registry has settled a non-running state — the tool result itself
+	// carries the output and the exit state, so the poller's completion message
+	// would be redundant (and, being a followUp, would queue behind the very
+	// turn that did the reading). Claim the notification before the poller can
+	// send it; a task the poller settled first stays notified as before.
+	const terminal = view.marker !== undefined || task.state !== "running";
 	try {
 		const end = view.size;
-		const finished = view.marker !== undefined || task.state !== "running";
+		const finished = terminal;
 		const position = Math.min(task.readPosition, end);
 		const page = options.latest ? newest(view, position, end, finished) : oldest(view, position, end, finished);
 		// Positions count raw log bytes; the agent reads, and `filter` matches, the stripped text.
@@ -59,6 +67,7 @@ export function readOutput(task: Task, options: OutputOptions): string {
 	} finally {
 		view.close();
 	}
+	if (terminal) task.notified = true;
 	const filtered = applyFilter(body, filter);
 	const parts = [`Task ${task.id}: ${stateText(task, code)}.`];
 	parts.push(filtered.text === "" ? (filtered.note ? "(no lines matched)" : "(no new output)") : filtered.text);

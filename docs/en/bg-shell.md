@@ -31,6 +31,11 @@ A watcher process (outside the task's group) kills the group if pi dies.
 | `TaskStop` | SIGTERM to the process group → grace → SIGKILL; no completion message follows |
 | `TaskList` | one line per task: id, state, runtime, command |
 
+When the agent reads a finished task through `TaskOutput`, the read claims
+the notification (CC `markTaskNotified` parity): the tool result already
+carries the output and the exit state, so no redundant completion message
+follows — otherwise it would queue behind the very turn that did the reading.
+
 `/tasks` opens the management panel (TUI: enter = output view, x = kill after
 confirm, q/esc closes, 1 s refresh; RPC degrades to `ui.select`; no-UI prints
 the list). `ctrl+shift+b` promotes the running foreground call(s); a foreground

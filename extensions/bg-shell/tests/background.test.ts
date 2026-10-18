@@ -45,6 +45,24 @@ describe("bash with background: true", () => {
 		await clock.until(() => s.sent.length > 0);
 	});
 
+	it("TaskOutput reading a finished task claims the notification — no redundant completion follows (CC markTaskNotified parity)", async () => {
+		const s = session();
+		const id = await start(s, "echo done");
+		procs.of(id).write("done\n");
+		procs.of(id).exit(0);
+		// The agent reads before the poller settles: the marker is already in
+		// the log, so the read itself is terminal and must claim the
+		// notification — otherwise the completion queues behind the very turn
+		// that did the reading and arrives as a redundant follow-up.
+		const output = text(await s.toolCall("TaskOutput", { id }));
+		assert.match(output, /exited \(code 0\)\./);
+		await clock.tick(3); // the poller settles but must not send
+		assert.equal(s.sent.length, 0);
+		// The task itself is still settled (visible to TaskList), only the
+		// message is gone.
+		assert.match(text(await s.toolCall("TaskList", {})), /exited \(code 0\)/);
+	});
+
 	it("sends exactly one follow-up message that names the id, command, exit, runtime and output", async () => {
 		const s = session();
 		const id = await start(s, "echo one; echo two");

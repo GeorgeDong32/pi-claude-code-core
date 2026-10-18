@@ -30,6 +30,10 @@ sleep 轮询。独立 watcher 进程（任务组外）在 pi 死亡时杀掉任�
 | `TaskStop` | 对进程组 SIGTERM → 宽限 → SIGKILL；随后不再发完成消息 |
 | `TaskList` | 每任务一行：id、状态、时长、命令 |
 
+模型通过 `TaskOutput` 读取已结束的任务时，读取本身即认领通知（对齐 CC
+的 `markTaskNotified`）：工具结果已携带输出与退出状态，不再补发冗余的
+完成消息——否则该消息会排在发起读取的那轮 turn 之后、迟到且重复。
+
 `/tasks` 打开管理面板（TUI：enter 看输出、x 确认后杀、q/esc 关闭、1 秒刷新；
 RPC 降级 `ui.select`；无 UI 打印列表）。`ctrl+shift+b` 把前台运行中的调用
 转后台；前台调用超 120 秒（`sleep` 除外）自动转后台。
