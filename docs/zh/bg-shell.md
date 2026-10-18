@@ -17,9 +17,11 @@
 ```
 
 命令退出时 agent 收到**一条完成消息**（customType `cc-core-bg-shell`，
-`deliverAs: "followUp"`，`triggerTurn: true`），携带退出状态、运行时长与
-输出尾部（20 行 / 4 KiB）——agent 空闲时自动开 turn，模型因此永远不需要
-sleep 轮询。独立 watcher 进程（任务组外）在 pi 死亡时杀掉任务组。
+`deliverAs: "followUp"`，`triggerTurn: true`，`display: false`），携带退出
+状态、运行时长与输出尾部（20 行 / 4 KiB）——agent 空闲时自动开 turn，
+模型因此永远不需要 sleep 轮询。通知仅模型侧可见（对齐 CC
+`task_notification`）：TUI 不渲染 `[cc-core-bg-shell]` 块——它触发的 turn
+即是用户可见面。独立 watcher 进程（任务组外）在 pi 死亡时杀掉任务组。
 
 ## 工具面（CC-parity 命名，BG-D3）
 

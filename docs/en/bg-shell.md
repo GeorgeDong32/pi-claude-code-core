@@ -17,9 +17,12 @@ appends stdout+stderr to a session log, and returns a task id at once:
 ```
 
 When the command exits, the agent receives **one completion message**
-(customType `cc-core-bg-shell`, `deliverAs: "followUp"`, `triggerTurn: true`)
-carrying exit status, runtime and the output tail (20 lines / 4 KiB) — it
-starts a turn if the agent is idle, so the model never sleeps-and-polls.
+(customType `cc-core-bg-shell`, `deliverAs: "followUp"`, `triggerTurn: true`,
+`display: false`) carrying exit status, runtime and the output tail (20
+lines / 4 KiB) — it starts a turn if the agent is idle, so the model never
+sleeps-and-polls. The notification is agent-side only (CC
+`task_notification` parity): the TUI renders no `[cc-core-bg-shell]` block —
+the turn it triggers is the user-visible face.
 A watcher process (outside the task's group) kills the group if pi dies.
 
 ## Tool surface (CC-parity names, BG-D3)

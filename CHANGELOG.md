@@ -3,6 +3,7 @@
 
 ### Added
 
+- **bg-shell**: the completion notification is now agent-side only (`display: false`, CC `task_notification` parity) — the TUI no longer renders a `[cc-core-bg-shell]` block; the triggered turn is the visible face.
 - **bg-shell**: `TaskOutput` reading a finished task now claims the completion notification (CC `markTaskNotified` parity) — no redundant follow-up message queues behind the turn that did the reading.
 - **bg-shell module**: background shell tasks for the model's `bash` tool (`background: true` / `waitFor`), CC-parity tools `TaskOutput`/`TaskStop`/`TaskList`, a `/tasks` management panel, and automatic completion messages that start a turn when the agent is idle. Vendored from `gvanderclay/pi-bg-bash` v0.2.1 (MIT). Logs live under the new cc-core unified root `~/.pi/agent/cc-core/logs/bg-shell/`.
 ## Unreleased

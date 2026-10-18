@@ -94,13 +94,13 @@ export function completionText(task: Task): string {
 	].join("\n");
 }
 
-/** Send the completion as a follow-up custom message that starts a turn when the agent is idle. */
+/** Send the completion as a follow-up custom message that starts a turn when the agent is idle. `display: false`: the notification is agent-side only (CC `task_notification` parity) — the TUI never renders a `[cc-core-bg-shell]` block; the turn it triggers is the user-visible face. */
 export function sendCompletion(pi: ExtensionAPI, task: Task): void {
 	pi.sendMessage(
 		{
 			customType: MESSAGE_TYPE,
 			content: completionText(task),
-			display: true,
+			display: false,
 			details: { id: task.id, exitCode: task.exitCode, state: task.state },
 		},
 		{ deliverAs: "followUp", triggerTurn: true },

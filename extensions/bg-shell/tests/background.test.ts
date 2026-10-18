@@ -73,7 +73,7 @@ describe("bash with background: true", () => {
 		assert.equal(s.sent.length, 1);
 		const { message, options } = s.sent[0];
 		assert.deepEqual(options, { deliverAs: "followUp", triggerTurn: true });
-		assert.equal(message.display, true);
+		assert.equal(message.display, false); // agent-side only — the TUI renders no notification block
 		assert.equal(
 			message.content,
 			`Background task ${id} finished: exited (code 0), ran 2.0s.\nCommand: echo one; echo two\nLast output:\none\ntwo`,
