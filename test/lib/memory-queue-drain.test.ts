@@ -139,7 +139,11 @@ describe("drainQueue direct (D-T1)", () => {
 
 describe("cap order (review R2 on the fix)", () => {
 	it("beyond QUEUE_DRAIN_MAX, surplus records STAY ready — never stranded as this-pid claims", async () => {
-		for (let i = 0; i < 7; i++) stage(`cap-${i}`, { savedAt: Date.parse("2026-10-07T10:00:00.000Z") + i });
+		// savedAt must be RELATIVE to now: a fixed calendar date silently ages
+		// past QUEUE_MAX_AGE_MS (7d) and the whole batch drops as expired before
+		// the cap is reached — this fixture time-bombed exactly that way from
+		// 2026-10-14 (staged at 2026-10-07).
+		for (let i = 0; i < 7; i++) stage(`cap-${i}`, { savedAt: Date.now() - 60_000 + i });
 		let completions = 0;
 		const result = await drainQueue(cap(), ports({ complete: async () => { completions++; return { ok: true as const, ops: [], stopReason: "stop", content: [] }; } }));
 		expect(result.summaries).toHaveLength(5); // QUEUE_DRAIN_MAX
