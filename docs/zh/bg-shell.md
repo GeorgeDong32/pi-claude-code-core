@@ -23,10 +23,12 @@
 于是 TUI 里出现工具调用行）——agent 空闲时自动开 turn，
 模型因此永远不需要 sleep 轮询。通知仅模型侧可见（对齐 CC
 `task_notification`）：TUI 不渲染 `[cc-core-bg-shell]` 块。用户侧可见面是
-状态行（`status-entry.ts`，BG-ENTRY-03）：每次完成与每次用户 kill 都追加
-一条 display-only 的 session entry（`pi.appendEntry`——不进 LLM），流内渲染
-`⏺ Task "cmd" completed in background`——状态着色圆点（success/error，工具行圆点同款语言）+ dim 正文（对齐 CC `task_status`
-attachment），先于 agent 回复显示，resume 时重放。独立 watcher 进程（任务组外）在 pi 死亡时杀掉任务组。
+状态行（BG-ENTRY-03）：每次完成与每次用户 kill 都追加一条 display-only
+的 session entry（`pi.appendEntry`——不进 LLM）。渲染归
+pi-claude-code-tui（`lib/bg-task-row.ts`）：`⏺ Background Task(bg-N)`
+伪工具行 + `⎿` 明细 gutter，状态色圆点，与 agent 随后的 TaskOutput 行
+视觉成对（对齐 CC `task_status`，resume 时重放）。core 刻意不注册
+renderer——first-wins 下会永久遮蔽 TUI 的。独立 watcher 进程（任务组外）在 pi 死亡时杀掉任务组。
 
 ## 工具面（CC-parity 命名，BG-D3）
 

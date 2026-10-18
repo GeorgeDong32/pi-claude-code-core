@@ -1,16 +1,17 @@
-// Vendored adaptation for pi-claude-code-core (BG): the user-visible task
-// status row, the pi equivalent of CC's `task_status` attachment rendered by
-// GenericTaskMessage — `⏺ Task "desc" completed in background` in dim, shown
-// in the stream BEFORE the agent's response to the completion.
+// Vendored adaptation for pi-claude-code-core (BG): the data half of the
+// user-visible task status row (BG-ENTRY-03). Every background-task
+// completion and every user kill appends a display-only session entry via
+// `pi.appendEntry` — the API contract keeps it OUT of the LLM context.
 //
-// Mechanism: `pi.appendEntry` appends a persistent session entry that is NOT
-// sent to the LLM (display-only by API contract); `pi.registerEntryRenderer`
-// renders it inline, and it replays on resume. The model-side notification
-// stays the followUp message from notify.ts — the two are separate faces of
-// one completion, exactly like CC's enqueueShellNotification (model) plus the
-// task_status attachment (user).
+// The RENDERING half lives in pi-claude-code-tui (`lib/bg-task-row.ts`):
+// a `⏺ Background Task(bg-N)` pseudo tool row with a `⎿` detail gutter,
+// CC GenericTaskStatus parity. core deliberately registers NO entry
+// renderer here — pi's renderer lookup is first-wins across extensions in
+// load order, so a core renderer would permanently shadow the TUI's; with
+// core silent, the TUI is the single rendering owner, and environments
+// without the TUI simply persist the entry (data is never lost, the row
+// appears once the TUI is installed).
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
 
 import { debugError } from "./debug.ts";
 import { oneLine } from "./notify.ts";
@@ -31,7 +32,7 @@ export interface TaskStatusData {
 export function statusData(task: Task): TaskStatusData {
 	return {
 		id: task.id,
-		command: task.command,
+		command: oneLine(task.command),
 		state: task.state,
 		exitCode: task.exitCode,
 		runtimeMs: (task.endedAt ?? Date.now()) - task.startedAt,
@@ -39,45 +40,9 @@ export function statusData(task: Task): TaskStatusData {
 }
 
 /**
- * The status wording, CC GenericTaskStatus parity: `completed in background`,
- * `stopped`; a non-zero exit is a failure and names its code (CC's summary
- * style `(exit code N)`).
- */
-export function statusWording(data: TaskStatusData): string {
-	if (data.state === "killed") return "stopped";
-	if (data.state === "exited") return data.exitCode === 0 ? "completed in background" : `failed in background (exit ${data.exitCode})`;
-	return "ended in background";
-}
-
-/** One rendered row: `⏺ Task "cmd on one line" completed in background`, dim. */
-export function statusRowText(data: TaskStatusData): string {
-	return `⏺ Task "${oneLine(data.command)}" ${statusWording(data)}`;
-}
-
-/** The dot color for a status row, matching the tool-call dot language (CCTUI DOT_COLOR): success green on exit 0, error red on failure, dim otherwise. */
-export function statusDotColor(data: TaskStatusData): "success" | "error" | "dim" {
-	if (data.state === "exited") return data.exitCode === 0 ? "success" : "error";
-	return "dim";
-}
-
-/** Register the renderer once per process (index.ts calls this at attach). */
-export function registerStatusEntry(pi: ExtensionAPI): void {
-	pi.registerEntryRenderer(STATUS_ENTRY_TYPE, (entry, _options, theme) => {
-		const data = entry.data as TaskStatusData | undefined;
-		if (data === undefined || typeof data !== "object") return undefined;
-		// Colored dot (state language, like the tool-call rows) + dim text —
-		// CC GenericTaskStatus paints the whole row dim, but the tool-row dot
-		// language is what the eye tracks; the user asked for the distinction.
-		const dot = theme.fg(statusDotColor(data), "⏺");
-		const rest = theme.fg("dim", ` Task "${oneLine(data.command)}" ${statusWording(data)}`);
-		return new Text(`${dot}${rest}`);
-	});
-}
-
-/**
  * Append the status entry; display-only, so a failure must never propagate.
- * `override` patches the data (a kill appends before the registry settles the
- * killed state, so it forces `state: "killed"` for the `stopped` wording).
+ * `override` patches the data (a kill appends before the registry settles
+ * the killed state, so it forces `state: "killed"` for the `stopped` row).
  */
 export function appendStatusEntry(pi: ExtensionAPI, task: Task, override?: Partial<TaskStatusData>): void {
 	try {

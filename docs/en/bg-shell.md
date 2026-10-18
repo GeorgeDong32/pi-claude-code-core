@@ -24,13 +24,14 @@ summary only, so the agent reads the output with `TaskOutput` and the read
 renders as a tool-call row in the TUI) — it starts a turn if the agent is
 idle, so the model never sleeps-and-polls. The notification is agent-side only (CC
 `task_notification` parity): the TUI renders no `[cc-core-bg-shell]` block.
-The user-visible face is the status row (`status-entry.ts`, BG-ENTRY-03):
-every completion and every user kill appends a display-only session entry
-(`pi.appendEntry` — not sent to the LLM) that renders inline as
-`⏺ Task "cmd" completed in background` — a state-colored dot (success /
-error, the tool-call dot language) plus dim text (CC `task_status`
-attachment parity), shown before the agent's response and replayed on
-resume.
+The user-visible face is the status row (BG-ENTRY-03): every completion
+and every user kill appends a display-only session entry (`pi.appendEntry`
+— not sent to the LLM). Rendering belongs to pi-claude-code-tui
+(`lib/bg-task-row.ts`): a `⏺ Background Task(bg-N)` pseudo tool row with a
+state-colored dot plus a `⎿` detail gutter, visually paired with the
+`TaskOutput` rows the agent emits next (CC `task_status` parity; replayed
+on resume). core registers no renderer on purpose — first-wins lookup
+would permanently shadow the TUI's.
 A watcher process (outside the task's group) kills the group if pi dies.
 
 ## Tool surface (CC-parity names, BG-D3)

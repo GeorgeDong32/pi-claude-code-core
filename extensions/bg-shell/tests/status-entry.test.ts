@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { after, afterEach, beforeEach, describe, it } from "node:test";
 
-import { appendStatusEntry, STATUS_ENTRY_TYPE, statusData, statusRowText, type TaskStatusData } from "../status-entry.ts";
+import { appendStatusEntry, STATUS_ENTRY_TYPE, statusData, type TaskStatusData } from "../status-entry.ts";
 import type { Task } from "../registry.ts";
 
 import {
@@ -34,22 +34,6 @@ after(cleanup);
 const fakeTask = (over: Partial<Task> = {}): Task =>
 	({ id: "bg-9", command: "echo hi", state: "exited", exitCode: 0, startedAt: 1_000, endedAt: 5_000, notified: true, ...over } as unknown as Task);
 
-describe("status entry data and wording (CC GenericTaskStatus parity)", () => {
-	it("maps states to the CC wording", () => {
-		const base = { id: "bg-1", command: "build", runtimeMs: 4000 };
-		assert.equal(statusRowText({ ...base, state: "exited", exitCode: 0 } as TaskStatusData), '⏺ Task "build" completed in background');
-		assert.equal(statusRowText({ ...base, state: "exited", exitCode: 3 } as TaskStatusData), '⏺ Task "build" failed in background (exit 3)');
-		assert.equal(statusRowText({ ...base, state: "killed" } as TaskStatusData), '⏺ Task "build" stopped');
-	});
-
-	it("puts a multi-line command on one line", () => {
-		assert.equal(
-			statusRowText(statusData(fakeTask({ command: "echo a\necho b" }))),
-			'⏺ Task "echo a ⏎ echo b" completed in background',
-		);
-	});
-});
-
 describe("status entry lifecycle through the real orchestration", () => {
 	it("a completion appends exactly one entry with the task's data", async () => {
 		const s = session();
@@ -73,29 +57,7 @@ describe("status entry lifecycle through the real orchestration", () => {
 		await clock.tick(2);
 		assert.equal(s.sent.length, 0); // no completion message on a user stop
 		assert.ok(s.entries.length >= 1, "a stopped row was appended");
-		assert.match(statusRowText(s.entries[0]!.data as TaskStatusData), /stopped$/);
-	});
-
-	it("the registered renderer draws the row live (pure render, no UI)", async () => {
-		const s = session();
-		assert.ok(s.entryRenderers[STATUS_ENTRY_TYPE], "renderer registered at attach");
-		const id = await start(s, "echo done");
-		procs.of(id).exit(0);
-		await clock.until(() => s.entries.length > 0);
-		const renderer = s.entryRenderers[STATUS_ENTRY_TYPE]!;
-		const painted: string[] = [];
-		const component = renderer({ data: s.entries[0]!.data }, undefined, {
-			fg: (color: string, text: string) => {
-				painted.push(`${color}:${text}`);
-				return text;
-			},
-			bold: (text: string) => text,
-		}) as { render(width: number): string[] };
-		const rows = component.render(80);
-		assert.match(rows.join("\n"), /Task "echo done" completed in background/);
-		// Two paints: the state-colored dot, then the dim text body.
-		assert.match(painted[0]!, /^success:\u23FA$/);
-		assert.match(painted[1]!, /^dim: Task /);
+		assert.equal((s.entries[0]!.data as TaskStatusData).state, "killed");
 	});
 
 	it("appendStatusEntry is fail-open: a throwing appendEntry never propagates", () => {
