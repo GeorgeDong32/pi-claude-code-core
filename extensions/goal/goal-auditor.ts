@@ -133,6 +133,27 @@ export function saveGoalAuditorFileConfig(cwd: string, config: GoalAuditorConfig
 	return clean;
 }
 
+/**
+ * G3-C18: parse the fixed-format BLOCKERS block from an auditor report.
+ * Returns the blocker lines (without the "- [Bn] " prefix), [] for the
+ * explicit empty list, or null when the block is absent (legacy reports —
+ * callers fall back to the old prefix truncation).
+ */
+export function parseBlockers(report: string): string[] | null {
+	const lines = report.split("\n");
+	const start = lines.findIndex((l) => l.trim() === "BLOCKERS:");
+	if (start === -1) return null;
+	const out: string[] = [];
+	for (let i = start + 1; i < lines.length; i++) {
+		const line = lines[i]!.trim();
+		if (!line.startsWith("-")) break; // block ends at the first non-item line (the verdict)
+		const item = line.replace(/^\-\s*/, "").replace(/^\[[Bb]\d+\]\s*/, "").trim();
+		if (item === "(none)" || item === "") continue;
+		out.push(item);
+	}
+	return out;
+}
+
 export function parseAuditorDecision(output: string): { approved: boolean; disapproved: boolean } {
 	const approved = /<approved\s*\/>/.test(output);
 	const disapproved = /<disapproved\s*\/>/.test(output);
@@ -154,6 +175,16 @@ export function buildGoalAuditorPrompt(args: {
 		"Return a concise audit report. The final line MUST be exactly one of:",
 		"<approved/>",
 		"<disapproved/>",
+		"",
+		// G3-C18: fixed-format blockers — the persistent re-injection ([C19])
+		// consumes this list instead of a raw prefix truncation.
+		"Right BEFORE the final verdict line, output a fixed-format blockers list:",
+		"BLOCKERS:",
+		"- [B1] one-sentence blocker (max ~120 chars)",
+		"- [B2] ...",
+		"When nothing blocks approval, output exactly:",
+		"BLOCKERS:",
+		"- (none)",
 		"",
 		"Goal objective:",
 		"<objective>",

@@ -1435,6 +1435,20 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		},
 	}));
 
+	/** G3-C21 threshold — named constant per the spec's hard constraint ⑥. */
+	const AUDIT_ATTEMPT_NOTICE = 3;
+
+	/** G3-C20: which [Cn] criteria appear in the objective but not in the
+	 * completion summary. Objectives without numbered criteria → []. */
+	function missingCriteriaLines(objective: string, completionSummary: string): string[] {
+		const ids = new Set<string>();
+		for (const m of objective.matchAll(/\[(C\d+)\]/g)) ids.add(m[1]!);
+		if (ids.size === 0) return [];
+		const present = new Set<string>();
+		for (const m of completionSummary.matchAll(/\[(C\d+)\]/g)) present.add(m[1]!);
+		return [...ids].filter((id) => !present.has(id)).sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
+	}
+
 	pi.registerTool(defineTool({
 		name: "update_goal",
 		label: "Update Goal",
@@ -1447,6 +1461,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			"Do not call update_goal merely because work is stopping, substantial progress was made, or tests passed without covering every requirement.",
 			"Do not use update_goal=complete as an escape hatch when you are blocked. If you are blocked, call pause_goal({reason, suggestedAction?}) instead so the user can intervene.",
 			"For sisyphus goals, do not mark complete until every numbered step has been executed and individually verified against its done criterion.",
+			"When the objective lists numbered criteria ([C1]…[Cn]), cover every criterion in the completion summary — one [Cn]-tagged line each with file:line and test evidence.",
 		],
 		parameters: Type.Object({
 			status: StringEnum([COMPLETE_STATUS] as const, { description: "Set to complete only when the objective is achieved." }),
@@ -1468,6 +1483,28 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			// Which audit attempt this is (1 = first try) — persisted up front
 			// so the count survives a rejected audit and process restarts.
 			const auditAttemptNo = (auditSource.auditAttempts ?? 0) + 1;
+			// G3-C21: surface the 3rd audit attempt once (named constant, spec ⑥).
+			if (auditAttemptNo === AUDIT_ATTEMPT_NOTICE) {
+				uiNotify(ctx, `Goal ${auditSource.id}: third completion attempt — the auditor has rejected this goal twice already. Consider whether the objective is actually achievable as written.`, "warning");
+			}
+			// G3-C20 (non-blocking): when the objective carries numbered
+			// criteria ([C1]…[Cn]), a completion summary missing some of the
+			// [Cn] lines gets ONE followUp reminder; the audit starts anyway.
+			const missingCriteria = missingCriteriaLines(auditSource.objective, params.completionSummary ?? "");
+			if (missingCriteria.length > 0) {
+				try {
+					pi.sendMessage(
+						{
+							customType: "pi-goal-missing-criteria",
+							content: `[goal] The completion summary is missing [Cn] evidence lines for: ${missingCriteria.join(", ")}. Future completion requests should cover every numbered criterion in the objective (one [Cn]-tagged line each). The current audit proceeds unchanged.`,
+							display: false,
+						},
+						{ deliverAs: "followUp", triggerTurn: false },
+					);
+				} catch {
+					/* reminder must never block the audit */
+				}
+			}
 			const auditTarget = { ...mergeGoalPromptFromDisk(ctx, auditSource), auditAttempts: auditAttemptNo };
 			// C5 follow-up: stamp auditAttempts + persist is the
 			// recordAuditAttempt verb (the adopted record keeps the in-memory

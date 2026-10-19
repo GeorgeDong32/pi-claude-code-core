@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Added (entropy-control G3: audit light improvements & recall data — docs/zh/entropy-control-spec.md)
+
+- **auditor permission status documented [C17]**: docs/{zh,en}/goal-auditor-permissions.md — the auditor session loads zero extensions (goal-auditor.ts:183), so permission-modes rules do not apply; residual risk is prompt-bound bash; the read-only profile is deferred with reasons and revival conditions.
+- **BLOCKERS format [C18]**: the audit prompt now requires a fixed-format `BLOCKERS:` block right before the verdict (`- [Bn] one-liner` / `- (none)`); `parseBlockers` handles conformant/empty/missing.
+- **re-injection uses the list [C19]**: `auditorRejectionBlock` prefers the parsed blockers (each item whole, ~300-char budget, per-item truncation noting "N more"); legacy reports fall back to the original 300-char prefix (site: goal-prompts.ts, recorded per G3-P1).
+- **missing-criteria reminder [C20, non-blocking]**: when the objective carries numbered criteria and the completion summary lacks some `[Cn]` lines, ONE followUp (triggerTurn:false) reminder lists the missing numbers — the audit starts unchanged; objectives without numbered criteria never trigger it.
+- **third-attempt notice [C21]**: at auditAttempts=3 (`AUDIT_ATTEMPT_NOTICE`) a one-time UI warning suggests re-reading the objective; no blocking.
+- **recall latency report [C22]**: `node scripts/recall-aggregate.mjs` aggregates pi-memory-recall details v1 from session transcripts — real data on this machine (258 samples): delivery immediate 3.5% / deferred 96.5%, selector p50 2977ms / p90 5146ms → **keep waitMs=0** (blocking a first turn for ~3s costs more than late delivery). Default unchanged.
+
+Gates: check 0 / full suite 0 fail / contracts 46+3todo.
+
 ### Added (entropy-control G2: memory snapshots & consolidation provenance/age — docs/zh/entropy-control-spec.md)
 
 - **snapshots [C9/C10]**: session_start full-snapshots both memory layers to `~/.pi/agent/cc-core/memory-snapshots/<layer>/snap-<ts>/` (outside the layers — non-recursive scanning keeps them invisible to index/recall by construction). Identical content skips; the newest 10 are kept (`SNAPSHOT_KEEP`); everything fail-open. Rollback guide: docs/{zh,en}/memory-snapshot.md.
