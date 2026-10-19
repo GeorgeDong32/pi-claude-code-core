@@ -26,6 +26,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { RECALL_MANIFEST_MAX } from "../../lib/context-budget.ts";
 import { liftJson } from "../../lib/json-lift.ts";
 import { completeText, resolveModelRef, type LlmComplete, type RegistryLike } from "./llm.ts";
+import { effectiveAgeMs } from "./memdir.ts";
 
 /** Selector-side hard timeout — longer than any configured waitMs so a
  * deferred (timed-out) selection can still land before run end. */
@@ -70,9 +71,13 @@ export function resolveRecallModel(
 	return resolveModelRef(ref, registry);
 }
 
-/** One manifest row (RV-12): `- [layer][type] key (age): description`. */
-export function manifestRow(c: SelectionCandidate, now = Date.now()): string {
-	const ageDays = Math.floor((now - c.mtimeMs) / 86_400_000);
+/** One manifest row (RV-12): `- [layer][type] key (age): description`.
+ * G2-C13: age follows the ONE rule (effectiveAgeMs) — a consolidated file
+ * shows its created-based age here too, matching the freshness hint, instead
+ * of resetting to "new" whenever a merge rewrote it. */
+export function manifestRow(c: SelectionCandidate, now = Date.now(), content?: string): string {
+	const ageMs = content === undefined ? now - c.mtimeMs : effectiveAgeMs(content, c.mtimeMs, now);
+	const ageDays = Math.floor(ageMs / 86_400_000);
 	const age = ageDays < 1 ? "new" : `${ageDays}d`;
 	return `- [${c.layer}][${c.type}] ${c.key} (${age}): ${c.description}`;
 }
@@ -126,7 +131,7 @@ export function llmSelector(deps: {
 				.slice()
 				.sort((a, b) => b.mtimeMs - a.mtimeMs)
 				.slice(0, RECALL_MANIFEST_MAX)
-				.map((c) => manifestRow(c))
+				.map((c) => manifestRow(c, Date.now(), (c as SelectionCandidate & { body?: string }).body))
 				.join("\n");
 			const tools = req.recentTools.length > 0 ? `\n\nRecently used tools: ${req.recentTools.join(", ")}` : "";
 			const done = await completeText(

@@ -1496,7 +1496,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 					pi.sendMessage(
 						{
 							customType: "pi-goal-missing-criteria",
-							content: `[goal] The completion summary is missing [Cn] evidence lines for: ${missingCriteria.join(", ")}. Future completion requests should cover every numbered criterion in the objective (one [Cn]-tagged line each). The current audit proceeds unchanged.`,
+							content: `[goal] The completion summary is missing [Cn] evidence lines for: ${missingCriteria.map((id) => `[${id}]`).join(", ")}. Future completion requests should cover every numbered criterion in the objective (one [Cn]-tagged line each). The current audit proceeds unchanged.`,
 							display: false,
 						},
 						{ deliverAs: "followUp", triggerTurn: false },

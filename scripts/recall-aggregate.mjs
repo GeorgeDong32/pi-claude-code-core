@@ -45,6 +45,7 @@ function percentile(sorted, p) {
 
 const files = jsonlFiles(root);
 const records = [];
+const turnDistances = []; // delivered-block → user-message distances (G3-C22)
 let scanned = 0;
 for (const file of files) {
 	let text;
@@ -54,9 +55,14 @@ for (const file of files) {
 	} catch {
 		continue;
 	}
-	// lines carrying the recall custom type; details live on the custom message
+	// Walk the transcript in line order: user messages stack a counter; a
+	// delivered pi-memory-recall block's distance is how many user messages
+	// were started since the one it was triggered by (0 = landed in the same
+	// turn, 1 = the next user turn, …). Immediate deliveries measure 0 by
+	// construction; deferred ones measure >= 1 when the next user turn
+	// delivered them.
+	let userMessagesSeen = -1; // -1 until the first user message
 	for (const line of text.split("\n")) {
-		if (!line.includes("pi-memory-recall")) continue;
 		let entry;
 		try {
 			entry = JSON.parse(line);
@@ -64,23 +70,19 @@ for (const file of files) {
 			continue;
 		}
 		const msg = entry?.message ?? entry;
+		const type = msg?.type ?? entry?.type;
+		if (type === "user" || msg?.role === "user") userMessagesSeen += 1;
+		if (!line.includes("pi-memory-recall")) continue;
 		const details = msg?.details;
 		if (details && details.v === 1 && typeof details.elapsedMs === "number") {
-			records.push({ file, lineNo: 0, ...pick(details), delivery: details.delivery });
+			records.push({ file, ...pick(details), delivery: details.delivery });
+			if (userMessagesSeen >= 0) turnDistances.push(userMessagesSeen);
 		}
 	}
 }
 
 function pick(d) {
 	return { elapsedMs: d.elapsedMs, bytes: d.bytes, files: Array.isArray(d.files) ? d.files.length : 0, model: d.model };
-}
-
-// per-session turn distance: delivered record vs the next user message after it
-const bySession = new Map();
-for (const r of records) {
-	const list = bySession.get(r.file) ?? [];
-	list.push(r);
-	bySession.set(r.file, list);
 }
 
 const deliveries = records.filter((r) => r.delivery === "immediate").length;
@@ -102,6 +104,20 @@ if (records.length === 0) {
 console.log(`- delivery: immediate ${deliveries} / deferred ${deferred} (immediate ratio ${(100 * deliveries / records.length).toFixed(1)}%)`);
 console.log(`- selector elapsedMs: p50 ${p50} / p90 ${p90} (n=${elapsed.length})`);
 console.log(`- bytes per delivered block: median ${percentile(records.map((r) => r.bytes).sort((a, b) => a - b), 50)}`);
+console.log();
+
+// delivered-turn-distance distribution (G3-C22): how many user turns later
+// each recall block actually landed (0 = same turn).
+const distances = turnDistances.slice().sort((a, b) => a - b);
+if (distances.length === 0) {
+	console.log(`- delivered-turn distance: **insufficient samples** (no delivered block with a preceding user message found — the metric needs transcripted deliveries)`);
+} else {
+	const counts = new Map();
+	for (const d of distances) counts.set(d, (counts.get(d) ?? 0) + 1);
+	const rows = [...counts.entries()].sort((a, b) => a[0] - b[0]).map(([d, n]) => `  - ${d} turn${d === 1 ? "" : "s"} later: ${n} (${((100 * n) / distances.length).toFixed(1)}%)`);
+	console.log(`- delivered-turn distance (n=${distances.length}, median ${percentile(distances, 50)}):`);
+	for (const row of rows) console.log(row);
+}
 console.log();
 
 // waitMs recommendation logic — data-backed, explicit
