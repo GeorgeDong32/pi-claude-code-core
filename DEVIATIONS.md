@@ -317,3 +317,5 @@
 122. **架构评审批次（2026-10-19）：C2-2 回退、C3/C5 不立项（对抗审查 R1 P1 打回）**：**C2-2（agent-dir 单点）尝试后回退**：动机「三策略合一」被审查证伪——modes/core-economy 的 `~/.pi/agent` 是**冻结盘布局根**（invariant 7 / P0-CT-09），必须 homedir() 定址；effort 的 settings.json 是宿主文件，跟随宿主 `getAgentDir()`（尊重 `PI_CODING_AGENT_DIR` env）是**有意语义**。两种语义合并 = 设 env 的用户 permission-modes.json 静默改址丢规则。modes 内 profiles.ts/permission-forwarding.ts 与 config.ts 的 homedir 分裂为既有状态，不在本批扩面。保留：惰性化 `??=`（import 零副作用）。
   **C3（goal 工具骨架工厂）不立项**：报告声称「8×90 行同形」经逐处核实不存在——8 个 renderCall 中 7 个带 args 定制（sisyphus 前缀/status 色/reason 截断），questionnaire 两工具同形段 ≈10 行，低于动作门槛。
   **C5（TUI 特性槽位 seam）不立项**：前提失准——入口实际 515 行非 3000+；ReplicaSession 视图/控制器分离已于 2026-10-07（spec P2-1）落地。
+
+123. **gitCanonicalRoot 在本机 git 从未生效，G1-C3 前提修复（2026-10-19，熵控制 G1）**：`git rev-parse --git-common-directory` 在本机 git 2.56 上于有效 repo 内也回显参数原样（exit 0）——`gitCanonicalRootUncached` 恒返回 null，长期被掩盖（pi 通常在 repo 根启动，null-fallback 的 cwd 恰与 root 重合）。修复：`--show-toplevel` 优先（本机验证有效，返回 worktree 根），旧形式保留为兜底且对回显参数（`--` 开头）显式判 null。盘布局影响（P0-CT-09）：cwd=repo 根时 sanitized project key 不变；**仅从子目录启动的会话**现在按 repo 根 keying PROJECT 层（原设计意图，此前按子目录 keying）——无数据迁移需求（用户实际会话均从根启动）。

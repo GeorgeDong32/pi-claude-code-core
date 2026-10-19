@@ -55,10 +55,14 @@ export function slugify(name: string): string {
 	return name.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "memory";
 }
 
-/** Split into frontmatter fields + body with ONE close-marker scan (K6);
- * null when the frontmatter is absent or invalid for indexing. */
-export function splitFrontmatter(content: string): { title: string; description: string; type: string; pinned: boolean; paths?: string[]; body: string } | null {
-	if (!content.startsWith("---")) return null;
+/**
+ * Why a file is NOT indexable — null when it IS indexable. The SAME steps
+ * as splitFrontmatter, named for the guard (entropy-control G1-C1): the
+ * guard must block the write at tool-call time with the specific problem,
+ * using the index's own judgment as the single source of truth.
+ */
+export function diagnoseFrontmatter(content: string): string | null {
+	if (!content.startsWith("---")) return "no frontmatter block: a memory file must start with a '---' line";
 	const lines = content.split("\n");
 	let close = -1;
 	for (let i = 1; i < lines.length; i++) {
@@ -67,16 +71,44 @@ export function splitFrontmatter(content: string): { title: string; description:
 			break;
 		}
 	}
-	if (close === -1) return null;
+	if (close === -1) return "frontmatter not closed: missing the closing '---' line";
 	const fm: Record<string, string> = {};
 	for (let i = 1; i < close; i++) {
 		const m = /^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/.exec(lines[i].trim());
-		if (!m) return null;
+		if (!m) return `invalid frontmatter line ${i + 1}: "${lines[i].trim().slice(0, 40)}" is not a key: value pair`;
 		let v = m[2].trim();
 		if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
 		fm[m[1]] = v;
 	}
-	if (!fm.name || !fm.description || !VALID_TYPES.has(fm.type)) return null;
+	const missing = ["name", "description"].filter((k) => !fm[k]);
+	if (missing.length > 0) return `missing required field(s): ${missing.join(", ")}`;
+	if (!VALID_TYPES.has(fm.type)) {
+		return `invalid metadata.type: ${fm.type ?? "(absent)"} — must be one of ${[...VALID_TYPES].join(", ")}`;
+	}
+	return null;
+}
+
+/** Split into frontmatter fields + body with ONE close-marker scan (K6);
+ * null when the frontmatter is absent or invalid for indexing. Same-source
+ * with diagnoseFrontmatter (G1-C1): the validity verdict below is exactly
+ * diagnoseFrontmatter === null. */
+export function splitFrontmatter(content: string): { title: string; description: string; type: string; pinned: boolean; paths?: string[]; body: string } | null {
+	if (diagnoseFrontmatter(content) !== null) return null;
+	const lines = content.split("\n");
+	let close = -1;
+	for (let i = 1; i < lines.length; i++) {
+		if (lines[i].trim() === "---") {
+			close = i;
+			break;
+		}
+	}
+	const fm: Record<string, string> = {};
+	for (let i = 1; i < close; i++) {
+		const m = /^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/.exec(lines[i].trim());
+		let v = m![2].trim();
+		if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+		fm[m![1]] = v;
+	}
 	return {
 		title: fm.name,
 		description: fm.description,

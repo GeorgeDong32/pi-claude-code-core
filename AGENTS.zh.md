@@ -23,6 +23,7 @@ pi 对每个 manifest 条目只加载一个工厂(见 `package.json` 的 `pi` �
 | `bun run check` | 统一 tsc 门:两遍——主工程(`tsconfig.json`)+ 契约工程(`tsconfig.contracts.json`)。必须 exit 0。 |
 | `bun run test` | 单元测试,**按框架分流**:vitest 跑 `test/lib/` + `extensions/modes/`(就近摆放),node:test(经 tsx)跑 `extensions/{effort,goal,review,action-fusion,observation-pack}/tests/` |
 | `bun run contracts` | 跨包契约套件(`test/contracts/`,独立 vitest config)。钉住 globalThis 键、env 变量、status 槽、session entry 类型、磁盘布局。 |
+| `npx vitest run test/lib/upgrade-canary.test.ts --config vitest.config.ts` | 升级金丝雀——升 Pi 前先跑（ObservationPack 占位符 + then_run 融合识别） |
 
 三项全绿才算完成。测试一律走 script 入口(`scripts/run-tests.mjs`、
 `scripts/check.mjs`),不要直接调 vitest/tsc。

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Added (entropy-control G1: memory write guards & self-modification protection — docs/zh/entropy-control-spec.md)
+
+- **write guard (tool_call channel, behavior on real incidents)**: writes/edits into the memory layers are now validated by the INDEX'S OWN judgment at write time (`diagnoseFrontmatter`, same steps as `splitFrontmatter`) — an unindexable result is blocked with the specific frontmatter problem instead of silently landing as a skipped file. Memory-shaped files (`**/memory/*.md` with name+description) written outside both layers are blocked with both correct absolute dirs (the 10-03 repo-root incident). USER-layer entries embedding the current git root's absolute path (or ~/ form) without `paths:` are blocked with a PROJECT-layer pointer; a bare short repo name only warns once per session.
+- **self-modification protection ([C4])**: write/edit onto permission-modes.json, the three rules dirs, or the host settings.json is blocked with a "edit manually" message (hardcoded list in `extensions/memory/protected-paths.ts`; bypass mode does not exempt — the guard is orthogonal to permission modes). A sha256 baseline of those files is taken at session_start and re-checked at agent_end: a direct-fs bypass (outside the tools) surfaces one UI notice.
+- **child sessions (PI_SUBAGENT_CHILD=1) can no longer write either memory layer** — they are told to relay facts to the parent agent.
+- **secret probe now covers edit's edits[]** (the old per-layer probe read edit fields pi's edit tool never sends).
+- **upgrade canary**: `test/lib/upgrade-canary.test.ts` drives the real ObservationPack projection (placeholder over THRESHOLD_BYTES) and the real then_run fusion path — run it before upgrading Pi. AGENTS.md/AGENTS.zh.md commands tables + docs/en+zh/upgrade-canary.md.
+- **fix (pre-existing)**: `gitCanonicalRoot` never worked on this machine's git (rev-parse --git-common-directory echoes the arg; constant null was masked by repo-root startups). Now `--show-toplevel` first, legacy probe as fallback — see DEVIATIONS #123 for the disk-layout note.
+
+Spec + implementer review archived at docs/{zh,en}/entropy-control-spec.md. Subagent-built: [C4] (protected-paths + 11 tests), [C7] (canary + docs).
+
 ### Changed (arch review 2026-10-18 C2 — transient notices through the shared entry)
 
 - **notify convergence**: review's inline notifier and memory's two bare `ctx.ui.notify` paths (degraded-mode `notifyOnce`, automation's side-channel notices) now flow through the shared entry in `extensions/ui/notify.ts` (bus publish + cctui negotiation) instead of hand-rolled host calls — every transient notice lands in the bus queue, so any consumer (TUI notice area, future panels) sees them uniformly. Known remaining bare-call sites outside this batch: memory/consolidate.ts manual-merge notices and review's config-edit flow — recorded as scope notes in DEVIATIONS #122. Review's headless console fallback keeps its `pi-review:` prefix semantics. `automationNotify` is exported with its stale-ctx try/catch pinned by a test.

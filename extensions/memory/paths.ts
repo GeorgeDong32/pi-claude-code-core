@@ -56,13 +56,33 @@ export function gitCanonicalRoot(cwd: string): string | null {
 }
 
 function gitCanonicalRootUncached(cwd: string): string | null {
+	// G1-C3 (entropy control): `--git-common-directory` turned out NEVER to
+	// work on this machine's git (2.56 echoes the arg back instead of the
+	// path, silently degrading gitCanonicalRoot to a constant null — hidden
+	// because pi usually starts at the repo root, where the cwd fallback
+	// coincides). `--show-toplevel` is the universally supported form and
+	// returns the worktree root directly; the old form stays as a fallback.
+	// Disk-layout note (P0-CT-09): when cwd IS the root the sanitized
+	// project key is unchanged; only sessions started INSIDE a subdirectory
+	// now key the project layer by the repo root (the original design
+	// intent) — recorded in DEVIATIONS.
+	try {
+		const toplevel = execSync("git rev-parse --show-toplevel", {
+			cwd,
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "pipe"],
+		}).trim();
+		if (toplevel && !toplevel.startsWith("--") && existsSync(toplevel)) return toplevel;
+	} catch {
+		/* fall through to the legacy probe */
+	}
 	try {
 		const out = execSync("git rev-parse --git-common-directory", {
 			cwd,
 			encoding: "utf-8",
 			stdio: ["ignore", "pipe", "pipe"],
 		}).trim();
-		if (!out) return null;
+		if (!out || out.startsWith("--")) return null; // echoed arg = unsupported here
 		const resolved = out === ".git" ? cwd : (out.match(/^(.*)\/\.git$/) ?? [])[1];
 		return resolved && existsSync(resolved) ? resolved : null;
 	} catch {

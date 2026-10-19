@@ -62,7 +62,9 @@ import { renderMemoryDiagnostics } from "./diagnostics.ts";
 import { queueInventory } from "./queue.ts";
 import { byteLength, createRecall, deriveHistory, freshnessHeader, type RecallBlock, type RecallMachine } from "./recall.ts";
 import { llmSelector, resolveRecallModel } from "./selector.ts";
-import { guardMemoryWrites } from "./guard.ts";
+import { guardMemoryToolCall, guardMemoryWrites, sessionHome, type GuardVerdict } from "./guard.ts";
+import { matchProtectedPath, protectedPathBlockReason, protectedPathFiles } from "./protected-paths.ts";
+import { createHash } from "node:crypto";
 import { InjectionGate } from "./yield.ts";
 import { recallTransparencyLine, sessionRecall } from "./session-recall.ts";
 import { readSessionProjection } from "../modes/session-branch.ts";
@@ -226,8 +228,58 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 		if (ctx?.hasUI) sharedNotify(ctx, msg, "warning");
 	}
 
+	// G1-C3: short-repo-name warns fire once per session per message shape.
+	let warnedMisfiles = new Set<string>();
+	// G1-C5: sha256 baseline of the protected files, taken at session_start
+	// (direct reads — never through the memdir cache, whose mtime granularity
+	// would miss content-level changes) and re-checked at agent_end.
+	let protectedBaseline = new Map<string, string | null>();
+	let bypassNoticeShown = false;
+
+	const sha256Of = (file: string): string | null => {
+		try {
+			return createHash("sha256").update(readFileSync(file)).digest("hex");
+		} catch {
+			return null; // unreadable/missing — not baseline-able
+		}
+	};
+
+	const baselineProtectedFiles = (ctx: ExtensionContext): void => {
+		try {
+			protectedBaseline = new Map(
+				protectedPathFiles({ home: sessionHome(), cwd: ctx.cwd ?? process.cwd() }).map((f) => [f, sha256Of(f)] as const),
+			);
+		} catch {
+			protectedBaseline = new Map<string, string | null>(); // fail-open: detection, never a startup blocker
+		}
+	};
+
+	const checkProtectedFiles = (ctx: ExtensionContext): void => {
+		try {
+			if (bypassNoticeShown || protectedBaseline.size === 0) return;
+			const changed: string[] = [];
+			for (const [file, was] of protectedBaseline) {
+				if (sha256Of(file) !== was) changed.push(file);
+			}
+			if (changed.length === 0) return;
+			bypassNoticeShown = true;
+			if (ctx?.hasUI) {
+				sharedNotify(
+					ctx,
+					`Protected files changed outside the tool guard: ${changed.join(", ")} — if this was not your own manual edit, review them.`,
+					"warning",
+				);
+			}
+		} catch {
+			/* detection must never break agent_end */
+		}
+	};
+
 	pi.on("session_start", (_event, ctx: ExtensionContext) => {
 		try {
+			warnedMisfiles = new Set();
+			bypassNoticeShown = false;
+			baselineProtectedFiles(ctx);
 			// AR1005-RC-04: defensive teardown — a session_start on a live
 			// extension instance (reload/resume drivers) must not let an old
 			// machine's in-flight work deliver into the new session. This does
@@ -358,11 +410,26 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 			// deriveHistory resolves read toolCalls against cwd) — no live
 			// tracking here. This hook only guards writes.
 			// V2-D2: both layers are guarded (project first, then user)
-			const verdict = [memoryDir(ctx), userMemoryDir(ctx)]
-				.map((d) => guardMemoryWrites(name, input, d))
-				.find((v) => v.block);
-			if (verdict) {
+			// G1-C4: self-modification protection first — its list is
+			// hardcoded (protected-paths.ts) and orthogonal to memory.
+			const target = typeof input.path === "string" ? input.path : "";
+			const protectedHit = matchProtectedPath(target, { home: sessionHome(), cwd: ctx.cwd ?? process.cwd() });
+			if (protectedHit) {
+				return { block: true, reason: protectedPathBlockReason(protectedHit) };
+			}
+			// G1-C1/C2/C3/C6 + the secret probe, over both layers at once.
+			const verdict: GuardVerdict = guardMemoryToolCall(name, input, {
+				projectDir: memoryDir(ctx),
+				userDir: userMemoryDir(ctx),
+				gitRoot: gitCanonicalRoot(ctx.cwd ?? process.cwd()) ?? undefined,
+				childSession: process.env.PI_SUBAGENT_CHILD === "1",
+			});
+			if (verdict.block) {
 				return { block: true, reason: verdict.reason };
+			}
+			if (verdict.warn !== undefined && !warnedMisfiles.has(verdict.warn)) {
+				warnedMisfiles.add(verdict.warn);
+				if (ctx?.hasUI) sharedNotify(ctx, verdict.warn, "warning");
 			}
 		} catch {
 			/* guard failure must not break the tool call */
@@ -392,8 +459,10 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 			/* never block the turn */
 		}
 	});
-	pi.on("agent_end", () => {
+	pi.on("agent_end", (_event, ctx: ExtensionContext) => {
 		try {
+			// G1-C5: compare protected files against the session_start baseline.
+			checkProtectedFiles(ctx);
 			// spec v1.2: NO abort here — an in-flight selection for this run may
 			// still complete and deliver (appends when not streaming → next
 			// turn's request #1 sees it). Latest-wins supersede happens at the
