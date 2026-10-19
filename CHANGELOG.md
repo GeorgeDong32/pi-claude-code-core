@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Added (entropy-control G2: memory snapshots & consolidation provenance/age — docs/zh/entropy-control-spec.md)
+
+- **snapshots [C9/C10]**: session_start full-snapshots both memory layers to `~/.pi/agent/cc-core/memory-snapshots/<layer>/snap-<ts>/` (outside the layers — non-recursive scanning keeps them invisible to index/recall by construction). Identical content skips; the newest 10 are kept (`SNAPSHOT_KEEP`); everything fail-open. Rollback guide: docs/{zh,en}/memory-snapshot.md.
+- **delete provenance [C11]**: every file deleted by `memory_consolidate` must appear in some write's `merged_from` or carry a per-file reason (`deletes` now takes `string | {file, reason}` — bare names keep parsing). Orphan deletions are rejected listing the file names.
+- **created preservation [C12]**: consolidation output is stamped `created` (oldest source's created or mtime; else the overwritten same-name file's; else omitted) + `consolidated_at` (ISO), so a merge never resets fact age.
+- **unified age [C13]**: `effectiveAgeMs` is the one age rule — `created` wins when the file's mtime does not postdate `consolidated_at` (5s tolerance); a hand edit after consolidation bumps mtime and falls back to it; legacy files use mtime. The read-staleness note and recall freshness header both use it; sort order stays mtime.
+- **mass-deletion post-check [C14]**: at agent_end, vs this session's start snapshot — ≥3 deleted files or ≥30% byte drop without a `memory_consolidate` call surfaces ONE notice pointing at the snapshot location (never blocks, never rolls back; thresholds are named constants).
+
+Gates: check 0 / full suite 0 fail / contracts 46+3todo.
+
 ### Added (entropy-control G1: memory write guards & self-modification protection — docs/zh/entropy-control-spec.md)
 
 - **write guard (tool_call channel, behavior on real incidents)**: writes/edits into the memory layers are now validated by the INDEX'S OWN judgment at write time (`diagnoseFrontmatter`, same steps as `splitFrontmatter`) — an unindexable result is blocked with the specific frontmatter problem instead of silently landing as a skipped file. Memory-shaped files (`**/memory/*.md` with name+description) written outside both layers are blocked with both correct absolute dirs (the 10-03 repo-root incident). USER-layer entries embedding the current git root's absolute path (or ~/ form) without `paths:` are blocked with a PROJECT-layer pointer; a bare short repo name only warns once per session.

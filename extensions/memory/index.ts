@@ -52,7 +52,7 @@ import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { coreBus } from "../bus.ts";
-import { eligibleMemories, scanMemoryDir, scanMemoryDirCached } from "./memdir.ts";
+import { eligibleMemories, listMemoryFiles, scanMemoryDir, scanMemoryDirCached } from "./memdir.ts";
 import { reindex } from "./writer.ts";
 import { friendlyProjectHint } from "./paths.ts";
 import { resolveMemoryPaths, sessionsDirFor, gitCanonicalRoot } from "./paths.ts";
@@ -64,6 +64,8 @@ import { byteLength, createRecall, deriveHistory, freshnessHeader, type RecallBl
 import { llmSelector, resolveRecallModel } from "./selector.ts";
 import { guardMemoryToolCall, guardMemoryWrites, sessionHome, type GuardVerdict } from "./guard.ts";
 import { matchProtectedPath, protectedPathBlockReason, protectedPathFiles } from "./protected-paths.ts";
+import { newestSnapshot, snapshotLayer, snapshotRoot, type SnapshotManifest } from "./snapshot.ts";
+import { sanitizePath } from "./paths.ts";
 import { createHash } from "node:crypto";
 import { InjectionGate } from "./yield.ts";
 import { recallTransparencyLine, sessionRecall } from "./session-recall.ts";
@@ -244,6 +246,64 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 		}
 	};
 
+	// G2-C9/C14 thresholds — named constants per the spec's hard constraint ⑥.
+	const DELETION_SPIKE_FILES = 3;
+	const BYTES_DROP_RATIO = 0.3;
+
+	/** G2-C9: snapshot both layers at session_start (fail-open, deduped, rotated). */
+	const snapshotBothLayers = (ctx: ExtensionContext): void => {
+		try {
+			const homeNow = sessionHome();
+			snapshotLayer(userMemoryDir(ctx), snapshotRoot(homeNow, "user"));
+			snapshotLayer(memoryDir(ctx), snapshotRoot(homeNow, `project-${sanitizePath(gitCanonicalRoot(ctx.cwd ?? process.cwd()) ?? (ctx.cwd ?? process.cwd()))}`));
+		} catch {
+			/* fail-open: snapshots never block startup */
+		}
+	};
+
+	/** G2-C14: vs this session's start snapshot — mass deletion or a big byte
+	 * drop without a memory_consolidate call surfaces ONE notice pointing at
+	 * the snapshot location. Never blocks, never rolls back. */
+	let consolidationUsedThisSession = false;
+	const checkMassDeletion = (ctx: ExtensionContext): void => {
+		try {
+			if (consolidationUsedThisSession) return;
+			const homeNow = sessionHome();
+			const layers: Array<{ label: string; dir: string; root: string }> = [
+				{ label: "user", dir: userMemoryDir(ctx), root: snapshotRoot(homeNow, "user") },
+				{ label: "project", dir: memoryDir(ctx), root: snapshotRoot(homeNow, `project-${sanitizePath(gitCanonicalRoot(ctx.cwd ?? process.cwd()) ?? (ctx.cwd ?? process.cwd()))}`) },
+			];
+			for (const layer of layers) {
+				const snap = newestSnapshot(layer.root);
+				if (!snap) continue;
+				const current = listMemoryFiles(layer.dir);
+				const snapFiles = snap.manifest.files.filter((f) => f.file !== "MEMORY.md").map((f) => f.file);
+				const deleted = snapFiles.filter((f) => !current.includes(f));
+				const snapBytes = (m: SnapshotManifest) => m.files.filter((f) => f.file !== "MEMORY.md").reduce((a, f) => a + f.bytes, 0);
+				const currentBytes = current.reduce((a, f) => {
+					try {
+						return a + statSync(join(layer.dir, f)).size;
+					} catch {
+						return a;
+					}
+				}, 0);
+				const dropped = snapBytes(snap.manifest) > 0 && currentBytes < snapBytes(snap.manifest) * (1 - BYTES_DROP_RATIO);
+				if (deleted.length >= DELETION_SPIKE_FILES || dropped) {
+					if (ctx?.hasUI) {
+						sharedNotify(
+							ctx,
+							`memory ${layer.label} layer lost ${deleted.length} file(s)${dropped ? ` and ${Math.round((1 - currentBytes / Math.max(1, snapBytes(snap.manifest))) * 100)}% of its bytes` : ""} this session without memory_consolidate — rollback snapshots live under ${layer.root}`,
+							"warning",
+						);
+					}
+					return; // one notice per agent_end scan is enough
+				}
+			}
+		} catch {
+			/* detection must never break agent_end */
+		}
+	};
+
 	const baselineProtectedFiles = (ctx: ExtensionContext): void => {
 		try {
 			protectedBaseline = new Map(
@@ -279,7 +339,9 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 		try {
 			warnedMisfiles = new Set();
 			bypassNoticeShown = false;
+			consolidationUsedThisSession = false;
 			baselineProtectedFiles(ctx);
+			snapshotBothLayers(ctx);
 			// AR1005-RC-04: defensive teardown — a session_start on a live
 			// extension instance (reload/resume drivers) must not let an old
 			// machine's in-flight work deliver into the new session. This does
@@ -450,6 +512,9 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 		pi,
 		(ctx) => ({ project: memoryDir(ctx), user: userMemoryDir(ctx) }),
 		consolidation,
+		() => {
+			consolidationUsedThisSession = true;
+		},
 	);
 	pi.on("turn_end", (event, ctx: ExtensionContext) => {
 		try {
@@ -461,6 +526,8 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 	});
 	pi.on("agent_end", (_event, ctx: ExtensionContext) => {
 		try {
+			// G2-C14: mass-deletion post-check vs this session's start snapshot.
+			checkMassDeletion(ctx);
 			// G1-C5: compare protected files against the session_start baseline.
 			checkProtectedFiles(ctx);
 			// spec v1.2: NO abort here — an in-flight selection for this run may
@@ -509,7 +576,8 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 				if ([userMemoryDir(ctx), memoryDir(ctx)].some((d) => path === d || path.startsWith(`${d}/`))) {
 					const header = (() => {
 						try {
-							return freshnessHeader(statSync(path).mtimeMs);
+							// G2-C13: content-aware age (created/consolidated_at rule)
+							return freshnessHeader(statSync(path).mtimeMs, readFileSync(path, "utf8"));
 						} catch {
 							return null;
 						}

@@ -88,6 +88,43 @@ export function diagnoseFrontmatter(content: string): string | null {
 	return null;
 }
 
+/** Text-level frontmatter field read (G2-C12/C13) — no reparse, no reorder. */
+export function readFrontmatterField(content: string, key: string): string | undefined {
+	if (!content.startsWith("---")) return undefined;
+	const lines = content.split("\n");
+	for (let i = 1; i < lines.length; i++) {
+		if (lines[i]!.trim() === "---") break;
+		const m = new RegExp(`^${key}:\\s*(\\S.*)$`).exec(lines[i]!.trim());
+		if (m) return m[1]!.trim().replace(/^(["'])(.*)\1$/, "$2");
+	}
+	return undefined;
+}
+
+/** Tolerance for "file mtime ≤ consolidated_at" (G2-C13): consolidation
+ * stamps then writes within the same second; a few seconds of slack keeps
+ * filesystem timestamp granularity from flipping the branch. */
+export const AGE_TOLERANCE_MS = 5_000;
+
+/**
+ * G2-C13 — the ONE age rule shared by manifest display and staleness hints:
+ * `created` wins when present AND the file's mtime does not postdate its
+ * `consolidated_at` (within tolerance) — a hand edit after consolidation
+ * bumps mtime past the stamp, and content currency falls back to mtime.
+ * Legacy files without created simply use mtime. Sort order stays mtime.
+ */
+export function effectiveAgeMs(content: string, mtimeMs: number, now = Date.now()): number {
+	const created = readFrontmatterField(content, "created");
+	const consolidatedAt = readFrontmatterField(content, "consolidated_at");
+	if (created !== undefined && consolidatedAt !== undefined) {
+		const createdMs = Date.parse(created);
+		const stampedMs = Date.parse(consolidatedAt);
+		if (Number.isFinite(createdMs) && Number.isFinite(stampedMs) && mtimeMs <= stampedMs + AGE_TOLERANCE_MS) {
+			return now - createdMs;
+		}
+	}
+	return now - mtimeMs;
+}
+
 /** Split into frontmatter fields + body with ONE close-marker scan (K6);
  * null when the frontmatter is absent or invalid for indexing. Same-source
  * with diagnoseFrontmatter (G1-C1): the validity verdict below is exactly

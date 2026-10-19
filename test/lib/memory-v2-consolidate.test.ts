@@ -19,6 +19,7 @@ import { applyMemoryOps, acquireLayerLock, layerStats, type MemoryOp } from "../
 import { parseMemoryFrontmatter } from "../../extensions/memory/memdir.ts";
 import {
 	runConsolidation,
+	type ConsolidateDelete,
 	buildConsolidationDirective,
 	ConsolidationTrigger,
 	CONSOLIDATE_DIRECTIVE_TYPE,
@@ -151,7 +152,8 @@ describe("V2-C runConsolidation (must-shrink transaction)", () => {
 		put(dir, "a.md", "alpha", "alpha fact");
 		put(dir, "b.md", "beta", "beta fact");
 		const merged = "---\nname: alpha-beta\ndescription: merged\nmetadata:\n  type: project\n---\n\nalpha fact + beta fact";
-		const r = runConsolidation(dir, [{ file: "alpha-beta.md", content: merged }], ["a.md", "b.md"]);
+		// G2-C11: deletes need provenance — the merge write absorbs both sources
+		const r = runConsolidation(dir, [{ file: "alpha-beta.md", content: merged, merged_from: ["a.md", "b.md"] }], ["a.md", "b.md"]);
 		expect(r.ok).toBe(true);
 		expect(r.afterFiles).toBeLessThan(r.beforeFiles);
 		expect(existsSync(join(dir, "a.md"))).toBe(false);
@@ -320,7 +322,7 @@ describe("V2-C /memory-consolidate command + tool registration", () => {
 		await host.fire("session_start", {}, ctx);
 		const tool = host.tools.get("memory_consolidate")!;
 		const merged = "---\nname: ab\ndescription: merged\nmetadata:\n  type: project\n---\n\nfact one + fact two";
-		const r = (await tool.execute("t1", { writes: [{ file: "ab.md", content: merged }], deletes: ["a.md", "b.md"] }, undefined, undefined, ctx)) as {
+		const r = (await tool.execute("t1", { writes: [{ file: "ab.md", content: merged, merged_from: ["a.md", "b.md"] }], deletes: ["a.md", "b.md"] }, undefined, undefined, ctx)) as {
 			content: Array<{ text: string }>;
 		};
 		expect(r.content[0]!.text).toContain("consolidated");
@@ -425,5 +427,88 @@ describe("store user→project routing (RV-15)", () => {
 		expect(out2.applied).toBe(1);
 		expect(notes2).toHaveLength(0);
 		expect(existsSync(join(tudir, "scoped-pref.md"))).toBe(true);
+	});
+});
+
+// ─── G2 [C11]/[C12]/[C13]: provenance, created preservation, unified age ───
+
+describe("G2-C11 delete provenance", () => {
+	let dir: string;
+	const valid = (t: string): string => `---\nname: ${t}\ndescription: d\nmetadata:\n  type: project\n---\n\nbody`;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "g2c11-"));
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, "a.md"), valid("a"));
+		writeFileSync(join(dir, "b.md"), valid("b"));
+	});
+	afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+	it("rejects deletes without provenance, naming the orphan files", () => {
+		const r = runConsolidation(dir, [{ file: "merged.md", content: valid("m") }], ["a.md", "b.md"]);
+		expect(r.ok).toBe(false);
+		expect(r.message).toContain("without provenance");
+		expect(r.message).toContain("a.md");
+		expect(r.message).toContain("b.md");
+	});
+
+	it("merged_from provenance passes", () => {
+		const r = runConsolidation(dir, [{ file: "merged.md", content: valid("m"), merged_from: ["a.md", "b.md"] }], ["a.md", "b.md"]);
+		expect(r.ok).toBe(true);
+	});
+
+	it("per-file reason passes (old bare-string shape keeps working via union)", () => {
+		const deletes: ConsolidateDelete[] = [{ file: "a.md", reason: "obsolete" }, { file: "b.md", reason: "superseded elsewhere" }];
+		const r = runConsolidation(dir, [{ file: "merged.md", content: valid("m"), merged_from: ["a.md"] }], deletes);
+		expect(r.ok).toBe(true);
+	});
+});
+
+describe("G2-C12 created preservation", () => {
+	it("merging a 60-day-old and a 10-day-old file stamps created at 60 days ago", () => {
+		const dir = mkdtempSync(join(tmpdir(), "g2c12-"));
+		mkdirSync(dir, { recursive: true });
+		const old60 = new Date(Date.now() - 60 * 24 * 3600 * 1000);
+		const old10 = new Date(Date.now() - 10 * 24 * 3600 * 1000);
+		writeFileSync(join(dir, "sixty.md"), `---\nname: sixty\ndescription: d\nmetadata:\n  type: project\n---\n\nbody`);
+		writeFileSync(join(dir, "ten.md"), `---\nname: ten\ndescription: d\nmetadata:\n  type: project\n---\n\nbody`);
+		utimesSync(join(dir, "sixty.md"), old60, old60);
+		utimesSync(join(dir, "ten.md"), old10, old10);
+		const r = runConsolidation(dir, [{ file: "merged.md", content: `---\nname: m\ndescription: d\nmetadata:\n  type: project\n---\n\nbody`, merged_from: ["sixty.md", "ten.md"] }], ["sixty.md", "ten.md"]);
+		expect(r.ok).toBe(true);
+		const out = readFileSync(join(dir, "merged.md"), "utf8");
+		const created = /^created: (.+)$/m.exec(out)?.[1];
+		expect(created).toBeDefined();
+		expect(Date.parse(created!)).toBeLessThan(Date.now() - 59 * 24 * 3600 * 1000);
+		expect(out).toMatch(/^consolidated_at: \S+$/m);
+		rmSync(dir, { recursive: true, force: true });
+	});
+});
+
+describe("G2-C13 unified age (effectiveAgeMs)", () => {
+	const now = 1_700_000_000_000;
+	it("created wins when mtime does not postdate consolidated_at (within tolerance)", async () => {
+		const { effectiveAgeMs } = await import("../../extensions/memory/memdir.ts");
+		const created = new Date(now - 40 * 24 * 3600 * 1000).toISOString();
+		const at = new Date(now - 5 * 24 * 3600 * 1000).toISOString();
+		const content = `---\nname: x\ndescription: d\nmetadata:\n  type: project\ncreated: ${created}\nconsolidated_at: ${at}\n---\n\nbody`;
+		const mtime = now - 5 * 24 * 3600 * 1000; // == consolidated_at → within tolerance
+		const age = effectiveAgeMs(content, mtime, now);
+		expect(Math.abs(age - 40 * 24 * 3600 * 1000)).toBeLessThan(1000);
+	});
+	it("mtime wins when the file was touched after consolidation (hand edit)", async () => {
+		const { effectiveAgeMs } = await import("../../extensions/memory/memdir.ts");
+		const created = new Date(now - 40 * 24 * 3600 * 1000).toISOString();
+		const at = new Date(now - 30 * 24 * 3600 * 1000).toISOString();
+		const content = `---\nname: x\ndescription: d\nmetadata:\n  type: project\ncreated: ${created}\nconsolidated_at: ${at}\n---\n\nbody`;
+		const mtime = now - 2 * 24 * 3600 * 1000; // postdates the stamp → content changed after
+		const age = effectiveAgeMs(content, mtime, now);
+		expect(Math.abs(age - 2 * 24 * 3600 * 1000)).toBeLessThan(1000);
+	});
+	it("legacy files without created fall back to mtime (regression pin)", async () => {
+		const { effectiveAgeMs } = await import("../../extensions/memory/memdir.ts");
+		const content = `---\nname: x\ndescription: d\nmetadata:\n  type: project\n---\n\nbody`;
+		const mtime = now - 12 * 24 * 3600 * 1000;
+		expect(effectiveAgeMs(content, mtime, now)).toBe(12 * 24 * 3600 * 1000);
 	});
 });

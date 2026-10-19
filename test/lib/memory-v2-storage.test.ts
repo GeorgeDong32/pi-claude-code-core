@@ -339,9 +339,9 @@ describe("V2 Phase 3 (AD1/AD3/AD4) — injection dedupe + policy text", () => {
 
 	it("AD2/AD3/AD4: graded age header; policy no longer teaches manual index edits and points at direct writes", async () => {
 		const now = Date.now();
-		expect(freshnessHeader(now - 2 * 60 * 60 * 1000, now)).toBeNull();
-		expect(freshnessHeader(now - 3 * 24 * 60 * 60 * 1000, now)).toBe("[3 days ago]");
-		expect(freshnessHeader(now - 47 * 24 * 60 * 60 * 1000, now)).toContain("47 days ago");
+		expect(freshnessHeader(now - 2 * 60 * 60 * 1000, undefined, now)).toBeNull();
+		expect(freshnessHeader(now - 3 * 24 * 60 * 60 * 1000, undefined, now)).toBe("[3 days ago]");
+		expect(freshnessHeader(now - 47 * 24 * 60 * 60 * 1000, undefined, now)).toContain("47 days ago");
 		const policy = policyCompact("/home/u/.pi/agent/projects/-Users-x-Coding-repo/memory");
 		expect(policy).not.toContain("Update MEMORY.md");
 		expect(policy).toContain("already exist — write files directly");

@@ -23,7 +23,7 @@
  * exactly these two unstated contracts).
  */
 
-import { existsSync, mkdirSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { Type } from "@earendil-works/pi-ai";
@@ -52,6 +52,17 @@ export const CONSOLIDATE_DIRECTIVE_TYPE = "pi-memory-consolidate";
 export interface ConsolidateWrite {
 	file: string;
 	content: string;
+	/** G2-C11 provenance: the delete targets this write absorbed. */
+	merged_from?: string[];
+}
+
+/** G2-C11: a delete is a bare file name, or a file name plus its per-file
+ * reason (why it disappeared without being merged anywhere). */
+export type ConsolidateDelete = string | { file: string; reason: string };
+
+/** Normalize the union to {file, reason?} entries (old shape: no reason). */
+export function normalizeDeletes(deletes: ConsolidateDelete[]): Array<{ file: string; reason?: string }> {
+	return deletes.map((d) => (typeof d === "string" ? { file: d } : { file: d.file, reason: d.reason }));
 }
 
 /** The directive the model receives (content of the custom message). */
@@ -82,11 +93,71 @@ export interface ConsolidateResult {
 	message: string;
 }
 
+/** Text-level frontmatter field read (G2-C12/C13) — no reparse, no reorder. */
+export function readFrontmatterField(content: string, key: string): string | undefined {
+	if (!content.startsWith("---")) return undefined;
+	const lines = content.split("\n");
+	for (let i = 1; i < lines.length; i++) {
+		if (lines[i]!.trim() === "---") break;
+		const m = new RegExp(`^${key}:\\s*(\\S.*)$`).exec(lines[i]!.trim());
+		if (m) return m[1]!.trim().replace(/^(["'])(.*)\1$/, "$2");
+	}
+	return undefined;
+}
+
+/** Insert created/consolidated_at lines just before the closing --- (G2-C12). */
+export function stampConsolidationFields(content: string, created: string | undefined, consolidatedAt: string | undefined): string {
+	if (!content.startsWith("---")) return content; // invalid shape is the pre-write validator's failure, not ours
+	const lines = content.split("\n");
+	const close = lines.findIndex((l, i) => i > 0 && l.trim() === "---");
+	if (close === -1) return content;
+	const insert: string[] = [];
+	if (created !== undefined && readFrontmatterField(content, "created") === undefined) insert.push(`created: ${created}`);
+	if (consolidatedAt !== undefined && readFrontmatterField(content, "consolidated_at") === undefined) insert.push(`consolidated_at: ${consolidatedAt}`);
+	if (insert.length === 0) return content;
+	lines.splice(close, 0, ...insert);
+	return lines.join("\n");
+}
+
+/** G2-C12: the oldest creation timestamp among the write's sources — the
+ * sources' created field when present, else their mtime (still on disk at
+ * this point: deletes run after writes' planning but BEFORE removal… no —
+ * removal runs after stamping in the same try block, so stats are valid). */
+function earliestCreatedFor(dir: string, w: ConsolidateWrite): string | undefined {
+	const stamps: number[] = [];
+	for (const src of w.merged_from ?? []) {
+		const full = join(dir, src);
+		if (!existsSync(full)) continue;
+		const content = (readOrUndefined(full)) ?? "";
+		const createdField = readFrontmatterField(content, "created");
+		const createdMs = createdField !== undefined ? Date.parse(createdField) : NaN;
+		stamps.push(Number.isFinite(createdMs) ? createdMs : statSync(full).mtimeMs);
+	}
+	if (stamps.length === 0) {
+		// no merged_from: fall back to the overwritten same-name file, if any
+		const existing = join(dir, w.file);
+		if (!existsSync(existing)) return undefined;
+		const content = (readOrUndefined(existing)) ?? "";
+		const createdField = readFrontmatterField(content, "created");
+		return createdField ?? new Date(statSync(existing).mtimeMs).toISOString();
+	}
+	return new Date(Math.min(...stamps)).toISOString();
+}
+
+// tiny sync read helper (try/catch'd)
+function readOrUndefined(file: string): string | undefined {
+	try {
+		return readFileSync(file, "utf8");
+	} catch {
+		return undefined;
+	}
+}
+
 /** Validate + apply a consolidation batch (the tool's core; exported for tests). */
 export function runConsolidation(
 	dir: string,
 	writes: ConsolidateWrite[],
-	deletes: string[],
+	deletes: ConsolidateDelete[],
 	userLayer = false,
 ): ConsolidateResult {
 	const fail = (message: string): ConsolidateResult => ({
@@ -101,7 +172,8 @@ export function runConsolidation(
 
 	// validate every write BEFORE touching anything
 	const safe = safeMemoryFileName; // S2: the engine's one filename predicate
-	const deleteSet = new Set(deletes);
+	const deletesNorm = normalizeDeletes(deletes);
+	const deleteSet = new Set(deletesNorm.map((d) => d.file));
 	const seenWrites = new Set<string>();
 	for (const w of writes) {
 		if (!safe(w.file)) return fail(`unsafe file name "${w.file}" (bare kebab-case name ending in .md, not MEMORY.md)`);
@@ -114,13 +186,23 @@ export function runConsolidation(
 		if (secret) return fail(`${w.file}: looks like a ${secret}`);
 		if (Buffer.byteLength(w.content, "utf8") > MEMORY_FILE_TOTAL_MAX) return fail(`${w.file}: exceeds ${MEMORY_FILE_TOTAL_MAX} bytes`);
 	}
-	for (const d of deletes) {
-		if (!safe(d)) return fail(`unsafe delete target "${d}" (bare kebab-case name ending in .md, not MEMORY.md)`);
-		if (!existsSync(join(dir, d))) {
+	for (const d of deletesNorm) {
+		if (!safe(d.file)) return fail(`unsafe delete target "${d.file}" (bare kebab-case name ending in .md, not MEMORY.md)`);
+		if (!existsSync(join(dir, d.file))) {
 			// write/delete overlap was already rejected above, so no write can
 			// supply this name — existence on disk is the only remaining source
-			return fail(`delete target "${d}" not found (check the "layer" argument — it defaults to "project")`);
+			return fail(`delete target "${d.file}" not found (check the "layer" argument — it defaults to "project")`);
 		}
+		if (d.reason !== undefined && typeof d.reason !== "string") return fail(`delete "${d.file}": reason must be a string`);
+	}
+
+	// G2-C11 provenance: every deleted file must be absorbed by some write's
+	// merged_from or carry its own reason — orphan deletions are rejected.
+	const orphaned = deletesNorm
+		.filter((d) => d.reason === undefined && !writes.some((w) => (w.merged_from ?? []).includes(d.file)))
+		.map((d) => d.file);
+	if (orphaned.length > 0) {
+		return fail(`delete(s) without provenance: ${orphaned.join(", ")} — name them in the absorbing write's merged_from, or give each a per-file reason`);
 	}
 
 	// must-shrink invariant: post state strictly smaller in bytes or files
@@ -141,8 +223,14 @@ export function runConsolidation(
 	if (!lock) return fail("consolidation already in progress (another session holds the lock)");
 
 	try {
-		for (const w of writes) atomicWriteFile(dir, w.file, w.content); // C7: invalidates the scan cache
-		for (const d of deletes) removeDocument(dir, d); // W1: ENOENT-idempotent, cache dropped per delete
+		// G2-C12: stamp created/consolidated_at so a merge never resets fact age.
+		const consolidatedAt = new Date().toISOString();
+		for (const w of writes) {
+			const created = earliestCreatedFor(dir, w);
+			const content = stampConsolidationFields(w.content, created, w.merged_from !== undefined || created !== undefined ? consolidatedAt : undefined);
+			atomicWriteFile(dir, w.file, content); // C7: invalidates the scan cache
+		}
+		for (const d of deletesNorm) removeDocument(dir, d.file); // W1: ENOENT-idempotent, cache dropped per delete
 		reindex(dir);
 		const after = layerStats(dir);
 		return {
@@ -258,6 +346,7 @@ export function registerConsolidation(
 	pi: ExtensionAPI,
 	dirs: (ctx?: { cwd?: string }) => { project: string; user: string },
 	trigger: ConsolidationTrigger,
+	onApplied?: () => void,
 ): void {
 	pi.registerTool(
 		defineTool({
@@ -271,18 +360,23 @@ export function registerConsolidation(
 					Type.Object({
 						file: Type.String({ description: "File name within the layer dir (e.g. merged-prefs.md)" }),
 						content: Type.String({ description: "Complete new file content including frontmatter" }),
+						merged_from: Type.Optional(Type.Array(Type.String(), { description: "Files this write absorbs (provenance for deletes)" })),
 					}),
 					{ description: "Files to write (created or replaced)" },
 				),
-				deletes: Type.Array(Type.String(), { description: "File names to delete" }),
+				deletes: Type.Array(
+					Type.Union([Type.String(), Type.Object({ file: Type.String(), reason: Type.String({ description: "Why this file disappears without being merged" }) })]),
+					{ description: "Files to delete: bare names, or {file, reason}. Every delete must appear in some write's merged_from or carry a reason." },
+				),
 				layer: Type.Optional(Type.String({ description: '"project" (default) or "user"' })),
 			}),
 			async execute(_id, params, _signal, _onUpdate, ctx) {
-				const p = params as { writes: ConsolidateWrite[]; deletes: string[]; layer?: string };
+				const p = params as { writes: ConsolidateWrite[]; deletes: ConsolidateDelete[]; layer?: string };
 				const userLayer = p.layer === "user";
 				const dir = userLayer ? dirs(ctx).user : dirs(ctx).project;
 				const result = runConsolidation(dir, p.writes ?? [], p.deletes ?? [], userLayer);
 				if (!result.ok) throw new Error(result.message);
+				onApplied?.(); // G2-C14: mark the session as having consolidated
 				return {
 					content: [{ type: "text", text: `memory_consolidate: ${result.message}` }],
 					details: { ok: true, written: result.written, deleted: result.deleted },

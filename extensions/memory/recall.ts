@@ -63,6 +63,7 @@ import {
 	RECALL_QUERY_MIN_CHARS,
 	RECALL_SESSION_MAX_BYTES,
 } from "../../lib/context-budget.ts";
+import { effectiveAgeMs } from "./memdir.ts";
 import type { SelectionCandidate, Selector, SelectorOutcome } from "./selector.ts";
 
 export const RECALL_CUSTOM_TYPE = "pi-memory-recall";
@@ -139,9 +140,12 @@ export function truncateUtf8(text: string, maxBytes: number): { text: string; tr
 }
 
 /** Freshness header (AD2/OPT-3, migrated from selection.ts): graded age;
- * only genuinely stale memories carry the verify hint. */
-export function freshnessHeader(mtimeMs: number, now = Date.now()): string | null {
-	const ageDays = Math.floor((now - mtimeMs) / (24 * 60 * 60 * 1000));
+ * only genuinely stale memories carry the verify hint.
+ * G2-C13: age follows effectiveAgeMs (created-aware, consolidation-stamp
+ * guarded) — the manifest display and this hint share the one rule. */
+export function freshnessHeader(mtimeMs: number, content: string | undefined, now = Date.now()): string | null {
+	const ageMs = content === undefined ? now - mtimeMs : effectiveAgeMs(content, mtimeMs, now);
+	const ageDays = Math.floor(ageMs / (24 * 60 * 60 * 1000));
 	if (ageDays < 1) return null;
 	if (ageDays <= 7) return `[${ageDays} day${ageDays === 1 ? "" : "s"} ago]`;
 	return `[${ageDays} days ago — verify before relying on it]`;
@@ -257,7 +261,7 @@ export function renderRecallBlock(
 	let used = 0;
 	for (const file of files) {
 		if (sections.length >= RECALL_MAX_FILES) break;
-		const freshness = freshnessHeader(file.mtimeMs, now);
+		const freshness = freshnessHeader(file.mtimeMs, file.body, now);
 		const cut = truncateUtf8(file.body, RECALL_FILE_MAX_BYTES);
 		const note = cut.truncated ? `\n\n> truncated at 4KB — read the full file: ${file.absPath}` : "";
 		const section = `## ${file.title} (${file.key})${freshness ? `\n${freshness}` : ""}\n\n${cut.text}${note}`;
