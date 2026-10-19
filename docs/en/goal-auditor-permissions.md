@@ -5,7 +5,7 @@
 
 ## Status (verifiable at file:line)
 
-- **The auditor session loads ZERO extensions**: `extensions/goal/goal-auditor.ts:183`
+- **The auditor session loads ZERO extensions**: `extensions/goal/goal-auditor.ts:214`
   `getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() })`.
 - permission-modes IS an extension (this package's `extensions/modes/`): its
   allow/deny/ask rules, tool_call gate, and rule families all load through the

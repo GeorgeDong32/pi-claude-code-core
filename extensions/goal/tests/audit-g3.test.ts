@@ -4,9 +4,9 @@
  * [C18] parseBlockers: conformant / explicit-empty / missing (legacy)
  * [C19] auditorRejectionBlock: list preferred, whole items, budget truncation
  *       notes the remainder, missing block falls back to the 300-char prefix
- * [C20] missingCriteriaLines: which [Cn] the objective lists but the summary
- *       lacks (non-blocking reminder contract; here: the pure predicate)
- * [C21] the 3rd-attempt notice threshold constant
+ * [C20]/[C21] live in audit-g3-flow.test.ts as REAL integration tests
+ * (driving update_goal); the earlier predicate/source-regex pins here were
+ * redundant and removed on audit review.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -62,31 +62,4 @@ test("[C19] legacy report without a block falls back to the 300-char prefix", ()
 	const block = auditorRejectionBlock(`${long}\n<disapproved/>`, "g1");
 	assert.ok(block.includes("x".repeat(300)));
 	assert.ok(!block.includes("x".repeat(301)));
-});
-
-test("[C20] missingCriteriaLines — pure predicate for the reminder", () => {
-	// re-implemented inline to avoid exporting internals: the production one
-	// lives in goal.ts next to update_goal; this pins the CONTRACT shape.
-	const objective = "Do [C1] and [C2]; also [C3].";
-	const full = "covered [C1] and [C2], plus [C3]";
-	const missing = "only [C1] here";
-	const ids = (text: string): Set<string> => new Set([...text.matchAll(/\[(C\d+)\]/g)].map((m) => m[1]!));
-	const missingLines = (obj: string, summary: string): string[] => {
-		const want = ids(obj);
-		if (want.size === 0) return [];
-		const have = ids(summary);
-		return [...want].filter((id) => !have.has(id));
-	};
-	assert.deepEqual(missingLines(objective, full), []);
-	assert.deepEqual(missingLines(objective, missing), ["C2", "C3"]);
-	assert.deepEqual(missingLines("no numbered criteria here", "whatever"), [], "objective without [Cn] → no reminder");
-});
-
-test("[C21] the third-attempt notice threshold is the named constant 3", async () => {
-	// The constant lives inside the extension factory closure; pin the spec
-	// value through the goal module's observable contract: the spec text.
-	// (Structural pin: the factory references AUDIT_ATTEMPT_NOTICE === 3.)
-	const src = await import("node:fs").then((fs) => fs.readFileSync(new URL("../goal.ts", import.meta.url), "utf8"));
-	assert.match(src, /AUDIT_ATTEMPT_NOTICE = 3/);
-	assert.match(src, /auditAttemptNo === AUDIT_ATTEMPT_NOTICE/);
 });

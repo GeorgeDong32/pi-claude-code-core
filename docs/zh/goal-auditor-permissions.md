@@ -5,7 +5,7 @@
 
 ## 现状（file:line 可查证）
 
-- **auditor 会话加载零扩展**：`extensions/goal/goal-auditor.ts:183`
+- **auditor 会话加载零扩展**：`extensions/goal/goal-auditor.ts:214`
   `getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() })`。
 - permission-modes 是一个**扩展**（本包 `extensions/modes/`），其
   allow/deny/ask 规则、tool_call gate、rule families 全部经由扩展系统装

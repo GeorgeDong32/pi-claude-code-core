@@ -496,6 +496,18 @@ describe("G2-C13 unified age (effectiveAgeMs)", () => {
 		const age = effectiveAgeMs(content, mtime, now);
 		expect(Math.abs(age - 40 * 24 * 3600 * 1000)).toBeLessThan(1000);
 	});
+	it("selector manifestRow is created-aware (audit nit 3): a consolidated file shows its created age, not \"new\"", async () => {
+		const { manifestRow } = await import("../../extensions/memory/selector.ts");
+		const created = new Date(now - 40 * 24 * 3600 * 1000).toISOString();
+		const at = new Date(now - 5 * 24 * 3600 * 1000).toISOString();
+		const content = `---\nname: x\ndescription: d\nmetadata:\n  type: project\ncreated: ${created}\nconsolidated_at: ${at}\n---\n\nbody`;
+		const candidate = { key: "memory/x.md", file: "x.md", title: "x", description: "d", type: "project", layer: "project" as const, mtimeMs: now - 5 * 24 * 3600 * 1000, absPath: "/x" };
+		const row = manifestRow(candidate, now, content);
+		expect(row).toContain("(40d)");
+		// without content the same candidate would read as 5d — pin the difference
+		expect(manifestRow(candidate, now)).toContain("(5d)");
+	});
+
 	it("mtime wins when the file was touched after consolidation (hand edit)", async () => {
 		const { effectiveAgeMs } = await import("../../extensions/memory/memdir.ts");
 		const created = new Date(now - 40 * 24 * 3600 * 1000).toISOString();
