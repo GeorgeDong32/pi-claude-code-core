@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Changed
+- bg-shell `/tasks` transient notices (empty list, kill outcomes) now ride the shared notification entry (bus tail queue + cctui negotiation) instead of a bare host notify — the same consolidation as the C2 batch, closing its last bypass.
+- `modes`: the working-stats presentation slice and the auto-mode tier-3 engine moved out of the 2k-line factory into `stats-presenter.ts` / `auto-engine.ts` (architecture review C4, batches 1–2; behavior unchanged, guarded by the full modes suite).
+- `review`: the empty-diff guard now runs before the reviewer workspace clone, saving a full depth-50 clone for empty diffs.
+
+### Fixed
+- memory docs no longer point tool_call interception at the unwired legacy `guardMemoryWrites` entry; the production guard is `guardMemoryToolCall` (G1 verdicts + secret probe over `edits[]`).
+- `modes` permission config reads ride the shared `readJsonCached` primitive (write-side invalidation included).
+- `recall-aggregate` delivered-turn metric relabeled as "landing position" (it measured the absolute user-turn index, not the distance from the trigger).
+
+### Internal
+- goal auditor `BLOCKERS:` marker is a single shared constant between the prompt writer and the parser.
+- `SelectionCandidate` declares `body?` explicitly; the selector's manifest row no longer inline-casts.
+
 ### Added (entropy-control G3: audit light improvements & recall data — docs/zh/entropy-control-spec.md)
 
 - **auditor permission status documented [C17]**: docs/{zh,en}/goal-auditor-permissions.md — the auditor session loads zero extensions (goal-auditor.ts:183), so permission-modes rules do not apply; residual risk is prompt-bound bash; the read-only profile is deferred with reasons and revival conditions.

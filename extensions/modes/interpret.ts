@@ -11,7 +11,7 @@
  *  - promptApproval: plain user prompt (label only).
  *  - firstSeen: the family first-seen dialog (allow once / session / always).
  *  - editWriteChoice: the ask-mode 5-choice dialog + applyApprovalDecision.
- *  - classifyTier3: the classifier seam (approveAutoTier3 — its retry loop
+ *  - classifyTier3: the classifier seam (auto-engine.ts approveTier3 — its retry loop
  *    gets clock/signal injection in Step 3).
  *  - recordAutoAllow: the old allowToolCall() side effect — resets the
  *    classifier denial state on every auto-ladder allow.

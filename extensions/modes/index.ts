@@ -34,39 +34,27 @@ import { isMcpShapedCall, knownServersSetFromEnv } from "../../lib/mcp-shape.ts"
 import { readFileSync } from "node:fs"
 import { homedir } from "node:os";
 import path from "node:path";
-import {
-  classifyToolCall,
-  invalidateClassifierVerdictCache,
-  readAgentsMdForClassifier,
-  type ClassifierSessionContext,
-} from "./classifier-client.ts";
-import {
-  buildClassifierUnavailableMessage,
-  buildYoloRejectionMessage,
-} from "./classifier-messages.ts";
+
+
 import {
   loadPermissionModesConfig,
   resolveAutoModeConfig,
   resolveClassifierConfig,
 } from "./config.ts";
+import { invalidateClassifierVerdictCache } from "./classifier-client.ts";
+import { createStatsPresenter } from "./stats-presenter.ts";
+import { createAutoEngine } from "./auto-engine.ts";
 import {
   restoreDangerousPermissionRules,
   stripDangerousPermissionRules,
 } from "./dangerous-permissions.ts";
-import {
-  createDenialTrackingState,
-  recordClassifierDenial,
-  recordClassifierSuccess,
-  shouldFallbackToPrompting,
-  type DenialTrackingState,
-} from "./denial-tracking.ts";
+
 import {
   buildInjectionWarningBlock,
   scanBranchForInjectionSignals,
   TOOL_OUTPUT_INJECTION_WARNING,
 } from "./injection-probe.ts";
 import {
-  readBranchEntries,
   readBranchMessages,
   readCustomEntryData,
   readGitBranch,
@@ -80,7 +68,6 @@ import {
   accumulateBranchStats,
   emptyBranchStatsState,
 } from "./branch-stats.ts";
-import { createWorkingStats, type WorkingStatsCache, type WorkingStatsHost } from "./working-stats.ts";
 import {
   addPermissionRule,
   loadMergedPermissionRules,
@@ -93,8 +80,7 @@ import {
   type PermissionRule,
   type PermissionVerdict,
 } from "./permissions.ts";
-import { checkAutoRisk } from "./auto-risk.ts";
-import { classifyBashTiers, isAutoFallbackBash, isSafeCommand } from "./bash-analysis.ts";
+import { classifyBashTiers, isSafeCommand } from "./bash-analysis.ts";
 import { PermissionMode, PlanPhase, filterSkillsFromPrompt, injectModePrompt, resolveModePrompt } from "./mode-prompt.ts";
 import { planHardBlock } from "./plan-gate.ts";
 import {
@@ -103,11 +89,9 @@ import {
 	type ToolCallRequest,
 } from "./adjudicate.ts";
 import { interpretDecision } from "./interpret.ts";
-import { runClassifierAttempts } from "./classifier-retry.ts";
 import { OutsideWriteSnapshot, listTrackedOutsideWrites, popTrackedOutsideWrite, restoreOutsideWrite, trackOutsideWrite } from "./outside-writes.ts";
 import { commandReferencesSensitivePath, findProjectRoot, isOutsideCwd, isSensitivePath } from "./path-safety.ts";
 import { TodoItem, ensurePlanFile, extractPlanSection, extractTodoItems, filterSubstantivePlanItems, getPlanFilePath, hashPlan, isPlanFilePath, markCompletedSteps, readPlanFile, resolveWorkspacePath, shouldSyncAssistantPlanToFile, writePlanFile } from "./plan.ts";
-import { formatCount } from "./ui/format.ts";
 import {
   runPlanApprovalDialog,
 } from "./ui/plan-approval-dialog.ts";
@@ -166,33 +150,6 @@ export interface PmCapability {
 	usage?: CoreSnapshot["modes"]["usage"] | null;
 }
 
-/** Sanitized raw usage (P2-4 §4.1): finite non-negative only; a missing or
- * invalid REQUIRED cumulative field omits the whole object; optional ctx
- * fields are independently absent when unknown — never faked as 0. */
-function sanitizeUsageNumbers(
-	stats: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number },
-	tps: number,
-	usage: { tokens: number | null; contextWindow: number; percent: number | null } | undefined,
-): NonNullable<CoreSnapshot["modes"]["usage"]> | undefined {
-	for (const n of [stats.input, stats.output, stats.cacheRead, stats.cacheWrite, stats.cost]) {
-		if (!Number.isFinite(n) || n < 0) return undefined;
-	}
-	const out: NonNullable<CoreSnapshot["modes"]["usage"]> = {
-		input: stats.input,
-		output: stats.output,
-		cacheRead: stats.cacheRead,
-		cacheWrite: stats.cacheWrite,
-		cost: stats.cost,
-	};
-	if (Number.isFinite(tps) && tps > 0) out.tps = tps;
-	if (usage) {
-		if (usage.tokens != null && Number.isFinite(usage.tokens) && usage.tokens >= 0) out.ctxTokens = usage.tokens;
-		if (usage.percent != null && Number.isFinite(usage.percent) && usage.percent >= 0) out.ctxPercent = usage.percent;
-		if (Number.isFinite(usage.contextWindow) && usage.contextWindow > 0) out.contextWindow = usage.contextWindow;
-	}
-	return out;
-}
-
 export default function permissionModesExtension(pi: ExtensionAPI): void {
   // ---- state -------------------------------------------------------------
   // DC5: the fallback UI adapter — the only writer of pi's working-message
@@ -218,11 +175,19 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
   let basePermissionRules: PermissionRule[] = [];
   let strippedDangerousRules: PermissionRule[] = [];
   let mergedPermissionRules: PermissionRule[] = [];
-  let classifierDenialState: DenialTrackingState = createDenialTrackingState();
-  const MAX_CLASSIFIER_FAILURES = 3;
   let forwardingPoller: ForwardingPoller | undefined;
   /** Survives poller restarts so the same inbox request is not double-prompted. */
   const forwardingClaimedIds = new Set<string>();
+
+  const autoEngine = createAutoEngine({
+    getClassifierConfig: () => classifierConfig,
+    getAutoModeConfig: () => autoModeConfig,
+    getMode: () => currentMode,
+    getFusionSchemaHint: fusionSchemaHint,
+    promptWithPermissionOptions,
+    uiNotify,
+    trackOutsideWrite,
+  });
 
   function applyAutoModePermissionStrip(): void {
     if (currentMode === "auto") {
@@ -265,9 +230,6 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
   registerProfileSurfaces(pi, profiles, profileWiring);
 
   // streaming stats (for the working-indicator readout)
-  let streamStart = 0;
-  let outputAtStart = 0;
-  let lastTps = 0;
   let gitBranch = "";
 
   // ---- small helpers -----------------------------------------------------
@@ -350,7 +312,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
 
     const trackOutsideWrite = (): void => {
       if (trackWrite && (tool === "edit" || tool === "write")) {
-        trackOutsideWriteIfNeeded(ctx, tool, String(input.path ?? ""));
+        autoEngine.trackOutsideWriteIfNeeded(ctx, tool, String(input.path ?? ""));
       }
     };
 
@@ -501,247 +463,10 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     return applyApprovalDecision(ctx, tool, input, decision, { category });
   }
 
-  function classifierErrorMessage(err: unknown): string {
-    return err instanceof Error ? err.message : String(err);
-  }
-
-  function logClassifierUnavailable(err: unknown, attempt: number): void {
-    const debug = process.env.PERMISSION_MODES_CLASSIFIER_DEBUG === "1";
-    const message = classifierErrorMessage(err);
-    const line = `[permission-modes] Classifier unavailable (${attempt}/${MAX_CLASSIFIER_FAILURES}): ${message}`;
-    if (debug) {
-      console.warn(line);
-      if (err instanceof Error && err.stack) console.debug(err.stack);
-      return;
-    }
-    if (attempt >= MAX_CLASSIFIER_FAILURES) {
-      console.warn(line);
-    }
-  }
-
-  type LocalAutoTier3Decision =
-    | { allow: true }
-    | { allow: false; reason: string; category: string };
-
-  function resolveLocalAutoTier3(
-    tool: string,
-    input: Record<string, unknown>,
-    riskInput: {
-      tool: string;
-      command?: string;
-      path?: string;
-    },
-    cwd: string,
-  ): LocalAutoTier3Decision {
-    const risk = checkAutoRisk(riskInput, cwd);
-    if (risk.match) {
-      return { allow: false, reason: risk.reason, category: risk.category };
-    }
-
-    // powershell runs the bash tier ladder under bash semantics (conservative
-    // approximation for PowerShell verbs — plan2 B1).
-    const isKnownTier3 =
-      tool === "bash" ||
-      tool === "powershell" ||
-      tool === "edit" ||
-      tool === "write";
-    if (!isKnownTier3) {
-      return {
-        allow: false,
-        reason: `Tool "${tool}" is not auto-approved in auto mode. Enable classifier or switch to bypass.`,
-        category: "unknown-tool",
-      };
-    }
-    if (tool === "bash" || tool === "powershell") {
-      const cmd = String(input.command ?? "");
-      if (cmd && !isAutoFallbackBash(cmd)) {
-        return {
-          allow: false,
-          reason: `Mutating ${tool} in auto mode: ${cmd}`,
-          category: "mutating-bash",
-        };
-      }
-    }
-    return { allow: true };
-  }
-
-  function finishAutoTier3Allow(
-    ctx: ExtensionContext,
-    tool: string,
-    input: Record<string, unknown>,
-  ): undefined {
-    if (tool === "edit" || tool === "write") {
-      trackOutsideWriteIfNeeded(ctx, tool, String(input.path ?? ""));
-    }
-    return undefined;
-  }
-
-  function classifierDenyBlock(tool: string, reason: string): Block {
-    return { block: true, reason: buildYoloRejectionMessage(reason) };
-  }
-
-  async function approveAutoTier3(
-    ctx: ExtensionContext,
-    tool: string,
-    input: Record<string, unknown>,
-    riskInput: {
-      tool: string;
-      command?: string;
-      path?: string;
-    },
-  ): Promise<Block> {
-    const reviewHint = describeTier3Review(tool, input, ctx.cwd);
-
-    if (classifierConfig.enabled) {
-      // Single visible retry layer (plan2 B2): the classifier call disables
-      // SDK-level retries (maxRetries: 0) and enforces timeoutMs per attempt,
-      // so the worst-case wait here is timeoutMs × MAX_CLASSIFIER_FAILURES.
-      // P2-1 Step 3: the retry mechanism lives in classifier-retry.ts; only
-      // the verdict business (denial accounting / fallback / fail-closed)
-      // stays in this gate.
-      const outcome = await runClassifierAttempts({
-        attempts: MAX_CLASSIFIER_FAILURES,
-        onRetry: (n, err) => {
-          if (process.env.PERMISSION_MODES_CLASSIFIER_DEBUG === "1") {
-            console.debug(
-              `[permission-modes] Classifier retry (${n}/${MAX_CLASSIFIER_FAILURES}): ${classifierErrorMessage(err)}`,
-            );
-          }
-        },
-        attempt: async () => {
-          const verdict = await classifyToolCall({
-            modelRef: classifierConfig.model,
-            session: collectClassifierSessionContext(ctx, reviewHint),
-            pendingTool: { name: tool, input },
-            registry: ctx.modelRegistry,
-            autoMode: autoModeConfig,
-            timeoutMs: classifierConfig.timeoutMs,
-            jsonlTranscript: classifierConfig.jsonlTranscript,
-            stage: classifierConfig.stage,
-            includeAgentsMd: classifierConfig.includeAgentsMd,
-            signal: ctx.signal,
-            debug: process.env.PERMISSION_MODES_CLASSIFIER_DEBUG === "1",
-          });
-          if (!verdict.allow) {
-            classifierDenialState = recordClassifierDenial(classifierDenialState);
-            if (shouldFallbackToPrompting(classifierDenialState)) {
-              return promptWithPermissionOptions(
-                ctx,
-                tool,
-                input,
-                verdict.reason || "Blocked by auto classifier (denial limit)",
-                "classifier-limit",
-              );
-            }
-            return classifierDenyBlock(
-              tool,
-              verdict.reason || "Blocked by auto classifier",
-            );
-          }
-          classifierDenialState = recordClassifierSuccess(classifierDenialState);
-          return finishAutoTier3Allow(ctx, tool, input);
-        },
-      });
-      if (outcome.ok) {
-        return outcome.value as Block;
-      }
-      logClassifierUnavailable(outcome.error, outcome.attempts);
-      if (classifierConfig.failClosed !== false) {
-        return classifierDenyBlock(
-          tool,
-          buildClassifierUnavailableMessage(tool, classifierConfig.model),
-        );
-      }
-      // fail-open: fall through to the local tier-3 fallback below
-    }
-
-    const local = resolveLocalAutoTier3(tool, input, riskInput, ctx.cwd);
-    if (!local.allow) {
-      return promptWithPermissionOptions(ctx, tool, input, local.reason, local.category);
-    }
-    classifierDenialState = recordClassifierSuccess(classifierDenialState);
-    return finishAutoTier3Allow(ctx, tool, input);
-  }
-
-  function trackOutsideWriteIfNeeded(
-    ctx: ExtensionContext,
-    tool: "edit" | "write",
-    pathStr: string,
-  ): void {
-    if (!pathStr || !isOutsideCwd(pathStr, ctx.cwd)) return;
-    const resolvedPath = resolveWorkspacePath(pathStr, ctx.cwd);
-    let backupContent: string | null = null;
-    try {
-      backupContent = readFileSync(resolvedPath, "utf-8");
-    } catch {
-      backupContent = null;
-    }
-    trackOutsideWrite(ctx.cwd, {
-      timestamp: new Date().toISOString(),
-      originalPath: resolvedPath,
-      toolName: tool,
-      backupContent,
-    });
-    if (ctx.hasUI) {
-      uiNotify(ctx, 
-        `📝 tracked outside-cwd ${tool}: ${shortenPath(resolvedPath)}`,
-        "info",
-      );
-    }
-  }
-
-  function describeTier3Review(
-    tool: string,
-    input: Record<string, unknown>,
-    cwd: string,
-  ): string {
-    if (tool === "bash" || tool === "powershell") {
-      const cmd = String(input.command ?? "");
-      if (cmd && !isSafeCommand(cmd)) {
-        return "Bash did not pass read-only allowlist; may include writes, installs, or unknown binaries.";
-      }
-      return "Bash requires tier-3 review.";
-    }
-    if (tool === "edit" || tool === "write") {
-      const pathStr = String(input.path ?? "");
-      if (pathStr && isOutsideCwd(pathStr, cwd)) {
-        return `Write/edit outside working directory (${cwd}).`;
-      }
-      return "File write/edit requires tier-3 review.";
-    }
-    const embedded = extractEmbeddedCommandInputs(tool, input);
-    if (embedded.length === 0) {
-      return `Tool "${tool}" is not auto-approved without classifier.`;
-    }
-    return (
-      `Tool "${tool}" is not auto-approved without classifier.\n` +
-      `  fusion tool carries command not individually approved: ${embedded
-        .map((c) => c.command)
-        .join(" && ")}${fusionSchemaHint(tool)}`
-    );
-  }
-
-  function collectClassifierSessionContext(
-    ctx: ExtensionContext,
-    reviewHint?: string,
-  ): ClassifierSessionContext {
-    let branch: ClassifierSessionContext["branch"] = [];
-    try {
-      branch = readBranchEntries(ctx.sessionManager);
-    } catch {
-      // classifier still runs with pending action only
-    }
-    const includeAgentsMd = classifierConfig.includeAgentsMd !== false;
-    return {
-      cwd: ctx.cwd,
-      mode: currentMode,
-      branch,
-      reviewHint,
-      agentsMd: includeAgentsMd
-        ? readAgentsMdForClassifier(ctx.cwd)
-        : null,
-    };
-  }
+  // C4 batch 2: the auto-mode tier-3 engine (local ladder + classifier
+  // invocation + denial accounting + tier-3 review descriptions) lives in
+  // auto-engine.ts now; the interpret ports below reach it through the
+  // returned surface.
 
   // ---- tool gating -------------------------------------------------------
   function applyToolRestrictions(): void {
@@ -783,7 +508,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     planExecuting = false;
 
     if (mode === "auto") {
-      classifierDenialState = createDenialTrackingState();
+      autoEngine.resetDenialState();
       applyAutoModePermissionStrip();
     } else if (prev === "auto") {
       applyAutoModePermissionStrip();
@@ -817,60 +542,14 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
   }
 
   // ---- UI: status, footer, plan widget, working stats --------------------
-
-  // Streaming chunks arrive while the branch is frozen (pi appends entries
-  // on message_end), so per-chunk work is O(new entries), not O(session
-  // length); a moved prefix (navigate/fork/switch) forces a full recompute
-  // (plan A1, property-tested in branch-stats.test.ts).
-  // AR1005-ST: the working-stats cache owns the snapshot + host-read
-  // invalidation (cheap key: sessionManager instance + sessionId + leafId).
-  const workingStats = createWorkingStats();
-
-  /** AR1005-ST: ONE host shape for every snapshot call site — the usage
-   * capability must be consistently present (a capability-less forced read
-   * would mark usage fresh with no value and hide the ctx% line on later
-   * cache hits). */
-  function statsHost(ctx: ExtensionContext): WorkingStatsHost {
-    return { sessionManager: ctx.sessionManager, getContextUsage: ctx.getContextUsage };
-  }
-
-  function computeStats(ctx: ExtensionContext): {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    cost: number;
-  } {
-    // AR1005-ST: the cache module owns failure handling (a failed read
-    // returns the last totals and stays uncached); branchStatsState is gone.
-    return workingStats.snapshot(statsHost(ctx)).stats;
-  }
-
-  /** P2-4 §4.1: the ONE derivation both representations share — the raw
-   * numbers (modes.usage) and the formatted string come from the same
-   * working-stats snapshot call. */
-  function workingStatsEntry(ctx: ExtensionContext, opts?: { forceUsage?: boolean }): {
-    stats: ReturnType<WorkingStatsCache["snapshot"]>["stats"];
-    usage: ReturnType<WorkingStatsCache["snapshot"]>["usage"];
-    tps: number;
-  } {
-    const entry = workingStats.snapshot(statsHost(ctx), opts);
-    return { stats: entry.stats, usage: entry.usage, tps: lastTps };
-  }
-
-  function workingStatsParts(entry: { stats: ReturnType<WorkingStatsCache["snapshot"]>["stats"]; usage: ReturnType<WorkingStatsCache["snapshot"]>["usage"]; tps: number }): string[] {
-    const s = entry.stats;
-    const parts = [`↑${formatCount(s.input)}`, `↓${formatCount(s.output)}`];
-    if (s.cacheRead) parts.push(`R${formatCount(s.cacheRead)}`);
-    if (entry.tps > 0) parts.push(`⚡${Math.round(entry.tps)} tok/s`);
-    parts.push(`$${s.cost.toFixed(3)}`);
-    const usage = entry.usage;
-    if (usage && usage.percent != null) {
-      parts.push(`${Math.round(usage.percent)}% ctx`);
-    }
-    return parts;
-  }
-
+  // C4 batch 1: the working-stats slice (cache + streaming counters +
+  // working-message refresh) lives in stats-presenter.ts now; index keeps
+  // only the capability channel below.
+  const statsPresenter = createStatsPresenter({
+    getFallbackAdapter: () => fallbackAdapter,
+    publishCapability,
+  });
+  const { refreshWorkingMessage } = statsPresenter;
   // ---- Capability channel to pi-claude-code-tui (plan B7) ------------------
   // One typed, versioned namespace replaces the untyped globals; the legacy
   // __pmWorkingStats key stays published for one compatibility cycle (older
@@ -895,18 +574,6 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
         meta: prev.meta ?? modeMetaData(),
       },
     });
-  }
-
-  function refreshWorkingMessage(ctx: ExtensionContext, opts?: { forceUsage?: boolean }): void {
-    if (!ctx.hasUI) return;
-    // DC5 flip: logic always publishes (snapshot is always-full); the
-    // working-message slot write belongs to the fallback adapter, which
-    // yields to a live CC-TUI at its own write point. With cctui active
-    // its status row owns the working line — publishing alone is correct.
-    const entry = workingStatsEntry(ctx, opts);
-    const stats = workingStatsParts(entry).join(" · ");
-    publishCapability({ workingStats: stats, usage: sanitizeUsageNumbers(entry.stats, entry.tps, entry.usage) });
-    fallbackAdapter.onSnapshot(coreBus().snapshot());
   }
 
   // P0-1 §4.2's applyPermissionVerdict was absorbed by P2-1: the allow/ask
@@ -1398,7 +1065,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
 
   function allowToolCall(): undefined {
     if (currentMode === "auto") {
-      classifierDenialState = recordClassifierSuccess(classifierDenialState);
+      autoEngine.noteAllowed();
     }
     return undefined;
   }
@@ -1498,7 +1165,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
         !!command
         && !!autoModeConfig?.soft_deny?.length
         && autoModeConfig.soft_deny.some((p) => matchAutoModePattern(command, p)),
-      tier3ReviewLabel: describeTier3Review(tool, input, ctx.cwd),
+      tier3ReviewLabel: autoEngine.describeTier3Review(tool, input, ctx.cwd),
     };
   }
 
@@ -1548,20 +1215,16 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
             firstSeenPrompt(c.ctx as ExtensionContext, canonicalId, c.tool, c.input, suggestedRule),
           editWriteChoice: (c, path) => editWriteChoicePrompt(c, path),
           classifyTier3: (c, tier3) =>
-            approveAutoTier3(c.ctx as ExtensionContext, c.tool, c.input, {
+            autoEngine.approveTier3(c.ctx as ExtensionContext, c.tool, c.input, {
               tool: c.tool,
               command: tier3.command,
               path: tier3.path,
             }),
-          recordAutoAllow: () => {
-            if (currentMode === "auto") {
-              classifierDenialState = recordClassifierSuccess(classifierDenialState);
-            }
-          },
+          recordAutoAllow: () => autoEngine.noteAllowed(),
           trackOutsideWrite: (c) => {
             const ctx = c.ctx as ExtensionContext;
             if (c.tool === "edit" || c.tool === "write") {
-              trackOutsideWriteIfNeeded(ctx, c.tool, String(c.input.path ?? ""));
+              autoEngine.trackOutsideWriteIfNeeded(ctx, c.tool, String(c.input.path ?? ""));
             }
           },
           noteFamilyAdjudication: (c, outcome) => noteFamilyAdjudication(c.tool, c.input, outcome),
@@ -1705,26 +1368,20 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
 
   // ---- streaming-stat working message -----------------------------------
   pi.on("turn_start", async (_event, ctx) => {
-    streamStart = Date.now();
-    // AR1005-ST: ONE forced read feeds both the TPS baseline and the
-    // display (the refresh that follows is cache-hot — zero extra reads).
-    outputAtStart = workingStats.snapshot(statsHost(ctx), { force: true }).stats.output;
-    refreshWorkingMessage(ctx);
+    statsPresenter.onTurnStart(ctx);
   });
   pi.on("before_provider_request", async (_event, ctx) =>
-    // ST: force ONE context-usage refresh; the branch sum reuses the cache
-    // (no unconditional re-sum of an unchanged branch).
-    refreshWorkingMessage(ctx, { forceUsage: true }),
+    statsPresenter.onBeforeProviderRequest(ctx),
   );
   pi.on("message_update", async (_event, ctx) => refreshWorkingMessage(ctx));
   pi.on("message_end", async (_event, _ctx) => {
     // ST: fired BEFORE the host appends the entry — the cached snapshot must
     // not be mistaken for the new branch state (the leafId key also moves).
-    workingStats.markDirty();
+    statsPresenter.markDirty();
   });
   pi.on("model_select", async (_event, _ctx) => {
     // ST: observable model change invalidates the usage snapshot.
-    workingStats.onModelChange();
+    statsPresenter.onModelChange();
   });
 
   // ---- turn_end: tps + plan-step tracking --------------------------------
@@ -1736,12 +1393,8 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     }
 
     // ST: ONE forced committed-final read feeds the TPS math AND the
-    // display refresh (the old handler read the branch twice per turn_end).
-    const stats = workingStats.snapshot(statsHost(ctx), { force: true }).stats;
-    const elapsed = Math.max((Date.now() - streamStart) / 1000, 0.001);
-    const delta = stats.output - outputAtStart;
-    if (delta > 0) lastTps = delta / elapsed;
-    refreshWorkingMessage(ctx);
+    // display refresh — the stats segment lives in the presenter now.
+    statsPresenter.onTurnEndStats(ctx);
 
     const msg = event.message;
     if (!isAssistant(msg)) return;
@@ -1840,7 +1493,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_compact", async (_event, ctx) => {
-    workingStats.invalidate(); // ST: compaction rewrites the branch
+    statsPresenter.invalidate(); // ST: compaction rewrites the branch
     if (currentMode === "bypass") {
       needsBypassSecurityReminder = true;
     }
@@ -1920,7 +1573,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     classifierConfig = resolveClassifierConfig(loadPermissionModesConfig());
     autoModeConfig = resolveAutoModeConfig(loadPermissionModesConfig());
     if (currentMode === "auto") {
-      classifierDenialState = createDenialTrackingState();
+      autoEngine.resetDenialState();
     }
     reloadMergedPermissionRules(ctx.cwd);
 
@@ -2053,11 +1706,11 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
   pi.on("session_start", onSessionStart);
   pi.on("session_tree", onSessionStart);
   pi.on("session_start", () => {
-    workingStats.reset(); // ST: re-base on (re)load
+    statsPresenter.reset(); // ST: re-base on (re)load
     publishCapability({ usage: null }); // XPKG-08: old-session numbers never leak into a new one
   });
   pi.on("session_tree", () => {
-    workingStats.reset();
+    statsPresenter.reset();
     publishCapability({ usage: null });
   });
   pi.on("session_start", (_event, ctx: ExtensionContext) => {
@@ -2067,7 +1720,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     void ctx;
   });
   pi.on("session_shutdown", () => {
-    workingStats.reset(); // ST: clear the private cache (legacy keys unaffected)
+    statsPresenter.reset(); // ST: clear the private cache (legacy keys unaffected)
     publishCapability({ usage: null }); // XPKG-08: shutdown clears the published numbers
     fallbackAdapter.shutdown();
     forwardingPoller?.stop();

@@ -116,7 +116,7 @@ export type Decision =
 	| { kind: "deny"; reason: string }
 	| { kind: "prompt"; flavor: PromptFlavor; label: string; category?: string; path?: string }
 	| { kind: "firstSeen"; canonicalId: string; suggestedRule: string }
-	/** Auto tier-3: the classifier seam (approveAutoTier3 until Step 3). */
+	/** Auto tier-3: the classifier seam (auto-engine.ts approveTier3). */
 	| { kind: "classify"; tier3: { command?: string; path?: string } };
 
 /** The decide function — pure, total, order fixed by the table above. */
