@@ -118,6 +118,11 @@ export function snapshotLayer(memoryDir: string, root: string, now = () => new D
 			}
 		}
 		const landed = allFiles.filter((f) => existsSync(join(dir, f)));
+		// Hash-vs-landed caveat: contentHash covers the pre-copy view (hashLayer
+		// above); files[] records what actually landed. A file vanishing mid-copy
+		// leaves the manifest self-inconsistent on that entry — accepted under
+		// the fail-open design; the restore hint treats missing files as
+		// best-effort omissions, never as corruption.
 		const manifest: SnapshotManifest = {
 			at: ts.toISOString(),
 			contentHash: hash,

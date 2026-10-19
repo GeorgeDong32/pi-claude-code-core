@@ -3,8 +3,7 @@
  * Pure fs helpers — no pi dependency.
  */
 
-import { statSync } from "node:fs"
-import { readJson } from "../../lib/settings.ts"
+import { readJsonCached } from "../../lib/settings.ts"
 import { homedir } from "node:os"
 import { join } from "node:path"
 
@@ -103,26 +102,21 @@ export function resolveAutoModeConfig(
 
 // (path, mtimeMs) cache (plan2 A1c): the config is read twice per turn
 // (classifier + autoMode resolution) and again through the global-permissions
-// loader; it changes rarely, so re-read only when the mtime moves (same
-// pattern as the classifier AGENTS.md cache). Callers treat the result as
+// loader; it changes rarely, so re-read only when the mtime moves. Since the
+// C1 hot-path batch this rides the shared readJsonCached primitive
+// (lib/settings.ts) — whose write side (writeJsonAtomic) also invalidates the
+// entry, closing the same-mtime rewrite window. Callers treat the result as
 // read-only — the cached object is shared.
-const configCache = new Map<string, { mtimeMs: number; config: PermissionModesConfig }>()
 
 export function loadPermissionModesConfig(): PermissionModesConfig {
 	try {
-		const configPath = getConfigPath()
-		const stat = statSync(configPath)
-		const cached = configCache.get(configPath)
-		if (cached && cached.mtimeMs === stat.mtimeMs) return cached.config
 		// shared settings-JSON primitive (P0-LB-01): {} fallback; malformed
 		// files keep the historical console.warn diagnostic
-		const config = readJson<PermissionModesConfig>(configPath, {}, (reason) => {
+		return readJsonCached<PermissionModesConfig>(getConfigPath(), {}, (reason) => {
 			if (reason === "malformed" || reason === "non-object") {
-				console.warn(`[permission-modes] Failed to load ${configPath}: invalid JSON`)
+				console.warn(`[permission-modes] Failed to load ${getConfigPath()}: invalid JSON`)
 			}
 		})
-		configCache.set(configPath, { mtimeMs: stat.mtimeMs, config })
-		return config
 	} catch {
 		return {}
 	}

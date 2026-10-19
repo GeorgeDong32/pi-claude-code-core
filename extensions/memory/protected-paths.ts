@@ -7,8 +7,11 @@
  * a "protected paths" setting file) would let the guarded writer rewrite its
  * own guard, so the boundary must live in code that only a human change can
  * move. Wiring this into the tool_call guard handler is the main thread's
- * job (guard.ts / index.ts); this file stays pure — no fs, no process, no
- * env — so it can be unit-tested with injected home/cwd alone.
+ * job (guard.ts / index.ts). The matcher itself (matchProtectedPath) stays
+ * pure — no fs, no process, no env — so it can be unit-tested with injected
+ * home/cwd alone; the C5-batch probe helpers (protectedPathFiles) below it
+ * deliberately do real IO (guarded, fail-open) for the session_start
+ * self-modification check.
  */
 
 import { existsSync, readdirSync, statSync } from "node:fs";

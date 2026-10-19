@@ -10,6 +10,7 @@ import {
 	type ExtensionCommandContext,
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
+import { notify as sharedNotify } from "../ui/notify.ts";
 import {
 	type Component,
 	Container,
@@ -48,14 +49,21 @@ function listed(): Task[] {
 
 export async function tasksCommand(ctx: ExtensionCommandContext): Promise<void> {
 	const tasks = listed;
-	if (tasks().length === 0) return ctx.ui.notify("No background tasks.", "info");
+	// C2 follow-up: transient notices go through the shared entry (bus queue +
+	// cctui negotiation) instead of a bare host notify; the headless fallback
+	// matches the review module's console pattern.
+	const notify = (msg: string, level: "info" | "warning" = "info") => {
+		if (ctx.hasUI) sharedNotify(ctx, msg, level);
+		else console.log(`bg-shell: ${msg}`);
+	};
+	if (tasks().length === 0) return void notify("No background tasks.");
 	if (!ctx.hasUI) return ctx.ui.notify(tasks().map(taskLine).join("\n"), "info");
 	if (ctx.mode !== "tui") {
 		const list = tasks();
 		const lines = list.map(taskLine);
 		const choice = await ctx.ui.select("Background tasks (pick one to kill it)", lines);
 		const task = choice === undefined ? undefined : list[lines.indexOf(choice)];
-		if (task !== undefined) await confirmKill(task, ctx);
+		if (task !== undefined) await confirmKill(task, ctx, notify);
 		return;
 	}
 	let selected: string | undefined;
@@ -65,20 +73,22 @@ export async function tasksCommand(ctx: ExtensionCommandContext): Promise<void> 
 		const pick = await ctx.ui.custom<Pick | undefined>((tui, theme, _keys, done) => taskList(at, tui, theme, done));
 		if (pick === undefined) return;
 		selected = pick.task.id;
-		if (pick.action === "kill") await confirmKill(pick.task, ctx);
+		if (pick.action === "kill") await confirmKill(pick.task, ctx, notify);
 		else await ctx.ui.custom<void>((tui, theme, _keys, done) => outputView(pick.task, tui, theme, done));
 	}
 }
 
-async function confirmKill(task: Task, ctx: ExtensionCommandContext): Promise<void> {
+type KillNotify = (msg: string, level?: "info" | "warning") => void;
+
+async function confirmKill(task: Task, ctx: ExtensionCommandContext, notify: KillNotify): Promise<void> {
 	const title = task.state === "running" ? `Kill ${task.id}?` : `Stop what ${task.id} left running?`;
 	if (!(await ctx.ui.confirm(title, oneLine(task.command)))) return;
 	const outcome = await killTask(task, "killed by user", { notify: true });
 	if (outcome === "finished" || outcome === "gone")
-		ctx.ui.notify(`Task ${task.id} had already finished; nothing was left running.`, "info");
-	if (outcome === "cleared") ctx.ui.notify(`Task ${task.id}: stopped the processes it left running.`, "info");
+		notify(`Task ${task.id} had already finished; nothing was left running.`);
+	if (outcome === "cleared") notify(`Task ${task.id}: stopped the processes it left running.`);
 	if (outcome === "leftover-stuck")
-		ctx.ui.notify(`Task ${task.id}: the processes it left running survived SIGKILL and are still running.`, "warning");
+		notify(`Task ${task.id}: the processes it left running survived SIGKILL and are still running.`, "warning");
 }
 
 function taskList(

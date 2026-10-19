@@ -45,7 +45,7 @@ function percentile(sorted, p) {
 
 const files = jsonlFiles(root);
 const records = [];
-const turnDistances = []; // delivered-block → user-message distances (G3-C22)
+const turnDistances = []; // landing positions: which user-turn index each delivered block landed on (G3-C22)
 let scanned = 0;
 for (const file of files) {
 	let text;
@@ -55,12 +55,16 @@ for (const file of files) {
 	} catch {
 		continue;
 	}
-	// Walk the transcript in line order: user messages stack a counter; a
-	// delivered pi-memory-recall block's distance is how many user messages
-	// were started since the one it was triggered by (0 = landed in the same
-	// turn, 1 = the next user turn, …). Immediate deliveries measure 0 by
-	// construction; deferred ones measure >= 1 when the next user turn
-	// delivered them.
+	// Walk the transcript in line order and record each delivered
+	// pi-memory-recall block's LANDING POSITION: the index of the last user
+	// message started before the block landed (0-based). Both immediate and
+	// deferred deliveries land before the NEXT user message (immediate blocks
+	// persist right after their user message; deferred ones flush at the same
+	// run's turn_end), so this measures where in the session the block landed
+	// — NOT how many turns after its trigger. It grows with session length by
+	// construction; treat it as a position gauge, not a delivery-delay gauge.
+	// (A true trigger→landing distance would need the trigger turn recorded in
+	// details v1 — a frozen surface (P0-CT-08); would take a v2 contract.)
 	let userMessagesSeen = -1; // -1 until the first user message
 	for (const line of text.split("\n")) {
 		let entry;
@@ -106,16 +110,17 @@ console.log(`- selector elapsedMs: p50 ${p50} / p90 ${p90} (n=${elapsed.length})
 console.log(`- bytes per delivered block: median ${percentile(records.map((r) => r.bytes).sort((a, b) => a - b), 50)}`);
 console.log();
 
-// delivered-turn-distance distribution (G3-C22): how many user turns later
-// each recall block actually landed (0 = same turn).
+// landing-position distribution (G3-C22): at which user-turn index each
+// recall block landed (0 = session's first user turn). Position gauge only —
+// see the note above the collector for why this is not a delivery delay.
 const distances = turnDistances.slice().sort((a, b) => a - b);
 if (distances.length === 0) {
-	console.log(`- delivered-turn distance: **insufficient samples** (no delivered block with a preceding user message found — the metric needs transcripted deliveries)`);
+	console.log(`- landing position: **insufficient samples** (no delivered block with a preceding user message found — the metric needs transcripted deliveries)`);
 } else {
 	const counts = new Map();
 	for (const d of distances) counts.set(d, (counts.get(d) ?? 0) + 1);
-	const rows = [...counts.entries()].sort((a, b) => a[0] - b[0]).map(([d, n]) => `  - ${d} turn${d === 1 ? "" : "s"} later: ${n} (${((100 * n) / distances.length).toFixed(1)}%)`);
-	console.log(`- delivered-turn distance (n=${distances.length}, median ${percentile(distances, 50)}):`);
+	const rows = [...counts.entries()].sort((a, b) => a[0] - b[0]).map(([d, n]) => `  - landed at user turn ${d}: ${n} (${((100 * n) / distances.length).toFixed(1)}%)`);
+	console.log(`- landing position (n=${distances.length}, median ${percentile(distances, 50)}):`);
 	for (const row of rows) console.log(row);
 }
 console.log();

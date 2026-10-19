@@ -92,6 +92,10 @@ export function parseGoalAuditorConfig(raw: unknown): GoalAuditorConfig {
 export const DEFAULT_AUDIT_TIMEOUT_MS = 600_000;
 /** Floor for user-configured timeouts: below this even one model round-trip can exceed the budget. */
 export const MIN_AUDIT_TIMEOUT_MS = 60_000;
+/** G3-C18: the fixed-format blockers marker — single source shared by the
+ *  prompt writer and parseBlockers (the memory side pins POLICY_MARKER the
+ *  same way; two independent literals would drift silently). */
+export const BLOCKERS_MARKER = "BLOCKERS:";
 
 function asAuditTimeoutMs(value: unknown): number | undefined {
 	if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return undefined;
@@ -141,7 +145,7 @@ export function saveGoalAuditorFileConfig(cwd: string, config: GoalAuditorConfig
  */
 export function parseBlockers(report: string): string[] | null {
 	const lines = report.split("\n");
-	const start = lines.findIndex((l) => l.trim() === "BLOCKERS:");
+	const start = lines.findIndex((l) => l.trim() === BLOCKERS_MARKER);
 	if (start === -1) return null;
 	const out: string[] = [];
 	for (let i = start + 1; i < lines.length; i++) {
@@ -179,11 +183,11 @@ export function buildGoalAuditorPrompt(args: {
 		// G3-C18: fixed-format blockers — the persistent re-injection ([C19])
 		// consumes this list instead of a raw prefix truncation.
 		"Right BEFORE the final verdict line, output a fixed-format blockers list:",
-		"BLOCKERS:",
+		BLOCKERS_MARKER,
 		"- [B1] one-sentence blocker (max ~120 chars)",
 		"- [B2] ...",
 		"When nothing blocks approval, output exactly:",
-		"BLOCKERS:",
+		BLOCKERS_MARKER,
 		"- (none)",
 		"",
 		"Goal objective:",

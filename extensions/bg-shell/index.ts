@@ -111,8 +111,8 @@ export default function (pi: ExtensionAPI): void {
 		name: "TaskList",
 		label: "TaskList",
 		description:
-			"List every background bash task of this session with its id, command, state, runtime, " +
-			"and exit code or reason. States: running, exited, killed, exit unknown.",
+			"List every background bash task of this session with its id, label (or command when no label was given), " +
+			"state, runtime, and exit code or reason. States: running, exited, killed, exit unknown.",
 		parameters: Type.Object({}),
 		async execute() {
 			const tasks = [...getRegistry().tasks.values()];

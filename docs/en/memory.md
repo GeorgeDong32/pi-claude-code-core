@@ -24,7 +24,7 @@ Hermes formats. Zero runtime dependencies, one LLM lane.
 | `turn_end` | **RV deferred delivery** (first continues=true turn_end, `sendMessage` `triggerTurn:false` — pi flushes pending custom messages right after handler dispatch) + P3 automation counting + correction gate (review extraction moved to `agent_end`, 2026-10-03) |
 | `agent_end` | **RV run boundary** (v1.2: in-flight selections may still complete and deliver — supersede happens at the next user message) + background review extraction (moved from turn_end 2026-10-03: completed-run snapshot, ≥10 turns / ≥15 tool calls thresholds, warmup, suffix-60 window cap, empty-window guard — no mid-run extraction, at most one LLM pass per run) |
 | `session_shutdown` | **AR1005-RC-04**: dispose the recall machine on ANY shutdown reason — synchronous, never waits on the model. A late selector completion (adapter ignored the AbortSignal) is dropped by generation invalidation: no history read, no delivery, no unhandled rejection (contract AR1005-RC-HOST pins this against the real `ExtensionRunner` + `invalidate()`; the baseline defect was exactly that crash) |
-| `tool_call` | `guardMemoryWrites` secret interceptor (both layers); read suppression is history-derived now (RV-07) |
+| `tool_call` | `guardMemoryToolCall` (G1 verdicts + secret probe over `edits[]`); read suppression is history-derived (RV-07) |
 | `tool_result` | `memory_consolidate` settle + stale-read staleness note |
 | `agent_settled` | Consolidation in-flight clear |
 | `registerTool` | `session_recall`, `memory_consolidate` |

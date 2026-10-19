@@ -26,8 +26,9 @@
  *                       invalidation. session_start also defensively
  *                       disposes (reload/resume drivers) — neither replaces
  *                       the other.
- *   tool_call           guardMemoryWrites secret interceptor (both layers;
- *                       read suppression is history-derived now — RV-07)
+ *   tool_call           guardMemoryToolCall (G1 verdicts + secret probe over
+ *                       edits[]; the legacy guardMemoryWrites stays a guard.ts
+ *                       module export under test, not production wiring)
  *   tool_result         memory_consolidate settle + stale-read staleness note
  *   agent_settled       consolidation in-flight clear
  *   registerTool        session_recall, memory_consolidate (V2-C)
@@ -62,7 +63,7 @@ import { renderMemoryDiagnostics } from "./diagnostics.ts";
 import { queueInventory } from "./queue.ts";
 import { byteLength, createRecall, deriveHistory, freshnessHeader, type RecallBlock, type RecallMachine } from "./recall.ts";
 import { llmSelector, resolveRecallModel } from "./selector.ts";
-import { guardMemoryToolCall, guardMemoryWrites, sessionHome, type GuardVerdict } from "./guard.ts";
+import { guardMemoryToolCall, sessionHome, type GuardVerdict } from "./guard.ts";
 import { matchProtectedPath, protectedPathBlockReason, protectedPathFiles } from "./protected-paths.ts";
 import { newestSnapshot, snapshotLayer, snapshotRoot, type SnapshotManifest } from "./snapshot.ts";
 import { sanitizePath } from "./paths.ts";

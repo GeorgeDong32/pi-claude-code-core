@@ -5,6 +5,7 @@ import { chmodSync } from "node:fs";
 import { join } from "node:path";
 import { after, afterEach, beforeEach, describe, it, mock } from "node:test";
 
+import { coreBus, resetCoreBusForTests } from "../../bus.ts";
 import { getRegistry } from "../registry.ts";
 import {
 	cleanup,
@@ -22,10 +23,12 @@ import {
 let clock: ReturnType<typeof fakeClock>;
 let procs: FakeProcesses;
 beforeEach(() => {
+	resetCoreBusForTests();
 	procs = fakeProcesses();
 	clock = fakeClock();
 });
 afterEach(() => {
+	resetCoreBusForTests();
 	clock.restore();
 	resetRegistry();
 	restoreProcesses();
@@ -455,7 +458,12 @@ describe("/tasks", () => {
 	it("says so when there are no tasks", async () => {
 		const s = session();
 		await s.command("tasks");
-		assert.deepEqual(s.dialogs.notices, ["No background tasks."]);
+		// C2 follow-up: /tasks notices ride the shared bus tail queue now;
+		// the fake host ui.notify only sees them on the legacy cctui leg.
+		assert.deepEqual(
+			(coreBus().snapshot().notifications ?? []).map((n) => n.msg),
+			["No background tasks."],
+		);
 		assert.equal(s.dialogs.selects.length, 0);
 	});
 });

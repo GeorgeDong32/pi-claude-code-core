@@ -82,6 +82,19 @@ export async function prepareRun(input: PrepareRunInput): Promise<PreparedRun | 
 			: `vs ${target.probeNote ?? "main"}`;
 	}
 	const changedFiles = parseChangedFilesFromDiff(diffResult.diff);
+	// Empty-diff guard BEFORE prepareWorkspace: the guard depends only on the
+	// diff's derived counts and the run dir, so checking first saves a full
+	// depth-50 clone for empty diffs (deviations ledger #61 ③). Drop the
+	// orphan run dir (only change.diff was written so far) instead of leaving
+	// it for the 24h pruner.
+	if (changedFiles.additions + changedFiles.deletions === 0) {
+		try {
+			rmSync(runDir, { recursive: true, force: true });
+		} catch {
+			/* best effort */
+		}
+		return null;
+	}
 	// Pass the diff's head SHA so the workspace checkout can verify it landed
 	// on the same commit (guards the force-push-between-calls TOCTOU window).
 	let workspaceResult = await prepareWorkspace({
@@ -140,17 +153,6 @@ export async function prepareRun(input: PrepareRunInput): Promise<PreparedRun | 
 	};
 
 	const gateModel = resolveModel(input.gateModel ?? config.gate.model, undefined);
-	// Trivial change guard: an empty/placeholder diff (no +/- hunks) is not
-	// worth fanning out reviewers. Drop the orphan run dir (only change.diff
-	// was written so far) instead of leaving it for the 24h pruner.
-	if (changedFiles.additions + changedFiles.deletions === 0) {
-		try {
-			rmSync(runDir, { recursive: true, force: true });
-		} catch {
-			/* best effort */
-		}
-		return null;
-	}
 	const profile: ChangeProfile = {
 		docsOnly: changedFiles.docsOnly,
 		rulePaths,

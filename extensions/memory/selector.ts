@@ -43,6 +43,13 @@ export interface SelectionCandidate {
 	mtimeMs: number;
 	/** Absolute path on disk (truncation notes point here). */
 	absPath: string;
+	/**
+	 * File body. Optional at this interface level: pre-selection pipelines
+	 * (candidate scanning) build candidates without bodies; the selector's
+	 * manifest row is the authority that needs one — manifestRow falls back
+	 * to mtime when absent (C13 age semantics).
+	 */
+	body?: string;
 }
 
 export interface SelectorRequest {
@@ -131,7 +138,7 @@ export function llmSelector(deps: {
 				.slice()
 				.sort((a, b) => b.mtimeMs - a.mtimeMs)
 				.slice(0, RECALL_MANIFEST_MAX)
-				.map((c) => manifestRow(c, Date.now(), (c as SelectionCandidate & { body?: string }).body))
+				.map((c) => manifestRow(c, Date.now(), c.body))
 				.join("\n");
 			const tools = req.recentTools.length > 0 ? `\n\nRecently used tools: ${req.recentTools.join(", ")}` : "";
 			const done = await completeText(

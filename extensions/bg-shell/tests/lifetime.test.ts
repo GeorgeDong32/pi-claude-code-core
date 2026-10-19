@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import { after, afterEach, beforeEach, describe, it } from "node:test";
 
+import { coreBus, resetCoreBusForTests } from "../../bus.ts";
 import { foregroundRuns } from "../foreground.ts";
 import { processPort } from "../port.ts";
 import { getRegistry } from "../registry.ts";
@@ -24,10 +25,12 @@ import {
 let clock: ReturnType<typeof fakeClock>;
 let procs: FakeProcesses;
 beforeEach(() => {
+	resetCoreBusForTests();
 	procs = fakeProcesses();
 	clock = fakeClock();
 });
 afterEach(() => {
+	resetCoreBusForTests();
 	clock.restore();
 	resetRegistry();
 	restoreProcesses();
@@ -255,6 +258,10 @@ describe("a task whose command has exited", () => {
 		s.dialogs.keys = [["x"], [keys.escape]];
 		await clock.settle(s.command("tasks"));
 		assert.equal(procs.of(id).signals[0], "SIGTERM");
-		assert.match(s.dialogs.notices.join("\n"), /stopped the processes it left running/);
+		// C2 follow-up: the kill outcome notice rides the shared bus tail queue.
+		assert.match(
+			(coreBus().snapshot().notifications ?? []).map((n) => n.msg).join("\n"),
+			/stopped the processes it left running/,
+		);
 	});
 });

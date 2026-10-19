@@ -23,7 +23,7 @@ spec 2026-10-02-memory-recall-v2)、守卫记忆写入路径、自动整合
 | `turn_end` | P3 automation 计数 + correction 门(≤1/3 turn;review 提取已挪 `agent_end`,2026-10-03;spec v1.2:召回投递不再按 turn 门控 —— 见 `message_end`) |
 | `agent_end` | spec v1.2:仅清 prompt 标记 —— 在途选择仍可完成后投递(下一轮可见);最新者胜的取代发生在下一条用户消息 + 后台 review 提取(2026-10-03 自 turn_end 挪入:完整 run 快照,≥10 turn / ≥15 tool call 门槛,suffix-60 窗口上限,空窗口守卫 —— 不再 run 中途提取,单 run 至多一次 LLM) |
 | `session_shutdown` | **AR1005-RC-04**:任意 shutdown 原因都 dispose 召回机 —— 同步执行、永不等待模型。晚到的选择器完成(adapter 忽略 AbortSignal)被 generation 失效丢弃:零 history 读取、零投递、零 unhandled rejection(契约 AR1005-RC-HOST 对真实 `ExtensionRunner` + `invalidate()` 钉住;基线缺陷正是该崩溃) |
-| `tool_call` | `guardMemoryWrites` 秘密拦截器(双层);已读抑制改为从历史推导(RV-07) |
+| `tool_call` | `guardMemoryToolCall`(G1 判定 + 对 edits[] 的密钥探测);已读抑制改为从历史推导(RV-07) |
 | `tool_result` | `memory_consolidate` settle + 陈旧读 staleness 标注 |
 | `agent_settled` | 清除整合进行中标记 |
 | `registerTool` | `session_recall`、`memory_consolidate` |
