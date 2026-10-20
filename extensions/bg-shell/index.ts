@@ -52,6 +52,15 @@ export default function (pi: ExtensionAPI): void {
 		description: `${builtin.description} ${BACKGROUND_DESCRIPTION}`,
 		parameters: Type.Object({
 			...builtin.parameters.properties,
+			// D2 (loop-guard spec): teach the omitted-timeout semantics — auto-
+			// backgrounding after PROMOTE_MS (sleep exempt) vs a hard cap.
+			timeout: Type.Optional(
+				Type.Number({
+					description:
+						`Optional timeout in seconds. Omitted = the command auto-backgrounds after ${PROMOTE_MS / 1000} s and keeps running (you are notified on completion; commands starting with \`sleep\` are exempt). ` +
+						"An explicit timeout hard-caps the run instead — use it only when a stale command is worse than a killed one.",
+				}),
+			),
 			waitFor: Type.Optional(
 				Type.String({
 					description:

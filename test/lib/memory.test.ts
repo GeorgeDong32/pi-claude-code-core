@@ -631,6 +631,12 @@ describe("adversarial-audit fixes (2026-09-22)", () => {
 
 import type { Selector, SelectorOutcome } from "../../extensions/memory/selector.ts";
 
+// B (recall-frequency-tuning): wiring-level cases fire few user turns and
+// expect selections — disable the warmup gate via the env seam (the B
+// suite pins the real gates).
+process.env.PI_CORE_RECALL_WARMUP_TURNS = "0";
+process.env.PI_CORE_RECALL_COOLDOWN_TURNS = "0";
+
 function writeSettings(recallModel: string): void {
 	mkdirSync(join(home, ".pi", "agent"), { recursive: true });
 	writeFileSync(join(home, ".pi", "agent", "settings.json"), JSON.stringify({ memory: { recallModel, recallWaitMs: 5000 } }));
@@ -877,3 +883,29 @@ describe("AR1005-RC wiring lifecycle", () => {
 function writeSettings2(recallModel: string): void {
 	writeFileSync(join(home, ".pi", "agent", "settings.json"), JSON.stringify({ memory: { recallModel, recallWaitMs: 5000 } }));
 }
+
+describe("B recall-frequency production seeding (no env override — real gates)", () => {
+	it("a machine created against a branch with ≥3 user turns skips the warmup on its first message (seed regression pin)", async () => {
+		delete process.env.PI_CORE_RECALL_WARMUP_TURNS;
+		delete process.env.PI_CORE_RECALL_COOLDOWN_TURNS;
+		// cover the production seed path: countBranchUserTurns reads the
+		// sessionManager branch; pin its contract against a branch holding
+		// exactly 7 user messages.
+		// machine-level pin (the wiring path — countBranchUserTurns — is a
+		// three-line projection reader; this pins the seed CONTRACT it feeds):
+		const calls: number[] = [];
+		const selector = { async select() { calls.push(1); return { kind: "empty" as const, elapsedMs: 0 }; } };
+		const { createRecall } = await import("../../extensions/memory/recall.ts");
+		const m = createRecall({
+			selector,
+			modelLabel: "t/sel",
+			files: () => [{ key: "memory/seed.md", file: "seed.md", title: "s", description: "d", type: "reference", layer: "project", mtimeMs: Date.now(), absPath: "/m/seed.md", body: "b" }],
+			cwd: "/w",
+			deliver: () => {},
+			initialUserTurns: 7,
+		});
+		await m.onUserMessage("a resumed conversation continuing right away", () => [], 0);
+		// eligible immediately: the selector ran (kind empty, but it RAN)
+		expect(calls).toHaveLength(1);
+	});
+});

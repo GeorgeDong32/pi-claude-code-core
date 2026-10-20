@@ -68,6 +68,28 @@ import type { SelectionCandidate, Selector, SelectorOutcome } from "./selector.t
 
 export const RECALL_CUSTOM_TYPE = "pi-memory-recall";
 
+/** B (recall-frequency-tuning spec): first N user turns of a conversation
+ * run no selector — short task-in/task-out sessions keep their fresh
+ * context and skip the p50-3s selector cost entirely. Test-only env
+ * overrides follow the CC_CORE_BG_PROMOTE_MS pattern; <= 0 disables the
+ * gate. */
+function recallTurnThreshold(envName: string, fallback: number): number {
+	const n = Number(process.env[envName]);
+	// <= 0 disables the gate (matches the header comment); a negative or
+	// malformed value never widens the gate back to the default.
+	return Number.isFinite(n) && n > 0 ? Math.floor(n) : Number.isFinite(n) ? 0 : fallback;
+}
+/** Read per check (not import time) so tests can flip the env seam after
+ * the module graph loads. Two env reads per user turn — negligible. */
+export function recallWarmupTurns(): number {
+	return recallTurnThreshold("PI_CORE_RECALL_WARMUP_TURNS", 3);
+}
+/** B: minimum user turns between two actual selector runs. The steady-state
+ * interval is cooldown + 1 (the run turn itself). */
+export function recallCooldownTurns(): number {
+	return recallTurnThreshold("PI_CORE_RECALL_COOLDOWN_TURNS", 2);
+}
+
 /** Frozen details v1 field set — pinned by the contract suite (P0-CT-08). */
 export const RECALL_DETAILS_FIELDS = ["v", "delivery", "model", "files", "bytes", "elapsedMs"] as const;
 
@@ -299,12 +321,21 @@ export function createRecall(deps: {
 	cwd: string;
 	deliver: (block: RecallBlock) => void;
 	diagnose?: (message: string) => void;
+	/** B: user turns already in the conversation when the machine is created
+	 * (resume seeding — derived from the sessionManager branch, never from
+	 * agent.state.messages which already holds the in-flight message). */
+	initialUserTurns?: number;
 }): RecallMachine {
 	const stats: RecallStats = { selections: 0, empties: 0, failures: 0, lastReason: null, deliveries: 0 };
 	const runDelivered = new Set<string>();
 	const diagnose = deps.diagnose ?? (() => {});
 	let disposed = false;
 	let generation = 0;
+	// B (recall-frequency-tuning): warmup + cooldown counters. Uniform rule:
+	// a turn without an actual selector run increments turnsSinceRun; a run
+	// resets it to 0. Eligible at >= RECALL_COOLDOWN_TURNS.
+	let userTurns = deps.initialUserTurns ?? 0;
+	let turnsSinceRun = Number.POSITIVE_INFINITY;
 
 	/** Per-request lifecycle record (AR1005-RC-01). */
 	interface RequestState {
@@ -385,16 +416,37 @@ export function createRecall(deps: {
 			const isCurrent = () => !disposed && generation === myGen;
 
 			try {
+				// B: warmup + cooldown gate — before any hygiene/dedup work (skip
+				// early, skip cheap). Every turn that reaches no actual selector
+				// run increments turnsSinceRun; the reset happens exactly where
+				// the selection promise is constructed below.
+				userTurns += 1;
+				if (userTurns <= recallWarmupTurns()) {
+					turnsSinceRun += 1;
+					stats.lastReason = "warmup";
+					return null;
+				}
+				if (turnsSinceRun < recallCooldownTurns()) {
+					turnsSinceRun += 1;
+					stats.lastReason = "cooldown";
+					return null;
+				}
+
 				const query = recallQuery(text);
 				if (query === null) {
 					stats.empties++;
+					turnsSinceRun += 1; // no selector run — keep cooling, don't reset
 					return null;
 				}
 				const derived = deriveHistory(history(), deps.cwd);
-				if (derived.bytesUsed >= RECALL_SESSION_MAX_BYTES) return null; // RV-08: silent, no selector call
+				if (derived.bytesUsed >= RECALL_SESSION_MAX_BYTES) {
+					turnsSinceRun += 1; // RV-08: silent, no selector call
+					return null;
+				}
 				const candidates = eligible(derived);
 				if (candidates.length === 0) {
 					stats.empties++;
+					turnsSinceRun += 1; // suppressed turn: not a run, not a penalty
 					return null;
 				}
 
@@ -406,6 +458,10 @@ export function createRecall(deps: {
 				const req: RequestState = { controller, timer: null, cancel: () => resolveCancelled("cancelled") };
 				current = req;
 
+				// B: the selector is now actually running — reset the cooldown
+				// clock (failures below still count as a run; the spec's uniform
+				// rule keys on "selection promise constructed").
+				turnsSinceRun = 0;
 				// AR1005-RC-02: a selector that throws SYNCHRONOUSLY (runtime
 				// violating the declared Promise) must not escape either —
 				// Promise.resolve(...) keeps an already-settled native promise's

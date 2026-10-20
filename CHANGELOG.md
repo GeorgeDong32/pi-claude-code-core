@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Added
+- **Tool-call loop guard (D1/D1b)**: byte-identical duplicate calls inside one assistant batch are blocked after the first (provider output-loop defense, runs before every permission path — bypass does not exempt it); a codemode parent stuck in an identical-call loop trips a per-parent breaker at 20 calls. Fail-open by construction; nested calls are structurally exempt from the batch check.
+- **Recall frequency gates (B)**: the first 3 user turns of a conversation run no memory selector (resume seeds the counter from session history), and two selector runs are at least 2 turns apart. `PI_CORE_RECALL_{WARMUP,COOLDOWN}_TURNS` env overrides; `stats.lastReason` gains `warmup` / `cooldown`.
+
+### Changed
+- The `bash` tool's `timeout` parameter description now states the real semantics: omitted = auto-backgrounds after 120 s (sleep exempt); an explicit timeout hard-caps the run.
+
 ### Changed
 - bg-shell `/tasks` transient notices (empty list, kill outcomes) now ride the shared notification entry (bus tail queue + cctui negotiation) instead of a bare host notify — the same consolidation as the C2 batch, closing its last bypass.
 - `modes`: the working-stats presentation slice and the auto-mode tier-3 engine moved out of the 2k-line factory into `stats-presenter.ts` / `auto-engine.ts` (architecture review C4, batches 1–2; behavior unchanged, guarded by the full modes suite).

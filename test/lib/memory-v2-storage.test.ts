@@ -376,6 +376,12 @@ describe("V2 Phase 3 (AD1/AD3/AD4) — injection dedupe + policy text", () => {
 
 import { parsePathsValue, scopeMatches, eligibleMemories } from "../../extensions/memory/memdir.ts";
 
+// B (recall-frequency-tuning): wiring-level cases fire few user turns and
+// expect selections — disable the warmup gate via the env seam (the B
+// suite pins the real gates).
+process.env.PI_CORE_RECALL_WARMUP_TURNS = "0";
+process.env.PI_CORE_RECALL_COOLDOWN_TURNS = "0";
+
 describe("R3 paths scoping (RV-14)", () => {
 	it("parsePathsValue: inline JSON array, comma form, single glob, ~ untouched for later expansion; junk → undefined", () => {
 		expect(parsePathsValue('["~/Coding/**", "~/Other"]')).toEqual(["~/Coding/**", "~/Other"]);

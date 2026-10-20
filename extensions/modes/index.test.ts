@@ -426,6 +426,97 @@ describe("permission-modes extension: tool_call gate", () => {
 		await pi.simulateSessionStart(realProjectRoot)
 	}
 
+	describe("loop-guard integration (D1/D1b, spec docs/en/tool-call-loop-guard.md)", () => {
+		async function rawToolCall(event: Record<string, unknown>) {
+			const ctx = makeCtx(pi, { cwd: realProjectRoot })
+			// the fixture stores handlers per event name; reach them via the
+			// same map the simulate helpers use, but with a full event shape
+			const handlers = (pi as unknown as { handlers: Map<string, Array<(e: unknown, c: unknown) => Promise<unknown>>> }).handlers
+			for (const h of handlers.get("tool_call") ?? []) {
+				const result = await h(event, ctx)
+				if (result !== undefined) return result
+			}
+			return undefined
+		}
+
+		async function fireMessageEnd(message: Record<string, unknown>) {
+			const handlers = (pi as unknown as { handlers: Map<string, Array<(e: unknown, c: unknown) => Promise<unknown>>> }).handlers
+			for (const h of handlers.get("message_end") ?? []) await h({ type: "message_end", message }, {})
+		}
+
+		it("D1-12: same batch in ask mode — first passes the gate, follower blocks with the duplicate reason (first-blocked ordering is pinned at unit level via firstId)", async () => {
+			await switchMode("ask")
+			await fireMessageEnd({
+				role: "assistant",
+				content: [
+					{ type: "toolCall", id: "dup-first", name: "read", arguments: { path: "package.json" } },
+					{ type: "toolCall", id: "dup-second", name: "read", arguments: { path: "package.json" } },
+				],
+			})
+			const first = await rawToolCall({ type: "tool_call", toolName: "read", toolCallId: "dup-first", input: { path: "package.json" } })
+			expect(first).toBeUndefined()
+			const second = await rawToolCall({ type: "tool_call", toolName: "read", toolCallId: "dup-second", input: { path: "package.json" } })
+			expect(second).toEqual({ block: true, reason: expect.stringMatching(/byte-identical duplicate/) })
+		})
+
+		it("D1-8: bypass mode does not exempt same-batch duplicates (a defense, not a permission)", async () => {
+			await switchMode("bypass")
+			await fireMessageEnd({
+				role: "assistant",
+				content: [
+					{ type: "toolCall", id: "by-first", name: "bash", arguments: { command: "echo x" } },
+					{ type: "toolCall", id: "by-second", name: "bash", arguments: { command: "echo x" } },
+				],
+			})
+			const first = await rawToolCall({ type: "tool_call", toolName: "bash", toolCallId: "by-first", input: { command: "echo x" } })
+			expect(first).toBeUndefined()
+			const second = await rawToolCall({ type: "tool_call", toolName: "bash", toolCallId: "by-second", input: { command: "echo x" } })
+			expect(second).toEqual({ block: true, reason: expect.stringMatching(/byte-identical duplicate/) })
+		})
+
+		it("D1-11: pi's stopReason=length interop — loop-guard stays quiet when the batch index holds non-duplicates", async () => {
+			// The truncation defense itself lives in pi core; here we pin that
+			// a truncated-looking message with DISTINCT calls leaves every gate
+			// path untouched (no double reason, pairing intact via undefined).
+			await fireMessageEnd({
+				role: "assistant",
+				content: [
+					{ type: "toolCall", id: "len-1", name: "read", arguments: { path: "package.json" } },
+					{ type: "toolCall", id: "len-2", name: "read", arguments: { path: "tsconfig.json" } },
+				],
+			})
+			expect(await rawToolCall({ type: "tool_call", toolName: "read", toolCallId: "len-1", input: { path: "package.json" } })).toBeUndefined()
+			expect(await rawToolCall({ type: "tool_call", toolName: "read", toolCallId: "len-2", input: { path: "tsconfig.json" } })).toBeUndefined()
+		})
+
+		it("D1-R1P1-1: a toolResult message_end BETWEEN the batch's gate calls must not clear the held index (sequential dispatch)", async () => {
+			await switchMode("bypass")
+			await fireMessageEnd({
+				role: "assistant",
+				content: [
+					{ type: "toolCall", id: "seq-1", name: "bash", arguments: { command: "echo seq" } },
+					{ type: "toolCall", id: "seq-2", name: "bash", arguments: { command: "echo seq" } },
+				],
+			})
+			expect(await rawToolCall({ type: "tool_call", toolName: "bash", toolCallId: "seq-1", input: { command: "echo seq" } })).toBeUndefined()
+			// the host's sequential path fires a toolResult message_end here,
+			// between the two gate calls of the SAME batch
+			await fireMessageEnd({ role: "toolResult", content: [{ type: "text", text: "out" }] })
+			const second = await rawToolCall({ type: "tool_call", toolName: "bash", toolCallId: "seq-2", input: { command: "echo seq" } })
+			expect(second).toEqual({ block: true, reason: expect.stringMatching(/byte-identical duplicate/) })
+		})
+
+		it("D1b-4: a codemode parent stuck in an identical-call loop trips the breaker at 20", async () => {
+			await switchMode("bypass")
+			const event = { type: "tool_call", toolName: "bash", parentToolCallId: "nested-1", input: { command: "echo loop" } }
+			for (let i = 0; i < 20; i++) {
+				expect(await rawToolCall({ ...event })).toBeUndefined()
+			}
+			const blocked = await rawToolCall({ ...event })
+			expect(blocked).toEqual({ block: true, reason: expect.stringMatching(/codemode script/) })
+		})
+	})
+
 	describe("pi 0.99 meta tools and MCP shape (SPEC META-04)", () => {
 		it("registration surface: alt+t belongs to effort, NOT modes (C5); alt+i stays via profile-apply", () => {
 			// registerShortcut is a per-extension Map.set — a double registration

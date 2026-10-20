@@ -108,6 +108,17 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 		return readSessionProjection(ctx.sessionManager);
 	}
 
+	/** B (recall-frequency-tuning): user turns already in the branch — the
+	 * recall machine's warmup seed. Same reader as historyFor (one defensive
+	 * sessionManager seam); counts role === "user" messages only. */
+	function countBranchUserTurns(ctx: ExtensionContext): number {
+		let n = 0;
+		for (const m of readSessionProjection(ctx.sessionManager) as Array<{ role?: string }>) {
+			if (m?.role === "user") n += 1;
+		}
+		return n;
+	}
+
 	/** The persisted custom message shape for a delivered recall block. */
 	function makeRecallMessage(block: RecallBlock) {
 		return {
@@ -158,6 +169,13 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 				modelLabel: label,
 				files: () => eligibleMemories(userMemoryDir(ctx), memoryDir(ctx), gitCanonicalRoot(ctx.cwd ?? process.cwd()) ?? undefined),
 				cwd: ctx.cwd ?? process.cwd(),
+				// B (recall-frequency-tuning): seed the warmup counter with the
+				// user turns already in the sessionManager branch (before_agent_start
+				// fires before the in-flight message is persisted — no off-by-one;
+				// NOT agent.state.messages, which already holds it). A rebuild
+				// mid-session (settings/model change) re-derives the seed so a
+				// resumed conversation never replays the warmup.
+				initialUserTurns: countBranchUserTurns(ctx),
 				// spec v1.2: immediate delivery the moment a parked selection
 				// completes — pi queues it as a pending custom message and flushes
 				// at the next turn_end (request #2 within the run, next turn's

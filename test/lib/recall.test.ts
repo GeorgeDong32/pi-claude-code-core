@@ -53,7 +53,7 @@ const instant = (keys: string[]): ((req: SelectorRequest) => Promise<SelectorOut
 
 function machine(selector: Selector, files: RecallFile[], cwd = "/w", delivered: RecallBlock[] = []) {
 	return {
-		m: createRecall({ selector, modelLabel: "test/selector-1", files: () => files, cwd, deliver: (b) => delivered.push(b) }),
+		m: createRecall({ initialUserTurns: 3, selector, modelLabel: "test/selector-1", files: () => files, cwd, deliver: (b) => delivered.push(b) }),
 		delivered,
 	};
 }
@@ -61,7 +61,7 @@ function machine(selector: Selector, files: RecallFile[], cwd = "/w", delivered:
 /** C7: like machine(), but counts deps.files() invocations. */
 function countingMachine(selector: Selector, files: RecallFile[], delivered: RecallBlock[] = []) {
 	let calls = 0;
-	const m = createRecall({
+	const m = createRecall({ initialUserTurns: 3,
 		selector,
 		modelLabel: "test/selector-1",
 		files: () => {
@@ -74,6 +74,10 @@ function countingMachine(selector: Selector, files: RecallFile[], delivered: Rec
 	return { m, delivered, filesCalls: () => calls };
 }
 
+process.env.PI_CORE_RECALL_COOLDOWN_TURNS = "0"; // legacy cases run back-to-back; B suite pins real gates
+/** B (recall-frequency-tuning): existing cases exercise post-warmup
+ * selection/delivery semantics — every machine is seeded past the warmup
+ * gate. The frequency gates are covered separately. */
 describe("RV recall machine (spec §8)", () => {
 	it("1 RV-02: skill wrapper stripped; skill-only and <6 chars skip; >4000 chars truncated", async () => {
 		const log: SelectorRequest[] = [];
@@ -365,7 +369,7 @@ describe("AR1005-RC recall lifecycle", () => {
 	it("RC-T01: waitMs=0, normal agent_end no-op, selector completes afterwards — exactly one delivery", async () => {
 		const delivered: RecallBlock[] = [];
 		const gate = gatedSelector();
-		const m = createRecall({
+		const m = createRecall({ initialUserTurns: 3,
 			selector: gate.selector,
 			modelLabel: "t/1",
 			files: () => [file("memory/a.md")],
@@ -391,7 +395,7 @@ describe("AR1005-RC recall lifecycle", () => {
 				return Promise.resolve<SelectorOutcome>({ kind: "empty", elapsedMs: 0 });
 			},
 		};
-		const m = createRecall({ selector: slowThenEmpty, modelLabel: "t/1", files: () => [file("memory/slow.md"), file("memory/b.md")], cwd: "/w", deliver: (b) => delivered.push(b) });
+		const m = createRecall({ initialUserTurns: 3, selector: slowThenEmpty, modelLabel: "t/1", files: () => [file("memory/slow.md"), file("memory/b.md")], cwd: "/w", deliver: (b) => delivered.push(b) });
 		const p1 = m.onUserMessage("first slow question", () => [], 200);
 		await new Promise((r) => setTimeout(r, 2));
 		const p2 = m.onUserMessage("second quick question", () => [], 0); // supersedes p1 mid-wait
@@ -406,7 +410,7 @@ describe("AR1005-RC recall lifecycle", () => {
 		const delivered: RecallBlock[] = [];
 		const historyReads: number[] = [];
 		const gate = gatedSelector();
-		const m = createRecall({
+		const m = createRecall({ initialUserTurns: 3,
 			selector: gate.selector,
 			modelLabel: "t/1",
 			files: () => [file("memory/c.md")],
@@ -429,7 +433,7 @@ describe("AR1005-RC recall lifecycle", () => {
 	it("RC-T04: dispose during a positive wait resolves the in-flight call promptly (bounded, no stale block)", async () => {
 		const delivered: RecallBlock[] = [];
 		const never: Selector = { select: () => new Promise<SelectorOutcome>(() => {}) }; // ignores abort forever
-		const m = createRecall({ selector: never, modelLabel: "t/1", files: () => [file("memory/d.md")], cwd: "/w", deliver: (b) => delivered.push(b) });
+		const m = createRecall({ initialUserTurns: 3, selector: never, modelLabel: "t/1", files: () => [file("memory/d.md")], cwd: "/w", deliver: (b) => delivered.push(b) });
 		const t0 = Date.now();
 		const p = m.onUserMessage("waiting question", () => [], 5000);
 		await new Promise((r) => setTimeout(r, 10));
@@ -448,16 +452,16 @@ describe("AR1005-RC recall lifecycle", () => {
 		const syncThrowSelector: Selector = { select: () => { throw new Error("sync boom"); } } as never;
 		const asyncRejectSelector: Selector = { select: () => Promise.reject(new Error("async boom")) };
 		// history throws
-		const m1 = createRecall({ selector: syncThrowSelector, modelLabel: "t/1", files: () => [file("memory/e.md")], cwd: "/w", deliver: () => {}, diagnose: (d) => diags.push(d) });
+		const m1 = createRecall({ initialUserTurns: 3, selector: syncThrowSelector, modelLabel: "t/1", files: () => [file("memory/e.md")], cwd: "/w", deliver: () => {}, diagnose: (d) => diags.push(d) });
 		await expect(m1.onUserMessage("history throws here", boom, 0)).resolves.toBeNull();
 		// files throws
-		const m2 = createRecall({ selector: syncThrowSelector, modelLabel: "t/1", files: boom as never, cwd: "/w", deliver: () => {}, diagnose: (d) => diags.push(d) });
+		const m2 = createRecall({ initialUserTurns: 3, selector: syncThrowSelector, modelLabel: "t/1", files: boom as never, cwd: "/w", deliver: () => {}, diagnose: (d) => diags.push(d) });
 		await expect(m2.onUserMessage("files throw here", () => [], 0)).resolves.toBeNull();
 		// selector throws synchronously
-		const m3 = createRecall({ selector: syncThrowSelector, modelLabel: "t/1", files: () => [file("memory/e.md")], cwd: "/w", deliver: () => {}, diagnose: (d) => diags.push(d) });
+		const m3 = createRecall({ initialUserTurns: 3, selector: syncThrowSelector, modelLabel: "t/1", files: () => [file("memory/e.md")], cwd: "/w", deliver: () => {}, diagnose: (d) => diags.push(d) });
 		await expect(m3.onUserMessage("selector sync throws", () => [], 50)).resolves.toBeNull();
 		// selector rejects asynchronously
-		const m4 = createRecall({ selector: asyncRejectSelector, modelLabel: "t/1", files: () => [file("memory/e.md")], cwd: "/w", deliver: () => {}, diagnose: (d) => diags.push(d) });
+		const m4 = createRecall({ initialUserTurns: 3, selector: asyncRejectSelector, modelLabel: "t/1", files: () => [file("memory/e.md")], cwd: "/w", deliver: () => {}, diagnose: (d) => diags.push(d) });
 		await expect(m4.onUserMessage("selector async rejects", () => [], 50)).resolves.toBeNull();
 		expect(m4.stats.failures).toBeGreaterThanOrEqual(1);
 		expect(m4.stats.lastReason).toBe("selector_throw");
@@ -468,7 +472,7 @@ describe("AR1005-RC recall lifecycle", () => {
 		const gate = gatedSelector();
 		let deliverShouldThrow = true;
 		let deliveriesSeen = 0;
-		const m = createRecall({
+		const m = createRecall({ initialUserTurns: 3,
 			selector: gate.selector,
 			modelLabel: "t/1",
 			files: () => [file("memory/f.md")],
@@ -499,7 +503,7 @@ describe("AR1005-RC recall lifecycle", () => {
 		const diags: string[] = [];
 		const gate = gatedSelector();
 		let historyShouldThrow = false;
-		const m = createRecall({
+		const m = createRecall({ initialUserTurns: 3,
 			selector: gate.selector,
 			modelLabel: "t/1",
 			files: () => [file("memory/g.md")],
@@ -522,7 +526,7 @@ describe("AR1005-RC recall lifecycle", () => {
 	it("RC-T07: a newer request's state is not clobbered by the older request's late finally; no dedup pollution", async () => {
 		const delivered: RecallBlock[] = [];
 		const gate = gatedSelector();
-		const m = createRecall({ selector: gate.selector, modelLabel: "t/1", files: () => [file("memory/h.md")], cwd: "/w", deliver: (b) => delivered.push(b) });
+		const m = createRecall({ initialUserTurns: 3, selector: gate.selector, modelLabel: "t/1", files: () => [file("memory/h.md")], cwd: "/w", deliver: (b) => delivered.push(b) });
 		await m.onUserMessage("old message parks", () => [], 0);
 		await m.onUserMessage("new message parks", () => [], 0); // supersedes the old request
 		gate.complete({ kind: "selected", keys: ["memory/h.md"], elapsedMs: 1 }); // the NEW request completes
@@ -535,12 +539,12 @@ describe("AR1005-RC recall lifecycle", () => {
 		const log: SelectorRequest[] = [];
 		const gate = gatedSelector(log);
 		const delivered: RecallBlock[] = [];
-		const m = createRecall({ selector: gate.selector, modelLabel: "t/1", files: () => [file("memory/i.md")], cwd: "/w", deliver: (b) => delivered.push(b) });
+		const m = createRecall({ initialUserTurns: 3, selector: gate.selector, modelLabel: "t/1", files: () => [file("memory/i.md")], cwd: "/w", deliver: (b) => delivered.push(b) });
 		m.dispose();
 		m.dispose();
 		await expect(m.onUserMessage("after dispose", () => [], 0)).resolves.toBeNull();
 		expect(log).toHaveLength(0); // no selector invocation
-		const m2 = createRecall({ selector: gate.selector, modelLabel: "t/1", files: () => [file("memory/i.md")], cwd: "/w", deliver: (b) => delivered.push(b) });
+		const m2 = createRecall({ initialUserTurns: 3, selector: gate.selector, modelLabel: "t/1", files: () => [file("memory/i.md")], cwd: "/w", deliver: (b) => delivered.push(b) });
 		await m2.onUserMessage("fresh machine", () => [], 0);
 		gate.complete({ kind: "selected", keys: ["memory/i.md"], elapsedMs: 1 });
 		await new Promise((r) => setTimeout(r, 5));
@@ -549,7 +553,7 @@ describe("AR1005-RC recall lifecycle", () => {
 
 	it("RC-T10: abort during a positive wait also resolves promptly and clears the wait timer (no stale block)", async () => {
 		const never: Selector = { select: () => new Promise<SelectorOutcome>(() => {}) };
-		const m = createRecall({ selector: never, modelLabel: "t/1", files: () => [file("memory/j.md")], cwd: "/w", deliver: () => {} });
+		const m = createRecall({ initialUserTurns: 3, selector: never, modelLabel: "t/1", files: () => [file("memory/j.md")], cwd: "/w", deliver: () => {} });
 		const t0 = Date.now();
 		const p = m.onUserMessage("will be aborted", () => [], 5000);
 		await new Promise((r) => setTimeout(r, 10));

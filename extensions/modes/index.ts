@@ -44,6 +44,7 @@ import {
 import { invalidateClassifierVerdictCache } from "./classifier-client.ts";
 import { createStatsPresenter } from "./stats-presenter.ts";
 import { createAutoEngine } from "./auto-engine.ts";
+import { checkBatchDup, createParentLoopBreaker, indexBatchDupes, parentLoopKey, type BatchDupIndex } from "./loop-guard.ts";
 import {
   restoreDangerousPermissionRules,
   stripDangerousPermissionRules,
@@ -178,6 +179,12 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
   let forwardingPoller: ForwardingPoller | undefined;
   /** Survives poller restarts so the same inbox request is not double-prompted. */
   const forwardingClaimedIds = new Set<string>();
+  // D1/D1b (loop-guard): same-batch duplicate index (replaced per
+  // message_end) + the per-parent identical-call breaker for codemode
+  // nested calls. A DEFENSE, not a permission — checked before the
+  // adjudicator so bypass does not exempt it.
+  let batchDupIndex: BatchDupIndex | null = null;
+  const parentLoopBreaker = createParentLoopBreaker();
 
   const autoEngine = createAutoEngine({
     getClassifierConfig: () => classifierConfig,
@@ -1235,6 +1242,27 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("tool_call", async (event, ctx): Promise<Block> => {
+    // D1/D1b (loop-guard) — first step, before every permission path:
+    // same-batch byte-identical followers block; a codemode parent stuck
+    // in an identical-call loop trips its breaker. Both fail open (an id
+    // missing from the index passes; see loop-guard.ts).
+    // R1 P2-2: the defense fails OPEN — a guard that throws would fail
+    // CLOSED at the host ("Extension failed, blocking execution") and become
+    // the very thing it exists to prevent.
+    try {
+      if (event.parentToolCallId === undefined) {
+        const dupReason = checkBatchDup(batchDupIndex ?? undefined, event.toolCallId);
+        if (dupReason) return { block: true, reason: dupReason };
+      } else {
+        const loopReason = parentLoopBreaker.check(
+          event.parentToolCallId,
+          parentLoopKey(event.toolName, event.input ?? {}),
+        );
+        if (loopReason) return { block: true, reason: loopReason };
+      }
+    } catch (err) {
+      console.warn("[permission-modes] loop-guard check failed open:", err);
+    }
     return adjudicator.check({
       ctx,
       tool: event.toolName,
@@ -1374,10 +1402,19 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     statsPresenter.onBeforeProviderRequest(ctx),
   );
   pi.on("message_update", async (_event, ctx) => refreshWorkingMessage(ctx));
-  pi.on("message_end", async (_event, _ctx) => {
+  pi.on("message_end", async (event, _ctx) => {
     // ST: fired BEFORE the host appends the entry — the cached snapshot must
     // not be mistaken for the new branch state (the leafId key also moves).
     statsPresenter.markDirty();
+    // D1 (loop-guard): hold the latest assistant batch's duplicate index.
+    // REPLACE-ONLY (R1 P1-1): the sequential dispatch path emits a toolResult
+    // message_end between the batch's gate calls, and parallel batches see
+    // queued steer/custom message_ends between batches — a non-assistant
+    // message_end must never clear the held index (indexBatchDupes returns
+    // null for those). toolCallIds are unique per response, so holding the
+    // last assistant index across turns cannot mis-block a fresh call.
+    const nextBatch = indexBatchDupes(event.message);
+    if (nextBatch) batchDupIndex = nextBatch;
   });
   pi.on("model_select", async (_event, _ctx) => {
     // ST: observable model change invalidates the usage snapshot.

@@ -257,7 +257,16 @@ describe("AR1005-RC-HOST recall teardown (2026-10-05-core-architecture-reliabili
 		const result = spawnSync("bun", [scenario], {
 			encoding: "utf8",
 			timeout: 60_000,
-			env: { ...process.env, PI_CONTRACT_RC_HOST: "1" },
+			env: {
+				...process.env,
+				PI_CONTRACT_RC_HOST: "1",
+				// B (recall-frequency-tuning): the teardown scenarios fire few
+				// user turns and pin the lifecycle, not the frequency gates —
+				// disable warmup/cooldown via the env seam (the B suite pins
+				// the real gates).
+				PI_CORE_RECALL_WARMUP_TURNS: "0",
+				PI_CORE_RECALL_COOLDOWN_TURNS: "0",
+			},
 		});
 		const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
 		if (result.status !== 0) {
