@@ -7,7 +7,9 @@
 # Usage: zsh scripts/sync-deploy-copies.sh [commit-ish]   # default origin/main
 set -euo pipefail
 
-REV="${1:-origin/main}"
+# Default: whatever the SSH fetch just brought (FETCH_HEAD) — the local
+# origin/main ref tracks the (flaky) https remote and may be stale.
+REV="${1:-FETCH_HEAD}"
 DESKTOP="$HOME/.pi/agent/git/github.com/GeorgeDong32/pi-claude-code-core"
 AIR="gd32@100.88.88.3"
 AIR_PATH="$HOME/.pi/agent/git/github.com/GeorgeDong32/pi-claude-code-core"
