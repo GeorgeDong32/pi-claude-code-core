@@ -351,11 +351,13 @@ function makeCtx(
 	p: FakePi,
 	opts: FakeCtxOptions & {
 		modelRegistry?: { find: (provider: string, model: string) => unknown }
+		model?: { provider: string; id: string; maxTokens?: number }
 	},
 ) {
 	const ui = opts.ui ?? {}
 	return {
 		cwd: opts.cwd,
+		model: opts.model,
 		hasUI: !!opts.ui,
 		modelRegistry: opts.modelRegistry ?? p.modelRegistry,
 		ui: {
@@ -378,7 +380,6 @@ function makeCtx(
 			getGitBranch: () => "",
 			getEntries: () => [],
 		},
-		model: undefined,
 	}
 }
 
@@ -425,6 +426,51 @@ describe("permission-modes extension: tool_call gate", () => {
 		pi.flags["permission-mode"] = mode
 		await pi.simulateSessionStart(realProjectRoot)
 	}
+
+	describe("B1 truncation notice (cherry-batch1 spec §B1)", () => {
+		async function fireTurnEnd(message: Record<string, unknown>) {
+			const handlers = (pi as unknown as { handlers: Map<string, Array<(e: unknown, c: unknown) => Promise<unknown>>> }).handlers
+			for (const h of handlers.get("turn_end") ?? []) await h({ type: "turn_end", message }, makeCtx(pi, { cwd: realProjectRoot }))
+		}
+
+		it("B1-3: a stopReason=length assistant turn_end publishes exactly one bus notice with verdict guidance", async () => {
+			resetCoreBusForTests()
+			await fireTurnEnd({
+				role: "assistant",
+				content: [{ type: "text", text: "partial" }],
+				timestamp: Date.now(),
+				usage: { input: 10, output: 4096, cacheRead: 0, cacheWrite: 0 },
+				stopReason: "length",
+			})
+			const notices = coreBus().snapshot().notifications ?? []
+			expect(notices.filter((n) => n.msg.includes("truncated") || n.msg.includes("output limit"))).toHaveLength(1)
+		})
+
+		it("B1-4: a normal stop turn_end publishes no truncation notice", async () => {
+			resetCoreBusForTests()
+			await fireTurnEnd({
+				role: "assistant",
+				content: [{ type: "text", text: "done" }],
+				timestamp: Date.now(),
+				usage: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0 },
+				stopReason: "stop",
+			})
+			const notices = coreBus().snapshot().notifications ?? []
+			expect(notices.filter((n) => n.msg.includes("truncated") || n.msg.includes("output limit"))).toHaveLength(0)
+		})
+
+		it("B1-3b: with a resolvable model cap at/below output, the copy names the output limit (quota verdict)", async () => {
+			resetCoreBusForTests()
+			const ctx = makeCtx(pi, { cwd: realProjectRoot, model: { provider: "t", id: "m", maxTokens: 4096 } })
+			const handlers = (pi as unknown as { handlers: Map<string, Array<(e: unknown, c: unknown) => Promise<unknown>>> }).handlers
+			for (const h of handlers.get("turn_end") ?? []) {
+				await h({ type: "turn_end", message: { role: "assistant", content: [{ type: "text", text: "x" }], timestamp: Date.now(), usage: { input: 1, output: 4096, cacheRead: 0, cacheWrite: 0 }, stopReason: "length" } }, ctx)
+			}
+			const notices = coreBus().snapshot().notifications ?? []
+			const hit = notices.find((n) => n.msg.includes("output limit"))
+			expect(hit?.msg).toMatch(/maxTokens/)
+		})
+	})
 
 	describe("loop-guard integration (D1/D1b, spec docs/en/tool-call-loop-guard.md)", () => {
 		async function rawToolCall(event: Record<string, unknown>) {

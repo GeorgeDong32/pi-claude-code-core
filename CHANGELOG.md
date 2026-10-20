@@ -3,6 +3,10 @@
 ## Unreleased
 
 ### Added
+- **Truncation dual verdict (B1)**: `lib/truncation-verdict.ts` distinguishes context-clamp from output-limit on `stopReason: "length"`; the modes turn_end handler now publishes one guidance notice per truncated turn — truncation is never a silent success.
+- **Live JSONL reads (B2)**: `lib/live-jsonl.ts` — committed-prefix reads with O_NOFOLLOW, inode/dev recheck, a bytes double-read TOCTOU guard, torn-tail accounting (fail-open) and bad-line counting. The goal ledger rides it (cross-process append safety).
+- **Contract pins (B3)**: pi-ai's `estimateContextTokens` usage-anchor invalidation criterion is pinned against regression (synthetic prefixes invalidate older usage anchors).
+
 - **Tool-call loop guard (D1/D1b)**: byte-identical duplicate calls inside one assistant batch are blocked after the first (provider output-loop defense, runs before every permission path — bypass does not exempt it); a codemode parent stuck in an identical-call loop trips a per-parent breaker at 20 calls. Fail-open by construction; nested calls are structurally exempt from the batch check.
 - **Recall frequency gates (B)**: the first 3 user turns of a conversation run no memory selector (resume seeds the counter from session history), and two selector runs are at least 2 turns apart. `PI_CORE_RECALL_{WARMUP,COOLDOWN}_TURNS` env overrides; `stats.lastReason` gains `warmup` / `cooldown`.
 

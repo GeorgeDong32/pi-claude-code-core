@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import { readCommittedLines } from "../../lib/live-jsonl.ts";
 import * as path from "node:path";
 import { normalizeRelPath, nowIso, safeIdPart, type GoalRecord } from "./goal-record.ts";
 
@@ -112,31 +113,36 @@ export function readGoalLedger(ctx: GoalLedgerContext): GoalLedgerReadResult {
   const cached = ledgerReadCache.get(filePath);
   if (cached && cached.mtimeMs === mtimeMs) return cached.result;
   const result = parseGoalLedgerFile(filePath);
+  if (result === null) {
+    // read error (vanished/symlink/shrunk/oversized/unstable): fail open,
+    // and never memoize the empty fallback — the next read retries.
+    ledgerReadCache.delete(filePath);
+    return { events: [], malformed: 0 };
+  }
   ledgerReadCache.set(filePath, { mtimeMs, result });
   return result;
 }
 
-function parseGoalLedgerFile(filePath: string): GoalLedgerReadResult {
-  let content: string;
+function parseGoalLedgerFile(filePath: string): GoalLedgerReadResult | null {
+  // B2 (cherry-batch1): the live JSONL read kernel — committed-prefix with
+  // O_NOFOLLOW / inode-dev recheck / bytes double-read (prefix-compare) /
+  // torn-tail accounting (another pi process on the same project can append
+  // while we read). A LiveReadError returns NULL so the caller does NOT
+  // cache the empty fallback (an error result is never memoized); every
+  // other shape maps to a result. The ledger read path never throws.
+  let committed: ReturnType<typeof readCommittedLines>;
   try {
-    content = fs.readFileSync(filePath, "utf8");
+    committed = readCommittedLines(filePath);
   } catch {
-    return { events: [], malformed: 0 };
+    return null;
   }
 
   const events: GoalLedgerEvent[] = [];
-  let malformed = 0;
-  for (const line of content.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    try {
-      const parsed = JSON.parse(trimmed) as unknown;
-      if (isValidLedgerEvent(parsed)) {
-        events.push(sanitizeEvent(parsed));
-      } else {
-        malformed++;
-      }
-    } catch {
+  let malformed = committed.badLines;
+  for (const parsed of committed.lines) {
+    if (isValidLedgerEvent(parsed)) {
+      events.push(sanitizeEvent(parsed));
+    } else {
       malformed++;
     }
   }

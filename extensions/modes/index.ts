@@ -22,6 +22,8 @@ import { clearModesStatus, installModesFooter, shortenPath } from "./ui/footer.t
 import { clearPlanWidget, updatePlanWidget as updatePlanWidgetUi } from "./ui/plan-widget.ts";
 import { confirmChoice } from "./ui/confirm.ts";
 import { notify as uiNotify } from "../ui/notify.ts";
+// B1 truncation notices ride the same shared entry (alias for clarity at the call site).
+const sharedNotify = uiNotify;
 import { createFallbackAdapter } from "../ui/fallback.ts";
 import { coreBus, type CoreSnapshot } from "../bus.ts"
 import { isMemoryWritePath } from "../memory/paths.ts"
@@ -42,6 +44,7 @@ import {
   resolveClassifierConfig,
 } from "./config.ts";
 import { invalidateClassifierVerdictCache } from "./classifier-client.ts";
+import { boundedRecoveryPolicy, classifyLengthStop } from "../../lib/truncation-verdict.ts";
 import { createStatsPresenter } from "./stats-presenter.ts";
 import { createAutoEngine } from "./auto-engine.ts";
 import { checkBatchDup, createParentLoopBreaker, indexBatchDupes, parentLoopKey, type BatchDupIndex } from "./loop-guard.ts";
@@ -1432,6 +1435,24 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     // ST: ONE forced committed-final read feeds the TPS math AND the
     // display refresh — the stats segment lives in the presenter now.
     statsPresenter.onTurnEndStats(ctx);
+
+    // B1 (cherry-batch1): truncation is never a silent success — a length
+    // terminal gets one bus notice with verdict-shaped guidance. Narrow to
+    // assistant first (TurnEndEvent.message is a union); ctx.model is the
+    // direct seam for the cap.
+    try {
+      if (isAssistant(event.message)) {
+        const verdict = classifyLengthStop({
+          stopReason: (event.message as { stopReason?: string }).stopReason,
+          usage: (event.message as { usage?: { output?: number } }).usage,
+          modelMaxOutputTokens: (ctx as { model?: { maxTokens?: number } }).model?.maxTokens,
+        });
+        const policy = boundedRecoveryPolicy(verdict);
+        if (policy.userNotice) sharedNotify(ctx, policy.userNotice, "warning");
+      }
+    } catch {
+      /* the notice path must never break a turn */
+    }
 
     const msg = event.message;
     if (!isAssistant(msg)) return;

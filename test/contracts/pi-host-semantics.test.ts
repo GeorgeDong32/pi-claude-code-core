@@ -394,3 +394,51 @@ describe("PI12-BAS-HOST before_agent_start union (pi 1.2.0 upgrade batch 2026-10
 		expect([user.messageType, custom.messageType]).toEqual(["user", "custom"]);
 	});
 });
+
+describe("CB1 cherry-batch1 host semantics (spec docs/en/cherry-batch1-spec.md)", () => {
+	// B3-ANCHOR (registered in README): pin pi-ai's estimate anchor
+	// invalidation criterion — a synthetic prefix (a newer-timestamped
+	// message EARLIER in array order) invalidates an older usage anchor;
+	// a fresh usage assistant restores it.
+	it("B3-ANCHOR: estimateContextTokens invalidates usage anchors behind newer synthetic prefixes and restores on fresh usage", async () => {
+		const est = await import("@earendil-works/pi-ai/utils/estimate");
+		const usage = (totalTokens: number) => ({
+			input: 1,
+			output: 1,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens,
+		});
+		const assistant = (ts: number, u?: unknown) => ({
+			role: "assistant",
+			content: [{ type: "text" as const, text: "t" }],
+			timestamp: ts,
+			usage: u ?? usage(1),
+			stopReason: "stop" as const,
+			thinking: undefined,
+		});
+		const user = (ts: number, text: string) => ({
+			role: "user",
+			content: [{ type: "text" as const, text }],
+			timestamp: ts,
+		});
+		// ① synthetic prefix BEFORE the usage assistant in array order →
+		// the older-timestamped usage anchor is invalidated.
+		const seq1 = [user(2000, "compaction summary"), assistant(1000, usage(9500))];
+		const r1 = (est as { estimateContextTokens(c: unknown[]): { lastUsageIndex: number | null } }).estimateContextTokens(seq1 as never);
+		expect(r1.lastUsageIndex).toBeNull();
+		// ② a fresh usage assistant after the prefix restores the anchor.
+		const seq2 = [...seq1, assistant(3000, usage(100))];
+		const r2 = (est as { estimateContextTokens(c: unknown[]): { lastUsageIndex: number | null } }).estimateContextTokens(seq2 as never);
+		expect(r2.lastUsageIndex).toBe(2);
+	});
+
+	// B1-TRUNC (registered in README): behavior pin — a truncated
+	// (stopReason=length) assistant message's toolCalls all FAIL. The
+	// guard lives in pi's agent loop (unexported bundle internals), so we
+	// pin the observable message-level fact: a length message carrying
+	// toolCalls is marked failed by the host pipeline. The extension-side
+	// notice is pinned in modes' FakePi suite; this contract guards the
+	// HOST half against upstream drift.
+	it.todo("B1-TRUNC: host fails all toolCalls of a stopReason=length message (failToolCallsFromTruncatedMessage behavior) — needs a real-session injection scenario; target Phase: next pi-upgrade contract batch (P0-CT-13)");
+});
