@@ -151,7 +151,7 @@ description gains:
 | 1 | batch: 3 identical bash calls in one assistant message | #1 passes; #2 #3 blocked with the duplicate reason |
 | 2 | batch: 2 identical + 1 different-args call | only the follower blocked |
 | 3 | cross-turn: same tool+args next turn | passes (fresh index) |
-| 4 | nested: 25 identical `executeTool` calls under one parent | first 19 pass; 20th+ blocked with the loop reason |
+| 4 | nested: 25 identical `executeTool` calls under one parent | first 20 pass; 21st+ blocked with the loop reason (maxIdentical = passes allowed) |
 | 5 | nested: 20 identical | all pass; 21st would block (threshold boundary: maxIdentical = passes allowed) |
 | 6 | nested: different args × 30 under one parent | all pass (key differs) |
 | 7 | fail-open: unknown toolCallId | passes |

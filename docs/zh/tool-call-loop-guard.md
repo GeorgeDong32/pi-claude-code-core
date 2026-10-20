@@ -131,7 +131,7 @@ description 增加：
 | 1 | 同批：一条 assistant 消息 3 个相同 bash 调用 | #1 放行；#2 #3 被拦且 reason 含重复字样 |
 | 2 | 同批：2 个相同 + 1 个不同参数 | 仅跟随者被拦 |
 | 3 | 跨轮：下一轮同工具+同参数 | 放行（索引已换新） |
-| 4 | 嵌套：同 parent 25 个逐字节相同 `executeTool` 调用 | 前 19 放行；第 20+ 被拦且 reason 含 loop 字样 |
+| 4 | 嵌套：同 parent 25 个逐字节相同 `executeTool` 调用 | 前 20 放行；第 21+ 被拦且 reason 含 loop 字样（maxIdentical = 放行数） |
 | 5 | 嵌套：20 个相同 | 全放行；第 21 个会被拦（阈值边界：maxIdentical = 放行数） |
 | 6 | 嵌套：不同参数 × 30 同 parent | 全放行（key 不同） |
 | 7 | fail-open：未知 toolCallId | 放行 |
