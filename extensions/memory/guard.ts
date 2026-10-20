@@ -60,6 +60,9 @@ export function guardMemoryToolCall(
 	const path = typeof input.path === "string" ? input.path : "";
 	if (!path) return { block: false };
 
+	// B8 (cherry-batch2 audit): lexical here is the CONSERVATIVE direction —
+	// inside means MORE checks; a symlink-shaped path reads as outside and
+	// takes the stricter branch. Deliberately NOT realpath-upgraded.
 	const inProject = isInsideDir(path, env.projectDir);
 	const inUser = isInsideDir(path, env.userDir);
 	const inMemory = inProject || inUser;

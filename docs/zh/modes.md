@@ -83,3 +83,8 @@ fail-closed,但 block reason 现在原样携带该 family 给出的建议 allow
 
 就近 vitest 套件(`*.test.ts`,约 5 000 行)—— 唯一就近放测试的模块;
 `bun run test` 直接拾取该目录。
+
+## 权限与路径匹配是便利层，不是沙箱
+
+allowlist 与路径匹配（含 memory write-root carve-out）是**便利层而非沙箱**。主边界（`isOutsideCwd`）带逐段 symlink 逃逸探测，memory write-root carve-out 已 realpath 收紧；但 memory scoping（`paths` frontmatter 字段）是召回过滤不是访问控制——任何安全决策不得建立在 paths scoping 之上。
+

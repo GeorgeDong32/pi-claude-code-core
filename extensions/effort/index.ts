@@ -9,6 +9,7 @@ import {
   cycleLevel,
   decideCycleShortcut,
   getAvailableThinkingLevels,
+  clampToSupported,
   getFastMode,
   getUserFacingLevels,
   isEffortAlias,
@@ -74,18 +75,24 @@ function applySessionLevel(
     return;
   }
 
-  const available = getAvailableThinkingLevels(ctx.model);
-  if (!available.includes(level)) {
+  // B5 (cherry-batch2): clamp-style — write the nearest supported tier.
+  // A null model keeps the status-quo reject (no nearest tier to compute).
+  const clamp = clampToSupported(level, ctx.model);
+  if (clamp === undefined) {
+    ui.notify(ctx, `No model resolved; ${level} was not applied`, "error");
+    return;
+  }
+  const levelToApply = clamp.level;
+  if (clamp.clamped) {
     ui.notify(
       ctx,
-      `Model ${modelName(ctx.model)} does not support ${level}. Available: ${formatAvailableLevels(ctx.model)}`,
-      "error"
+      `Model ${modelName(ctx.model)} does not support ${level}; set to ${levelToApply}. Available: ${formatAvailableLevels(ctx.model)}`,
+      "warning"
     );
-    return;
   }
 
   const before = pi.getThinkingLevel();
-  owner.setExplicit(toThinkingLevel(level), src);
+  owner.setExplicit(toThinkingLevel(levelToApply), src);
   const after = pi.getThinkingLevel();
   const appliesNow = ctx.isIdle();
   ui.sync(ctx, after, fastMode, appliesNow);
@@ -246,17 +253,26 @@ export default function effortExtension(pi: ExtensionAPI): void {
         return;
       }
 
-      const available = getAvailableThinkingLevels(ctx.model);
-      if (!available.includes(resolved)) {
-        ui.notify(ctx, 
-          `--effort ${flagValue}: not supported by ${modelName(ctx.model)}. Available: ${formatAvailableLevels(ctx.model)}`,
-          "warning"
-        );
+      // B5: clamp-style; null model keeps the reject.
+      const clamp = clampToSupported(resolved, ctx.model);
+      if (clamp === undefined) {
+        ui.notify(ctx, `--effort ${flagValue}: no model resolved; not applied`, "warning");
         return;
       }
+      const clampedResolved = clamp.level;
+      // clamp notice fires AFTER the write outcome below is known (R1 P3-1):
+      // under an env pin the "pinned; not applied" message must not be
+      // preceded by a contradictory "set to X" — the notice moved to post-write.
 
       // --effort flag = manual intent at startup (② via "command")
-      const outcome = owner.setExplicit(toThinkingLevel(resolved), "command");
+      const outcome = owner.setExplicit(toThinkingLevel(clampedResolved), "command");
+      if (clamp.clamped && outcome !== "pinned-by-env") {
+        ui.notify(
+          ctx,
+          `--effort ${flagValue}: ${resolved} not supported by ${modelName(ctx.model)}; set to ${clamp.level}. Available: ${formatAvailableLevels(ctx.model)}`,
+          "warning"
+        );
+      }
       if (outcome === "pinned-by-env") {
         // P1-EF-06 c) parity with the command/picker paths: being silently
         // swallowed under an env pin is the one UX gap they don't have

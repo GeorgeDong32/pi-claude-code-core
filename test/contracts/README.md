@@ -42,6 +42,8 @@
 | **B3-ANCHOR** 钉 `@earendil-works/pi-ai` `estimateContextTokens` 的锚点时间戳判据现状(合成前缀使旧 usage 锚点失效:`lastUsageIndex` 不指向数组序在前且时间戳更新的 usage assistant 之前的旧锚;新 usage assistant 到场后恢复)。上游语义漂移即红 = pi-ai 升级信号 | CB1-B3(spec docs/{en,zh}/cherry-batch1-spec.md) | core 任何 usage 派生路径(cost 记账/OBS-09 节省计数/classifier 上下文信号) | pi-ai 正式变更 estimate 锚点语义时随版本说明改写 |
 | **B1-TRUNC** 行为钉 pi 宿主「截断不静默成功」:stopReason=length 的 assistant 消息其 toolCall 全部失败(failToolCallsFromTruncatedMessage 行为在场);若行为钉对真实包不可行,按 P0-CT-13 走 `test.todo`+Phase,不写伪导出探测 | CB1-B1(spec docs/{en,zh}/cherry-batch1-spec.md) | core lib/truncation-verdict 消费方(modes turn_end 通知) | pi 公开导出该防线或提供正式截断事件时改写 |
 
+| **CB2-B6** 钉 `AgentEndEvent` **当前无 willRetry 字段**（编译期 keyof-extends 断言——红灯亮在 check 的契约 tsc pass；运行时套件恒绿）+ 三个压缩事件（session_before_compact/session_compact/session_compact_failed）带 willRetry 且语义为 overflow recovery 重试。上游引入 agent_end.willRetry 时本契约变红 → 触发 B6 激活评估（逐 agent_end 消费点回答「终态结算是否并入 pre-retry 碎片」——评估记录在 docs/{en,zh}/cherry-batch2-spec.md §B6） | CB2-B6(spec docs/{en,zh}/cherry-batch2-spec.md) | goal 记账 / modes idle-reset / memory automation（激活评估对象） | pi 正式引入 agent_end willRetry 后随激活评估改写 |
+
 维护规约:
 - 新契约必须先在此表登记再写测试;删契约先删表行并注明版本。
 - todo 逃生门(P0-CT-13):跑不通的用例 `test.todo` 且必须带去向 Phase 编号,禁止静默丢弃。

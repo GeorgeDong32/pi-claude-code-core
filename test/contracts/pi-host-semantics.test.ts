@@ -395,6 +395,8 @@ describe("PI12-BAS-HOST before_agent_start union (pi 1.2.0 upgrade batch 2026-10
 	});
 });
 
+import type { SessionBeforeCompactEvent, SessionCompactEvent, SessionCompactFailedEvent } from "@earendil-works/pi-coding-agent";
+
 describe("CB1 cherry-batch1 host semantics (spec docs/en/cherry-batch1-spec.md)", () => {
 	// B3-ANCHOR (registered in README): pin pi-ai's estimate anchor
 	// invalidation criterion — a synthetic prefix (a newer-timestamped
@@ -441,4 +443,39 @@ describe("CB1 cherry-batch1 host semantics (spec docs/en/cherry-batch1-spec.md)"
 	// notice is pinned in modes' FakePi suite; this contract guards the
 	// HOST half against upstream drift.
 	it.todo("B1-TRUNC: host fails all toolCalls of a stopReason=length message (failToolCallsFromTruncatedMessage behavior) — needs a real-session injection scenario; target Phase: next pi-upgrade contract batch (P0-CT-13)");
+});
+
+describe("CB2 cherry-batch2 host semantics (spec docs/en/cherry-batch2-spec.md)", () => {
+	// CB2-B6 (registered): AgentEndEvent currently has NO willRetry field.
+	// COMPILE-TIME pin (keyof-extends): a runtime `in` probe on a sample
+	// could never see type-level additions. The red light turns on only in
+	// `bun run check`'s contracts tsc pass (vitest/esbuild do not typecheck).
+	it("B6-C1: AgentEndEvent has no willRetry field (compile-time keyof pin)", () => {
+		type AgentEndEventLike = import("@earendil-works/pi-coding-agent").AgentEndEvent extends never ? never : keyof import("@earendil-works/pi-coding-agent").AgentEndEvent;
+		const keys: AgentEndEventLike[] = ["type", "messages"] as AgentEndEventLike[];
+		// The compile-time assertion lives in the const below: if upstream
+		// adds willRetry, HasWillRetry becomes true and the assignment fails
+		// the check gate (tsc), turning this contract red.
+		type HasWillRetry = "willRetry" extends keyof import("@earendil-works/pi-coding-agent").AgentEndEvent ? true : false;
+		const _pinAgentEndHasNoWillRetry: false = null as unknown as HasWillRetry;
+		void _pinAgentEndHasNoWillRetry;
+		// runtime mirror (informational only — the type pin above is the contract)
+		expect(keys).not.toContain("willRetry");
+	});
+
+	// CB2-B6: the compaction events DO carry willRetry (overflow-retry
+	// semantics) — the data source a future activation review would use.
+	it("B6-C2: the three compaction events declare willRetry", async () => {
+		// Structural presence probe against declared shapes via a sample cast.
+		// The samples MUST stay MINIMAL ({type, willRetry} only): adding the
+		// other required fields would make the cast tolerate a willRetry
+		// removal (both directions assignable) and silently kill the pin.
+		// (the types are imported at module top level):
+		const compactSample = { type: "session_compact", willRetry: false } as SessionCompactEvent;
+		const beforeSample = { type: "session_before_compact", willRetry: false } as SessionBeforeCompactEvent;
+		const failedSample = { type: "session_compact_failed", willRetry: false } as SessionCompactFailedEvent;
+		expect("willRetry" in compactSample).toBe(true);
+		expect("willRetry" in beforeSample).toBe(true);
+		expect("willRetry" in failedSample).toBe(true);
+	});
 });

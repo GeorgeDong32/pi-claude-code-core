@@ -13,6 +13,8 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { lstatSync, realpathSync } from "node:fs";
+import { dirname } from "node:path";
 import { isInsideDir } from "../../lib/rule-text.ts";
 
 /** Sanitize a path exactly like pi's sessions directory naming. */
@@ -120,10 +122,75 @@ export function memoryWriteRoots(cwd: string, home = process.env.HOME ?? homedir
 	return [p.memoryDir, p.userMemoryDir];
 }
 
-/** True when a write/edit path targets either memory layer. Shared by the
- * modes carve-out and the secret guard so the two can never drift. */
+/**
+ * True when a write/edit path targets either memory layer. Shared by the
+ * modes carve-out and the secret guard so the two can never drift.
+ *
+ * B8 (cherry-batch2): the carve-out is an ALLOWANCE (it skips the approval
+ * dialog), so a purely lexical match would let a symlink alias physically
+ * pointing OUTSIDE a write root ride the carve-out (fail-open escape — the
+ * audit's headline). The second pass realpath-resolves the write path and
+ * requires it to stay inside a RESOLVED write root; unresolvable or escaped
+ * paths return false and fall back to the normal approval path
+ * (fail-closed). Consumers in the stricter direction (guard layer checks)
+ * keep using the lexical helpers directly.
+ *
+ * Known window (accepted, same class as the pre-B8 lexical check): the
+ * realpath verdict is check-then-use — the link can be swapped between
+ * this check and the actual write. This tightens the alias escape; it is
+ * not a sandbox guarantee (convenience, not containment).
+ */
 export function isMemoryWritePath(path: string, cwd: string, home = process.env.HOME ?? homedir()): boolean {
-	return memoryWriteRoots(cwd, home).some((root) => isInsideDir(path, root));
+	const roots = memoryWriteRoots(cwd, home);
+	const lexical = roots.some((root) => isInsideDir(path, root));
+	if (!lexical) return false;
+	// realpath tightening: resolve both sides; miss → NOT a memory write.
+	// A not-yet-existing WRITE TARGET (a new memory file) resolves via its
+	// nearest existing ancestor — the new file lands inside the root iff
+	// that ancestor does.
+	// A DANGLING symlink (the link itself exists via lstat but its target
+	// does not) means the write would land outside (or fail) — fail-closed
+	// before any ancestor walk. existsSync would FOLLOW the link and miss it.
+	try {
+		lstatSync(path);
+		try {
+			realpathSync(path);
+		} catch {
+			return false; // lstat ok + realpath throws = dangling
+		}
+	} catch {
+		/* path itself does not exist yet — the ancestor walk handles it */
+	}
+	try {
+		const realPath = realpathOfNearestExisting(path);
+		return roots.some((root) => {
+			try {
+				// both sides resolve via nearest-existing ancestors: a brand-new
+				// project's memory root may not exist yet either
+				return isInsideDir(realPath, realpathOfNearestExisting(root));
+			} catch {
+				return false;
+			}
+		});
+	} catch {
+		return false;
+	}
+}
+
+/** realpath of the path itself, or (for not-yet-existing write targets) of
+ *  its nearest existing ancestor. Dangling symlinks are rejected by the
+ *  caller BEFORE this walk. */
+function realpathOfNearestExisting(p: string): string {
+	let probe = p;
+	for (;;) {
+		try {
+			return realpathSync(probe);
+		} catch {
+			const parent = dirname(probe);
+			if (parent === probe) return probe; // filesystem root reached
+			probe = parent;
+		}
+	}
 }
 
 /** The sessions dir for a cwd (session_recall scans here; shared sanitizer).

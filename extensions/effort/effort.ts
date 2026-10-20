@@ -11,6 +11,38 @@ import { readJson, readJsonCached, writeJsonAtomic } from "../../lib/settings.js
 export const ALL_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export const ALL_LEVELS_WITHOUT_XHIGH = ["off", "minimal", "low", "medium", "high"] as const;
 
+/**
+ * B5 (cherry-batch2): clamp a requested level to the model's nearest
+ * SUPPORTED tier. Equidistant → the lower side (lower tiers spend fewer
+ * tokens and fail smaller — the conservative direction). "off" is always
+ * legal. An unresolvable model returns undefined — the CALLER keeps the
+ * status-quo reject (today /effort with a null model refuses; clamp-style
+ * must not widen that).
+ */
+export function clampToSupported(
+  level: EffortLevel,
+  model: EffortModel | null | undefined,
+): { level: EffortLevel; clamped: boolean } | undefined {
+  if (level === "off") return { level, clamped: false };
+  if (!model) return undefined; // no model → no nearest tier → caller rejects
+  const available = getAvailableThinkingLevels(model);
+  if (available.includes(level)) return { level, clamped: false };
+  const ranks = ALL_LEVELS as readonly EffortLevel[];
+  const requested = ranks.indexOf(level);
+  // pick the nearest supported tier (equidistant → lower)
+  let best: EffortLevel | undefined;
+  let bestDist = Number.POSITIVE_INFINITY;
+  for (const candidate of available) {
+    const dist = Math.abs(ranks.indexOf(candidate) - requested);
+    if (dist < bestDist || (dist === bestDist && ranks.indexOf(candidate) < ranks.indexOf(best!))) {
+      best = candidate;
+      bestDist = dist;
+    }
+  }
+  if (best === undefined) return { level: "off", clamped: true }; // only "off" available
+  return { level: best, clamped: true };
+}
+
 /** Levels shown to users in usage and tab completion. */
 export const USER_LEVELS = ["minimal", "low", "medium", "high", "xhigh"] as const satisfies readonly ThinkingLevel[];
 

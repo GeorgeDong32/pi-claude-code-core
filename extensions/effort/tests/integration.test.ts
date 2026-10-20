@@ -319,13 +319,13 @@ test("new sessions inherit defaultThinkingLevel from Pi settings", async () => {
 
 // ─── xhigh pre-validation tests ─────────────────────────────────────
 
-test("runtime rejects xhigh on non-xhigh-capable model", async () => {
+test("runtime CLAMPS xhigh to high on non-xhigh-capable model (B5 clamp-style)", async () => {
   const { session, previousAgentDir } = await createTestSession(reasoningModel, "medium", "medium");
 
   try {
-    const before = session.thinkingLevel;
     await session.prompt("/effort xhigh");
-    assert.equal(session.thinkingLevel, before as ThinkingLevel);
+    // B5: the nearest supported tier is written (was: reject, level unchanged)
+    assert.equal(session.thinkingLevel, "high" as ThinkingLevel);
   } finally {
     cleanupSession(previousAgentDir);
   }

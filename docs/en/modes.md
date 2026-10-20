@@ -99,3 +99,8 @@ prompt path).
 
 Colocated vitest suites (`*.test.ts`, ~5 000 lines) — the only module with
 colocated tests; `bun run test` picks the directory up directly.
+
+## Permissions and path matching are a convenience layer, not a sandbox
+
+Allowlists and path matching (including the memory write-root carve-out) are a **convenience layer, not a sandbox**. The main boundary (`isOutsideCwd`) probes symlink escapes per segment and the memory write-root carve-out is realpath-tightened; but memory scoping (the `paths` frontmatter field) is a recall filter, not access control — no security decision may rest on paths scoping.
+

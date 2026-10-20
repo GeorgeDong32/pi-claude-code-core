@@ -35,6 +35,9 @@ interface ProtectedEntry {
 	dir: boolean;
 }
 
+// B8 audit note: the matcher is LEXICAL; an alias symlink can bypass a
+// protected entry (miss = allowance). Kept lexical this batch — see
+// DEVIATIONS #127 for the revisit condition (G1 evidence).
 /** The frozen list (order per spec [C4]; see header for why it is code). */
 function protectedEntries(opts: ProtectedPathsInput): ProtectedEntry[] {
 	return [

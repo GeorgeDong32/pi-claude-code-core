@@ -23,6 +23,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { getSharedEffortOwner, type OwnerEffortLevel } from "../../lib/effort-owner.ts";
+import { clampToSupported, type EffortLevel } from "../effort/effort.ts";
 import { notify as uiNotify } from "../ui/notify.ts";
 import type { PermissionMode } from "./mode-prompt.ts";
 import {
@@ -141,9 +142,21 @@ export function createProfileController(pi: ExtensionAPI, wiring: ProfileWiring)
 			);
 			return;
 		}
+		// B5 (cherry-batch2): clamp the profile's level to the model's
+		// supported set BEFORE writing — profile switches are routine, so an
+		// info notice (not error); an unresolvable model writes as-is (the
+		// profile expresses intent; no nearest tier exists without a model).
+		const clamp = clampToSupported(effort as EffortLevel, ctx.model ?? null);
+		if (clamp && clamp.clamped) {
+			notify(
+				ctx,
+				`Profile "${activeProfile}": effort ${effort} is not supported by ${ctx.model ? String((ctx.model as { id?: string }).id ?? "the model") : "the model"}; clamped to ${clamp.level}`,
+				"info",
+			);
+		}
 		// membership in PROFILE_EFFORT_LEVELS checked just above; the owner
 		// arbitrates against explicit manual levels (D5, P1-EF-05)
-		getSharedEffortOwner(pi).setFromProfile(effort as OwnerEffortLevel, activeProfile);
+		getSharedEffortOwner(pi).setFromProfile((clamp ? clamp.level : effort) as OwnerEffortLevel, activeProfile);
 	}
 
 	async function setActive(name: string, ctx: ExtensionContext): Promise<void> {
