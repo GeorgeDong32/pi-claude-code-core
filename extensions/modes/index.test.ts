@@ -506,6 +506,44 @@ describe("permission-modes extension: tool_call gate", () => {
 			expect(second).toEqual({ block: true, reason: expect.stringMatching(/byte-identical duplicate/) })
 		})
 
+		it("D1 group 3: cross-turn retry passes — a fresh assistant batch index never marks the same call duplicate", async () => {
+			await switchMode("bypass")
+			await fireMessageEnd({
+				role: "assistant",
+				content: [{ type: "toolCall", id: "turn1-run", name: "bash", arguments: { command: "bun run test" } }],
+			})
+			expect(await rawToolCall({ type: "tool_call", toolName: "bash", toolCallId: "turn1-run", input: { command: "bun run test" } })).toBeUndefined()
+			// next turn, the model legitimately retries the identical call
+			await fireMessageEnd({
+				role: "assistant",
+				content: [{ type: "toolCall", id: "turn2-retry", name: "bash", arguments: { command: "bun run test" } }],
+			})
+			expect(await rawToolCall({ type: "tool_call", toolName: "bash", toolCallId: "turn2-retry", input: { command: "bun run test" } })).toBeUndefined()
+		})
+
+		it("D1 group 3: a legal codemode batch — same parent, DIFFERENT arguments — all pass (D1b counts per key)", async () => {
+			await switchMode("bypass")
+			for (let i = 0; i < 12; i++) {
+				const result = await rawToolCall({
+					type: "tool_call",
+					toolName: "read",
+					parentToolCallId: "codemode-batch-1",
+					input: { path: `src/file-${i}.ts` },
+				})
+				expect(result).toBeUndefined()
+			}
+		})
+
+		it("D1 group 3: fail-open at the gate — an event whose toolCallId misses the held index passes", async () => {
+			await switchMode("bypass")
+			await fireMessageEnd({
+				role: "assistant",
+				content: [{ type: "toolCall", id: "known-1", name: "bash", arguments: { command: "echo a" } }],
+			})
+			// an id that never appeared in any indexed batch (older-host shape)
+			expect(await rawToolCall({ type: "tool_call", toolName: "bash", toolCallId: "never-indexed", input: { command: "echo a" } })).toBeUndefined()
+		})
+
 		it("D1b-4: a codemode parent stuck in an identical-call loop trips the breaker at 20", async () => {
 			await switchMode("bypass")
 			const event = { type: "tool_call", toolName: "bash", parentToolCallId: "nested-1", input: { command: "echo loop" } }

@@ -108,7 +108,7 @@ this process started". Sessions continued after compaction keep counting
 | 5 | seeded=2 (short resume) | first turn is warmup turn 3; second turn runs |
 | 6 | pipeline early-exit (eligible() empty) at an eligible turn N | counter +1 (not reset); turn N+1 is still eligible and runs |
 | 7 | abort() mid-warmup | counter preserved (abort clears request state, not turn counters) |
-| 8 | aggregate script smoke on a synthetic jsonl with new reasons | parses; counts unchanged in shape |
+| 8 | aggregate script smoke on a synthetic sparse-delivery jsonl (the gates touch details v1 never — fewer blocks with larger turn gaps is all that lands) | parses; output shape unchanged (test/lib/recall-aggregate-smoke.test.ts) |
 | 9 | steer path (waitMs=0) shares the machine | warmup/cooldown counters shared with the normal path — a steer during cooldown still skips |
 | 10 | machine rebuilt mid-session (settings change) | warmup seed re-derived from the branch (no warmup replay); the cooldown clock restarts — rebuilds are rare and the first post-rebuild turn is eligible immediately |
 

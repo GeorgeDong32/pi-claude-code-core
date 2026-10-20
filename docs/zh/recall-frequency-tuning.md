@@ -93,7 +93,7 @@ appendMessage），所以 branch 计数永不含正在处理的消息——无 o
 | 5 | 种子=2（短 resume） | 第 1 turn 是首免第 3 turn；第 2 turn 运行 |
 | 6 | 具备资格的 turn N 流水线早退（eligible() 空） | 计数 +1（不重置）；turn N+1 仍具备资格并运行 |
 | 7 | warmup 期间 abort() | 计数保留（abort 清请求态，不清 turn 计数） |
-| 8 | aggregate 脚本对含新 reason 的合成 jsonl 冒烟 | 可解析；计数形状不变 |
+| 8 | aggregate 脚本对稀疏投递形状的合成 jsonl 冒烟（门不碰 details v1——落盘的只有更少块与更大间隔） | 可解析；输出形状不变（test/lib/recall-aggregate-smoke.test.ts） |
 | 9 | steer 路径（waitMs=0）共用 machine | warmup/cooldown 计数与常规路径共享——冷却期 steer 仍跳过 |
 | 10 | 会话中途重建 machine（settings 变更） | 首免种子从 branch 重导出（不重放首免）；冷却时钟重启——重建罕见且重建后首 turn 立即具备资格 |
 
