@@ -53,6 +53,8 @@ export function renderMcpPanel(input: {
 	ruleSummary: string[];
 	denyCount: number;
 	home?: string;
+	/** B4: extra lines rendered in BOTH states (the declarations meter line). */
+	extraLines?: string[];
 }): McpPanelSection {
 	const home = input.home ?? homedir();
 	if (input.port.present && input.port.snapshot) {
@@ -66,6 +68,7 @@ export function renderMcpPanel(input: {
 					`mcp: adapter connected (v${snap.version}), servers: ${(snap.servers ?? []).join(", ") || "(none)"}`,
 					...input.ruleSummary,
 					`mirror deny count: ${input.denyCount}`,
+					...(input.extraLines ?? []),
 				],
 			};
 		} catch {
@@ -79,6 +82,7 @@ export function renderMcpPanel(input: {
 	}
 	lines.push(...input.ruleSummary);
 	lines.push(`mirror deny count: ${input.denyCount}`);
+	for (const l of input.extraLines ?? []) lines.push(l);
 	lines.push("install: pi install npm:pi-mcp-adapter");
 	return { status: "absent", lines };
 }

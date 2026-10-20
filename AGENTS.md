@@ -134,6 +134,7 @@ Per-module docs live in [docs/en/](docs/en) / [docs/zh/](docs/zh) — start with
 | `PERMISSION_MODES_CLASSIFIER_DEBUG` | modes | Debug logging for the auto-mode classifier |
 | `PI_GOAL_AUTO_CONFIRM` | goal | Auto-confirm goal proposals |
 | `CC_CORE_BG_DEBUG` / `CC_CORE_BG_{PROMOTE,GRACE,LOG_LIMIT}_*` | bg-shell | Debug log + test seams for promote/grace/log-limit thresholds |
+| `PI_B4_TEST_HOME` | mcp-gov | Test seam: overrides the home dir for `/core exposure` writes (tests only) |
 | `PI_CORE_RECALL_{WARMUP,COOLDOWN}_TURNS` | memory | Recall frequency gates: first-N-turns warmup / min-turns cooldown (≤ 0 disables; test seam) |
 
 `PI_SUBAGENT_*` variables are produced by pi-subagents; core only reads them.

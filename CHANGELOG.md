@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added — cherry-batch3 (B4 MCP declaration economics, tier 1)
+- `/core` panel now shows measured per-request tool-declaration volume (per MCP server + peak), from a fail-open `before_provider_request` meter (`extensions/mcp-gov/declaration-meter.ts`, dialect-tolerant: flat / Bedrock toolConfig / Google nested forms).
+- `/core exposure <server> <tier>` switches a server's declaration tier in the global `mcp.json` (4 tiers; `codemode-deferred` normalizes to `codemode`), atomically, refusing project-level overrides; takes effect after `/reload` or restart.
+- Recon report `docs/{en,zh}/b4-declaration-recon.md` (GO verdict: one direct exa server ≈ 1,343 tokens per request).
+
+
 ### Changed
 - **Effort write-time clamping (B5)**: unsupported thinking levels clamp to the nearest supported tier (equidistant → lower; off always legal) instead of being refused — the /effort command, the --effort flag, and mode profiles all share one clamping semantic; an unresolvable model keeps the reject. The profile path previously wrote unvalidated.
 - **Memory write-root carve-out realpath-tightened (B8)**: a symlink alias inside a write root no longer rides the approval skip (fail-closed; dangling aliases rejected; new files and brand-new projects resolve via nearest-existing ancestors). The path-matching posture is documented: a convenience layer, not a sandbox.
