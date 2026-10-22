@@ -9,6 +9,7 @@
 
 
 ### Changed
+- **Builtin search-channel rule is exposure-neutral**: the shipped wording no longer assumes `mcp__exa__*` tools are declared to the model — direct exposure calls them directly, codemode/deferred exposure reaches them from a codemode script via the top-level `searchTools()` global. Keeps the rule truthful after an exposure switch (`/core exposure` or hand-edited `mcp.json`).
 - **Effort write-time clamping (B5)**: unsupported thinking levels clamp to the nearest supported tier (equidistant → lower; off always legal) instead of being refused — the /effort command, the --effort flag, and mode profiles all share one clamping semantic; an unresolvable model keeps the reject. The profile path previously wrote unvalidated.
 - **Memory write-root carve-out realpath-tightened (B8)**: a symlink alias inside a write root no longer rides the approval skip (fail-closed; dangling aliases rejected; new files and brand-new projects resolve via nearest-existing ancestors). The path-matching posture is documented: a convenience layer, not a sandbox.
 - **Contract pin (B6)**: AgentEndEvent has no willRetry (compile-time pin, red only in the check gate); the three compaction events do carry it. Guards deferred to a recorded activation review.
