@@ -5,6 +5,11 @@
  * deliberately deferred (P3-RU-12) — the factory shell accepts future
  * commands without breaking the interface.
  *
+ * No shipped rules: the builtin rule set (exa search-channel et al.) was
+ * removed in 1.4.x — user preferences belong in the user's own rules
+ * directories, not the package. The builtin:// scope MECHANISM stays in
+ * render.ts (SCOPE_PRIORITY) for future use; no builtin dir is wired here.
+ *
  * Wiring:
  *   - session_start: reset the activation set; drop the mtime fingerprint.
  *   - before_agent_start: append-only concatenation of renderRules output
@@ -26,7 +31,6 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { CONTEXT_BUDGET } from "../../lib/context-budget.js";
 import { createRuleActivation } from "./activation.ts";
 import { coreBus } from "../bus.js";
-import { BUILTIN_RULES } from "./defaults.ts";
 import { collectRules, globToRegExp, renderRules, setRulesHome, type RenderedRule, type RuleDir, type RuleFs } from "./render.ts";
 
 /** In-memory glob hit for the cached-rules activation hot path. */
@@ -58,7 +62,6 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 		const agentDir = join(home, ".pi", "agent");
 
 		const dirsOf = (cwd: string): RuleDir[] => [
-			{ scope: "builtin", path: "builtin://" },
 			{ scope: "global", path: join(agentDir, "rules") },
 			{ scope: "compat", path: join(cwd, ".claude", "rules") },
 			{ scope: "project", path: join(cwd, ".pi", "rules") },
@@ -67,7 +70,6 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 
 		const realFs: RuleFs = {
 			listMarkdownFiles(dir: string): string[] {
-				if (dir === "builtin://") return BUILTIN_RULES.map((r) => `${r.slug}.md`);
 				try {
 					return readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
 				} catch {
@@ -75,12 +77,6 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 				}
 			},
 			readFile(path: string): string {
-				if (path.startsWith("builtin://")) {
-					const slug = path.slice("builtin://".length).replace(/\.md$/, "");
-					const rule = BUILTIN_RULES.find((r) => r.slug === slug);
-					if (!rule) throw new Error("missing builtin");
-					return `---\nname: ${rule.name}\ndescription: ${rule.description}\n---\n\n${rule.content}`;
-				}
 				return readFileSync(path, "utf-8");
 			},
 		};
@@ -101,7 +97,6 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 			// DEVIATIONS #39).
 			return dirs
 				.map((d) => {
-					if (d.scope === "builtin") return "builtin:static";
 					try {
 						const files = readdirSync(d.path)
 							.filter((f) => f.endsWith(".md"))
