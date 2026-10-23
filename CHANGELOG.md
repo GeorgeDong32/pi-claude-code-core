@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 (2026-10-23)
 
 ### Added — cherry-batch3 (B4 MCP declaration economics, tier 1)
 - `/core` panel now shows measured per-request tool-declaration volume (per MCP server + peak), from a fail-open `before_provider_request` meter (`extensions/mcp-gov/declaration-meter.ts`, dialect-tolerant: flat / Bedrock toolConfig / Google nested forms).
