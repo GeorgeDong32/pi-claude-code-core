@@ -15,7 +15,14 @@ import { getAdjudication, hasSessionGrant, isBypassActive } from "../modes/rule-
 import { createBrokerMirror, probeMcpAdapterPort, type McpEventPort } from "./broker.ts";
 import { createMcpRuleFamily, directKnownServersFromEnv } from "./family.ts";
 import { renderMcpPanel } from "./panel.ts";
-import { estimateTextTokens } from "@earendil-works/pi-ai/utils/estimate";
+// NOTE: resolved as a relative entity path, NOT the public
+// "@earendil-works/pi-ai/utils/estimate" subpath — pi's extension loader
+// (jiti aliases, present in 1.3.0+) rewrites bare "@earendil-works/pi-ai*"
+// imports to the compat entrypoint FILE, so any subpath import resolves to
+// "<compat.js>/utils/estimate" and dies at load time (vitest/bun resolve
+// fine; only the pi runtime is affected). Revisit once pi's alias table
+// grows per-subpath entries.
+import { estimateTextTokens } from "../../node_modules/@earendil-works/pi-ai/dist/utils/estimate.js";
 import { createDeclarationMeter } from "./declaration-meter.ts";
 import { readJson, writeJsonAtomic } from "../../lib/settings.ts";
 
