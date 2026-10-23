@@ -15,14 +15,18 @@ import { getAdjudication, hasSessionGrant, isBypassActive } from "../modes/rule-
 import { createBrokerMirror, probeMcpAdapterPort, type McpEventPort } from "./broker.ts";
 import { createMcpRuleFamily, directKnownServersFromEnv } from "./family.ts";
 import { renderMcpPanel } from "./panel.ts";
-// NOTE: resolved as a relative entity path, NOT the public
-// "@earendil-works/pi-ai/utils/estimate" subpath — pi's extension loader
-// (jiti aliases, present in 1.3.0+) rewrites bare "@earendil-works/pi-ai*"
-// imports to the compat entrypoint FILE, so any subpath import resolves to
-// "<compat.js>/utils/estimate" and dies at load time (vitest/bun resolve
-// fine; only the pi runtime is affected). Revisit once pi's alias table
-// grows per-subpath entries.
-import { estimateTextTokens } from "../../node_modules/@earendil-works/pi-ai/dist/utils/estimate.js";
+// NOTE (DEVIATIONS #133): inline copy of pi-ai's estimateTextTokens
+// (ceil(len / 3.5), pi-ai 1.4.0 dist/utils/estimate.js). The public
+// "@earendil-works/pi-ai/utils/estimate" subpath import cannot be used
+// here twice over: pi's extension loader (jiti aliases) rewrites bare
+// "@earendil-works/pi-ai*" to the compat entrypoint FILE (killing any
+// subpath), and a relative entity-path import would bind the package to
+// the dev node_modules layout (absent on machines that install via
+// `pi update` without devDeps). Keep in sync with pi-ai if the constant
+// changes; re-export from the public subpath once pi's alias table grows
+// per-subpath entries.
+const PI_AI_CHARS_PER_TOKEN = 3.5;
+const estimateTextTokens = (text: string): number => Math.ceil(text.length / PI_AI_CHARS_PER_TOKEN);
 import { createDeclarationMeter } from "./declaration-meter.ts";
 import { readJson, writeJsonAtomic } from "../../lib/settings.ts";
 
