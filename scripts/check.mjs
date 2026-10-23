@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Unified typecheck gate (P0-SK-03): `bun run check` must be exit-0.
+ * Unified typecheck gate (P0-SK-03): `pnpm run check` must be exit-0.
  *
  * Runs TWO tsc passes:
  *   1. main project (tsconfig.json — core sources + unit tests)
@@ -31,7 +31,10 @@ const GOAL_DRIFTS = [];
 
 function runTsc(args) {
 	try {
-		return { ok: true, output: execFileSync("bunx", ["tsc", ...args], { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }) };
+		// Resolve the local tsc binary directly — works identically under
+		// pnpm/npm/bun installs and needs nothing on PATH (the old `bunx tsc`
+		// tied this gate to bun).
+		return { ok: true, output: execFileSync(join(repoRoot, "node_modules", ".bin", "tsc"), args, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }) };
 	} catch (error) {
 		return { ok: false, output: String(error.stdout ?? "") + String(error.stderr ?? "") };
 	}

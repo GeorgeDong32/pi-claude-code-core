@@ -15,10 +15,10 @@ pi install npm:@georgedong32/pi-claude-code-core
 ## Development
 
 ```
-bun install
-bun run check      # tsc gate (main + contracts w/ documented allowlist)
-bun run test       # unit tests (lib/, later module suites — per-framework)
-bun run contracts  # cross-package contract suite (test/contracts)
+pnpm install
+pnpm run check      # tsc gate (main + contracts w/ documented allowlist)
+pnpm run test       # unit tests (lib/, later module suites — per-framework)
+pnpm run contracts  # cross-package contract suite (test/contracts)
 ```
 
 The contract suite pins every cross-package surface (globalThis keys, env vars, status slots, session entry types, disk layout) so the phase-by-phase migration cannot silently break consumers. See [test/contracts/README.md](test/contracts/README.md) for the contract → consumer → removal-condition table.

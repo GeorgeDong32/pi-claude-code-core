@@ -98,7 +98,7 @@ prompt path).
 ## Tests
 
 Colocated vitest suites (`*.test.ts`, ~5 000 lines) — the only module with
-colocated tests; `bun run test` picks the directory up directly.
+colocated tests; `pnpm run test` picks the directory up directly.
 
 ## Permissions and path matching are a convenience layer, not a sandbox
 

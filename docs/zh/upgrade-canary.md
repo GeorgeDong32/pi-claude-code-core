@@ -28,4 +28,4 @@ npx vitest run test/lib/upgrade-canary.test.ts --config vitest.config.ts
 
 ## 与三门禁的关系
 
-**不属于**三个常规门禁（`bun run check` / `bun run test` / `bun run contracts`）。升级专用：改 pi 版本时跑。
+**不属于**三个常规门禁（`pnpm run check` / `pnpm run test` / `pnpm run contracts`）。升级专用：改 pi 版本时跑。

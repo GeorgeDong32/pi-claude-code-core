@@ -28,4 +28,4 @@ Check exactly two mechanisms:
 
 ## Relation to the gates
 
-This is **not** one of the three regular gates (`bun run check` / `bun run test` / `bun run contracts`). It is upgrade-specific: run it when changing the pi version.
+This is **not** one of the three regular gates (`pnpm run check` / `pnpm run test` / `pnpm run contracts`). It is upgrade-specific: run it when changing the pi version.

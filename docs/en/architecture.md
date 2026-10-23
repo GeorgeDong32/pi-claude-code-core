@@ -99,10 +99,10 @@ per-module implementation status in `PROGRESS.md`.
   `extensions/modes/` (colocated `*.test.ts`).
 - **node:test via tsx**: `extensions/{effort,goal,review,action-fusion,
   observation-pack}/tests/` — each migrated package kept its framework.
-- **contracts** (`bun run contracts`): `test/contracts/` pins cross-package
+- **contracts** (`pnpm run contracts`): `test/contracts/` pins cross-package
   surfaces; includes a host-semantics suite (`pi-host-semantics.test.ts`)
   that is the first red light when a pi upgrade breaks an assumed behavior.
-- **tsc gate** (`bun run check`): two projects, main + contracts.
+- **tsc gate** (`pnpm run check`): two projects, main + contracts.
 
-Run everything through the script entries (`bun run check|test|contracts`);
+Run everything through the script entries (`pnpm run check|test|contracts`);
 never invoke vitest/tsc directly.

@@ -6,7 +6,7 @@
 ## 1. 背景
 
 事件（session `01a10ca2-dd4f`，2026-10-05）：单条 assistant 消息携带 **755 个
-并行 toolCall**，其中 **653 个逐字节相同**（`bun run contracts 2>&1 | tail
+并行 toolCall**，其中 **653 个逐字节相同**（`pnpm run contracts 2>&1 | tail
 -30`）。后果：1,089 次「response hit the output token limit」未执行、675 次
 429 五小时限额中断、14.2 MB session 文件、占扫描语料全部工具失败的 67%。
 根因：provider 在 output token 上限附近的退化输出（GLM/CPA 复读同一

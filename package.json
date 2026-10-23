@@ -1,68 +1,69 @@
 {
-	"name": "@georgedong32/pi-claude-code-core",
-	"version": "0.3.0",
-	"description": "Unified core for pi coding agent: permission modes + effort + goal + review, plus rules / memory / mcp-gov / web-gov modules.",
-	"type": "module",
-	"license": "MIT",
-	"repository": {
-		"type": "git",
-		"url": "git+https://github.com/GeorgeDong32/pi-claude-code-core.git"
-	},
-	"publishConfig": {
-		"access": "public",
-		"registry": "https://registry.npmjs.org/"
-	},
-	"keywords": [
-		"pi-package"
-	],
-	"scripts": {
-		"check": "node scripts/check.mjs",
-		"test": "node scripts/run-tests.mjs",
-		"contracts": "vitest run --config vitest.contracts.config.ts"
-	},
-	"pi": {
-		"extensions": [
-			"./extensions/index.ts"
-		],
-		"subagents": {
-			"agents": [
-				"./extensions/review/agents"
-			]
-		}
-	},
-	"exports": {
-		"./types": {
-			"types": "./types/index.d.mts"
-		}
-	},
-	"files": [
-		"extensions",
-		"lib",
-		"types",
-		"README.md",
-		"LICENSE"
-	],
-	"peerDependencies": {
-		"@earendil-works/pi-ai": ">=0.86.0 <2.0.0",
-		"@earendil-works/pi-coding-agent": ">=0.87.0 <2.0.0",
-		"@earendil-works/pi-tui": ">=0.87.0 <2.0.0",
-		"pi-subagents": ">=0.41.0 <1.0.0",
-		"typebox": "*"
-	},
-	"devDependencies": {
-		"@earendil-works/pi-agent-core": "1.4.0",
-		"@earendil-works/pi-ai": "1.4.0",
-		"@earendil-works/pi-coding-agent": "1.4.0",
-		"@earendil-works/pi-tui": "1.4.0",
-		"@types/node": "^24.0.0",
-		"tsx": "^4.20.0",
-		"typebox": "1.3.27",
-		"typescript": "^5.9.0",
-		"vitest": "^1.6.0"
-	},
-	"peerDependenciesMeta": {
-		"pi-subagents": {
-			"optional": true
-		}
-	}
+  "name": "@georgedong32/pi-claude-code-core",
+  "version": "0.3.0",
+  "description": "Unified core for pi coding agent: permission modes + effort + goal + review, plus rules / memory / mcp-gov / web-gov modules.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GeorgeDong32/pi-claude-code-core.git"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "keywords": [
+    "pi-package"
+  ],
+  "scripts": {
+    "check": "node scripts/check.mjs",
+    "test": "node scripts/run-tests.mjs",
+    "contracts": "vitest run --config vitest.contracts.config.ts"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/index.ts"
+    ],
+    "subagents": {
+      "agents": [
+        "./extensions/review/agents"
+      ]
+    }
+  },
+  "exports": {
+    "./types": {
+      "types": "./types/index.d.mts"
+    }
+  },
+  "files": [
+    "extensions",
+    "lib",
+    "types",
+    "README.md",
+    "LICENSE"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-ai": ">=0.86.0 <2.0.0",
+    "@earendil-works/pi-coding-agent": ">=0.87.0 <2.0.0",
+    "@earendil-works/pi-tui": ">=0.87.0 <2.0.0",
+    "pi-subagents": ">=0.41.0 <1.0.0",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-agent-core": "1.4.0",
+    "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@earendil-works/pi-tui": "1.4.0",
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typebox": "1.3.27",
+    "typescript": "^5.9.0",
+    "vitest": "^1.6.0"
+  },
+  "peerDependenciesMeta": {
+    "pi-subagents": {
+      "optional": true
+    }
+  },
+  "packageManager": "pnpm@10.27.0"
 }

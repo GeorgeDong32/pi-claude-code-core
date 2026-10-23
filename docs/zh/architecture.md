@@ -90,10 +90,10 @@ P4 mcp-gov/web-gov,另有 0.2.0 吸收 SoL-Pi economy 的 SPEC 2026-09-29)。
   (就近 `*.test.ts`)。
 - **node:test 经 tsx**:`extensions/{effort,goal,review,action-fusion,
   observation-pack}/tests/` —— 各包保留迁移时的框架。
-- **契约**(`bun run contracts`):`test/contracts/` 钉住跨包表面;内含
+- **契约**(`pnpm run contracts`):`test/contracts/` 钉住跨包表面;内含
   pi 宿主语义套件(`pi-host-semantics.test.ts`),pi 升级破坏被依赖行为时
   第一个亮红灯。
-- **tsc 门**(`bun run check`):两个 project,主工程 + 契约工程。
+- **tsc 门**(`pnpm run check`):两个 project,主工程 + 契约工程。
 
-一律通过 script 入口运行(`bun run check|test|contracts`);不要直接调
+一律通过 script 入口运行(`pnpm run check|test|contracts`);不要直接调
 vitest/tsc。

@@ -8,7 +8,7 @@ defense 2026-10-20 · Modules: `extensions/modes/loop-guard.ts` (new),
 
 Incident (session `01a10ca2-dd4f`, 2026-10-05): a single assistant message
 carried **755 parallel toolCalls**, **653 of them byte-identical**
-(`bun run contracts 2>&1 | tail -30`). Downstream: 1,089
+(`pnpm run contracts 2>&1 | tail -30`). Downstream: 1,089
 "response hit the output token limit" non-executions, 675 429
 five-hour-limit aborts, a 14.2 MB session file, 67% of all tool failures
 in the scanned corpus. Root cause: provider-side degenerate output near the
