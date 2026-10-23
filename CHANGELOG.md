@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Added — notification CC-ification (2026-10-20 prototype decision)
+- All ten core-owned `display: true` custom messages now render in the Claude Code visual language instead of pi's native `[customType]` box. Two new presentation modules: `ui/cc-rows.ts` (shared primitives — command bar / `⏺` summary / `⎿` body, the single source for the family, review's v0.8.5 flat-card language generalized) + `ui/cc-panels.ts` (per-type content shapers + one `pi.registerMessageRenderer` call per customType from the assembly entry).
+- Command-panel family (bar + `⏺` summary + `⎿` body): `pi-core-status` (`/core` panel + `/core exposure`), `pi-memory-status` (`/memory` + both import reports), `pi-review-agents`, `model-profile-list`, `permissions-list`, `outside-writes-list` (`/outside-writes` + `/undo-outside-writes --list`), `pi-rules-list`.
+- Special forms: `modes-execute` renders as a synthetic user bar (`Execute the plan now — N steps (plan approved)`) + steps block; `plan-complete` a single `⏺ Plan Complete ✓` terminal row; `pi-rules-activate` a dim `⎿` block (steer injection de-emphasized).
+- The command-bar text rides new `details.command` display metadata on core's own send sites — the model-visible `content` string is byte-identical (display-layer red line). Unparseable shapes degrade (no `⏺` head / no bar), a throwing shaper falls back to pi's native box, and long bodies clip with a `ctrl+o` hint driven by the host's global expansion toggle (no per-card fold state). Only standard theme tokens are consulted, with one deliberate exception: the command-bar background is the CC user-bar constant `rgb(55,55,55)` (CC themes blank `userMessageBg`; same call as review's commandEchoRow).
+- goal/review's own renderers (`pi-goal-event`, `pi-goal-audit-event`, `pi-review`) are untouched; `notify(info)` dim status lines stay as-is (user decision).
+
 ## 0.4.0 (2026-10-23)
 
 ### Added — cherry-batch3 (B4 MCP declaration economics, tier 1)

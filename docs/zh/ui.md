@@ -30,6 +30,19 @@ ui 包装后(如 `effort/ui`),业务流因此可以对 fake await。
 | core 兜底 | `ui/fallback.ts` | 「无 cctui 的 core」的瘦默认:持有 working 消息行与通知尾队列显示;每次写入前读 presence 键向在场的 CC-TUI 让位(轮询点自愈——过期键在每次快照时重读) |
 | notify | `ui/notify.ts` | 模块共享的通知入口(喂尾队列) |
 | footer-lines | `ui/footer-lines.ts` | 多来源 `display.footer` 发布器(XPKG-07,2026-10-07 P1-1):每个 bus 实例一份 `Map<source, line>`(WeakMap——reset/reload 不沿旧行),单次 patch 发布按 source 排序的整体数组;删除最后一行时显式发布空数组 |
+| cc 面板 | `ui/cc-rows.ts` + `ui/cc-panels.ts` | 全部 core 自有 `display: true` customType 的 CC 风格消息渲染器(2026-10-20):共享视觉原语(命令条 / `⏺` 摘要 / `⎿` 正文)+ 每类型 shaper,由装配入口一次性注册 |
+
+## CC 面板渲染器(2026-10-20)
+
+命令面板类输出(`/core`、`/memory*`、`/review-agents`、`/model-profile`、
+`/permissions`、`/outside-writes`、`/rules`)渲染为命令条 + `⏺` 摘要 +
+`⎿` 正文,不再落回 pi 原生 `[customType]` 盒子。`modes-execute` 合成批准
+用户条 + 步骤列表;`plan-complete` 单行终态;`pi-rules-activate` 降为 dim
+`⎿` 块。命令条文本来自 core send 点新增的 `details.command` 显示元数据——
+模型可见 content 逐字不变(显示层红线)。shaper 全部防御式解析(摘要
+解析不出则去掉 `⏺` 头;抛错则整体落回原生盒子);长正文靠宿主全局
+ctrl+o 展开裁剪。命令条底色用 CC 用户条常量 `rgb(55,55,55)`——CC 主题
+故意把 `userMessageBg` 留空(CC-TUI 接管用户条),主题查询会渲染成透明。
 
 ## 不变量与坑
 
@@ -40,7 +53,9 @@ ui 包装后(如 `effort/ui`),业务流因此可以对 fake await。
 
 ## 测试
 
-`test/lib/fallback-adapter.test.ts`、`notify.test.ts`(vitest);effort 的
+`test/lib/fallback-adapter.test.ts`、`notify.test.ts`(vitest);CC 面板渲染器
+由 `test/lib/cc-panels.test.ts` 钉住(视觉原语 + 全部 shaper + 渲染安全 +
+注册表一致性);effort 的
 适配器交互另见 `extensions/effort/tests/ui.test.ts`;effort 的「恰好显示一次」
 合同(真实入口 + 真实 bus + 真实 fallback 适配器,含旧 cctui 直写分支与
 off/on 交接)由 `extensions/effort/tests/notify-display.test.ts` 钉住。

@@ -34,6 +34,22 @@ against a fake.
 | core fallback | `ui/fallback.ts` | Thin default for "core without cctui": owns the working message line and the notification tail display; yields to a live CC-TUI by reading the presence key before any write (poll point self-heals — stale keys are re-read on every snapshot) |
 | notify | `ui/notify.ts` | Shared notification entry for modules (feeds the tail queue) |
 | footer-lines | `ui/footer-lines.ts` | Multi-source `display.footer` publisher (XPKG-07, 2026-10-07 P1-1): one `Map<source, line>` per bus instance (WeakMap — reset/reload drops old lines), publishes the whole source-sorted array in one patch; removing the last line publishes an explicit empty array |
+| cc panels | `ui/cc-rows.ts` + `ui/cc-panels.ts` | CC-style message renderers for every core-owned `display: true` customType (2026-10-20): shared visual primitives (command bar / `⏺` summary / `⎿` body) + per-type shapers, registered in one pass from the assembly entry |
+
+## CC panel renderers (2026-10-20)
+
+Command-panel outputs (`/core`, `/memory*`, `/review-agents`, `/model-profile`,
+`/permissions`, `/outside-writes`, `/rules`) render as a command bar +
+`⏺` summary + `⎿` body instead of pi's native `[customType]` box.
+`modes-execute` becomes a synthetic approval bar + steps, `plan-complete`
+a single terminal row, `pi-rules-activate` a dim `⎿` block. The bar text
+rides `details.command` display metadata added at core's send sites — the
+model-visible content is never modified. Shapers parse defensively (missing
+summary drops the `⏺` head; a throwing shaper falls back to the native
+box); long bodies clip behind the host's global ctrl+o expansion. The
+command-bar background is the CC user-bar constant `rgb(55,55,55)` — CC
+themes deliberately blank `userMessageBg` (CC-TUI owns user bars), so a
+themed lookup would render transparent.
 
 ## Invariants & gotchas
 
@@ -45,7 +61,9 @@ against a fake.
 
 ## Tests
 
-`test/lib/fallback-adapter.test.ts`, `notify.test.ts` (vitest); effort's
+`test/lib/fallback-adapter.test.ts`, `notify.test.ts` (vitest); the CC panel
+renderers are pinned in `test/lib/cc-panels.test.ts` (primitives + every
+shaper + renderer safety + registration lockstep); effort's
 adapter interaction is covered in `extensions/effort/tests/ui.test.ts`, and
 effort's single-display contract (real entry + real bus + real fallback
 adapter, incl. the legacy-cctui leg and off/on handover) in

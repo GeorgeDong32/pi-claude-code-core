@@ -2,6 +2,15 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## 2026-10-23 通知 CC 化：全部 10 个 display:true customType 注册 CC 风格消息渲染器（用户拍板,2026-10-20 演示页）
+
+- **背景**：core 的 10 个 `display: true` customType 无自带 renderer,落回 pi 原生 `[customType]` 盒子（#2C323E 底 + 青色标签 + 白字 Markdown）。用户在演示页（prototype-ccify-notifications.html,已按 prototype 纪律从工作区移除,决策固化进 goal/CHANGELOG）逐卡拍板 CC 化形态。
+- **实现**：`extensions/ui/cc-rows.ts`（共享视觉原语:命令条 dim ❯ + 白字 + CC 用户条常量 rgb(55,55,55) 底 / `⏺` accent 摘要 / `⎿` dim gutter 5 格续行对齐 / CLIP_LINES=12 裁剪 + ctrl+o 提示——宿主全局展开,不自造折叠状态;render 永不抛,失败回退裸文本）+ `extensions/ui/cc-panels.ts`（每类型 shaper + panelRenderer 安全包装 + CC_PANEL_SHAPERS 表,装配入口 extensions/index.ts 新增 ccPanels 槽一次性注册）。
+- **shaper 形态**：命令面板类 7 类型 8 处（pi-core-status 两形态、pi-memory-status 三命令、pi-review-agents、model-profile-list、permissions-list、outside-writes-list 两处、pi-rules-list）→ 命令条+⏺摘要+⎿正文;modes-execute → 合成批准用户条 + 步骤;plan-complete → 单行 ⏺ Plan Complete ✓(success 色 ✓);pi-rules-activate → 纯 dim ⎿ 块（steer 注入弱化）。
+- **红线**：命令条文本来自 send 点新增 `details.command` 显示元数据（mcp-gov×2、memory×3、review、modes×4、rules 共 11 处）,模型可见 content 逐字不变。防御式降级:摘要解析失败去 ⏺ 头、bar 缺失去命令条、shaper 抛错 panelRenderer 吞掉返回 undefined 落回原生盒子。goal/review 已有 renderer 的类型不碰（first-wins 不抢占）;notify(info) dim 行保持现状（用户拍板）。
+- **验收**：test/lib/cc-panels.test.ts 26 例（原语/裁剪/全部 shaper/安全包装/注册表 lockstep/不占用他人类型）。门禁全绿:check 双 pass、vitest 1070（含新增 26）、node:test 276、contracts 49+4todo。
+- **台账**：CHANGELOG Unreleased、docs/{en,zh}/ui.md（适配器表 + CC 面板渲染器节 + 测试节）、本条。真机目验（重启 pi 后 8 条命令上屏形态）归用户执行。
+
 ## 2026-10-09 C5 封装收口：读入口泄漏 + 公开静默原语修复（P2-2 真终态；#73 重开再关，见 DEVIATIONS #120）
 
 - **缺口（对 c8429f4 真实调用复现 6/6）**：`focused().objective=…`、`pool.get(id).usage.tokensUsed=…`、`confirmationIntent.originalTopic=…` 直改内部状态；输入记录别名入池后仍可改；`adopt/replacePool/setFocusedSilently/removeFromPool` 公开且被 restore/persist/accounting/tweak/audit 生产路径调用；persist port 回调再经公开 adopt 写回——「外部写权已撤除」不成立，2026-10-08 的关闭作废（#119 审查教训：未做主动绕过尝试）。

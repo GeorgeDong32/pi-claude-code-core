@@ -39,6 +39,8 @@ import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 import { loadCoreEconomy } from "../lib/core-economy.ts";
 import createActionFusion from "./action-fusion/index.ts";
 import observationPack from "./observation-pack/index.ts";
+// Presentation: CC-style renderers for core's display:true custom messages
+import { registerCcPanels } from "./ui/cc-panels.ts";
 
 type ModuleFactory = (pi: ExtensionAPI) => void | Promise<void>;
 
@@ -62,6 +64,12 @@ const moduleFactories: ModuleFactory[] = [
 	},
 	mcpGovExtension,
 	bgShell,
+	// CC panels (2026-10-20): one registration point for every core-owned
+	// display:true customType — presentation lives in extensions/ui, after the
+	// owning modules so the shaper table stays a single source.
+	function ccPanels(pi: ExtensionAPI) {
+		registerCcPanels(pi);
+	},
 	// SPEC ASM-01: economy modules last — observation-pack must own the FINAL
 	// context projection slot (after modes/memory handlers), action-fusion's
 	// registration order is position-independent but fixed here too.

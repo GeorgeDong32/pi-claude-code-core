@@ -748,7 +748,13 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 					existsSync(join(process.env.HOME ?? home, ".pi", "agent", "pi-hermes-memory", "USER.md")),
 			});
 			
-			pi.sendMessage({ customType: "pi-memory-status", content, display: true });
+			pi.sendMessage({
+				customType: "pi-memory-status",
+				content,
+				// display metadata for the CC panel renderer (content untouched)
+				details: { command: "/memory" },
+				display: true,
+			});
 		},
 	});
 
@@ -763,7 +769,12 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 				`memory-import-claude: copied ${report.copied}, skipped ${report.skipped} (idempotent)`,
 				...report.notes,
 			].join("\n");
-			pi.sendMessage({ customType: "pi-memory-status", content: text, display: true });
+			pi.sendMessage({
+				customType: "pi-memory-status",
+				content: text,
+				details: { command: "/memory-import-claude" },
+				display: true,
+			});
 		},
 	});
 
@@ -789,7 +800,12 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 					...report.notes,
 				);
 			}
-			pi.sendMessage({ customType: "pi-memory-status", content: text.join("\n"), display: true });
+			pi.sendMessage({
+				customType: "pi-memory-status",
+				content: text.join("\n"),
+				details: { command: "/memory-import-hermes" },
+				display: true,
+			});
 		},
 	});
 }

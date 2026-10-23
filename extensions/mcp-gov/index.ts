@@ -87,6 +87,9 @@ export default function mcpGovExtension(pi: ExtensionAPI): void {
 				pi.sendMessage({
 					customType: "pi-core-status",
 					content: `# /core — mcp-gov\n\n- ${result}`,
+					// display metadata for the CC panel renderer (model-visible
+					// content is untouched) — the typed command, args included
+					details: { command: `/core ${(args ?? "").trim()}`.trim() },
 					display: true,
 				});
 				return;
@@ -107,6 +110,8 @@ export default function mcpGovExtension(pi: ExtensionAPI): void {
 			pi.sendMessage({
 				customType: "pi-core-status",
 				content: `# /core — mcp-gov [${section.status}]\n\n${section.lines.map((l) => `- ${l}`).join("\n")}`,
+				// display metadata for the CC panel renderer (content untouched)
+				details: { command: "/core" },
 				display: true,
 			});
 		},

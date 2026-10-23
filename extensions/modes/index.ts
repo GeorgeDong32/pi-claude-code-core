@@ -231,7 +231,10 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     },
     sendList: (text: string) => {
       pi.sendMessage(
-        { customType: "model-profile-list", content: text, display: true },
+        { customType: "model-profile-list", content: text, display: true,
+          // display metadata for the CC panel renderer (content untouched);
+          // the list form is the only path here — echo the typed subcommand
+          details: { command: "/model-profile list" } },
         { triggerTurn: false },
       );
     },
@@ -680,6 +683,8 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
           {
             customType: "permissions-list",
             content: `**Permission rules**\n\n\`\`\`\n${text}\n\`\`\`${grantsBlock}`,
+            // display metadata for the CC panel renderer (content untouched)
+            details: { command: "/permissions" },
             display: true,
           },
           { triggerTurn: false },
@@ -940,6 +945,8 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
         {
           customType: "outside-writes-list",
           content: `Tracked outside-cwd writes (${snaps.length}):\n${lines.join("\n")}`,
+          // display metadata for the CC panel renderer (content untouched)
+          details: { command: "/outside-writes" },
           display: true,
         },
         { triggerTurn: false },
@@ -965,6 +972,8 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
           {
             customType: "outside-writes-list",
             content: `Tracked outside-cwd writes (${snaps.length}):\n${lines.join("\n")}`,
+            // display metadata for the CC panel renderer (content untouched)
+            details: { command: "/undo-outside-writes --list" },
             display: true,
           },
           { triggerTurn: false },

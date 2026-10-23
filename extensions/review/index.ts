@@ -221,7 +221,13 @@ export default function (pi: ExtensionAPI) {
 			lines.push(`Gate: ${resolveModel(config.gate.model, parent)} · threshold ${config.gate.threshold} · policy ${config.gate.verdictPolicy}`);
 			lines.push(`Routing: ${config.routing.mode}`);
 			const body = lines.join("\n");
-			pi.sendMessage({ customType: "pi-review-agents", content: body, display: true });
+			pi.sendMessage({
+				customType: "pi-review-agents",
+				content: body,
+				// display metadata for the CC panel renderer (content untouched)
+				details: { command: "/review-agents" },
+				display: true,
+			});
 		},
 	});
 

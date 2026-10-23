@@ -253,7 +253,13 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 				const rowCount = (result.output.match(/^- .+ read .+ on demand$/gm) ?? []).length;
 				const budget = options?.budgetChars ?? CONTEXT_BUDGET.rulesMax;
 				const summary = `rules: ${inlineCount} inline, ${rowCount} indexed, ${result.output.length}/${budget} chars, ${activation.sessionActivatedCount()} activated this session`;
-				pi.sendMessage({ customType: "pi-rules-list", content: `${summary}\n\n${result.output}`, display: true });
+				pi.sendMessage({
+					customType: "pi-rules-list",
+					content: `${summary}\n\n${result.output}`,
+					// display metadata for the CC panel renderer (content untouched)
+					details: { command: "/rules" },
+					display: true,
+				});
 			},
 		});
 	};
