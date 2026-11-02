@@ -20,9 +20,13 @@
  * maxKeysPerParent (a stuck loop reuses few keys — detection intact).
  *
  * This is a DEFENSE, not a permission: the gate step runs before the
- * adjudicator (bypass does not exempt it — same philosophy as the memory
- * G1 guard). Cross-turn repetition stays legal by design (polling,
- * retries) — only same-batch duplicates and same-parent loops block.
+ * adjudicator. EXCEPTED in bypass mode since 2026-11-02 (P1-B, BREAKING):
+ * the adapter skips the D1b check entirely when the current mode is
+ * bypass — Claude Code's bypass has no loop defense, and its scripts
+ * legitimately repeat identical calls (polling, retries). D1 (same-batch
+ * byte-identical followers) still runs in every mode. Cross-turn
+ * repetition stays legal by design (polling, retries) — only same-batch
+ * duplicates and same-parent loops (non-bypass) block.
  */
 
 /** Byte-identical duplicate key: tool name + canonical (key-sorted) JSON. */

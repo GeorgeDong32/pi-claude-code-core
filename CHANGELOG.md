@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Breaking — bypass semantics aligned with Claude Code (2026-11-02, P1)
+- **bypass 判定序重排**(CC `permissions.ts` 1a/1d → 1f/1g → 2a):显式 deny 规则、显式 ask 规则、敏感路径检查(`.git/`、SSH 密钥、`.env*`,edit/write 目标或 bash 命令引用)在 bypass 下**仍然拦截/弹窗**;其余一切静默放行。此前 bypass 是第一个分支,连 deny 规则的调用也直接批准 —— 该行为已废弃。对其余三模式(ask/plan/auto)重排是 no-op。
+- **codemode 父级循环断路器(D1b)在 bypass 下完全豁免**:同参数嵌套调用不再在 20 次后断路(CC bypass 无循环防御,脚本的轮询/重试是合法形态);同批字节相同 follower(D1)在所有模式仍然拦截;非 bypass 模式 D1b 阈值仍为 20。
+- adjudication-parity golden 重 pin:新增 4 个 bypass × (deny 规则/ask 规则/敏感路径) case,旧行为零变化(纯新增 diff)。
+
+### Added — Claude Code approved-list import (2026-11-02, P2)
+- `/permissions import-cc [--dry-run]`:读取 CC 三层 settings(`~/.claude/settings.json` → global、`<cwd>/.claude/settings.json` → project、`.claude/settings.local.json` → local)+ 历史 `~/.claude.json` `projects.<cwd>.allowedTools`(→ project)。规则映射:`Bash/Read/Edit/Write/Grep/Glob(...)` 原样、`WebFetch(domain:..)` → `webfetch(domain:..)`(web-gov)、`mcp__srv__tool` → `mcp(srv_tool)`(mcp-gov)、裸工具名工具级(pi 无该工具则惰性并注明);无法解析的规则进 skip 报告。dry-run 只打印计划;真实导入幂等(已存在跳过)。
+
 ### Changed — pi 1.5.0 compatibility (devDeps matrix)
 - devDeps 全量矩阵 1.4.0 → 1.5.0（pi-agent-core / pi-ai / pi-coding-agent / pi-tui，四项同升）；peerDeps 范围 `<2.0.0` 不变。适配点：`Type` 导入从 pi-ai 迁至 `typebox`（pi-ai 1.5 不再 re-export TypeBox）；goal 的 `StringEnum` 复刻为 typebox `Type.Unsafe`（pi-ai 版返回 pi-schema `Schema`，与 defineTool 的 typebox `TSchema` 泛型断链，wire shape 逐字节等价）；modes fake host 的 `ExecResult` 补 1.5 新增的 `truncated` 字段。三门禁 + 升级金丝雀全绿（pi-host-semantics 19 项红绿灯通过）。
 

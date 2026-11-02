@@ -591,14 +591,90 @@ describe("permission-modes extension: tool_call gate", () => {
 			expect(await rawToolCall({ type: "tool_call", toolName: "bash", toolCallId: "never-indexed", input: { command: "echo a" } })).toBeUndefined()
 		})
 
-		it("D1b-4: a codemode parent stuck in an identical-call loop trips the breaker at 20", async () => {
+		it("D1b-4 (P1-B, BREAKING 2026-11-02): bypass mode fully exempts the codemode parent breaker — 50 identical calls all pass", async () => {
 			await switchMode("bypass")
-			const event = { type: "tool_call", toolName: "bash", parentToolCallId: "nested-1", input: { command: "echo loop" } }
+			const event = { type: "tool_call", toolName: "read", parentToolCallId: "nested-bypass", input: { path: "package.json" } }
+			for (let i = 0; i < 50; i++) {
+				expect(await rawToolCall({ ...event })).toBeUndefined()
+			}
+		})
+
+		it("D1b-4b: outside bypass the breaker still trips at 20 (regression guard for the P1-B exemption)", async () => {
+			await switchMode("ask")
+			const event = { type: "tool_call", toolName: "read", parentToolCallId: "nested-ask", input: { path: "package.json" } }
 			for (let i = 0; i < 20; i++) {
 				expect(await rawToolCall({ ...event })).toBeUndefined()
 			}
 			const blocked = await rawToolCall({ ...event })
 			expect(blocked).toEqual({ block: true, reason: expect.stringMatching(/codemode script/) })
+		})
+
+		describe("P1-A bypass adjudication order (CC 1a/1d → 1f/1g → 2a; BREAKING 2026-11-02)", () => {
+			async function switchModeWithRules(mode: string, perms: { allow?: string[]; ask?: string[]; deny?: string[] }) {
+				writeProjectPermissionsFile(realProjectRoot, perms)
+				pi.flags["permission-mode"] = mode
+				await pi.simulateSessionStart(realProjectRoot)
+			}
+
+			it("bypass: an explicit deny rule still denies (deny is bypass-immune, CC 1a/1d)", async () => {
+				await switchModeWithRules("bypass", { deny: ["Bash(echo boom:*)"] })
+				const result = await callToolCall("bash", { command: "echo boom" })
+				expect(result).toMatchObject({ block: true })
+				expect(String((result as { reason?: string }).reason)).toContain("Denied by permission rule")
+			})
+
+			it("bypass: an explicit ask rule still prompts (bypass-immune, CC 1f)", async () => {
+				await switchModeWithRules("bypass", { ask: ["Bash(npm publish:*)"] })
+				let selectCalls = 0
+			const blocked = await callToolCall("bash", { command: "npm publish" }, {
+					select: async () => {
+						selectCalls++
+						return "Block"
+					},
+				})
+				expect(selectCalls).toBe(1)
+				expect(blocked).toMatchObject({ block: true })
+			})
+
+			it("bypass: a sensitive path on edit still prompts (bypass-immune, CC 1g)", async () => {
+				await switchMode("bypass")
+				let selectCalls = 0
+				const blocked = await callToolCall("edit", { path: ".git/config", content: "x" }, {
+					select: async () => {
+						selectCalls++
+						return "Block"
+					},
+				})
+				expect(selectCalls).toBe(1)
+				expect(blocked).toMatchObject({ block: true })
+			})
+
+			it("bypass: a bash command referencing .git still prompts (bypass-immune, CC 1g)", async () => {
+				await switchMode("bypass")
+				let selectCalls = 0
+				const blocked = await callToolCall("bash", { command: "cat .git/config" }, {
+					select: async () => {
+						selectCalls++
+						return "Block"
+					},
+				})
+				expect(selectCalls).toBe(1)
+				expect(blocked).toMatchObject({ block: true })
+			})
+
+			it("bypass: everything else silently allows — no dialog fires (CC 2a)", async () => {
+				await switchMode("bypass")
+				let selectCalls = 0
+				const ui = {
+					select: async () => {
+						selectCalls++
+						return "Allow"
+					},
+				}
+				expect(await callToolCall("bash", { command: "echo fine" }, ui)).toBeUndefined()
+				expect(await callToolCall("edit", { path: "src/new-file.ts", content: "x" }, ui)).toBeUndefined()
+				expect(selectCalls).toBe(0)
+			})
 		})
 	})
 

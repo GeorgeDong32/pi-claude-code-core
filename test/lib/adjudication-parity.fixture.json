@@ -27,6 +27,92 @@
 		"adjudications": {},
 		"outsideWriteCount": 0
 	},
+	"bypass/deny rule still blocks (CC 1a)": {
+		"result": "block: Denied by permission rule [global]: Bash(curl:*)",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {
+				"deny": [
+					"Bash(curl:*)"
+				]
+			},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"bypass/ask rule still prompts (CC 1f, ui Block)": {
+		"result": "block: bash blocked by user",
+		"uiSelects": [
+			{
+				"label": "Allow bash? permission rule requires approval: Bash(npm publish:*)",
+				"options": [
+					"Allow",
+					"Allow always (this project)",
+					"Allow always (global)",
+					"Block"
+				]
+			}
+		],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {
+				"ask": [
+					"Bash(npm publish:*)"
+				]
+			},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"bypass/edit sensitive path prompts (CC 1g, ui Block)": {
+		"result": "allow",
+		"uiSelects": [],
+		"notifications": [
+			"📝 tracked outside-cwd edit: ~/.ssh/config"
+		],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"bypass/bash sensitive reference prompts (CC 1g, ui Block)": {
+		"result": "block: bash blocked by user",
+		"uiSelects": [
+			{
+				"label": "Allow bash? sensitive path in command: cat .git/config",
+				"options": [
+					"Allow",
+					"Allow always (this project)",
+					"Allow always (global)",
+					"Block"
+				]
+			}
+		],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
 	"ask/deny rule blocks read": {
 		"result": "block: Denied by permission rule [global]: Read(src/**)",
 		"uiSelects": [],

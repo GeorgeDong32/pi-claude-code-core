@@ -77,6 +77,7 @@ import {
   loadMergedPermissionRules,
   warnIfLocalPermissionsNotGitignored,
 } from "./permissions-loader.ts";
+import { planCcImport, executeCcImport, formatCcImportReport } from "./cc-import.ts";
 import {
   evaluateToolPermission,
   formatMergedRulesForDisplay,
@@ -668,8 +669,53 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
 
   pi.registerCommand("permissions", {
     description:
-      "List merged permission rules (allow/deny/ask) from global + project config",
-    handler: async (_args, ctx) => {
+      "List merged permission rules (allow/deny/ask) from global + project config; 'import-cc [--dry-run]' imports Claude Code approved lists",
+    handler: async (args, ctx) => {
+      const raw = String(args ?? "").trim()
+      if (raw.startsWith("import-cc")) {
+        const dryRun = /\b--dry-run\b/.test(raw)
+        // P2: plan reads CC's three settings layers + the legacy ~/.claude.json
+        // allowedTools; execute writes through the idempotent loader path.
+        try {
+          const plan = planCcImport({ cwd: ctx.cwd })
+          if (dryRun) {
+            const text = formatCcImportReport(plan)
+            if (ctx.hasUI) {
+              pi.sendMessage(
+                {
+                  customType: "permissions-list",
+                  content: `${text}\n\n(dry run — nothing was written; rerun without --dry-run to import)`,
+                  details: { command: "/permissions import-cc --dry-run" },
+                  display: true,
+                },
+                { triggerTurn: false },
+              )
+            } else {
+              console.log(text)
+            }
+            return
+          }
+          const result = executeCcImport(plan, { cwd: ctx.cwd })
+          reloadMergedPermissionRules(ctx.cwd)
+          const text = formatCcImportReport(plan, result)
+          if (ctx.hasUI) {
+            pi.sendMessage(
+              {
+                customType: "permissions-list",
+                content: text,
+                details: { command: "/permissions import-cc" },
+                display: true,
+              },
+              { triggerTurn: false },
+            )
+          } else {
+            console.log(text)
+          }
+        } catch (err) {
+          console.warn("[permission-modes] import-cc failed:", err)
+        }
+        return
+      }
       reloadMergedPermissionRules(ctx.cwd);
       const text = formatMergedRulesForDisplay(mergedPermissionRules);
       // P4-FAM-05: session grants are visible and clearable from here
@@ -1258,6 +1304,9 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     // same-batch byte-identical followers block; a codemode parent stuck
     // in an identical-call loop trips its breaker. Both fail open (an id
     // missing from the index passes; see loop-guard.ts).
+    // P1-B (2026-11-02, BREAKING): D1b is fully exempted in bypass mode —
+    // Claude Code's bypass has no loop defense and its scripts legitimately
+    // repeat identical calls (poll/retry); D1 (same-batch followers) stays.
     // R1 P2-2: the defense fails OPEN — a guard that throws would fail
     // CLOSED at the host ("Extension failed, blocking execution") and become
     // the very thing it exists to prevent.
@@ -1265,7 +1314,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       if (event.parentToolCallId === undefined) {
         const dupReason = checkBatchDup(batchDupIndex ?? undefined, event.toolCallId);
         if (dupReason) return { block: true, reason: dupReason };
-      } else {
+      } else if (currentMode !== "bypass") {
         const loopReason = parentLoopBreaker.check(
           event.parentToolCallId,
           parentLoopKey(event.toolName, event.input ?? {}),

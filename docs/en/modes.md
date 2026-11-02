@@ -14,9 +14,35 @@ Claude-Code-style permission modes for pi, cycled with Shift+Tab:
 | `ask` | Manual approval for edits, outside-cwd access, mutating bash |
 | `plan` | Read-only; only `plan.md` may be written |
 | `auto` | Tiered auto-approve + optional built-in classifier + risk blacklist |
-| `bypass` | Full auto-approve (old auto semantics); sparse security reminders |
+| `bypass` | CC-aligned auto-approve: explicit deny rules, explicit ask rules and sensitive-path checks (`.git/`, SSH keys, `.env*`) still prompt — everything else silently passes; sparse security reminders |
 
-**codemode (pi 1.0)**: `plan` mode denies the `codemode` tool itself — it executes other tools. A codemode script's nested tool calls run through the full agent tool pipeline (`tool_call` gates, permission checks), so the mode rules above apply to them per tool; codemode is not a permission bypass.
+**codemode (pi 1.0)**: `plan` mode denies the `codemode` tool itself — it executes other tools. A codemode script's nested tool calls run through the full agent tool pipeline (`tool_call` gates, permission checks), so the mode rules above apply to them per tool; codemode is not a permission bypass. In `bypass` mode the codemode parent loop breaker (D1b) is fully exempted (2026-11-02, BREAKING): scripts may repeat identical calls (polling, retries) without tripping the 20-call breaker; same-batch byte-identical followers (D1) still block.
+
+### Bypass adjudication order (CC alignment, 2026-11-02 — BREAKING)
+
+Reordered to match Claude Code's `permissions.ts` (1a/1d → 1f/1g → 2a). Before this change bypass was the very first branch and approved even deny-ruled calls:
+
+| Step | Check | Result |
+|---|---|---|
+| 1 | `evaluateToolPermission` → deny | block (`Denied by permission rule [...]`) — bypass-immune (CC 1a/1d) |
+| 2a | bypass + explicit ask rule | prompt — bypass-immune (CC 1f) |
+| 2b | bypass + sensitive path (edit/write target, or bash command referencing `.git`/`~/.ssh`/`.env*`) | prompt — bypass-immune (CC 1g) |
+| 2c | bypass, everything else | silent allow (+ outside-cwd write tracking) |
+
+Steps 3+ (plan hard limits, verdict allow/ask, the auto ladder, ask dispatch) are unchanged — for the other three modes the reorder is a no-op.
+
+### Claude Code approved-list import (2026-11-02)
+
+`/permissions import-cc [--dry-run]` reads Claude Code's approved lists and writes them into core's three permission scopes through the idempotent loader path:
+
+| CC source | Core destination |
+|---|---|
+| `~/.claude/settings.json` `permissions.{allow,deny,ask}` | global |
+| `<cwd>/.claude/settings.json` | project |
+| `<cwd>/.claude/settings.local.json` | local (gitignored) |
+| `~/.claude.json` `projects.<cwd>.allowedTools` (legacy) | project |
+
+Rule mapping: `Bash/Read/Edit/Write/Grep/Glob(...)` pass through verbatim (core stores CC syntax); `WebFetch(domain:host)` → `webfetch(domain:host)` (web-gov family); `mcp__server__tool`/`mcp__server__*` → `mcp(server_tool)`/`mcp(server_*)` (mcp-gov family); bare tool names import as tool-level rules (pi-absent tools stay inert). `--dry-run` prints the full plan — rules, mappings, skips — without writing; a real import is idempotent (already-present rules are skipped).
 
 ### Plan-mode adjudication order (SPEC 2026-10-07 P0-1)
 

@@ -7,8 +7,14 @@
  * Adjudication order (the whole point of this module — keep this table in
  * lockstep with decide() and the parity golden):
  *
- *  1. bypass            → allow (only side effect: outside-cwd write tracking)
- *  2. rule deny         → deny (terminal)
+ *  1. rule deny         → deny (terminal; CC 1a/1d — an explicit deny rule
+ *                          is bypass-immune; reordered ahead of bypass
+ *                          2026-11-02, BREAKING: bypass used to win)
+ *  2. mode bypass       → CC alignment (1f/1g → 2a): an explicit ask rule
+ *                          prompts (1f), a sensitive path on edit/write or a
+ *                          bash command referencing one prompts (1g — both
+ *                          bypass-immune, as in Claude Code); everything else
+ *                          allows (only side effect: outside-cwd write tracking)
  *  3. plan hard limits  → deny (plan-gate.ts; allow/ask rules can never unlock)
  *  4. verdict allow     → allow (+ outside-write track + family note)
  *  5. verdict ask       → family first-seen dialog | permission prompt
@@ -121,19 +127,52 @@ export type Decision =
 
 /** The decide function — pure, total, order fixed by the table above. */
 export function decide(f: AdjudicationFacts): Decision {
-	// 1. bypass: approve everything; outside-write tracking is an effect.
-	if (f.mode === "bypass") {
-		const effects: AllowEffects = {};
-		if (f.tool === "edit" || f.tool === "write") effects.trackOutsideWrite = true;
-		return { kind: "allow", effects };
-	}
-
-	// 2. rule deny (terminal, ahead of everything mode-specific).
+	// 1. rule deny (terminal) — CC 1a/1d alignment: an explicit deny rule is
+	// bypass-immune. Reordered ahead of bypass 2026-11-02 (BREAKING: bypass
+	// used to approve even deny-ruled calls); for the other three modes this
+	// step was already the first reachable branch, so their order is unchanged.
 	if (f.verdict.behavior === "deny") {
 		return {
 			kind: "deny",
 			reason: `Denied by permission rule [${f.verdict.source}]: ${f.verdict.rule}`,
 		};
+	}
+
+	// 2. bypass — CC alignment (permissions.ts 1f/1g → 2a): explicit ask rules
+	// and sensitive-path checks are bypass-immune and still prompt; everything
+	// else auto-approves. Outside-write tracking stays an allow effect.
+	if (f.mode === "bypass") {
+		// 1f: a user-configured ask rule is respected even in bypass mode.
+		if (f.verdict.behavior === "ask") {
+			return {
+				kind: "prompt",
+				flavor: "permission-options",
+				label: `permission rule requires approval: ${f.verdict.rule}`,
+				category: "permission-ask",
+			};
+		}
+		// 1g: safety checks (.git/, shell configs, ...) are bypass-immune —
+		// a sensitive path on edit/write, or a bash command referencing one,
+		// must prompt even in bypass mode (same categories as the auto ladder).
+		if ((f.tool === "edit" || f.tool === "write") && f.pathSensitive) {
+			return {
+				kind: "prompt",
+				flavor: "permission-options",
+				label: `sensitive path "${f.path}"`,
+				category: "sensitive-path",
+			};
+		}
+		if ((f.tool === "bash" || f.tool === "powershell") && f.command && f.commandSensitive) {
+			return {
+				kind: "prompt",
+				flavor: "permission-options",
+				label: `sensitive path in command: ${f.command}`,
+				category: "sensitive-path",
+			};
+		}
+		const effects: AllowEffects = {};
+		if (f.tool === "edit" || f.tool === "write") effects.trackOutsideWrite = true;
+		return { kind: "allow", effects };
 	}
 
 	// 3. plan hard limits — never prompt, never unlockable by allow/ask.

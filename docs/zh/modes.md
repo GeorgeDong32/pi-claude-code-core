@@ -14,9 +14,35 @@
 | `ask` | 编辑、越出 cwd 访问、变更型 bash 一律人工审批 |
 | `plan` | 只读;只允许写 `plan.md` |
 | `auto` | 分层自动批准 + 可选内置分类器 + 风险黑名单 |
-| `bypass` | 全自动批准(旧 auto 语义);少量安全提醒 |
+| `bypass` | CC 对齐的自动批准:显式 deny 规则、显式 ask 规则、敏感路径检查(`.git/`、SSH 密钥、`.env*`)仍会弹窗 —— 其余全部静默放行;少量安全提醒 |
 
-**codemode(pi 1.0)**:`plan` 模式直接拒绝 `codemode` 本体——它会执行其他工具。codemode 脚本发起的嵌套工具调用走完整 agent tool pipeline(`tool_call` 门、权限检查),上述模式规则对它们逐工具生效;codemode 不是权限旁路。
+**codemode(pi 1.0)**:`plan` 模式直接拒绝 `codemode` 本体——它会执行其他工具。codemode 脚本发起的嵌套工具调用走完整 agent tool pipeline(`tool_call` 门、权限检查),上述模式规则对它们逐工具生效;codemode 不是权限旁路。`bypass` 模式下 codemode 父级循环断路器(D1b)完全豁免(2026-11-02,BREAKING):脚本可以合法地重复同参数调用(轮询、重试)而不再触发 20 次断路;同批字节相同 follower(D1)仍然拦截。
+
+### bypass 判定顺序(CC 对齐,2026-11-02 —— BREAKING)
+
+重排为对齐 Claude Code `permissions.ts` 的 1a/1d → 1f/1g → 2a。此前 bypass 是第一个分支,连 deny 规则的调用也直接批准:
+
+| 步骤 | 检查 | 结果 |
+|---|---|---|
+| 1 | `evaluateToolPermission` → deny | 拦截(`Denied by permission rule [...]`)—— bypass 不豁免(CC 1a/1d) |
+| 2a | bypass + 显式 ask 规则 | 弹窗 —— bypass 不豁免(CC 1f) |
+| 2b | bypass + 敏感路径(edit/write 目标,或 bash 命令引用 `.git`/`~/.ssh`/`.env*`) | 弹窗 —— bypass 不豁免(CC 1g) |
+| 2c | bypass 其余一切 | 静默放行(+ cwd 外写跟踪) |
+
+步骤 3+(plan 硬限制、verdict allow/ask、auto 阶梯、ask 分发)不变 —— 对其余三个模式重排是 no-op。
+
+### Claude Code 批准清单导入(2026-11-02)
+
+`/permissions import-cc [--dry-run]` 读取 Claude Code 的批准清单,经幂等 loader 路径写入 core 的三层权限 scope:
+
+| CC 来源 | core 落点 |
+|---|---|
+| `~/.claude/settings.json` `permissions.{allow,deny,ask}` | global |
+| `<cwd>/.claude/settings.json` | project |
+| `<cwd>/.claude/settings.local.json` | local(gitignore) |
+| `~/.claude.json` `projects.<cwd>.allowedTools`(历史格式) | project |
+
+规则映射:`Bash/Read/Edit/Write/Grep/Glob(...)` 原样通过(core 本就存 CC 语法);`WebFetch(domain:host)` → `webfetch(domain:host)`(web-gov 规则族);`mcp__server__tool`/`mcp__server__*` → `mcp(server_tool)`/`mcp(server_*)`(mcp-gov 规则族);裸工具名作为工具级规则导入(pi 没有的工具保持惰性)。`--dry-run` 只打印完整计划——规则、映射、跳过项——不写盘;真实导入幂等(已存在的规则跳过)。
 
 ### plan 模式判定顺序(SPEC 2026-10-07 P0-1)
 

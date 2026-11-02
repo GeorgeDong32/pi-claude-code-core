@@ -63,6 +63,12 @@ const CASES: ParityCase[] = [
 	// ---- bypass -----------------------------------------------------------
 	{ name: "bypass/edit inside", mode: "bypass", tool: "edit", input: { path: "src/a.ts", oldString: "x", newString: "y" } },
 	{ name: "bypass/bash dangerous", mode: "bypass", tool: "bash", input: { command: "rm -rf /tmp/x" } },
+	// P1-A (2026-11-02, BREAKING): CC 1a/1f/1g are bypass-immune — deny rules,
+	// explicit ask rules and sensitive-path checks still fire in bypass.
+	{ name: "bypass/deny rule still blocks (CC 1a)", mode: "bypass", tool: "bash", input: { command: "curl example.com" }, rules: { deny: ["Bash(curl:*)"] } },
+	{ name: "bypass/ask rule still prompts (CC 1f, ui Block)", mode: "bypass", tool: "bash", input: { command: "npm publish" }, rules: { ask: ["Bash(npm publish:*)"] }, ui: "Block" },
+	{ name: "bypass/edit sensitive path prompts (CC 1g, ui Block)", mode: "bypass", tool: "edit", input: { path: SENSITIVE, oldString: "x", newString: "y" }, ui: "Block" },
+	{ name: "bypass/bash sensitive reference prompts (CC 1g, ui Block)", mode: "bypass", tool: "bash", input: { command: "cat .git/config" }, ui: "Block" },
 	// ---- rule layer -------------------------------------------------------
 	{ name: "ask/deny rule blocks read", mode: "ask", tool: "read", input: { path: "src/a.ts" }, rules: { deny: ["Read(src/**)"] } },
 	{ name: "ask/allow rule passes edit", mode: "ask", tool: "edit", input: { path: "src/a.ts", oldString: "x", newString: "y" }, rules: { allow: ["Edit(src/**)"] } },
