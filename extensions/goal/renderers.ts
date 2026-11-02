@@ -72,6 +72,10 @@ export interface GoalAuditEventDetails {
 	phase: "started" | "passed" | "approved" | "rejected";
 	goalId: string;
 	auditor?: string;
+	/** Display-only: the audit conclusion reaches the model through the
+	 * update_goal tool result alone — context handler drops these messages
+	 * from model requests so the auditor report is not injected twice. */
+	viewOnly?: boolean;
 	/** Approved-only completion stats backing the compact summary line. */
 	achievedAt?: number;
 	activeSeconds?: number;

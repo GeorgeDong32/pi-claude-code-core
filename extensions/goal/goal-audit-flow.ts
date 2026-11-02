@@ -78,6 +78,7 @@ export interface PendingAchievement {
 		phase: "approved";
 		goalId: string;
 		auditor?: string;
+		viewOnly?: boolean;
 		achievedAt?: number;
 		activeSeconds?: number;
 		tokensUsed?: number;

@@ -1537,7 +1537,11 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 						customType: GOAL_AUDIT_ENTRY,
 						content,
 						display: true,
-						details: { phase, goalId, auditor },
+						// view-only: the conclusion travels in the update_goal tool
+						// result; the context handler drops this from model requests
+						// (otherwise the auditor report is injected twice and can
+						// bait the model into answering it again).
+						details: { phase, goalId, auditor, viewOnly: true },
 					});
 				},
 			});
@@ -1560,6 +1564,9 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 					phase: "approved",
 					goalId: outcome.goalId,
 					auditor: outcome.auditorModel,
+					// view-only: display marker; the model already saw the conclusion
+					// in the update_goal tool result this same turn.
+					viewOnly: true,
 					...(finalUsage
 						? { achievedAt: Date.now(), activeSeconds: finalUsage.activeSeconds, tokensUsed: finalUsage.tokensUsed, costUsed: finalUsage.costUsed, auditAttempts: auditAttemptNo }
 						: {}),
@@ -1836,13 +1843,25 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 
 	pi.on("context", async (event): Promise<{ messages: typeof event.messages } | undefined> => {
 		let changed = false;
+		// View-only audit events (started/passed/rejected/approved with
+		// details.viewOnly) are display-only: their conclusion already reached
+		// the model through the update_goal tool result, so drop them from
+		// model requests entirely — otherwise the auditor report is injected
+		// twice and can bait the model into answering it again.
+		const auditVisible = event.messages.filter((message) => {
+			const candidate = message as { customType?: string; details?: unknown };
+			if (candidate.customType !== GOAL_AUDIT_ENTRY) return true;
+			if ((asRecord(candidate.details) as { viewOnly?: boolean } | null)?.viewOnly !== true) return true;
+			changed = true;
+			return false;
+		});
 		const latestGoalEventIndex = new Map<string, number>();
-		event.messages.forEach((message, index) => {
+		auditVisible.forEach((message, index) => {
 			const queuedGoalId = goalEventMessageId(message as { customType?: string; details?: unknown; content?: unknown });
 			if (queuedGoalId) latestGoalEventIndex.set(queuedGoalId, index);
 		});
 
-		const messages = event.messages.map((message, index) => {
+		const messages = auditVisible.map((message, index) => {
 			const candidate = message as { customType?: string; details?: unknown; content?: unknown };
 			const queuedGoalId = goalEventMessageId(candidate);
 			if (!queuedGoalId) return message;
