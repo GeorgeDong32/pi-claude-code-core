@@ -1,9 +1,17 @@
-import { StringEnum, Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { defineTool, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { notify as uiNotify } from "../ui/notify.ts";
 import { isSubagentChildProcess } from "../modes/permission-forwarding.ts";
 import { coreBus } from "../bus.ts";
 import { Text } from "@earendil-works/pi-tui";
+
+// pi-ai 1.5.0 StringEnum returns a pi-schema `Schema`, which no longer unifies with
+// the typebox `TSchema` that defineTool's params generic expects — recreate it as a
+// typebox TUnsafe with the identical `{ type: "string", enum: [...] }` wire shape.
+function StringEnum<T extends readonly string[]>(values: T, options?: { description?: string; default?: T[number] }) {
+	return Type.Unsafe<T[number]>({ type: "string", enum: [...values], ...(options?.description !== undefined ? { description: options.description } : {}), ...(options?.default !== undefined ? { default: options.default } : {}) });
+}
+
 import {
 	footerStatus,
 	formatDuration,

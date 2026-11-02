@@ -49,7 +49,7 @@ import { accessSync, constants as fsConstants, existsSync, mkdirSync, readdirSyn
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { coreBus } from "../bus.ts";

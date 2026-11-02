@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Changed — pi 1.5.0 compatibility (devDeps matrix)
+- devDeps 全量矩阵 1.4.0 → 1.5.0（pi-agent-core / pi-ai / pi-coding-agent / pi-tui，四项同升）；peerDeps 范围 `<2.0.0` 不变。适配点：`Type` 导入从 pi-ai 迁至 `typebox`（pi-ai 1.5 不再 re-export TypeBox）；goal 的 `StringEnum` 复刻为 typebox `Type.Unsafe`（pi-ai 版返回 pi-schema `Schema`，与 defineTool 的 typebox `TSchema` 泛型断链，wire shape 逐字节等价）；modes fake host 的 `ExecResult` 补 1.5 新增的 `truncated` 字段。三门禁 + 升级金丝雀全绿（pi-host-semantics 19 项红绿灯通过）。
+
 ### Added — notification CC-ification (2026-10-20 prototype decision)
 - All ten core-owned `display: true` custom messages now render in the Claude Code visual language instead of pi's native `[customType]` box. Two new presentation modules: `ui/cc-rows.ts` (shared primitives — command bar / `⏺` summary / `⎿` body, the single source for the family, review's v0.8.5 flat-card language generalized) + `ui/cc-panels.ts` (per-type content shapers + one `pi.registerMessageRenderer` call per customType from the assembly entry).
 - Command-panel family (bar + `⏺` summary + `⎿` body): `pi-core-status` (`/core` panel + `/core exposure`), `pi-memory-status` (`/memory` + both import reports), `pi-review-agents`, `model-profile-list`, `permissions-list`, `outside-writes-list` (`/outside-writes` + `/undo-outside-writes --list`), `pi-rules-list`.

@@ -2,7 +2,8 @@
  * CC classify_result tool schema for auto-mode classifier (tool stage).
  */
 
-import { Type, type Tool } from "@earendil-works/pi-ai"
+import { Type } from "typebox";
+import { type Tool } from "@earendil-works/pi-ai"
 
 export const CLASSIFIER_TOOL_NAME = "classify_result"
 

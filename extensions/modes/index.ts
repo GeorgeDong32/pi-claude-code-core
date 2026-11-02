@@ -10,7 +10,7 @@
  *   - bypass  Full auto-approve (old auto semantics); sparse security reminders.
  */
 
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import {
   defineTool,
   type ExtensionAPI,

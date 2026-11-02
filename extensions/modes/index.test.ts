@@ -276,6 +276,7 @@ function createFakePi(): FakePi {
 				killed: false,
 				stdout: "",
 				stderr: "",
+				truncated: false,
 			} as ExecResult
 		},
 		getCommands() {
