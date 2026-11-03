@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Added — questionnaire dialogs report blocked status to the terminal (OSC 7501) (2026-11-03)
+- goal questionnaire 全家族（含 propose_goal_draft 的 Confirm / Continue Chatting 对话框与 goal_question/goal_questionnaire 工具）通过 pi 1.5.0 的 `ctx.ui.custom` `blocked` 选项上报「等待用户输入」——Rex/Ghostty 等 agentic inbox（OSC 7501 Program Status 消费端）现在能在 goal 确认等待时正确显示 blocked 并提醒，不再错过确认消息。message 携带问题标题（单问）/ 问题数+首问（多问）。`lib/overlay.ts` 的 `showComponentOverlay` 新增 `blocked` 透传（inline 组件生效；overlay 形态 pi 上游忽略——plan approval 浮窗暂为盲区，待上游支持）。旧 pi host（<1.5.0）运行时无害忽略该字段。
+
 ### Fixed — goal audit events are view-only (2026-11-02)
 - `GOAL_AUDIT_ENTRY`（started/passed/approved/rejected）全部加 `details.viewOnly` 并由 goal 的 context handler 从模型请求中剔除——审计结论此前同时走 tool result 和 custom message 两条通道进模型上下文（auditor 报告全文下一轮重复注入，还可能诱发模型"回应" auditor 多跑一轮）；现在单通道走 `update_goal` tool result，UI 渲染不变（compact 图标行 + ctrl+o 全文）。旧 transcript 中无标记的历史 audit 消息保持模型可见（向后兼容）。
 

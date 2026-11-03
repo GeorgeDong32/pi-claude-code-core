@@ -81,7 +81,7 @@ export interface CustomOverlayContext {
 	ui: {
 		custom: <T>(
 			factory: (tui: unknown, theme: unknown, kb: unknown, done: (v: T) => void) => Component,
-			options?: { overlay?: boolean; overlayOptions?: OverlayOptions },
+			options?: { overlay?: boolean; overlayOptions?: OverlayOptions; blocked?: { kind: "question" | "permission" | "auth"; message: string } },
 		) => Promise<T>;
 	};
 }
@@ -101,13 +101,21 @@ export async function showComponentOverlay<T>(
 		 * provided = `overlay: true` + geometry (effort picker, plan dialog).
 		 */
 		overlayOptions?: OverlayOptions;
+		/** OSC 7501 program status: report pi as blocked on user input while
+		 * the component is visible (pi 1.5.0 `blocked` option — inline
+		 * components only; overlays ignore it). Older hosts ignore the
+		 * field harmlessly. */
+		blocked?: { kind: "question" | "permission" | "auth"; message: string };
 	},
 ): Promise<T> {
 	return ctx.ui.custom<T>(
 		(tui, theme, kb, done) => options.component(tui, theme, kb, done),
-		options.overlayOptions
-			? { overlay: true, overlayOptions: options.overlayOptions }
-			: undefined,
+		{
+			...(options.overlayOptions
+				? { overlay: true as const, overlayOptions: options.overlayOptions }
+				: {}),
+			...(options.blocked ? { blocked: options.blocked } : {}),
+		},
 	);
 }
 

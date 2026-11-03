@@ -98,8 +98,19 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 	const totalTabs = questions.length + 1;
 
 	// shared overlay plumbing (P2-GO-03a): bare custom call, no overlay
-	// options — identical to the previous inline ctx.ui.custom(factory)
+	// options — identical to the previous inline ctx.ui.custom(factory).
+	// blocked (OSC 7501): pi reports "blocked on user input" to the terminal
+	// (Rex/Ghostty agentic inboxes) while any questionnaire — including the
+	// propose_goal_draft Confirm / Continue Chatting dialog — waits on the
+	// user; the message names the first question so the inbox line is useful.
+	// Inline components only (pi 1.5.0); older hosts ignore the field.
 	return await showComponentOverlay<GoalQuestionnaireResult>(ctx, {
+		blocked: {
+			kind: "question",
+			message: isMulti
+				? `Goal questionnaire: ${totalTabs - 1} questions — ${truncateText(questions[0]!.question, 60)}`
+				: truncateText(questions[0]!.question, 80),
+		},
 		component: (tui, theme, _kb, done) => {
 		let currentTab = 0;
 		let optionIndex = 0;

@@ -66,6 +66,49 @@ test("proposal confirmation helpers keep headless and cancel semantics stable", 
 });
 
 
+test("questionnaire reports blocked (OSC 7501) through the custom options — single and multi question", async () => {
+	const fakeTui = new Proxy({}, { get: () => () => {} }) as never;
+	const theme = { fg: (_c: string, s: string) => s, bg: (_c: string, s: string) => s, bold: (s: string) => s } as never;
+	const capture = (captured: { opts?: unknown }[]) => ({
+		hasUI: true,
+		mode: "tui",
+		ui: {
+			custom: async (factory: (t: unknown, th: unknown, kb: unknown, done: (v: unknown) => void) => { render(w: number): string[] }, opts?: unknown) => {
+				captured.push({ opts });
+				const comp = factory(fakeTui, theme, undefined, () => {});
+				comp.render(80);
+				return null;
+			},
+		},
+	}) as never;
+
+	const single: { opts?: unknown }[] = [];
+	await runGoalQuestionnaire(capture(single), [{
+		id: "confirm",
+		question: "Confirm Goal Draft",
+		context: "=== Goal ===",
+		options: ["Confirm — create this goal now", "Continue chatting — keep refining"],
+		recommended: 0,
+		allowCustom: false,
+	}]);
+	assert.equal(single.length, 1);
+	assert.deepEqual((single[0]!.opts as { blocked?: unknown }).blocked, {
+		kind: "question",
+		message: "Confirm Goal Draft",
+	});
+
+	const multi: { opts?: unknown }[] = [];
+	await runGoalQuestionnaire(capture(multi), [
+		{ id: "a", question: "First question?", options: ["x"], allowCustom: false },
+		{ id: "b", question: "Second question?", options: ["y"], allowCustom: false },
+	]);
+	const blocked = (multi[0]!.opts as { blocked?: { kind: string; message: string } }).blocked;
+	assert.equal(blocked?.kind, "question");
+	assert.match(blocked?.message ?? "", /^Goal questionnaire: 2 questions — First question\?/);
+	// bare custom call: no overlay options leaked into the blocked path
+	assert.equal((multi[0]!.opts as { overlay?: unknown }).overlay, undefined);
+});
+
 test("questionnaire context and question wrap with a hanging indent", async () => {
 	let lines: string[] | null = null;
 	// Stub tui: every method access is a no-op (Editor only needs requestRender).
