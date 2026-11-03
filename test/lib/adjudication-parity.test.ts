@@ -68,7 +68,9 @@ const CASES: ParityCase[] = [
 	{ name: "bypass/deny rule still blocks (CC 1a)", mode: "bypass", tool: "bash", input: { command: "curl example.com" }, rules: { deny: ["Bash(curl:*)"] } },
 	{ name: "bypass/ask rule still prompts (CC 1f, ui Block)", mode: "bypass", tool: "bash", input: { command: "npm publish" }, rules: { ask: ["Bash(npm publish:*)"] }, ui: "Block" },
 	{ name: "bypass/edit sensitive path prompts (CC 1g, ui Block)", mode: "bypass", tool: "edit", input: { path: SENSITIVE, oldString: "x", newString: "y" }, ui: "Block" },
-	{ name: "bypass/bash sensitive reference prompts (CC 1g, ui Block)", mode: "bypass", tool: "bash", input: { command: "cat .git/config" }, ui: "Block" },
+	// 2026-11-03 fix: the bash sensitive-reference case was REMOVED — CC's 1g
+	// safetyCheck is edit-tools only; bash has no sensitive-path scan in CC
+	// bypass (over-reach broke `ssh -F ~/.ssh/config`-style workflows).
 	// ---- rule layer -------------------------------------------------------
 	{ name: "ask/deny rule blocks read", mode: "ask", tool: "read", input: { path: "src/a.ts" }, rules: { deny: ["Read(src/**)"] } },
 	{ name: "ask/allow rule passes edit", mode: "ask", tool: "edit", input: { path: "src/a.ts", oldString: "x", newString: "y" }, rules: { allow: ["Edit(src/**)"] } },

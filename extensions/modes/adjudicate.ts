@@ -11,10 +11,11 @@
  *                          is bypass-immune; reordered ahead of bypass
  *                          2026-11-02, BREAKING: bypass used to win)
  *  2. mode bypass       → CC alignment (1f/1g → 2a): an explicit ask rule
- *                          prompts (1f), a sensitive path on edit/write or a
- *                          bash command referencing one prompts (1g — both
- *                          bypass-immune, as in Claude Code); everything else
- *                          allows (only side effect: outside-cwd write tracking)
+ *                          prompts (1f), a sensitive path on edit/write
+ *                          prompts (1g — CC's checkPathSafetyForAutoEdit is
+ *                          edit-tools only; bash has NO sensitive scan in
+ *                          CC bypass); everything else allows (only side
+ *                          effect: outside-cwd write tracking)
  *  3. plan hard limits  → deny (plan-gate.ts; allow/ask rules can never unlock)
  *  4. verdict allow     → allow (+ outside-write track + family note)
  *  5. verdict ask       → family first-seen dialog | permission prompt
@@ -151,22 +152,18 @@ export function decide(f: AdjudicationFacts): Decision {
 				category: "permission-ask",
 			};
 		}
-		// 1g: safety checks (.git/, shell configs, ...) are bypass-immune —
-		// a sensitive path on edit/write, or a bash command referencing one,
-		// must prompt even in bypass mode (same categories as the auto ladder).
+		// 1g: safety checks on edit/write paths (.git/, shell configs, ...) are
+		// bypass-immune, exactly like CC's checkPathSafetyForAutoEdit (edit tools
+		// only). NOTE: CC has NO bash sensitive-path scan in bypass — its bash
+		// danger checks live in the auto/yolo classifier, which bypass skips —
+		// so a bash command referencing sensitive paths auto-approves here too
+		// (2026-11-03 fix: the previous bash commandSensitive branch was an
+		// over-reach that broke `ssh -F ~/.ssh/config`-style workflows).
 		if ((f.tool === "edit" || f.tool === "write") && f.pathSensitive) {
 			return {
 				kind: "prompt",
 				flavor: "permission-options",
 				label: `sensitive path "${f.path}"`,
-				category: "sensitive-path",
-			};
-		}
-		if ((f.tool === "bash" || f.tool === "powershell") && f.command && f.commandSensitive) {
-			return {
-				kind: "prompt",
-				flavor: "permission-options",
-				label: `sensitive path in command: ${f.command}`,
 				category: "sensitive-path",
 			};
 		}

@@ -649,17 +649,21 @@ describe("permission-modes extension: tool_call gate", () => {
 				expect(blocked).toMatchObject({ block: true })
 			})
 
-			it("bypass: a bash command referencing .git still prompts (bypass-immune, CC 1g)", async () => {
+			it("bypass: a bash command referencing .git auto-approves (CC parity — no bash sensitive scan in bypass, 2026-11-03 fix)", async () => {
 				await switchMode("bypass")
 				let selectCalls = 0
-				const blocked = await callToolCall("bash", { command: "cat .git/config" }, {
+				const ui = {
 					select: async () => {
 						selectCalls++
-						return "Block"
+						return "Allow"
 					},
-				})
-				expect(selectCalls).toBe(1)
-				expect(blocked).toMatchObject({ block: true })
+				}
+				// CC's 1g safetyCheck is edit-tools only; the previous
+				// commandSensitive branch was an over-reach that broke
+				// `ssh -F ~/.ssh/config`-style workflows.
+				expect(await callToolCall("bash", { command: "cat .git/config" }, ui)).toBeUndefined()
+				expect(await callToolCall("bash", { command: "ssh -F ~/.ssh/config host ls" }, ui)).toBeUndefined()
+				expect(selectCalls).toBe(0)
 			})
 
 			it("bypass: everything else silently allows — no dialog fires (CC 2a)", async () => {

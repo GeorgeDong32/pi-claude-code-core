@@ -9,6 +9,9 @@
 - `GOAL_AUDIT_ENTRY`（started/passed/approved/rejected）全部加 `details.viewOnly` 并由 goal 的 context handler 从模型请求中剔除——审计结论此前同时走 tool result 和 custom message 两条通道进模型上下文（auditor 报告全文下一轮重复注入，还可能诱发模型"回应" auditor 多跑一轮）；现在单通道走 `update_goal` tool result，UI 渲染不变（compact 图标行 + ctrl+o 全文）。旧 transcript 中无标记的历史 audit 消息保持模型可见（向后兼容）。
 
 ### Breaking — bypass semantics aligned with Claude Code (2026-11-02, P1)
+
+### Fixed — bypass no longer scans bash commands for sensitive paths (2026-11-03)
+- 昨日 P1-A 的 1g 实现超出 CC:`commandSensitive`(bash 命令引用 `.git`/`~/.ssh`/`.env*` 即弹窗)在 bypass 下拦截了 `ssh -F ~/.ssh/config`、`grep ".git"`、`find -name ".env.example"` 等常规工作流。CC 的 1g safetyCheck(`checkPathSafetyForAutoEdit`)只覆盖 edit/write 工具路径,bash 危险检查在 CC 属于 auto/yolo classifier(bypass 不跑)。已删 bypass 分支的 bash commandSensitive 检查,保留 edit/write pathSensitive(逐字对齐 CC);parity golden 移除对应 case(55 cases)。
 - **bypass 判定序重排**(CC `permissions.ts` 1a/1d → 1f/1g → 2a):显式 deny 规则、显式 ask 规则、敏感路径检查(`.git/`、SSH 密钥、`.env*`,edit/write 目标或 bash 命令引用)在 bypass 下**仍然拦截/弹窗**;其余一切静默放行。此前 bypass 是第一个分支,连 deny 规则的调用也直接批准 —— 该行为已废弃。对其余三模式(ask/plan/auto)重排是 no-op。
 - **codemode 父级循环断路器(D1b)在 bypass 下完全豁免**:同参数嵌套调用不再在 20 次后断路(CC bypass 无循环防御,脚本的轮询/重试是合法形态);同批字节相同 follower(D1)在所有模式仍然拦截;非 bypass 模式 D1b 阈值仍为 20。
 - adjudication-parity golden 重 pin:新增 4 个 bypass × (deny 规则/ask 规则/敏感路径) case,旧行为零变化(纯新增 diff)。

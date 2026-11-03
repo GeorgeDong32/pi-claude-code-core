@@ -26,7 +26,7 @@ Reordered to match Claude Code's `permissions.ts` (1a/1d → 1f/1g → 2a). Befo
 |---|---|---|
 | 1 | `evaluateToolPermission` → deny | block (`Denied by permission rule [...]`) — bypass-immune (CC 1a/1d) |
 | 2a | bypass + explicit ask rule | prompt — bypass-immune (CC 1f) |
-| 2b | bypass + sensitive path (edit/write target, or bash command referencing `.git`/`~/.ssh`/`.env*`) | prompt — bypass-immune (CC 1g) |
+| 2b | bypass + sensitive path (edit/write target) | prompt — bypass-immune (CC 1g — edit tools only; bash has NO sensitive scan in CC bypass, 2026-11-03 fix) |
 | 2c | bypass, everything else | silent allow (+ outside-cwd write tracking) |
 
 Steps 3+ (plan hard limits, verdict allow/ask, the auto ladder, ask dispatch) are unchanged — for the other three modes the reorder is a no-op.

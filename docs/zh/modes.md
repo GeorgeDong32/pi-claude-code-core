@@ -26,7 +26,7 @@
 |---|---|---|
 | 1 | `evaluateToolPermission` → deny | 拦截(`Denied by permission rule [...]`)—— bypass 不豁免(CC 1a/1d) |
 | 2a | bypass + 显式 ask 规则 | 弹窗 —— bypass 不豁免(CC 1f) |
-| 2b | bypass + 敏感路径(edit/write 目标,或 bash 命令引用 `.git`/`~/.ssh`/`.env*`) | 弹窗 —— bypass 不豁免(CC 1g) |
+| 2b | bypass + 敏感路径(edit/write 目标) | 弹窗 —— bypass 不豁免(CC 1g —— 仅 edit 类工具;CC bypass 下 bash 无敏感路径扫描,2026-11-03 修正) |
 | 2c | bypass 其余一切 | 静默放行(+ cwd 外写跟踪) |
 
 步骤 3+(plan 硬限制、verdict allow/ask、auto 阶梯、ask 分发)不变 —— 对其余三个模式重排是 no-op。
