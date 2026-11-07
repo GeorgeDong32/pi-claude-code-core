@@ -112,6 +112,98 @@ export function isSensitivePath(targetPath: string, cwd: string): boolean {
 	return pathHasSensitiveSegment(resolved)
 }
 
+// ---- CC-parity safety set (W2, 2026-11-07) ------------------------------
+// CC's checkPathSafetyForAutoEdit set (DANGEROUS_FILES / DANGEROUS_DIRECTORIES
+// in claude-code src/utils/permissions/filesystem.ts) ∪ pi extras (.env*,
+// key files, .ssh/, .gnupg/). Used ONLY by the bypass edit/write gate — the
+// other modes keep the narrow isSensitivePath semantics. Case-insensitive
+// segment matching mirrors CC's normalizeCaseForComparison.
+
+/** CC DANGEROUS_FILES (filesystem.ts) — exact filename matches. */
+export const CC_DANGEROUS_FILES: readonly string[] = [
+	".gitconfig",
+	".gitmodules",
+	".bashrc",
+	".bash_profile",
+	".zshrc",
+	".zprofile",
+	".profile",
+	".ripgreprc",
+	".mcp.json",
+	".claude.json",
+]
+
+/** pi additions to the CC file set — .env* by prefix, keys/credentials exact. */
+export const CC_EXTRA_FILES_EXACT: readonly string[] = [
+	"id_rsa",
+	"id_ed25519",
+	"credentials",
+]
+
+/** CC DANGEROUS_DIRECTORIES (filesystem.ts) + pi extras (.ssh, .gnupg). */
+export const CC_DANGEROUS_DIRECTORIES: readonly string[] = [
+	".git",
+	".vscode",
+	".idea",
+	".claude",
+	".ssh",
+	".gnupg",
+]
+
+/**
+ * W2 (2026-11-07): CC-parity safety-path check for the bypass edit/write
+ * gate — any path segment hitting a dangerous directory, or the filename
+ * hitting a dangerous file (CC set, case-insensitive; .env* by prefix,
+ * pi key files). NOT used by the other modes' gates (they keep the narrow
+ * isSensitivePath semantics); no Windows patterns (out of scope per
+ * handoff 2026-11-07). Carries two CC behaviors over: the .claude/worktrees
+ * structural exception, and the original + symlink-resolved double check.
+ */
+export function isCcSafetyPath(targetPath: string, cwd: string): boolean {
+	if (!targetPath) return false
+	const p = expandUserPath(targetPath)
+	const resolved = path.isAbsolute(p)
+		? path.resolve(p)
+		: path.resolve(cwd, p)
+	if (ccPathHasSensitiveSegment(resolved)) return true
+	// Symlink double-check (CC getPathsForPermissionCheck parity): a clean
+	// lexical path that resolves through a symlink onto a sensitive location
+	// still prompts. Fail-open on resolution errors.
+	try {
+		if (existsSync(resolved)) {
+			const real = realpathSync(resolved)
+			if (real !== resolved && ccPathHasSensitiveSegment(real)) return true
+		}
+	} catch {
+		/* fail-open */
+	}
+	return false
+}
+
+function ccPathHasSensitiveSegment(resolvedPath: string): boolean {
+	const segments = resolvedPath.split(path.sep)
+	const fileName = segments.at(-1) ?? ""
+	const lowerFile = fileName.toLowerCase()
+	for (let i = 0; i < segments.length; i++) {
+		const lower = segments[i]!.toLowerCase()
+		if (!CC_DANGEROUS_DIRECTORIES.some((d) => d === lower)) continue
+		// CC structural exception: .claude/worktrees/ is where worktrees
+		// live, not a user-configured dangerous dir — skip that .claude
+		// segment (nested .claude dirs inside still match).
+		if (lower === ".claude") {
+			const next = segments[i + 1]
+			if (next !== undefined && next.toLowerCase() === "worktrees") continue
+		}
+		return true
+	}
+	if (CC_DANGEROUS_FILES.some((d) => d === lowerFile)) return true
+	if (CC_EXTRA_FILES_EXACT.some((d) => d === lowerFile)) return true
+	// .env / .env.<suffix> — dot boundary, so `.environment.ts` stays clean
+	// (same semantics as the narrow gate's SENSITIVE_FILE_PATTERN).
+	if (/^\.env(?:\.|$)/.test(lowerFile)) return true
+	return false
+}
+
 /** Heuristic: does a bash command reference sensitive paths (.git, .env, ~/.ssh, etc.)? */
 export function commandReferencesSensitivePath(command: string): boolean {
 	if (!command.trim()) return false

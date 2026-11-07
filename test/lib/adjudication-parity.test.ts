@@ -68,6 +68,16 @@ const CASES: ParityCase[] = [
 	{ name: "bypass/deny rule still blocks (CC 1a)", mode: "bypass", tool: "bash", input: { command: "curl example.com" }, rules: { deny: ["Bash(curl:*)"] } },
 	{ name: "bypass/ask rule still prompts (CC 1f, ui Block)", mode: "bypass", tool: "bash", input: { command: "npm publish" }, rules: { ask: ["Bash(npm publish:*)"] }, ui: "Block" },
 	{ name: "bypass/edit sensitive path prompts (CC 1g, ui Block)", mode: "bypass", tool: "edit", input: { path: SENSITIVE, oldString: "x", newString: "y" }, ui: "Block" },
+	// W1 (2026-11-07): family default-ask auto-approves in bypass — only an
+	// explicit ask rule prompts (CC bypassPermissions parity).
+	{ name: "bypass/mcp family default-ask auto-approves (W1)", mode: "bypass", tool: "mcp__exa__search", input: { query: "x" }, family: true },
+	{ name: "bypass/mcp family explicit ask rule prompts (W1, ui Block)", mode: "bypass", tool: "mcp__exa__search", input: { query: "x" }, family: true, rules: { ask: ["mcp_exa_*"] }, ui: "Block" },
+	// W3 (2026-11-07): bash write-target safety check (redirection onto a
+	// CC-sensitive path) prompts in bypass.
+	{ name: "bypass/bash redirect onto .bashrc prompts (W3, ui Block)", mode: "bypass", tool: "bash", input: { command: "echo alias x=1 >> ~/.bashrc" }, ui: "Block" },
+	// W4 (2026-11-07): a Read deny rule reached through a bash path target
+	// denies the whole command, in every mode.
+	{ name: "bypass/bash cat .env denies via Read deny rule (W4)", mode: "bypass", tool: "bash", input: { command: "cat .env > /tmp/e" }, rules: { deny: ["Read(./.env)"] } },
 	// 2026-11-03 fix: the bash sensitive-reference case was REMOVED — CC's 1g
 	// safetyCheck is edit-tools only; bash has no sensitive-path scan in CC
 	// bypass (over-reach broke `ssh -F ~/.ssh/config`-style workflows).

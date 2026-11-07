@@ -14,22 +14,26 @@
 | `ask` | 编辑、越出 cwd 访问、变更型 bash 一律人工审批 |
 | `plan` | 只读;只允许写 `plan.md` |
 | `auto` | 分层自动批准 + 可选内置分类器 + 风险黑名单 |
-| `bypass` | CC 对齐的自动批准:显式 deny 规则、显式 ask 规则、敏感路径检查(`.git/`、SSH 密钥、`.env*`)仍会弹窗 —— 其余全部静默放行;少量安全提醒 |
+| `bypass` | CC 对齐的自动批准:显式 deny 规则、显式 ask 规则、CC 全集敏感路径检查(edit/write)、bash 写目标检查仍会弹窗 —— 其余全部静默放行;少量安全提醒 |
 
 **codemode(pi 1.0)**:`plan` 模式直接拒绝 `codemode` 本体——它会执行其他工具。codemode 脚本发起的嵌套工具调用走完整 agent tool pipeline(`tool_call` 门、权限检查),上述模式规则对它们逐工具生效;codemode 不是权限旁路。`bypass` 模式下 codemode 父级循环断路器(D1b)完全豁免(2026-11-02,BREAKING):脚本可以合法地重复同参数调用(轮询、重试)而不再触发 20 次断路;同批字节相同 follower(D1)仍然拦截。
 
-### bypass 判定顺序(CC 对齐,2026-11-02 —— BREAKING)
+### bypass 判定顺序(CC 对齐,2026-11-02 —— BREAKING;W1–W5 修订 2026-11-07)
 
 重排为对齐 Claude Code `permissions.ts` 的 1a/1d → 1f/1g → 2a。此前 bypass 是第一个分支,连 deny 规则的调用也直接批准:
 
 | 步骤 | 检查 | 结果 |
 |---|---|---|
 | 1 | `evaluateToolPermission` → deny | 拦截(`Denied by permission rule [...]`)—— bypass 不豁免(CC 1a/1d) |
-| 2a | bypass + 显式 ask 规则 | 弹窗 —— bypass 不豁免(CC 1f) |
-| 2b | bypass + 敏感路径(edit/write 目标) | 弹窗 —— bypass 不豁免(CC 1g —— 仅 edit 类工具;CC bypass 下 bash 无敏感路径扫描,2026-11-03 修正) |
+| 1b | bash 路径目标 deny 扩展(W4) | 拦截 —— Read/Edit deny 规则覆盖 bash 路径类命令(读类参数对 `Read(...)` 规则、写/建类参数与重定向目标对 `Edit(...)` 规则),所有模式、bypass 不豁免;pattern/变量/ssh 参数 fail-open 不触发 |
+| 2a | bypass + 显式 ask 规则 | 弹窗 —— bypass 不豁免(CC 1f)。W1:family 合成的默认 ask(MCP 首见工具、web-gov 非预批域名)不是显式 ask 规则,自动放行;有管辖的显式 ask 规则时仍弹 |
+| 2b | bypass + 敏感路径(edit/write 目标) | 弹窗 —— bypass 不豁免(CC 1g —— 仅 edit 类工具)。W2:路径集合扩为 CC `DANGEROUS_FILES/DIRECTORIES` 全集(大小写不敏感、`.claude/worktrees` 结构例外、symlink 双检)∪ pi 额外(`.env*`、密钥文件、`.ssh/`、`.gnupg/`) |
+| 2b′ | bypass + bash 写目标(W3) | 弹窗 —— 重定向目标与写命令参数位(tee/cp/mv/rm/install/touch/mkdir/rmdir/sed -i)命中敏感路径;分词+结构化判定(非正则),引号/变量/通配 token 不透明,fail-open;复合命令仅在其余段全部只读时触发(CC 近似) |
 | 2c | bypass 其余一切 | 静默放行(+ cwd 外写跟踪) |
 
-步骤 3+(plan 硬限制、verdict allow/ask、auto 阶梯、ask 分发)不变 —— 对其余三个模式重排是 no-op。
+步骤 3+(plan 硬限制、verdict allow/ask、auto 阶梯、ask 分发)不变 —— 对其余三个模式重排是 no-op(W4 例外,它对所有模式生效)。
+
+**W5 开关** —— 环境变量 `PI_CORE_BASH_PATH_CHECKS` 或 `~/.pi/agent/permission-modes.json` 的 `bashPathChecks` 键:`all`(默认)|`safety`(仅 W3)|`deny`(仅 W4)|`off`(回到 2026-11-07 之前行为)。env 优先;改配置免 `/reload` 即生效(env 仅对新进程生效)。W1/W2 不受开关控制。
 
 ### Claude Code 批准清单导入(2026-11-02)
 

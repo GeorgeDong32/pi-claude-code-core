@@ -3497,3 +3497,81 @@ describe("plan precedence: rules vs hard limits (SPEC P0-1)", () => {
 	})
 
 })
+
+describe("bash path-target checks W3/W4/W5 (2026-11-07 handoff)", () => {
+	let pi: FakePi
+	let realProjectRoot: string
+	let configTmp: string
+
+	beforeEach(async () => {
+		pi = createFakePi()
+		configTmp = mkdtempSync(join(tmpdir(), "pm-w345-cfg-"))
+		setConfigPath(join(configTmp, "permission-modes.json"))
+		writeFileSync(
+			join(configTmp, "permission-modes.json"),
+			// deny rules mirror the user's real global set (handoff §W4)
+			JSON.stringify({
+				classifier: { enabled: false },
+				permissions: { deny: ["Read(./.env)", "Read(./.git/**)"] },
+			}),
+		)
+		realProjectRoot = process.cwd()
+		const permsDir = join(realProjectRoot, ".pi", "projects")
+		for (const f of ["permissions.json", "permissions.local.json"]) {
+			rmSync(join(permsDir, getProjectId(realProjectRoot), f), { force: true })
+		}
+		permissionModesExtension(makeFakePiForExtension(pi))
+		pi.flags["permission-mode"] = "bypass"
+		await pi.simulateSessionStart(realProjectRoot)
+	})
+
+	afterEach(() => {
+		const permsDir = join(realProjectRoot, ".pi", "projects")
+		for (const f of ["permissions.json", "permissions.local.json"]) {
+			rmSync(join(permsDir, getProjectId(realProjectRoot), f), { force: true })
+		}
+		delete process.env.PI_CORE_BASH_PATH_CHECKS
+	})
+
+	async function callBash(command: string) {
+		const ctx = makeCtx(pi, { cwd: realProjectRoot })
+		return pi.simulateToolCall("bash", { command }, ctx)
+	}
+
+	it("W3: bypass redirection onto a sensitive path blocks (headless prompt fails closed)", async () => {
+		const r = await callBash("echo alias x=1 >> ~/.zshrc")
+		expect(r).toMatchObject({ block: true })
+		expect(String((r as { reason?: string }).reason)).toContain("~/.zshrc")
+	})
+
+	it("W3: bypass rm .git/index blocks; clean output passes", async () => {
+		expect(await callBash("rm .git/index")).toMatchObject({ block: true })
+		expect(await callBash("echo build > dist/out.js")).toBeUndefined()
+	})
+
+	it("W4: Read deny rule denies bash cat .env in bypass; cat of a clean file passes", async () => {
+		const r = await callBash("cat .env")
+		expect(r).toMatchObject({ block: true })
+		expect(String((r as { reason?: string }).reason)).toContain("Read(./.env)")
+		expect(await callBash("cat package.json")).toBeUndefined()
+	})
+
+	it("W5: config bashPathChecks off restores pre-change behavior exactly", async () => {
+		writeFileSync(
+			join(configTmp, "permission-modes.json"),
+			JSON.stringify({
+				classifier: { enabled: false },
+				bashPathChecks: "off",
+				permissions: { deny: ["Read(./.env)", "Read(./.git/**)"] },
+			}),
+		)
+		expect(await callBash("cat .env")).toBeUndefined()
+		expect(await callBash("rm .git/x")).toBeUndefined()
+	})
+
+	it("W5: env PI_CORE_BASH_PATH_CHECKS overrides config (deny-only keeps W4, drops W3)", async () => {
+		process.env.PI_CORE_BASH_PATH_CHECKS = "deny"
+		expect(await callBash("rm .git/x")).toBeUndefined() // W3 off
+		expect(await callBash("cat .env")).toMatchObject({ block: true }) // W4 on
+	})
+})

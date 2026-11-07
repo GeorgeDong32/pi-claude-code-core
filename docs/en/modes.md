@@ -14,22 +14,26 @@ Claude-Code-style permission modes for pi, cycled with Shift+Tab:
 | `ask` | Manual approval for edits, outside-cwd access, mutating bash |
 | `plan` | Read-only; only `plan.md` may be written |
 | `auto` | Tiered auto-approve + optional built-in classifier + risk blacklist |
-| `bypass` | CC-aligned auto-approve: explicit deny rules, explicit ask rules and sensitive-path checks (`.git/`, SSH keys, `.env*`) still prompt — everything else silently passes; sparse security reminders |
+| `bypass` | CC-aligned auto-approve: explicit deny rules, explicit ask rules, CC-parity sensitive-path checks (edit/write, full CC `DANGEROUS` set) and bash write-target checks still prompt — everything else silently passes; sparse security reminders |
 
 **codemode (pi 1.0)**: `plan` mode denies the `codemode` tool itself — it executes other tools. A codemode script's nested tool calls run through the full agent tool pipeline (`tool_call` gates, permission checks), so the mode rules above apply to them per tool; codemode is not a permission bypass. In `bypass` mode the codemode parent loop breaker (D1b) is fully exempted (2026-11-02, BREAKING): scripts may repeat identical calls (polling, retries) without tripping the 20-call breaker; same-batch byte-identical followers (D1) still block.
 
-### Bypass adjudication order (CC alignment, 2026-11-02 — BREAKING)
+### Bypass adjudication order (CC alignment, 2026-11-02 — BREAKING; W1–W5 revision 2026-11-07)
 
 Reordered to match Claude Code's `permissions.ts` (1a/1d → 1f/1g → 2a). Before this change bypass was the very first branch and approved even deny-ruled calls:
 
 | Step | Check | Result |
 |---|---|---|
 | 1 | `evaluateToolPermission` → deny | block (`Denied by permission rule [...]`) — bypass-immune (CC 1a/1d) |
-| 2a | bypass + explicit ask rule | prompt — bypass-immune (CC 1f) |
-| 2b | bypass + sensitive path (edit/write target) | prompt — bypass-immune (CC 1g — edit tools only; bash has NO sensitive scan in CC bypass, 2026-11-03 fix) |
+| 1b | bash path-target deny extension (W4) | block — Read/Edit deny rules cover bash path commands (read-class args → `Read(...)` rules, write-class args + redirection targets → `Edit(...)` rules), every mode, bypass-immune; fail-open on patterns/variables/ssh |
+| 2a | bypass + explicit ask rule | prompt — bypass-immune (CC 1f). W1: a rule family's synthesized default-ask (first-seen MCP tool, web-gov non-preapproved domain) is NOT an explicit ask rule — it auto-approves; family asks with a governing explicit ask rule still prompt |
+| 2b | bypass + sensitive path (edit/write target) | prompt — bypass-immune (CC 1g — edit tools only). W2: the path set is the full CC `DANGEROUS_FILES/DIRECTORIES` set (case-insensitive, `.claude/worktrees` exception, symlink double-check) ∪ pi extras (`.env*`, key files, `.ssh/`, `.gnupg/`)
+| 2b′ | bypass + bash write-target (W3) | prompt — redirection targets and write-command argument slots (tee/cp/mv/rm/install/touch/mkdir/rmdir/sed -i) on a sensitive path; tokenizer + structural judgment (no regex), quoted/variable/glob tokens opaque, fail-open; compound commands only trigger when every other segment is read-only (CC approximation) |
 | 2c | bypass, everything else | silent allow (+ outside-cwd write tracking) |
 
-Steps 3+ (plan hard limits, verdict allow/ask, the auto ladder, ask dispatch) are unchanged — for the other three modes the reorder is a no-op.
+Steps 3+ (plan hard limits, verdict allow/ask, the auto ladder, ask dispatch) are unchanged — for the other three modes the reorder is a no-op (except W4, which applies to every mode).
+
+**W5 switch** — `PI_CORE_BASH_PATH_CHECKS` env or the `bashPathChecks` config key (`~/.pi/agent/permission-modes.json`): `all` (default) | `safety` (W3 only) | `deny` (W4 only) | `off` (pre-2026-11-07 behavior). Env wins; config edits apply without `/reload` (env applies to new processes only). W1/W2 are not switch-gated.
 
 ### Claude Code approved-list import (2026-11-02)
 

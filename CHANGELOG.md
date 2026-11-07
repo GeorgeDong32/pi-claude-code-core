@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Changed — bypass CC-alignment gaps W1–W5 (2026-11-07)
+- **W1 family 默认 ask 在 bypass 下自动放行**：MCP 首见工具 / web-gov 非预批域名此前在 bypass 下仍弹 first-seen/审批窗（family 合成的默认 ask 被当显式规则）——CC 的 bypassPermissions 只对**用户显式配置的 ask 规则**弹窗，现对齐；family 有显式 ask 规则时仍弹。
+- **W2 bypass 敏感路径集合扩为 CC 全集**：edit/write 的 1g 检查从窄集（.git/.env*/密钥）扩到 CC `DANGEROUS_FILES/DIRECTORIES` 全集（.gitconfig/.bashrc/.zshrc/.mcp.json/.claude.json/.vscode/.idea/.claude 等，大小写不敏感，含 .claude/worktrees 结构例外与 symlink 双检）∪ pi 额外（.env 前缀、id_rsa/id_ed25519/credentials、.ssh/.gnupg）。行为变化：bypass 下 edit `~/.ssh/config` 等现在弹窗（旧为静默放行）。
+- **W3 bash 写目标安全检查（仅 bypass）**：重定向目标或写命令（tee/cp/mv/rm/install/touch/mkdir/rmdir/sed -i）参数位命中敏感集合时弹窗；分词+结构化判定（非正则），引号/变量/通配/ssh 远程串不透明，fail-open；复合命令其余段非只读时不触发（CC 近似，交由整体审批）。
+- **W4（Breaking）Read/Edit deny 规则开始作用于 bash 路径类命令**：读类命令（cat/head/grep/ls/find/sed 非 -i 等）的路径参数对 `Read(...)` deny 规则、写/建类（rm/mv/cp/touch/mkdir/sed -i）与重定向目标对 `Edit(...)` deny 规则，命中即**整条命令拒绝**（所有模式、bypass 免疫）。迁移说明：此前 `cat .env` 绕过 `Read(./.env)` deny（read 工具会拒、bash 不会）——现在一致拒绝；你的 `.env.example` 若被 `Read(./.env.*)` 盖住，bash 里 `cat .env.example` 也会被拒，建议收窄规则（如去掉 `./.env.*` 或改精确列举）；`.git/**` deny 视意图收窄到 `.git/config` 等。pattern/flag/ssh/变量参数不触发。
+- **W5 快速开关**：环境变量 `PI_CORE_BASH_PATH_CHECKS` 或 `~/.pi/agent/permission-modes.json` 的 `bashPathChecks` 键（四档：`all` 默认 / `safety` 仅 W3 / `deny` 仅 W4 / `off`；env 优先）控制 W3+W4，改配置免 `/reload` 即生效（env 仅对新进程生效）；关闭后行为与本次改动前完全一致。W1/W2 不受开关影响。
+- adjudication-parity golden 重 pin：新增 W1×2/W3/W4 四个 bypass case，旧 case 除 W2 扩集的一个 edit 敏感 case（预期变化）外零漂移。
+
 ### Added — questionnaire dialogs report blocked status to the terminal (OSC 7501) (2026-11-03)
 - goal questionnaire 全家族（含 propose_goal_draft 的 Confirm / Continue Chatting 对话框与 goal_question/goal_questionnaire 工具）通过 pi 1.5.0 的 `ctx.ui.custom` `blocked` 选项上报「等待用户输入」——Rex/Ghostty 等 agentic inbox（OSC 7501 Program Status 消费端）现在能在 goal 确认等待时正确显示 blocked 并提醒，不再错过确认消息。message 携带问题标题（单问）/ 问题数+首问（多问）。`lib/overlay.ts` 的 `showComponentOverlay` 新增 `blocked` 透传（inline 组件生效；overlay 形态 pi 上游忽略——plan approval 浮窗暂为盲区，待上游支持）。旧 pi host（<1.5.0）运行时无害忽略该字段。
 

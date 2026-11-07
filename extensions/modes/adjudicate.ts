@@ -10,12 +10,16 @@
  *  1. rule deny         → deny (terminal; CC 1a/1d — an explicit deny rule
  *                          is bypass-immune; reordered ahead of bypass
  *                          2026-11-02, BREAKING: bypass used to win)
+ *     + W4 bash deny ext→ deny (Read/Edit deny rules cover bash path
+ *                          targets — redirections + write-command args,
+ *                          every mode, 2026-11-07)
  *  2. mode bypass       → CC alignment (1f/1g → 2a): an explicit ask rule
- *                          prompts (1f), a sensitive path on edit/write
- *                          prompts (1g — CC's checkPathSafetyForAutoEdit is
- *                          edit-tools only; bash has NO sensitive scan in
- *                          CC bypass); everything else allows (only side
- *                          effect: outside-cwd write tracking)
+ *                          prompts (1f; W1 2026-11-07: family default-ask
+ *                          auto-approves), a CC-parity sensitive path on
+ *                          edit/write prompts (1g — W2: isCcSafetyPath
+ *                          superset; bash has NO sensitive scan in CC
+ *                          bypass, W3 adds a write-target check), else
+ *                          allows (side effect: outside-cwd write tracking)
  *  3. plan hard limits  → deny (plan-gate.ts; allow/ask rules can never unlock)
  *  4. verdict allow     → allow (+ outside-write track + family note)
  *  5. verdict ask       → family first-seen dialog | permission prompt
@@ -81,6 +85,15 @@ export interface AdjudicationFacts {
 	pathOutsideCwd: boolean;
 	/** memory-dir write carve-out (P3-PM-01). */
 	pathIsMemoryDir: boolean;
+	/** W2 (2026-11-07): isCcSafetyPath(path) — CC DANGEROUS set ∪ pi extras;
+	 * the bypass edit/write gate (1g) uses this wider CC-parity set. */
+	pathCcSafety: boolean;
+	/** W3 (2026-11-07): bash write-target check result (bypass gate) — null
+	 * when the PI_CORE_BASH_PATH_CHECKS switch is off or no target matched. */
+	bashPathCheck: { path: string; kind: "redirect" | "argument" } | null;
+	/** W4 (2026-11-07): full deny reason when a Read/Edit deny rule matches a
+	 * bash path target (all modes); null otherwise. Switch-gated like W3. */
+	bashDenyRule: string | null;
 	/** String(input.command ?? "") */
 	command: string;
 	/** isSafeCommand(command) — ask bash semantics. */
@@ -139,12 +152,32 @@ export function decide(f: AdjudicationFacts): Decision {
 		};
 	}
 
-	// 2. bypass — CC alignment (permissions.ts 1f/1g → 2a): explicit ask rules
-	// and sensitive-path checks are bypass-immune and still prompt; everything
-	// else auto-approves. Outside-write tracking stays an allow effect.
+	// 1b. bash path-target deny extension (W4, 2026-11-07): a Read/Edit deny
+	// rule covers bash path-taking commands too — when the command's
+	// redirection / write-command argument targets a denied path, the whole
+	// command denies, in every mode (bypass-immune like step 1, CC parity for
+	// `cat .env` against Read(./.env) deny rules). The adapter pre-computed
+	// the full deny reason (rule text + source); null when disabled
+	// (PI_CORE_BASH_PATH_CHECKS) or nothing matched.
+	if (f.bashDenyRule) {
+		return { kind: "deny", reason: f.bashDenyRule };
+	}
+
+	// 2. bypass — CC alignment (permissions.ts 1f/1g → 2a): explicit ask
+	// rules and sensitive-path checks are bypass-immune and still prompt;
+	// everything else auto-approves. Outside-write tracking stays an allow
+	// effect.
 	if (f.mode === "bypass") {
 		// 1f: a user-configured ask rule is respected even in bypass mode.
-		if (f.verdict.behavior === "ask") {
+		// W1 (2026-11-07): a rule family's synthesized default-ask verdict
+		// (first-seen MCP tool, web-gov non-preapproved domain) is NOT a
+		// user-configured ask rule — bypass auto-approves it, matching CC
+		// bypassPermissions which only prompts for explicit ask rules. A
+		// family ask still prompts when an explicit ask rule governs the
+		// canonical id (hasExplicitAskRule); non-family ask verdicts always
+		// come from the real rule loop (unknown tools only get non-passthrough
+		// verdicts through families or that loop).
+		if (f.verdict.behavior === "ask" && (f.family === null || f.family.hasExplicitAskRule)) {
 			return {
 				kind: "prompt",
 				flavor: "permission-options",
@@ -154,16 +187,34 @@ export function decide(f: AdjudicationFacts): Decision {
 		}
 		// 1g: safety checks on edit/write paths (.git/, shell configs, ...) are
 		// bypass-immune, exactly like CC's checkPathSafetyForAutoEdit (edit tools
-		// only). NOTE: CC has NO bash sensitive-path scan in bypass — its bash
-		// danger checks live in the auto/yolo classifier, which bypass skips —
-		// so a bash command referencing sensitive paths auto-approves here too
+		// only). W2 (2026-11-07): the bypass path set is the CC-parity
+		// isCcSafetyPath superset (DANGEROUS_FILES/DIRECTORIES ∪ pi extras),
+		// wider than the narrow pathSensitive used by the other modes' gates.
+		// NOTE: CC has NO bash sensitive-path scan in bypass — its bash danger
+		// checks live in the auto/yolo classifier, which bypass skips — so a
+		// bash command referencing sensitive paths auto-approves here too
 		// (2026-11-03 fix: the previous bash commandSensitive branch was an
-		// over-reach that broke `ssh -F ~/.ssh/config`-style workflows).
-		if ((f.tool === "edit" || f.tool === "write") && f.pathSensitive) {
+		// over-reach that broke `ssh -F ~/.ssh/config`-style workflows). The
+		// bash write-target check (W3) covers redirection/argument targets
+		// separately below.
+		if ((f.tool === "edit" || f.tool === "write") && f.pathCcSafety) {
 			return {
 				kind: "prompt",
 				flavor: "permission-options",
 				label: `sensitive path "${f.path}"`,
+				category: "sensitive-path",
+			};
+		}
+		// W3 (2026-11-07): bash write-target safety check (bypass-only, CC
+		// BashTool pathValidation parity): a redirection or write-command
+		// argument targeting a CC-sensitive path prompts. Gated upstream by
+		// PI_CORE_BASH_PATH_CHECKS (facts carry null when disabled); fails
+		// open — an unparseable command carries no targets and allows.
+		if (f.bashPathCheck) {
+			return {
+				kind: "prompt",
+				flavor: "permission-options",
+				label: `bash writes sensitive path "${f.bashPathCheck.path}"`,
 				category: "sensitive-path",
 			};
 		}

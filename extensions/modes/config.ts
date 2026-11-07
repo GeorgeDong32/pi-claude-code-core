@@ -37,6 +37,10 @@ export interface PermissionModesConfig {
 	classifier?: Partial<ClassifierConfig>
 	/** CC auto-mode classifier allow / soft_deny / environment bullets. */
 	autoMode?: AutoModeRules
+	/** W5 (2026-11-07): bash path-target checks — "all" (default) | "safety"
+	 * (W3 only) | "deny" (W4 only) | "off". PI_CORE_BASH_PATH_CHECKS env
+	 * overrides. Applies without /reload (read per adjudication). */
+	bashPathChecks?: "all" | "safety" | "deny" | "off"
 	permissions?: {
 		allow?: string[]
 		deny?: string[]

@@ -29,6 +29,9 @@ function facts(patch: Partial<AdjudicationFacts>): AdjudicationFacts {
 		pathSensitive: false,
 		pathOutsideCwd: false,
 		pathIsMemoryDir: false,
+		pathCcSafety: false,
+		bashPathCheck: null,
+		bashDenyRule: null,
 		command: "",
 		commandSafe: false,
 		embeddedAuto: [],
@@ -47,6 +50,53 @@ describe("decide: bypass", () => {
 			.toEqual({ kind: "allow", effects: {} });
 		expect(decide(facts({ mode: "bypass", tool: "edit" })))
 			.toEqual({ kind: "allow", effects: { trackOutsideWrite: true } });
+	});
+	it("W1: family default-ask auto-approves; explicit ask rule still prompts", () => {
+		// family synthesized ask (first-seen MCP / web-gov domain) — allow
+		expect(decide(facts({
+			mode: "bypass",
+			tool: "mcp__exa__search",
+			verdict: ask,
+			family: { canonicalId: "mcp_exa_search", suggestedRule: "mcp_exa_*", hasExplicitAskRule: false },
+		}))).toEqual({ kind: "allow", effects: {} });
+		// family with a governing explicit ask rule — prompt (CC 1f)
+		expect(decide(facts({
+			mode: "bypass",
+			tool: "mcp__exa__search",
+			verdict: ask,
+			family: { canonicalId: "mcp_exa_search", suggestedRule: "mcp_exa_*", hasExplicitAskRule: true },
+		})).kind).toBe("prompt");
+		// non-family ask verdict — always a real rule, prompts
+		expect(decide(facts({ mode: "bypass", tool: "edit", verdict: ask })).kind).toBe("prompt");
+	});
+	it("W2: bypass edit/write gate uses the CC-parity safety set", () => {
+		expect(decide(facts({ mode: "bypass", tool: "edit", path: "~/.bashrc", pathCcSafety: true })))
+			.toMatchObject({ kind: "prompt", category: "sensitive-path" });
+		// narrow-gate-only sensitivity (pathSensitive) no longer drives 1g
+		expect(decide(facts({ mode: "bypass", tool: "edit", path: "src/a.ts", pathSensitive: true })))
+			.toEqual({ kind: "allow", effects: { trackOutsideWrite: true } });
+		// plain file — allow
+		expect(decide(facts({ mode: "bypass", tool: "write", path: "src/a.ts" })))
+			.toEqual({ kind: "allow", effects: { trackOutsideWrite: true } });
+	});
+	it("W3: bash write-target check prompts in bypass; null (off/clean) allows", () => {
+		expect(decide(facts({
+			mode: "bypass",
+			tool: "bash",
+			input: { command: "echo x >> ~/.zshrc" },
+			bashPathCheck: { path: "~/.zshrc", kind: "redirect" },
+		}))).toMatchObject({ kind: "prompt", category: "sensitive-path" });
+		expect(decide(facts({ mode: "bypass", tool: "bash", input: { command: "echo x > out.txt" } })))
+			.toEqual({ kind: "allow", effects: {} });
+	});
+	it("W4: bash deny extension denies in every mode, bypass included", () => {
+		const reason = "Denied by permission rule [global]: Read(./.env) (bash references denied path)";
+		expect(decide(facts({ mode: "bypass", tool: "bash", input: { command: "cat .env" }, bashDenyRule: reason })))
+			.toEqual({ kind: "deny", reason });
+		expect(decide(facts({ mode: "ask", tool: "bash", input: { command: "cat .env" }, bashDenyRule: reason })))
+			.toEqual({ kind: "deny", reason });
+		expect(decide(facts({ mode: "bypass", tool: "bash", input: { command: "cat readme.md" } })))
+			.toEqual({ kind: "allow", effects: {} });
 	});
 });
 
