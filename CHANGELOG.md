@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Changed — W1–W5 review fixes P0/P1/P2 (2026-11-08)
+- **P0-1（Breaking，safety 档）allow 规则不再匹配带命令替换/敏感重定向的命令**：`git status $(rm x)`、``git status `rm x` ``、`git status > ~/.zshrc` 此前命中 `Bash(git status:*)` 即静默放行（ask/auto 也不问）；现在落回 passthrough 由各模式默认逻辑处理。CC isSafeHeredoc 已移植：`git commit -m "$(cat <<'EOF'…EOF)"` 形态豁免（引号分隔符 + 行级闭合 + 剩余字符白名单 + 参数位要求，4 个测试钉住）。迁移：被影响的命令会开始弹窗——按需批准或 `bashPathChecks: "deny"`（保留 W4、关闭 W3+P0-1+P1-4）；双机 14 天 11251 条历史回放实测新增询问 0。
+- **P0-2/3 引号字面量参与判定**：`cat ".env"`（W4 拒）、`rm ".git/index"` / `echo x > ".zshrc"`（W3 弹）不再绕过；引号内含 $ ` \\ 或非整段引号仍不透明（fail-open），ssh 远程串不受影响。
+- **P1-1 融合命令纳入检查**：`edit { then_run: "cat .env" }` 现在被 Read deny 拒、bypass 下 `then_run: "rm .git/index"` 弹窗（与主 bash 命令同套 W3/W4/P1-4 检查）。
+- **P1-2 mv/cp 全位置参数**：`mv .git/index /tmp/x`、`cp .git/config /tmp/x` 现在弹窗（源参数也检查）；install 保持 destination-only（CC 不收录，DEVIATIONS）。
+- **P1-3 sed 提取器补全**：`-i.bak`/`--in-place[=s]`/组合短选项识别为 in-place；文件参数=脚本之后全部（多文件 sed 全查）；`-f` 脚本文件参与校验、`-e` 表达式跳过（CC PATH_EXTRACTORS.sed 对照）。
+- **P1-4（safety 档）bash 写 pi 自身保护路径弹窗（所有模式）**：`echo x > ~/.pi/agent/permission-modes.json`、`rm ~/.pi/agent/rules/*` 等命中 [C4] 保护集时弹窗（bypass 含；plan 硬限制优先不降级）；动作是弹窗非硬拦（启发式检测、只读 cp 备份也会命中、留人工出口）；write/edit 的 [C4] 硬拦不变。开关配置键本身在被保护文件里，agent 无法用 write/edit 改掉。
+- **P2 deny/ask 对齐包装器与子命令**：SAFE_WRAPPER 五形态对齐 CC（bare `nice`、`nice -N`、`time`、`stdbuf -o0`、`timeout` 含长/短 flag 白名单值与 `--` 透传）——`nice rm x` 现在命中 `Bash(rm:*)` deny；deny/ask 方向展开 `$()`/反引号子命令（单层近似，`(...)`/`{...;}` 为已知差距）。
+- **safety 档语义扩大（文档）**：现为「W3（bypass 写目标弹窗）+ P0-1 allow 收紧（所有模式）+ P1-4 保护路径弹窗（所有模式）」；`deny` 档仍仅 W4。parity golden：+3 新 case，旧 case 零漂移。
+
 ### Changed — bypass CC-alignment gaps W1–W5 (2026-11-07)
 - **W1 family 默认 ask 在 bypass 下自动放行**：MCP 首见工具 / web-gov 非预批域名此前在 bypass 下仍弹 first-seen/审批窗（family 合成的默认 ask 被当显式规则）——CC 的 bypassPermissions 只对**用户显式配置的 ask 规则**弹窗，现对齐；family 有显式 ask 规则时仍弹。
 - **W2 bypass 敏感路径集合扩为 CC 全集**：edit/write 的 1g 检查从窄集（.git/.env*/密钥）扩到 CC `DANGEROUS_FILES/DIRECTORIES` 全集（.gitconfig/.bashrc/.zshrc/.mcp.json/.claude.json/.vscode/.idea/.claude 等，大小写不敏感，含 .claude/worktrees 结构例外与 symlink 双检）∪ pi 额外（.env 前缀、id_rsa/id_ed25519/credentials、.ssh/.gnupg）。行为变化：bypass 下 edit `~/.ssh/config` 等现在弹窗（旧为静默放行）。

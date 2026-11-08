@@ -28,12 +28,15 @@
 | 1b | bash 路径目标 deny 扩展(W4) | 拦截 —— Read/Edit deny 规则覆盖 bash 路径类命令(读类参数对 `Read(...)` 规则、写/建类参数与重定向目标对 `Edit(...)` 规则),所有模式、bypass 不豁免;pattern/变量/ssh 参数 fail-open 不触发 |
 | 2a | bypass + 显式 ask 规则 | 弹窗 —— bypass 不豁免(CC 1f)。W1:family 合成的默认 ask(MCP 首见工具、web-gov 非预批域名)不是显式 ask 规则,自动放行;有管辖的显式 ask 规则时仍弹 |
 | 2b | bypass + 敏感路径(edit/write 目标) | 弹窗 —— bypass 不豁免(CC 1g —— 仅 edit 类工具)。W2:路径集合扩为 CC `DANGEROUS_FILES/DIRECTORIES` 全集(大小写不敏感、`.claude/worktrees` 结构例外、symlink 双检)∪ pi 额外(`.env*`、密钥文件、`.ssh/`、`.gnupg/`) |
-| 2b′ | bypass + bash 写目标(W3) | 弹窗 —— 重定向目标与写命令参数位(tee/cp/mv/rm/install/touch/mkdir/rmdir/sed -i)命中敏感路径;分词+结构化判定(非正则),引号/变量/通配 token 不透明,fail-open;复合命令仅在其余段全部只读时触发(CC 近似) |
+| 2b′ | bypass + bash 写目标(W3) | 弹窗 —— 重定向目标与写命令参数位(tee/cp/mv/rm/install/touch/mkdir/rmdir/sed -i)命中敏感路径;分词+结构化判定(非正则),引号字面量脱引号参与(P0-2/3),变量/通配不透明,fail-open;复合命令仅在其余段全部只读时触发(CC 近似);mv/cp 全位置参数(P1-2);sed 按 CC 完整提取器(`-i后缀`/`--in-place[=s]`/组合短 flag,文件=脚本之后全部,`-f` 脚本文件校验、`-e` 跳过)(P1-3) |
+| 2b″ | bypass + 保护路径写入(P1-4) | 弹窗 —— bash 写入 [C4] 保护集(permission-modes.json / rules 目录 / settings.json);非 bypass 模式镜像在第 3.5 步;弹窗而非硬拦(启发式检测留人工出口) |
 | 2c | bypass 其余一切 | 静默放行(+ cwd 外写跟踪) |
 
-步骤 3+(plan 硬限制、verdict allow/ask、auto 阶梯、ask 分发)不变 —— 对其余三个模式重排是 no-op(W4 例外,它对所有模式生效)。
+步骤 3+(verdict allow/ask、auto 阶梯、ask 分发)不变 —— 对其余三个模式重排是 no-op(W4 例外,它对所有模式生效)。新增第 3.5 步(P1-4):bash 写入保护 pi 路径在所有非 bypass 模式弹窗,位于 plan 硬限制**之后**——plan 拒绝不降级为弹窗。
 
-**W5 开关** —— 环境变量 `PI_CORE_BASH_PATH_CHECKS` 或 `~/.pi/agent/permission-modes.json` 的 `bashPathChecks` 键:`all`(默认)|`safety`(仅 W3)|`deny`(仅 W4)|`off`(回到 2026-11-07 之前行为)。env 优先;改配置免 `/reload` 即生效(env 仅对新进程生效)。W1/W2 不受开关控制。
+**W5 开关** —— 环境变量 `PI_CORE_BASH_PATH_CHECKS` 或 `~/.pi/agent/permission-modes.json` 的 `bashPathChecks` 键:`all`(默认)|`safety`(W3 写目标弹窗 + P0-1 allow 收紧 + P1-4 保护路径弹窗——后两者所有模式生效)|`deny`(仅 W4)|`off`(回到 2026-11-07 之前行为)。env 优先;改配置免 `/reload` 即生效(env 仅对新进程生效)。W1/W2 不受开关控制。
+
+**复核修复(2026-11-08)** —— 同开关下的新增门:P0-1——allow 规则不再匹配带命令替换(`$()`、反引号、`${}`、进程替换等)的命令(除 CC 安全 heredoc 形态——`git commit -m "$(cat <<'EOF'…EOF)"` 仍放行),也不再匹配重定向目标命中敏感路径的命令——这些命令落回各模式默认询问逻辑(双机 11251 条历史 bash 回放实测:新增询问 0)。P1-1——融合(`then_run`)命令与主 bash 命令同套 W3/W4/P1-4 检查。P2——deny/ask 匹配剥离 CC 五安全包装器(timeout/time/nice/stdbuf/nohup 含裸 `nice` 与 `-N` 形态)并展开 `$()`/反引号子命令(单层;`(...)`/`{ ...; }` 为已知差距)。
 
 ### Claude Code 批准清单导入(2026-11-02)
 

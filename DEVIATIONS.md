@@ -349,3 +349,10 @@
 133. **mcp-gov estimate import 改实体路径（2026-10-22，pi 加载器兼容）**：B4 的 `@earendil-works/pi-ai/utils/estimate` 子路径 import 在 pi 扩展运行时必炸——pi 1.3.0+ 的 jiti alias 把裸 `@earendil-works/pi-ai*` 前缀重写为 compat 入口文件路径，任何子路径都被拼成 `<compat.js>/utils/estimate`（1.3.0 报 Cannot find module、1.4.0 报 exports 未定义；vitest/bun 原生 resolver 认 exports map 所以测试恒绿——只有 pi 运行时受影响）。fe17755 引入后一直没炸是因副本文件长期未变、jiti 缓存命中；10-22 副本同步（cfa2531）使缓存失效后冷解析暴露。修正：mcp-gov/index.ts 内联 estimateTextTokens（ceil(len/3.5)，pi-ai 1.4.0 同源常量，注释标注同步义务）——既绕 alias 又不绑定 dev node_modules 布局（`pi update` 安装的机器无 devDeps，ae34f6d 的相对实体路径方案在无 node_modules 副本上会指向空气，随即修正）；回迁条件：pi alias 表长出子路径条目。上游改进方向：alias 表补 `@earendil-works/pi-ai/utils/*` 条目。
 
 134. **bypass CC 对齐剩余缺口 W1-W5（2026-11-07，用户逐项拍板，handoff `.pi/handoff/2026-11-07-core-bypass-cc-alignment.md`）**：四项有意偏差 CC 的设计——①W1：family 合成默认-ask（MCP 首见/web-gov 非预批域名）在 bypass 下自动放行（CC 只对显式 ask 规则弹窗）；②W2：bypass edit/write 敏感集 = CC DANGEROUS_FILES/DIRECTORIES ∪ pi 额外（.env 前缀、密钥、.ssh/.gnupg）——比 CC 更严（有意超集），Windows 特有模式（UNC/8.3/ADS）未移植；③W3：bash 写目标安全检查仅 bypass、复合命令近似 CC（其余段非只读则不触发，交由整体审批）；④W4：Read/Edit deny 规则作用于 bash 路径类命令、所有模式、整条 deny——CC 无此跨工具行为（pi 加强，用户 deny 语义拍板）；开关 PI_CORE_BASH_PATH_CHECKS（all/safety/deny/off 四档）同时控制 W3 与 W4，关闭即恢复改动前行为。另：sudo 弹窗主案（2026-11-07 前期排查）真拦截源为用户侧 `~/.pi/agent/extensions/codeisland.ts`（非 core），CodeIsland 侧另行修复，本批不涉及。
+
+**#134 增补（2026-11-08 复核修复批）**：
+- **P0-1 前提更正**：上批 W3 的「其它模式本来就会问」不成立——allow 规则命中时 ask/auto 不问；allow 收紧（命令替换/敏感重定向不匹配）归入 safety 档后该缺口闭合。CC isSafeHeredoc 已移植（`git commit -m "$(cat <<'EOF'…EOF)"` 豁免）。双机 14 天 11251 条 bash 回放：allow 基线命中 0、收紧后新增询问 0。
+- **P1-2**：install 不在 CC COMMAND_OPERATION_TYPE（保持 destination-only）；mv/cp 已按 CC 改为全位置参数。
+- **P1-4 有意超集**：CC 无「bash 写入 pi 自身保护路径」检查（CC 靠 .claude 目录段间接覆盖）；pi 显式复用 [C4] matchProtectedPath 清单、所有模式弹窗（非硬拦——启发式检测留人工出口）。
+- **P2 已知差距**：deny/ask 子命令展开为单层正则近似（$() 与反引号）；`(...)` 分组与 `{ ...; }` 未展开（CC 用 AST）——真实场景罕见，后续如需完整展开引入 shell AST 解析器。
+- **P0-2/3**：引号脱引号限「整段单/双引号字面量且内部无 $ ` \」——比 CC 的宽松 strip 保守（CC validatePath 只剥首尾引号）。

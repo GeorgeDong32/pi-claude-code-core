@@ -109,7 +109,7 @@ docs/                # 架构文档(en/ + zh/ 双语分文件)
 | 变量 | 模块 | 作用 |
 |---|---|---|
 | `PI_CORE_EFFORT` | effort | 思考档位硬钉;置位期间显式写入被拒绝 |
-| `PI_CORE_BASH_PATH_CHECKS` | modes | W3/W4 bash 路径检查开关覆盖:`all`(默认)\|`safety`(仅 W3)\|`deny`(仅 W4)\|`off`;覆盖 `bashPathChecks` 配置键,免 `/reload` 生效(env 仅对新进程生效) |
+| `PI_CORE_BASH_PATH_CHECKS` | modes | W3/W4/P0-1/P1-4 bash 路径检查开关:`all`(默认)\|`safety`(W3 弹窗+allow 收紧+保护路径弹窗)\|`deny`(仅 W4)\|`off`;覆盖 `bashPathChecks` 配置键,免 `/reload` 生效(env 仅对新进程生效) |
 | `PI_CORE_MCP_DIRECT_SERVERS` | mcp-gov | 允许认领裸工具名的 server id(如 `exa`) |
 | `PERMISSION_MODES_INHERITED_MODE` | modes | 子代理模式继承(pi-subagents 生产,此处只消费) |
 | `PERMISSION_MODES_CLASSIFIER_DEBUG` | modes | auto 模式分类器调试日志 |

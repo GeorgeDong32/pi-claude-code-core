@@ -129,7 +129,7 @@ Per-module docs live in [docs/en/](docs/en) / [docs/zh/](docs/zh) — start with
 | Variable | Module | Effect |
 |---|---|---|
 | `PI_CORE_EFFORT` | effort | Hard pin on thinking level; explicit writes are refused while set |
-| `PI_CORE_BASH_PATH_CHECKS` | modes | W3/W4 bash path-target checks override: `all` (default) \| `safety` (W3 only) \| `deny` (W4 only) \| `off`; overrides the `bashPathChecks` config key, applies without `/reload` (env applies to new processes only) |
+| `PI_CORE_BASH_PATH_CHECKS` | modes | W3/W4/P0-1/P1-4 bash path-check switch: `all` (default) \| `safety` (W3 prompts + allow-rule hardening + protected-path prompts) \| `deny` (W4 only) \| `off`; overrides the `bashPathChecks` config key, applies without `/reload` (env applies to new processes only) |
 | `PI_CORE_MCP_DIRECT_SERVERS` | mcp-gov | Server ids allowed to claim bare tool names (e.g. `exa`) |
 | `PERMISSION_MODES_INHERITED_MODE` | modes | Subagent mode inheritance (produced by pi-subagents, only consumed here) |
 | `PERMISSION_MODES_CLASSIFIER_DEBUG` | modes | Debug logging for the auto-mode classifier |
