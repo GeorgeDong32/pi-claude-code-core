@@ -107,6 +107,8 @@ function ruleMatchesToolCall(
 			cmd,
 			rule.ruleValue.ruleContent,
 			rule.behavior,
+			// cwd feeds the P0-1 sensitive-redirection check
+			{ cwd },
 		)
 	}
 

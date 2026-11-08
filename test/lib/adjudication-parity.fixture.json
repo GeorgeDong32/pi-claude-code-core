@@ -181,6 +181,76 @@
 		"adjudications": {},
 		"outsideWriteCount": 0
 	},
+	"ask/allow rule defeated by substitution (P0-1)": {
+		"result": "block: bash blocked by user",
+		"uiSelects": [
+			{
+				"label": "Allow bash? \"git status $(rm x)\"",
+				"options": [
+					"Allow",
+					"Allow always (this project)",
+					"Allow always (global)",
+					"Block"
+				]
+			}
+		],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {
+				"allow": [
+					"Bash(git status:*)"
+				]
+			},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"bypass/deny rule hits through bare nice wrapper (P2)": {
+		"result": "block: Denied by permission rule [global]: Bash(rm:*)",
+		"uiSelects": [],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {
+				"deny": [
+					"Bash(rm:*)"
+				]
+			},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
+	"ask/bash write onto permission-modes.json prompts (P1-4)": {
+		"result": "block: bash blocked by user",
+		"uiSelects": [
+			{
+				"label": "Allow bash? bash writes protected pi path \"~/.pi/agent/permission-modes.json\" (modes-permissions-file)",
+				"options": [
+					"Allow",
+					"Allow always (this project)",
+					"Allow always (global)",
+					"Block"
+				]
+			}
+		],
+		"notifications": [],
+		"persistedRules": {
+			"permissions": {},
+			"classifier": {
+				"enabled": false
+			}
+		},
+		"sessionGrants": [],
+		"adjudications": {},
+		"outsideWriteCount": 0
+	},
 	"ask/deny rule blocks read": {
 		"result": "block: Denied by permission rule [global]: Read(src/**)",
 		"uiSelects": [],

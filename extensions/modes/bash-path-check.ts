@@ -1,13 +1,14 @@
 /**
  * modes/bash-path-check.ts — bash path-target checks (W3/W4/W5, 2026-11-07
- * handoff "bypass CC alignment").
+ * handoff "bypass CC alignment"; review fixes 2026-11-08: P0-2/3 quoted
+ * literals, P1-2 mv/cp all args, P1-3 full sed extractor, P1-4 protected
+ * pi-own paths).
  *
  * W3 (bypass-only prompt): a bash write target — redirection target or the
- * argument-slot target of a write command (tee/cp/mv/rm/install/sed -i/
- * touch/mkdir/rmdir) — landing on a CC-sensitive path prompts. Compound
- * commands follow CC's approximation: the check fires only when every other
- * segment is read-only safe (`isSafeCommand`), because a compound command
- * with non-read-only segments is already gated as a whole elsewhere.
+ * argument-slot target of a write command (tee/cp/mv/rm/touch/mkdir/rmdir/
+ * sed -i) — landing on a CC-sensitive path prompts. Compound commands follow
+ * CC's approximation: the check fires only when every other segment is
+ * read-only safe (`isSafeCommand`).
  *
  * W4 (all-modes deny): Read/Edit deny rules apply to bash path-taking
  * commands. Read-class commands (cat/head/…, sed without -i) check Read deny
@@ -15,29 +16,46 @@
  * the whole command (CC deniedSubresult parity) — bypass-immune, decide
  * step 1b.
  *
- * Shared extractor rules (CC BashTool pathValidation parity, handoff):
+ * W3.5 (all-modes prompt, 2026-11-08 P1-4): a bash write target landing on
+ * a pi-own protected path (permission-modes.json, rules dirs, settings.json
+ * — the [C4] set via memory/protected-paths.ts) prompts in every mode
+ * (bypass included; placed after plan hard limits in decide). A deliberate
+ * pi superset over CC (which only covers these via the .claude dir segment).
+ *
+ * Shared extractor rules (CC BashTool pathValidation parity):
  * - Tokenizer + structural judgment only — NO path-extraction regexes.
- * - Quoted tokens are opaque; tokens with variables ($VAR), globs (* ? [ ]),
- *   or command substitution are skipped — fail-open on uncertainty.
- * - grep/rg/awk/jq/sed: the first non-flag argument is a pattern/script, not
- *   a path. find: only paths before the first flag. `--` ends flag parsing.
- * - ssh / git / cd are deliberately NOT path-checked (CC parity — remote
- *   command strings are not local paths).
+ * - A token that is ENTIRELY one single/double-quoted literal with no $, `
+ *   or backslash inside is unquoted and participates (P0-2/3, CC
+ *   validatePath strip-parity); anything else carrying quotes/variables/
+ *   globs/command substitution is opaque — fail-open on uncertainty.
+ * - grep/rg/awk/jq: the first non-flag argument is a pattern, not a path.
+ *   find: only paths before the first flag. `--` ends flag parsing.
+ * - sed: CC PATH_EXTRACTORS.sed parity — `-f/--file` operand is a script
+ *   FILE (validated), `-e/--expression` operand is skipped, combined short
+ *   flags containing e/f mark the script found, the first non-flag is the
+ *   script, the rest are files. In-place forms: -i, -iSUFFIX,
+ *   --in-place[=SUFFIX], combined short flags containing i.
+ * - ssh / git / cd are deliberately NOT path-checked (remote strings are
+ *   not local paths).
  *
  * W5 switch: PI_CORE_BASH_PATH_CHECKS env ("all" | "safety" | "deny" |
  * "off") overrides permission-modes.json `bashPathChecks` (same values,
- * default "all"). safety = W3 only, deny = W4 only. Read per adjudication
- * (mtime-cached config primitive — config edits apply without /reload; env
- * applies to new processes only).
+ * default "all"). safety = W3 + allow-rule hardening (P0-1, lives in
+ * bash-permission-match.ts) + protected-path prompt (P1-4); deny = W4 only.
+ * Read per adjudication (mtime-cached config primitive — config edits apply
+ * without /reload; env applies to new processes only).
  *
- * Pure string layer — no fs (the symlink double-check lives in
- * path-safety's isCcSafetyPath), no pi imports.
+ * Pure string layer — no fs beyond protected-paths' matcher (lexical), no
+ * pi imports.
  */
 import { splitShellSegments, isSafeCommand } from "./bash-analysis.ts"
-import { isCcSafetyPath } from "./path-safety.ts"
+import { isCcSafetyPath, expandUserPath } from "./path-safety.ts"
 import type { PermissionModesConfig } from "./config.ts"
 import type { PermissionRule } from "./permissions.ts"
 import { pathToolMatchesRuleContent } from "./path-permission-match.ts"
+import { matchProtectedPath } from "../memory/protected-paths.ts"
+import { homedir } from "node:os"
+import path from "node:path"
 
 // ---- W5 switch -----------------------------------------------------------
 
@@ -54,8 +72,7 @@ function coerceMode(v: string | undefined): BashPathCheckMode | null {
 /**
  * Resolve the W5 switch: env PI_CORE_BASH_PATH_CHECKS wins over the config
  * key `bashPathChecks`; both default to "all". Invalid values fall back to
- * the next source (never throw — a typo must not disable safety silently…
- * it disables the override and keeps the config/default effective).
+ * the next source (never throw — a typo disables the override only).
  */
 export function resolveBashPathChecks(config: PermissionModesConfig): BashPathCheckMode {
 	return coerceMode(process.env.PI_CORE_BASH_PATH_CHECKS)
@@ -66,28 +83,43 @@ export function resolveBashPathChecks(config: PermissionModesConfig): BashPathCh
 // ---- shared tokenizer ----------------------------------------------------
 
 export interface BashPathTarget {
-	/** Candidate path as written in the command (unresolved). */
+	/** Candidate path as written in the command (post-unquote). */
 	path: string
 	/** How the target was identified. */
 	kind: "redirect" | "argument"
 }
 
-/** True for tokens that carry quote characters (opaque per CC semantics). */
-function isQuotedToken(token: string): boolean {
-	return token.includes("'") || token.includes('"')
+/**
+ * P0-2/3 (2026-11-08): unquote a token that is ENTIRELY one single- or
+ * double-quoted literal. The inside must be free of $, backtick and
+ * backslash (no expansion/escaping tricks) — otherwise null (caller treats
+ * the token as opaque). Mirrors CC validatePath's leading/trailing quote
+ * strip, restricted to the provably-literal case.
+ */
+function unquoteLiteral(token: string): string | null {
+	if (token.length < 2) return null
+	const first = token[0]!
+	const last = token[token.length - 1]!
+	if (!((first === "'" && last === "'") || (first === '"' && last === '"'))) return null
+	const inner = token.slice(1, -1)
+	if (inner.length === 0) return null
+	if (inner.includes("$") || inner.includes("`") || inner.includes("\\")) return null
+	// a quote character inside means it was not one whole literal
+	if (inner.includes("'") || inner.includes('"')) return null
+	return inner
 }
 
-/** True for tokens the extractor cannot confidently treat as a literal path. */
-function isOpaqueToken(token: string): boolean {
-	return (
-		isQuotedToken(token) ||
-		token.includes("$") ||
-		token.includes("*") ||
-		token.includes("?") ||
-		token.includes("[") ||
-		token.includes("]") ||
-		token.includes("`")
-	)
+/**
+ * Resolve a token to a literal path candidate: unquoted literals are
+ * unquoted, plain tokens pass through, anything uncertain is null (opaque).
+ */
+function resolveToken(token: string): string | null {
+	if (token === "") return null
+	if (token.includes("'") || token.includes('"')) return unquoteLiteral(token)
+	// Variables, command substitution, globs and character classes are
+	// uncertain — fail-open (the old isOpaqueToken set).
+	if (/[`$*?\[\]]/.test(token)) return null
+	return token
 }
 
 /**
@@ -141,11 +173,15 @@ function tokenizeSegment(segment: string): string[] {
 interface ParsedSegment {
 	/** argv[0] basename (env-assignment prefixes stripped). */
 	base: string
-	/** Plain (non-opaque, non-flag, non-redirect) positional arguments. */
+	/** Positional args (unquoted when literal, flags excluded, opaque skipped). */
 	args: string[]
-	/** Positional arguments BEFORE the first flag (find semantics). */
-	pathArgs: string[]
-	/** Redirection targets (next plain token after a redirect operator). */
+	/**
+	 * All operand tokens after argv0 in order, flags INCLUDED (unquoted when
+	 * literal; opaque kept verbatim so sed's combined-flag logic can still
+	 * see them). For sed-style extractors only.
+	 */
+	operands: string[]
+	/** Redirection targets (unquoted when literal). */
 	redirects: string[]
 }
 
@@ -163,9 +199,8 @@ function parseSegment(segment: string): ParsedSegment | null {
 	const argv0 = tokens[first]
 	if (argv0 === undefined || isRedirectOp(argv0)) return null
 	const args: string[] = []
-	const pathArgs: string[] = []
+	const operands: string[] = []
 	const redirects: string[] = []
-	let sawFlag = false
 	let positionalOnly = false // after `--`
 	for (let i = first + 1; i < tokens.length; i++) {
 		const t = tokens[i]!
@@ -176,29 +211,95 @@ function parseSegment(segment: string): ParsedSegment | null {
 		if (isRedirectOp(t)) {
 			const dst = tokens[i + 1]
 			// /dev/null is the universal sink; a leading & is an fd reference.
-			if (
-				dst !== undefined &&
-				dst !== "/dev/null" &&
-				!dst.startsWith("&") &&
-				!isOpaqueToken(dst)
-			) {
-				redirects.push(dst)
+			if (dst !== undefined && dst !== "/dev/null" && !dst.startsWith("&")) {
+				const resolved = resolveToken(dst)
+				if (resolved !== null) redirects.push(resolved)
 			}
 			i++ // consume the target
 			continue
 		}
 		if (!positionalOnly && t.startsWith("-")) {
-			sawFlag = true
-			continue // flag (possibly glued value)
-		}
-		if (isOpaqueToken(t)) {
-			sawFlag = true
+			const resolved = resolveToken(t)
+			operands.push(resolved ?? t)
 			continue
 		}
-		if (!sawFlag && !positionalOnly) pathArgs.push(t)
-		args.push(t)
+		const resolved = resolveToken(t)
+		operands.push(resolved ?? t)
+		if (resolved !== null) args.push(resolved)
 	}
-	return { base: argv0.slice(argv0.lastIndexOf("/") + 1), args, pathArgs, redirects }
+	return { base: argv0.slice(argv0.lastIndexOf("/") + 1), args, operands, redirects }
+}
+
+// ---- sed analysis (P1-3, CC PATH_EXTRACTORS.sed parity) -------------------
+
+interface SedAnalysis {
+	/** In-place edit (-i family)? */
+	inPlace: boolean
+	/** File path candidates (script operand + trailing files). */
+	paths: string[]
+}
+
+const SED_LONG_FILE = new Set(["-f", "--file"])
+const SED_LONG_EXPR = new Set(["-e", "--expression"])
+
+/** Analyze sed operands per CC's extractor: flags, script position, files. */
+function analyzeSed(operands: string[]): SedAnalysis {
+	const paths: string[] = []
+	let scriptFound = false
+	let inPlace = false
+	let afterDoubleDash = false
+	for (let i = 0; i < operands.length; i++) {
+		const arg = operands[i]!
+		if (!afterDoubleDash && arg === "--") {
+			afterDoubleDash = true
+			continue
+		}
+		if (!afterDoubleDash && arg.startsWith("-") && arg !== "-") {
+			// -f/--file: the next operand is a script FILE (validated too).
+			if (SED_LONG_FILE.has(arg)) {
+				const scriptFile = operands[i + 1]
+				if (scriptFile !== undefined && resolveToken(scriptFile) !== null) {
+					paths.push(resolveToken(scriptFile)!)
+					i++
+				}
+				scriptFound = true
+				continue
+			}
+			// -e/--expression: the next operand is an expression, not a file.
+			if (SED_LONG_EXPR.has(arg)) {
+				i++
+				scriptFound = true
+				continue
+			}
+			if (arg === "--in-place" || arg.startsWith("--in-place=")) {
+				inPlace = true
+				scriptFound = true // GNU docs: implies the script is next non-flag
+				continue
+			}
+			// Combined/short flags: -i[SUFFIX] or any short group containing
+			// i marks in-place; a group containing e or f marks script-found.
+			if (arg.startsWith("--")) continue // unknown long flag — skip
+			const letters = arg.replace(/^-+/, "")
+			if (letters.includes("i")) inPlace = true
+			if (letters.includes("e") || letters.includes("f")) scriptFound = true
+			continue
+		}
+		// First non-flag operand is the script (unless -e/-f found it).
+		if (!scriptFound) {
+			scriptFound = true
+			continue
+		}
+		const resolved = resolveToken(arg)
+		if (resolved !== null) paths.push(resolved)
+	}
+	return { inPlace, paths }
+}
+
+/** True when the segment invokes sed with an in-place (-i family) flag. */
+function sedInPlace(segment: string): boolean {
+	const parsed = parseSegment(segment)
+	if (!parsed || parsed.base !== "sed") return false
+	return analyzeSed(parsed.operands).inPlace
 }
 
 // ---- W3: bypass write-target safety check --------------------------------
@@ -215,13 +316,13 @@ const W3_WRITE_COMMANDS: readonly string[] = [
 	"rmdir",
 ]
 
-/** All argument slots (tee) or just the destination (cp/mv/install)? */
-const DEST_ONLY = new Set(["cp", "mv", "install"])
-
 /**
  * W3: does a bash command write to a CC-sensitive path? Returns the first
- * offending target, or null. Compound-command approximation (CC parity):
- * only fires when every non-hitting segment is read-only safe.
+ * offending target, or null. P1-2: mv/cp check ALL positional args (CC
+ * COMMAND_OPERATION_TYPE treats them as write over every operand); install
+ * stays destination-only (not in CC's set — DEVIATIONS). Compound-command
+ * approximation (CC parity): only fires when every non-hitting segment is
+ * read-only safe.
  */
 export function checkBashWriteTargets(
 	command: string,
@@ -244,42 +345,100 @@ export function checkBashWriteTargets(
 	return hit
 }
 
-/** True when the segment invokes sed with an in-place (-i) flag. */
-function sedInPlace(segment: string): boolean {
-	return /(^|\s|\/)sed(\s|$)/.test(` ${segment} `) && /(^|\s)-i(\s|$|['"'])/.test(segment)
-}
-
 function w3SegmentCheck(segment: string, cwd: string): BashPathTarget | null {
 	// Redirection onto a sensitive path (checked before command parsing so
-	// `echo x > ~/.bashrc` hits regardless of argv0).
+	// `echo x > ~/.bashrc` hits regardless of argv0). Quoted literal targets
+	// are unquoted first (P0-2/3).
 	const rawTokens = tokenizeSegment(segment)
 	for (let i = 0; i < rawTokens.length; i++) {
 		const t = rawTokens[i]!
 		if (!isRedirectOp(t)) continue
 		const dst = rawTokens[i + 1]
-		if (dst === undefined || dst === "/dev/null" || dst.startsWith("&") || isOpaqueToken(dst)) continue
-		if (isCcSafetyPath(dst, cwd)) return { path: dst, kind: "redirect" }
-	}
-	// `sed -i` inline edit: the LAST plain argument is the file target
-	// (macOS `sed -i '' s/a/b/ file` — the '' token is empty and dropped).
-	if (sedInPlace(segment)) {
-		const parsed = parseSegment(segment)
-		if (parsed && parsed.base === "sed" && parsed.args.length > 0) {
-			const file = parsed.args[parsed.args.length - 1]!
-			if (isCcSafetyPath(file, cwd)) return { path: file, kind: "argument" }
-		}
-		return null
+		if (dst === undefined || dst === "/dev/null" || dst.startsWith("&")) continue
+		const resolved = resolveToken(dst)
+		if (resolved === null) continue
+		if (isCcSafetyPath(resolved, cwd)) return { path: resolved, kind: "redirect" }
 	}
 	const parsed = parseSegment(segment)
 	if (!parsed) return null
+	// `sed -i` family: every file operand + the -f script file (P1-3).
+	if (parsed.base === "sed") {
+		const { inPlace, paths } = analyzeSed(parsed.operands)
+		if (!inPlace) return null
+		for (const p of paths) {
+			if (isCcSafetyPath(p, cwd)) return { path: p, kind: "argument" }
+		}
+		return null
+	}
 	if (!W3_WRITE_COMMANDS.includes(parsed.base)) return null
 	if (parsed.args.length === 0) return null
-	if (DEST_ONLY.has(parsed.base)) {
+	if (parsed.base === "install") {
+		// not in CC's COMMAND_OPERATION_TYPE — keep destination-only (DEVIATIONS)
 		const dst = parsed.args[parsed.args.length - 1]!
 		if (isCcSafetyPath(dst, cwd)) return { path: dst, kind: "argument" }
-	} else {
-		for (const a of parsed.args) {
-			if (isCcSafetyPath(a, cwd)) return { path: a, kind: "argument" }
+		return null
+	}
+	for (const a of parsed.args) {
+		if (isCcSafetyPath(a, cwd)) return { path: a, kind: "argument" }
+	}
+	return null
+}
+
+// ---- W3.5: pi-own protected paths (P1-4, all-modes prompt) ----------------
+
+export interface BashProtectedWrite {
+	/** The write target as written (post-unquote). */
+	target: string
+	/** The protected boundary kind that matched ([C4] set). */
+	kind: string
+}
+
+function resolveAbs(p: string, cwd: string): string {
+	const expanded = expandUserPath(p)
+	return path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(cwd, expanded)
+}
+
+/**
+ * P1-4 (2026-11-08): does a bash command WRITE to a pi-own protected path
+ * (permission-modes.json, rules dirs, settings.json — the [C4] set)? Uses
+ * the same write-target set as W3 (redirections + write-command args,
+ * sed -i files). Read-style references do not trigger; a read-only `cp`
+ * backup of a protected file DOES (accepted: the check is heuristic, the
+ * outcome is a prompt the user can approve, not a hard block).
+ */
+export function checkBashProtectedWrite(
+	command: string,
+	cwd: string,
+): BashProtectedWrite | null {
+	if (!command || !command.trim()) return null
+	const home = homedir()
+	for (const segment of splitShellSegments(command)) {
+		// redirection targets always count as writes
+		const rawTokens = tokenizeSegment(segment)
+		for (let i = 0; i < rawTokens.length; i++) {
+			if (!isRedirectOp(rawTokens[i]!)) continue
+			const dst = rawTokens[i + 1]
+			if (dst === undefined || dst === "/dev/null" || dst.startsWith("&")) continue
+			const resolved = resolveToken(dst)
+			if (resolved === null) continue
+			const match = matchProtectedPath(resolveAbs(resolved, cwd), { home, cwd })
+			if (match) return { target: resolved, kind: match.kind }
+		}
+		const parsed = parseSegment(segment)
+		if (!parsed) continue
+		let candidates: string[] | null = null
+		if (parsed.base === "sed") {
+			const { inPlace, paths } = analyzeSed(parsed.operands)
+			if (inPlace) candidates = paths
+		} else if (W3_WRITE_COMMANDS.includes(parsed.base)) {
+			candidates = parsed.base === "install"
+				? parsed.args.slice(-1)
+				: parsed.args
+		}
+		if (!candidates) continue
+		for (const p of candidates) {
+			const match = matchProtectedPath(resolveAbs(p, cwd), { home, cwd })
+			if (match) return { target: p, kind: match.kind }
 		}
 	}
 	return null
@@ -301,7 +460,7 @@ const W4_WRITE_COMMANDS: readonly string[] = [
 ]
 
 /** First non-flag argument is a pattern/script, not a path. */
-const PATTERN_FIRST = new Set(["grep", "rg", "awk", "jq", "sed"])
+const PATTERN_FIRST = new Set(["grep", "rg", "awk", "jq"])
 
 export interface BashDenyHit {
 	/** The path argument that matched. */
@@ -313,9 +472,14 @@ export interface BashDenyHit {
 
 function pathArgsFor(parsed: ParsedSegment): string[] {
 	if (parsed.base === "find") {
-		// find: only paths before the first flag (`find . -name .env` — the
-		// -name value is a pattern operand, not a path).
-		return parsed.pathArgs
+		// only paths before the first flag — operands keep flags, so cut at
+		// the first flag-looking operand
+		const out: string[] = []
+		for (const op of parsed.operands) {
+			if (op.startsWith("-") && op !== "-") break
+			if (!op.includes("'") && !op.includes('"') && !op.includes("$") && !op.includes("`")) out.push(op)
+		}
+		return out
 	}
 	if (PATTERN_FIRST.has(parsed.base)) return parsed.args.slice(1)
 	return parsed.args
@@ -324,7 +488,8 @@ function pathArgsFor(parsed: ParsedSegment): string[] {
 /**
  * W4: first Read/Edit deny-rule hit reached through a bash path argument or
  * redirection target, or null. Read-class commands check Read rules,
- * write/create-class (and every redirection target) check Edit rules. The
+ * write/create-class (and every redirection target) check Edit rules;
+ * sed applies its CC extractor (files + -f script; -i routes to Edit). The
  * deny applies to the whole command — callers must treat any hit as a
  * full-command deny (CC deniedSubresult parity).
  */
@@ -338,16 +503,14 @@ export function checkBashDenyHit(
 	for (const segment of splitShellSegments(command)) {
 		const parsed = parseSegment(segment)
 		if (parsed) {
-			const inPlaceSed = parsed.base === "sed" && sedInPlace(segment)
-			if (W4_READ_COMMANDS.includes(parsed.base) && !inPlaceSed) {
-				const hit = matchRules(
-					pathArgsFor(parsed),
-					"Read",
-					rules,
-					cwd,
-				)
+			if (parsed.base === "sed") {
+				const { inPlace, paths } = analyzeSed(parsed.operands)
+				const hit = matchRules(paths, inPlace ? "Edit" : "Read", rules, cwd)
 				if (hit) return hit
-			} else if (W4_WRITE_COMMANDS.includes(parsed.base) || inPlaceSed) {
+			} else if (W4_READ_COMMANDS.includes(parsed.base)) {
+				const hit = matchRules(pathArgsFor(parsed), "Read", rules, cwd)
+				if (hit) return hit
+			} else if (W4_WRITE_COMMANDS.includes(parsed.base)) {
 				const hit = matchRules(parsed.args, "Edit", rules, cwd)
 				if (hit) return hit
 			}
@@ -357,8 +520,10 @@ export function checkBashDenyHit(
 		for (let i = 0; i < rawTokens.length; i++) {
 			if (!isRedirectOp(rawTokens[i]!)) continue
 			const dst = rawTokens[i + 1]
-			if (dst === undefined || dst === "/dev/null" || dst.startsWith("&") || isOpaqueToken(dst)) continue
-			const hit = matchRules([dst], "Edit", rules, cwd)
+			if (dst === undefined || dst === "/dev/null" || dst.startsWith("&")) continue
+			const resolved = resolveToken(dst)
+			if (resolved === null) continue
+			const hit = matchRules([resolved], "Edit", rules, cwd)
 			if (hit) return hit
 		}
 	}

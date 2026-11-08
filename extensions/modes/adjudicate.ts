@@ -21,6 +21,12 @@
  *                          bypass, W3 adds a write-target check), else
  *                          allows (side effect: outside-cwd write tracking)
  *  3. plan hard limits  → deny (plan-gate.ts; allow/ask rules can never unlock)
+ *  3.5 protected pi-path write (P1-4, 2026-11-08) → prompt, every mode:
+ *                          a bash write onto the [C4] protected set
+ *                          (permission-modes.json / rules dirs / settings)
+ *                          prompts — a prompt, not a block, because bash-side
+ *                          detection is heuristic (read-only cp backups also
+ *                          match); bypass mirrors it inside the step-2 branch
  *  4. verdict allow     → allow (+ outside-write track + family note)
  *  5. verdict ask       → family first-seen dialog | permission prompt
  *  6. mode auto         → embedded-command scan (sensitive path / tier check
@@ -91,6 +97,11 @@ export interface AdjudicationFacts {
 	/** W3 (2026-11-07): bash write-target check result (bypass gate) — null
 	 * when the PI_CORE_BASH_PATH_CHECKS switch is off or no target matched. */
 	bashPathCheck: { path: string; kind: "redirect" | "argument" } | null;
+	/** P1-4 (2026-11-08): bash write onto a pi-own protected path
+	 * ([C4] set via memory/protected-paths) — prompts in EVERY mode, decide
+	 * step 3.5 (after plan hard limits, before verdict allow) plus the
+	 * bypass branch; null when disabled or clean. */
+	bashProtectedWrite: { target: string; kind: string } | null;
 	/** W4 (2026-11-07): full deny reason when a Read/Edit deny rule matches a
 	 * bash path target (all modes); null otherwise. Switch-gated like W3. */
 	bashDenyRule: string | null;
@@ -190,13 +201,14 @@ export function decide(f: AdjudicationFacts): Decision {
 		// only). W2 (2026-11-07): the bypass path set is the CC-parity
 		// isCcSafetyPath superset (DANGEROUS_FILES/DIRECTORIES ∪ pi extras),
 		// wider than the narrow pathSensitive used by the other modes' gates.
-		// NOTE: CC has NO bash sensitive-path scan in bypass — its bash danger
-		// checks live in the auto/yolo classifier, which bypass skips — so a
-		// bash command referencing sensitive paths auto-approves here too
-		// (2026-11-03 fix: the previous bash commandSensitive branch was an
-		// over-reach that broke `ssh -F ~/.ssh/config`-style workflows). The
-		// bash write-target check (W3) covers redirection/argument targets
-		// separately below.
+		// NOTE (2026-11-08 correction): CC DOES check bash write targets /
+		// redirections (BashTool pathValidation + bashPermissions) — those
+		// checks are bypass-immune in CC, and CC returns them verbatim only
+		// when exactly one sub-command is non-allow. pi mirrors that with the
+		// W3 write-target check below (tokenizer-based, narrower trigger) and
+		// the P0-1 allow-rule hardening in bash-permission-match.ts. CC has no
+		// bash sensitive-path scan of the old commandSensitive shape — that
+		// 2026-11-03 removal stands.
 		if ((f.tool === "edit" || f.tool === "write") && f.pathCcSafety) {
 			return {
 				kind: "prompt",
@@ -218,6 +230,17 @@ export function decide(f: AdjudicationFacts): Decision {
 				category: "sensitive-path",
 			};
 		}
+		// P1-4 (2026-11-08): bash write onto a pi-own protected path also
+		// prompts in bypass (the all-modes copy lives at step 3.5, after plan
+		// hard limits — bypass returns before it, so it is mirrored here).
+		if (f.bashProtectedWrite) {
+			return {
+				kind: "prompt",
+				flavor: "permission-options",
+				label: `bash writes protected pi path "${f.bashProtectedWrite.target}" (${f.bashProtectedWrite.kind})`,
+				category: "protected-path",
+			};
+		}
 		const effects: AllowEffects = {};
 		if (f.tool === "edit" || f.tool === "write") effects.trackOutsideWrite = true;
 		return { kind: "allow", effects };
@@ -226,6 +249,23 @@ export function decide(f: AdjudicationFacts): Decision {
 	// 3. plan hard limits — never prompt, never unlockable by allow/ask.
 	if (f.planHardBlock) {
 		return { kind: "deny", reason: f.planHardBlock.reason };
+	}
+
+	// 3.5 protected pi-path write (P1-4, 2026-11-08): a bash write onto a
+	// pi-own protected path (permission-modes.json, rules dirs, settings —
+	// the [C4] set) prompts in EVERY mode. Deliberately a prompt, not a hard
+	// block: bash-side detection is heuristic (a read-only cp backup of a
+	// protected file also matches), so the user keeps an approval exit —
+	// unlike the [C4] write/edit hard block, whose detection is exact.
+	// Bypass reaches its mirrored copy inside the step-2 branch; plan hard
+	// limits stay ahead so plan denials never degrade into prompts.
+	if (f.bashProtectedWrite) {
+		return {
+			kind: "prompt",
+			flavor: "permission-options",
+			label: `bash writes protected pi path "${f.bashProtectedWrite.target}" (${f.bashProtectedWrite.kind})`,
+			category: "protected-path",
+		};
 	}
 
 	// 4. verdict allow: outside-write tracking + family adjudication note

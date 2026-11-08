@@ -96,7 +96,7 @@ import {
 import { interpretDecision } from "./interpret.ts";
 import { OutsideWriteSnapshot, listTrackedOutsideWrites, popTrackedOutsideWrite, restoreOutsideWrite, trackOutsideWrite } from "./outside-writes.ts";
 import { commandReferencesSensitivePath, findProjectRoot, isCcSafetyPath, isOutsideCwd, isSensitivePath } from "./path-safety.ts";
-import { checkBashDenyHit, checkBashWriteTargets, resolveBashPathChecks } from "./bash-path-check.ts";
+import { checkBashDenyHit, checkBashProtectedWrite, checkBashWriteTargets, resolveBashPathChecks, type BashProtectedWrite } from "./bash-path-check.ts";
 import { pathToolMatchesRuleContent } from "./path-permission-match.ts";
 import { TodoItem, ensurePlanFile, extractPlanSection, extractTodoItems, filterSubstantivePlanItems, getPlanFilePath, hashPlan, isPlanFilePath, markCompletedSteps, readPlanFile, resolveWorkspacePath, shouldSyncAssistantPlanToFile, writePlanFile } from "./plan.ts";
 import {
@@ -1191,19 +1191,42 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     const isBashLike = tool === "bash" || tool === "powershell";
     // W5 switch, read per adjudication: env PI_CORE_BASH_PATH_CHECKS
     // overrides permission-modes.json bashPathChecks (default "all").
-    const checkMode = isBashLike && !!command
+    // safety = W3 + protected-path prompt (P1-4) + allow-rule hardening
+    // (P0-1, enforced inside bash-permission-match); deny = W4 only.
+    const checkMode = isBashLike || embedded.length
       ? resolveBashPathChecks(loadPermissionModesConfig())
       : "off";
+    const safetyOn = checkMode === "all" || checkMode === "safety";
+    const denyOn = checkMode === "all" || checkMode === "deny";
+    // P1-1 (2026-11-08): embedded (fusion then_run-style) commands run the
+    // same checks as the main bash command — deny in every mode, write
+    // targets / protected paths wherever their mode checks them.
+    const commandsToCheck = [
+      ...(isBashLike && command ? [command] : []),
+      ...embedded.map((c) => c.command),
+    ];
+    const firstHit = <T,>(fn: (c: string) => T | null): T | null => {
+      for (const c of commandsToCheck) {
+        const hit = fn(c);
+        if (hit !== null) return hit;
+      }
+      return null;
+    };
     // W3 (safety): first CC-sensitive write target — bypass gate prompt.
-    const bashPathCheck = checkMode === "all" || checkMode === "safety"
-      ? checkBashWriteTargets(command, ctx.cwd)
+    const bashPathCheck = safetyOn
+      ? firstHit((c) => checkBashWriteTargets(c, ctx.cwd))
+      : null;
+    // P1-4 (safety): bash write onto a pi-own protected path prompts in
+    // every mode (bypass included; decide places it after plan limits).
+    const bashProtectedWrite: BashProtectedWrite | null = safetyOn
+      ? firstHit((c) => checkBashProtectedWrite(c, ctx.cwd))
       : null;
     // W4 (deny): first Read/Edit deny-rule hit through a bash path target —
     // whole-command deny, every mode; reason text carries rule + path + the
     // switch name so the model does not blind-retry.
     let bashDenyRule: string | null = null;
-    if (checkMode === "all" || checkMode === "deny") {
-      const hit = checkBashDenyHit(command, ctx.cwd, mergedPermissionRules);
+    if (denyOn) {
+      const hit = firstHit((c) => checkBashDenyHit(c, ctx.cwd, mergedPermissionRules));
       if (hit) {
         bashDenyRule = `Denied by permission rule [${hit.source}]: ${hit.rule} — bash references denied path "${hit.path}". Adjust the rule, or scope/disable via bashPathChecks / PI_CORE_BASH_PATH_CHECKS.`;
       }
@@ -1233,6 +1256,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       pathIsMemoryDir: isMemoryDirWrite(tool, ctx, input),
       pathCcSafety: !!path && isCcSafetyPath(path, ctx.cwd),
       bashPathCheck,
+      bashProtectedWrite,
       bashDenyRule,
       command,
       commandSafe: isSafeCommand(command),

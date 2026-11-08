@@ -31,6 +31,7 @@ function facts(patch: Partial<AdjudicationFacts>): AdjudicationFacts {
 		pathIsMemoryDir: false,
 		pathCcSafety: false,
 		bashPathCheck: null,
+		bashProtectedWrite: null,
 		bashDenyRule: null,
 		command: "",
 		commandSafe: false,
@@ -253,5 +254,40 @@ describe("decide: auto ladder (Step 2)", () => {
 		expect(decide(facts({ mode: "auto", verdict: deny }))).toMatchObject({ kind: "deny" });
 		expect(decide(facts({ mode: "auto", verdict: allow, tool: "bash" })))
 			.toEqual({ kind: "allow", effects: { resetAutoDenialState: true } });
+	});
+});
+
+describe("decide: P1-4 protected pi-path write (2026-11-08)", () => {
+	it("step 3.5 prompts in non-bypass modes, after plan hard limits", () => {
+		// ask mode, protected write → prompt (3.5)
+		expect(decide(facts({
+			mode: "ask",
+			tool: "bash",
+			input: { command: "echo x > ~/.pi/agent/permission-modes.json" },
+			bashProtectedWrite: { target: "~/.pi/agent/permission-modes.json", kind: "modes-permissions-file" },
+		}))).toMatchObject({ kind: "prompt", category: "protected-path" });
+		// plan hard block wins over the 3.5 prompt
+		expect(decide(facts({
+			mode: "plan",
+			tool: "bash",
+			input: { command: "x" },
+			planHardBlock: { block: true, reason: "plan hard limit" },
+			bashProtectedWrite: { target: "x", kind: "modes-permissions-file" },
+		}))).toEqual({ kind: "deny", reason: "plan hard limit" });
+		// auto mode, protected write → prompt
+		expect(decide(facts({
+			mode: "auto",
+			tool: "bash",
+			input: { command: "x" },
+			bashProtectedWrite: { target: "x", kind: "host-settings-file" },
+		})).kind).toBe("prompt");
+	});
+	it("bypass branch mirrors the protected-write prompt", () => {
+		expect(decide(facts({
+			mode: "bypass",
+			tool: "bash",
+			input: { command: "rm ~/.pi/agent/settings.json" },
+			bashProtectedWrite: { target: "~/.pi/agent/settings.json", kind: "host-settings-file" },
+		}))).toMatchObject({ kind: "prompt", category: "protected-path" });
 	});
 });

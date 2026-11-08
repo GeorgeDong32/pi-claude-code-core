@@ -7,6 +7,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	checkBashDenyHit,
+	checkBashProtectedWrite,
 	checkBashWriteTargets,
 	resolveBashPathChecks,
 } from "./bash-path-check.ts";
@@ -145,5 +146,78 @@ describe("resolveBashPathChecks (W5 switch)", () => {
 		process.env.PI_CORE_BASH_PATH_CHECKS = "bogus";
 		expect(resolveBashPathChecks({ bashPathChecks: "deny" })).toBe("deny");
 		expect(resolveBashPathChecks({})).toBe("all");
+	});
+});
+
+describe("P0-2/3 (2026-11-08): quoted literal paths participate", () => {
+	it("W4: quoted .env literals hit Read deny", () => {
+		const envDeny = [denyRule("Read(./.env)")];
+		expect(checkBashDenyHit('cat ".env"', CWD, envDeny)).toMatchObject({ path: ".env" });
+		expect(checkBashDenyHit("cat '.env'", CWD, envDeny)).toMatchObject({ path: ".env" });
+		expect(checkBashDenyHit('echo y > ".env"', CWD, [denyRule("Edit(./.env)")])).toMatchObject({ path: ".env" });
+	});
+	it("W3: quoted sensitive write targets prompt", () => {
+		expect(checkBashWriteTargets('rm ".git/index"', CWD)).toMatchObject({ path: ".git/index" });
+		expect(checkBashWriteTargets("rm '.git/index'", CWD)).toMatchObject({ path: ".git/index" });
+		expect(checkBashWriteTargets('echo x > ".zshrc"', CWD)).toMatchObject({ path: ".zshrc" });
+	});
+	it("opaque boundaries unchanged: ssh remote strings, $-containing quotes", () => {
+		const envDeny = [denyRule("Read(./.env)")];
+		expect(checkBashDenyHit("ssh host 'cat .env'", CWD, envDeny)).toBeNull();
+		expect(checkBashDenyHit('cat "$F"', CWD, envDeny)).toBeNull();
+		// quote with expansion inside stays opaque for W3 too
+		expect(checkBashWriteTargets('rm "$X"/.git/x', CWD)).toBeNull();
+	});
+});
+
+describe("P1-2 (2026-11-08): mv/cp check ALL positional args", () => {
+	it("moving/copying a sensitive SOURCE prompts (not just destination)", () => {
+		expect(checkBashWriteTargets("mv .git/index /tmp/x", CWD)).toMatchObject({ path: ".git/index" });
+		expect(checkBashWriteTargets("cp .git/config /tmp/x", CWD)).toMatchObject({ path: ".git/config" });
+		expect(checkBashWriteTargets("cp a.ts b.ts", CWD)).toBeNull();
+	});
+	it("install stays destination-only (not in CC set)", () => {
+		expect(checkBashWriteTargets("install -m 644 x .git/hooks/h", CWD)).toMatchObject({ path: ".git/hooks/h" });
+		// source arg sensitive — not a hit under destination-only semantics
+		expect(checkBashWriteTargets("install -m 644 .git/config /tmp/x", CWD)).toBeNull();
+	});
+});
+
+describe("P1-3 (2026-11-08): full sed extractor", () => {
+	it("in-place flag family: -iSUFFIX, --in-place, --in-place=SUFFIX, combined", () => {
+		expect(checkBashWriteTargets("sed -i.bak s/a/b/ ~/.zshrc", CWD)).toMatchObject({ path: "~/.zshrc" });
+		expect(checkBashWriteTargets("sed --in-place s/a/b/ ~/.zshrc", CWD)).toMatchObject({ path: "~/.zshrc" });
+		expect(checkBashWriteTargets("sed --in-place=.bak s/a/b/ ~/.zshrc", CWD)).toMatchObject({ path: "~/.zshrc" });
+		expect(checkBashWriteTargets("sed -ni s/a/b/ ~/.zshrc", CWD)).toMatchObject({ path: "~/.zshrc" });
+	});
+	it("every file after the script is checked (multi-file)", () => {
+		expect(checkBashWriteTargets("sed -i s/a/b/ ok.txt ~/.zshrc", CWD)).toMatchObject({ path: "~/.zshrc" });
+		expect(checkBashWriteTargets("sed -i s/a/b/ ~/.zshrc ok.txt", CWD)).toMatchObject({ path: "~/.zshrc" });
+	});
+	it("plain sed (no -i) is read-only — no W3 hit; -e/-f operands routed per CC", () => {
+		expect(checkBashWriteTargets("sed -n 1p ~/.zshrc", CWD)).toBeNull();
+		// -e expression operand is not a file
+		expect(checkBashWriteTargets("sed -i -e s/a/b/ ~/.zshrc", CWD)).toMatchObject({ path: "~/.zshrc" });
+		// W4: -f script FILE is validated against deny rules
+		const envDeny = [denyRule("Edit(./.env)")];
+		expect(checkBashDenyHit("sed -i -f .env.sed .env", CWD, envDeny)).toMatchObject({ path: ".env" });
+		expect(checkBashDenyHit("sed -i -f .env.sed ok.txt", CWD, envDeny)).toBeNull();
+	});
+});
+
+describe("P1-4 (2026-11-08): pi-own protected paths", () => {
+	it("write onto permission-modes.json / rules dir / settings.json matches", () => {
+		const home = process.env.HOME ?? "/Users/x";
+		expect(checkBashProtectedWrite("echo x > ~/.pi/agent/permission-modes.json", CWD)).toMatchObject({ kind: "modes-permissions-file" });
+		expect(checkBashProtectedWrite("rm ~/.pi/agent/settings.json", CWD)).toMatchObject({ kind: "host-settings-file" });
+		expect(checkBashProtectedWrite("tee ~/.pi/agent/rules/r.md", CWD)).toMatchObject({ kind: "global-rules-dir" });
+		// relative project rules dir
+		expect(checkBashProtectedWrite("rm .pi/rules/r.md", CWD)).toMatchObject({ kind: "project-rules-dir" });
+		// read-only reference does not trigger
+		expect(checkBashProtectedWrite("cat ~/.pi/agent/permission-modes.json", CWD)).toBeNull();
+	});
+	it("plain paths stay clean", () => {
+		expect(checkBashProtectedWrite("echo x > src/out.ts", CWD)).toBeNull();
+		expect(checkBashProtectedWrite("rm src/old.ts", CWD)).toBeNull();
 	});
 });

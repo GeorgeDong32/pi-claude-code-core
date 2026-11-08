@@ -3575,3 +3575,85 @@ describe("bash path-target checks W3/W4/W5 (2026-11-07 handoff)", () => {
 		expect(await callBash("cat .env")).toMatchObject({ block: true }) // W4 on
 	})
 })
+
+describe("review fixes P1-1/P1-4 (2026-11-08 handoff)", () => {
+	let pi: FakePi
+	let realProjectRoot: string
+	let configTmp: string
+
+	beforeEach(async () => {
+		pi = createFakePi()
+		configTmp = mkdtempSync(join(tmpdir(), "pm-rf-cfg-"))
+		setConfigPath(join(configTmp, "permission-modes.json"))
+		writeFileSync(
+			join(configTmp, "permission-modes.json"),
+			JSON.stringify({
+				classifier: { enabled: false },
+				permissions: { deny: ["Read(./.env)"] },
+			}),
+		)
+		realProjectRoot = process.cwd()
+		const permsDir = join(realProjectRoot, ".pi", "projects")
+		for (const f of ["permissions.json", "permissions.local.json"]) {
+			rmSync(join(permsDir, getProjectId(realProjectRoot), f), { force: true })
+		}
+		permissionModesExtension(makeFakePiForExtension(pi))
+		pi.flags["permission-mode"] = "bypass"
+		await pi.simulateSessionStart(realProjectRoot)
+	})
+
+	afterEach(() => {
+		const permsDir = join(realProjectRoot, ".pi", "projects")
+		for (const f of ["permissions.json", "permissions.local.json"]) {
+			rmSync(join(permsDir, getProjectId(realProjectRoot), f), { force: true })
+		}
+		delete process.env.PI_CORE_BASH_PATH_CHECKS
+	})
+
+	async function callTool(toolName: string, input: Record<string, unknown>) {
+		const ctx = makeCtx(pi, { cwd: realProjectRoot })
+		return pi.simulateToolCall(toolName, input, ctx)
+	}
+
+	it("P1-1: edit + then_run hitting a Read deny rule is denied (every mode)", async () => {
+		const r = await callTool("edit", { path: "src/a.ts", oldString: "x", newString: "y", then_run: "cat .env" })
+		expect(r).toMatchObject({ block: true })
+		expect(String((r as { reason?: string }).reason)).toContain("Read(./.env)")
+	})
+
+	it("P1-1: bypass + then_run rm .git/index prompts (W3 over embedded)", async () => {
+		const r = await callTool("edit", { path: "src/a.ts", oldString: "x", newString: "y", then_run: "rm .git/index" })
+		expect(r).toMatchObject({ block: true })
+		expect(String((r as { reason?: string }).reason)).toContain(".git/index")
+	})
+
+	it("P1-4: bash write onto permission-modes.json prompts in ask mode too (not just bypass)", async () => {
+		pi.flags["permission-mode"] = "ask"
+		await pi.simulateSessionStart(realProjectRoot)
+		const r = await callTool("bash", { command: "echo x > ~/.pi/agent/permission-modes.json" })
+		expect(r).toMatchObject({ block: true })
+		expect(String((r as { reason?: string }).reason)).toContain("permission-modes.json")
+	})
+
+	it("P1-4: plan hard limits keep priority — a plan-blocked call with a protected write stays denied, not prompted", async () => {
+		pi.flags["permission-mode"] = "plan"
+		await pi.simulateSessionStart(realProjectRoot)
+		// bash is not plan-legal at all; plan gate denies before 3.5 could prompt
+		const r = await callTool("bash", { command: "echo x > ~/.pi/agent/permission-modes.json" })
+		expect(r).toMatchObject({ block: true })
+		expect(String((r as { reason?: string }).reason)).not.toContain("protected pi path")
+	})
+
+	it("W5: bashPathChecks off disables P1-1 embedded + P1-4 protected checks", async () => {
+		writeFileSync(
+			join(configTmp, "permission-modes.json"),
+			JSON.stringify({
+				classifier: { enabled: false },
+				bashPathChecks: "off",
+				permissions: { deny: ["Read(./.env)"] },
+			}),
+		)
+		expect(await callTool("edit", { path: "src/a.ts", oldString: "x", newString: "y", then_run: "cat .env" })).toBeUndefined()
+		expect(await callTool("bash", { command: "echo x > ~/.pi/agent/permission-modes.json" })).toBeUndefined()
+	})
+})

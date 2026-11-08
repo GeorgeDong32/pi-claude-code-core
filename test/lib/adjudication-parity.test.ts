@@ -78,6 +78,11 @@ const CASES: ParityCase[] = [
 	// W4 (2026-11-07): a Read deny rule reached through a bash path target
 	// denies the whole command, in every mode.
 	{ name: "bypass/bash cat .env denies via Read deny rule (W4)", mode: "bypass", tool: "bash", input: { command: "cat .env > /tmp/e" }, rules: { deny: ["Read(./.env)"] } },
+	// Review fixes (2026-11-08): P0-1 allow hardening, P2 wrapper strip, P1-4
+	// protected pi-path write — end-to-end through the assembled gate.
+	{ name: "ask/allow rule defeated by substitution (P0-1)", mode: "ask", tool: "bash", input: { command: "git status $(rm x)" }, rules: { allow: ["Bash(git status:*)"] }, ui: "Block" },
+	{ name: "bypass/deny rule hits through bare nice wrapper (P2)", mode: "bypass", tool: "bash", input: { command: "nice rm x" }, rules: { deny: ["Bash(rm:*)"] } },
+	{ name: "ask/bash write onto permission-modes.json prompts (P1-4)", mode: "ask", tool: "bash", input: { command: "echo x > ~/.pi/agent/permission-modes.json" }, ui: "Block" },
 	// 2026-11-03 fix: the bash sensitive-reference case was REMOVED — CC's 1g
 	// safetyCheck is edit-tools only; bash has no sensitive-path scan in CC
 	// bypass (over-reach broke `ssh -F ~/.ssh/config`-style workflows).
