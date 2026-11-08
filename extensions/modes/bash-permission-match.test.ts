@@ -3,6 +3,9 @@ import {
 	bashCommandMatchesRuleContent,
 	suggestBashAllowRule,
 } from "./bash-permission-match.ts"
+import { checkBashWriteTargets } from "./bash-path-check.ts"
+
+const checkBashWriteTargets3 = (c: string) => checkBashWriteTargets(c, "/w")
 
 describe("bash-permission-match", () => {
 	it("allow matches single-segment prefix rule", () => {
@@ -90,5 +93,40 @@ describe("P2 (2026-11-08): wrapper + subcommand expansion for deny/ask", () => {
 		expect(bashCommandMatchesRuleContent("printf %s ok", rm, "deny")).toBe(false);
 		// allow direction: no expansion (P0-1 rejects substitution instead)
 		expect(bashCommandMatchesRuleContent("echo $(rm x)", "echo:*", "allow", { allowHardening: false })).toBe(true);
+	});
+});
+
+describe("review fixes 2026-11-08 (P1#1/P2#3): glued redirects + bare Bash rule", () => {
+	const gitStatus = "git status:*";
+	const hard = { allowHardening: true };
+	it("glued redirect operators are tokenized like W3 (x>file, 2>file, >>file)", () => {
+		expect(bashCommandMatchesRuleContent("git status >~/.zshrc", gitStatus, "allow", hard)).toBe(false);
+		expect(bashCommandMatchesRuleContent("git status >>~/.zshrc", gitStatus, "allow", hard)).toBe(false);
+		expect(bashCommandMatchesRuleContent("git status 2>~/.zshrc", gitStatus, "allow", hard)).toBe(false);
+		expect(bashCommandMatchesRuleContent("git status >out.txt", gitStatus, "allow", hard)).toBe(true);
+	});
+	it("quoted target with spaces is unquoted whole, not split", () => {
+		expect(bashCommandMatchesRuleContent('git status > "~/.ssh/authorized keys 2"', gitStatus, "allow", hard)).toBe(false);
+	});
+	it("bare Bash allow rule (no content) is hardened too", () => {
+		expect(bashCommandMatchesRuleContent("echo $(rm -rf /)", undefined, "allow", hard)).toBe(false);
+		expect(bashCommandMatchesRuleContent("echo x > ~/.zshrc", undefined, "allow", hard)).toBe(false);
+		expect(bashCommandMatchesRuleContent("echo ok", undefined, "allow", hard)).toBe(true);
+		// deny/ask unaffected by hardening
+		expect(bashCommandMatchesRuleContent("echo $(rm -rf /)", undefined, "deny", hard)).toBe(true);
+	});
+});
+
+describe("review fixes 2026-11-08 (P1#2): mv/cp flag forms hit", () => {
+	it("mv -t / --target-directory cannot hide the destination (W3)", () => {
+		expect(checkBashWriteTargets3("mv -t ~/.pi/agent/rules ./evil.md")).toMatchObject({ kind: "argument" });
+		expect(checkBashWriteTargets3("cp --target-directory=~/.ssh id_ed25519.pub")).toMatchObject({ kind: "argument" });
+		// mv/cp with flags on an otherwise clean path also prompts (validator parity)
+		expect(checkBashWriteTargets3("mv -v a.ts b.ts")).toMatchObject({ path: "-v" });
+		// no flags → unchanged semantics
+		expect(checkBashWriteTargets3("mv a.ts b.ts")).toBeNull();
+	});
+	it("install -m 644 stays destination-only (legitimate common form)", () => {
+		expect(checkBashWriteTargets3("install -m 644 x .git/hooks/h")).toMatchObject({ path: ".git/hooks/h" });
 	});
 });

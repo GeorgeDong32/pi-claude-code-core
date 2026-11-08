@@ -11,6 +11,7 @@
 - **P1-4（safety 档）bash 写 pi 自身保护路径弹窗（所有模式）**：`echo x > ~/.pi/agent/permission-modes.json`、`rm ~/.pi/agent/rules/*` 等命中 [C4] 保护集时弹窗（bypass 含；plan 硬限制优先不降级）；动作是弹窗非硬拦（启发式检测、只读 cp 备份也会命中、留人工出口）；write/edit 的 [C4] 硬拦不变。开关配置键本身在被保护文件里，agent 无法用 write/edit 改掉。
 - **P2 deny/ask 对齐包装器与子命令**：SAFE_WRAPPER 五形态对齐 CC（bare `nice`、`nice -N`、`time`、`stdbuf -o0`、`timeout` 含长/短 flag 白名单值与 `--` 透传）——`nice rm x` 现在命中 `Bash(rm:*)` deny；deny/ask 方向展开 `$()`/反引号子命令（单层近似，`(...)`/`{...;}` 为已知差距）。
 - **safety 档语义扩大（文档）**：现为「W3（bypass 写目标弹窗）+ P0-1 allow 收紧（所有模式）+ P1-4 保护路径弹窗（所有模式）」；`deny` 档仍仅 W4。parity golden：+3 新 case，旧 case 零漂移。
+- **flash 对抗审查二审修复（同日）**：P0-1 敏感重定向检查改用 W3 同源 tokenizer（堵 `2>file`/`>>file` 贴连与引号空格目标）；mv/cp 带 pre-`--` 旗标按命中处理（CC COMMAND_VALIDATOR parity，`-t`/`--target-directory` 藏目的地失效；install 豁免 `-m 644` 常见合法形态）；裸 `Bash` allow 规则纳入 P0-1 硬化；`--` 后停止 flag 解析（sed `-- -i` / find `--` 语义修正）；W5 开关单源化穿透判定链；复合命令压制形态测试钉住（`echo x > /tmp/log; echo y > ~/.zshrc` 第二段不弹——刻意近似残余，见 DEVIATIONS #134）。
 
 ### Changed — bypass CC-alignment gaps W1–W5 (2026-11-07)
 - **W1 family 默认 ask 在 bypass 下自动放行**：MCP 首见工具 / web-gov 非预批域名此前在 bypass 下仍弹 first-seen/审批窗（family 合成的默认 ask 被当显式规则）——CC 的 bypassPermissions 只对**用户显式配置的 ask 规则**弹窗，现对齐；family 有显式 ask 规则时仍弹。

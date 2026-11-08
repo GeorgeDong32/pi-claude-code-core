@@ -183,6 +183,12 @@ interface ParsedSegment {
 	operands: string[]
 	/** Redirection targets (unquoted when literal). */
 	redirects: string[]
+	/**
+	 * Index in `operands` where the post-`--` positional region starts
+	 * (-1 when no `--` appeared). `--` itself is NOT an operand entry.
+	 * Review fix 2026-11-08 P2#4/#5: flag parsing must stop here.
+	 */
+	postDashStart: number
 }
 
 /** Does the token look like a redirect operator (`>`, `>>`, `&>`, `n>`)? */
@@ -201,11 +207,11 @@ function parseSegment(segment: string): ParsedSegment | null {
 	const args: string[] = []
 	const operands: string[] = []
 	const redirects: string[] = []
-	let positionalOnly = false // after `--`
+	let postDashStart = -1
 	for (let i = first + 1; i < tokens.length; i++) {
 		const t = tokens[i]!
-		if (!positionalOnly && t === "--") {
-			positionalOnly = true
+		if (postDashStart === -1 && t === "--") {
+			postDashStart = operands.length
 			continue
 		}
 		if (isRedirectOp(t)) {
@@ -218,7 +224,7 @@ function parseSegment(segment: string): ParsedSegment | null {
 			i++ // consume the target
 			continue
 		}
-		if (!positionalOnly && t.startsWith("-")) {
+		if (postDashStart === -1 && t.startsWith("-")) {
 			const resolved = resolveToken(t)
 			operands.push(resolved ?? t)
 			continue
@@ -227,8 +233,18 @@ function parseSegment(segment: string): ParsedSegment | null {
 		operands.push(resolved ?? t)
 		if (resolved !== null) args.push(resolved)
 	}
-	return { base: argv0.slice(argv0.lastIndexOf("/") + 1), args, operands, redirects }
+	return {
+		base: argv0.slice(argv0.lastIndexOf("/") + 1),
+		args,
+		operands,
+		redirects,
+		postDashStart,
+	}
 }
+
+// Single tokenizer authority — exported for bash-permission-match.ts's
+// P0-1 redirect check (review fix 2026-11-08 P1#1).
+export { tokenizeSegment }
 
 // ---- sed analysis (P1-3, CC PATH_EXTRACTORS.sed parity) -------------------
 
@@ -243,18 +259,17 @@ const SED_LONG_FILE = new Set(["-f", "--file"])
 const SED_LONG_EXPR = new Set(["-e", "--expression"])
 
 /** Analyze sed operands per CC's extractor: flags, script position, files. */
-function analyzeSed(operands: string[]): SedAnalysis {
+function analyzeSed(operands: string[], postDashStart: number): SedAnalysis {
 	const paths: string[] = []
 	let scriptFound = false
 	let inPlace = false
-	let afterDoubleDash = false
 	for (let i = 0; i < operands.length; i++) {
 		const arg = operands[i]!
-		if (!afterDoubleDash && arg === "--") {
-			afterDoubleDash = true
-			continue
-		}
-		if (!afterDoubleDash && arg.startsWith("-") && arg !== "-") {
+		// After `--` everything is positional — no flag parsing (review fix
+		// 2026-11-08 P2#4: `sed -- -i s/x/y/ f` has -i as the SCRIPT, not an
+		// in-place flag; CC's extractor tracks `--` the same way).
+		const isFlag = postDashStart === -1 || i < postDashStart
+		if (isFlag && arg.startsWith("-") && arg !== "-") {
 			// -f/--file: the next operand is a script FILE (validated too).
 			if (SED_LONG_FILE.has(arg)) {
 				const scriptFile = operands[i + 1]
@@ -299,7 +314,7 @@ function analyzeSed(operands: string[]): SedAnalysis {
 function sedInPlace(segment: string): boolean {
 	const parsed = parseSegment(segment)
 	if (!parsed || parsed.base !== "sed") return false
-	return analyzeSed(parsed.operands).inPlace
+	return analyzeSed(parsed.operands, parsed.postDashStart).inPlace
 }
 
 // ---- W3: bypass write-target safety check --------------------------------
@@ -363,7 +378,7 @@ function w3SegmentCheck(segment: string, cwd: string): BashPathTarget | null {
 	if (!parsed) return null
 	// `sed -i` family: every file operand + the -f script file (P1-3).
 	if (parsed.base === "sed") {
-		const { inPlace, paths } = analyzeSed(parsed.operands)
+		const { inPlace, paths } = analyzeSed(parsed.operands, parsed.postDashStart)
 		if (!inPlace) return null
 		for (const p of paths) {
 			if (isCcSafetyPath(p, cwd)) return { path: p, kind: "argument" }
@@ -372,6 +387,11 @@ function w3SegmentCheck(segment: string, cwd: string): BashPathTarget | null {
 	}
 	if (!W3_WRITE_COMMANDS.includes(parsed.base)) return null
 	if (parsed.args.length === 0) return null
+	// P1#2 (2026-11-08): mv/cp/install with any pre-`--` flag hit as a
+	// target — GNU -t/--target-directory moves the destination out of the
+	// positional slots (CC COMMAND_VALIDATOR parity).
+	const flagHit = moveCommandFlagTarget(parsed)
+	if (flagHit !== null) return { path: flagHit, kind: "argument" }
 	if (parsed.base === "install") {
 		// not in CC's COMMAND_OPERATION_TYPE — keep destination-only (DEVIATIONS)
 		const dst = parsed.args[parsed.args.length - 1]!
@@ -428,7 +448,7 @@ export function checkBashProtectedWrite(
 		if (!parsed) continue
 		let candidates: string[] | null = null
 		if (parsed.base === "sed") {
-			const { inPlace, paths } = analyzeSed(parsed.operands)
+			const { inPlace, paths } = analyzeSed(parsed.operands, parsed.postDashStart)
 			if (inPlace) candidates = paths
 		} else if (W3_WRITE_COMMANDS.includes(parsed.base)) {
 			candidates = parsed.base === "install"
@@ -440,6 +460,10 @@ export function checkBashProtectedWrite(
 			const match = matchProtectedPath(resolveAbs(p, cwd), { home, cwd })
 			if (match) return { target: p, kind: match.kind }
 		}
+		// P1#2 (2026-11-08): a flagged mv/cp/install cannot be path-validated —
+		// prompt (the flag form may hide the real destination).
+		const flagHit = moveCommandFlagTarget(parsed)
+		if (flagHit !== null) return { target: flagHit, kind: "mv-cp-flag-form" }
 	}
 	return null
 }
@@ -473,16 +497,42 @@ export interface BashDenyHit {
 function pathArgsFor(parsed: ParsedSegment): string[] {
 	if (parsed.base === "find") {
 		// only paths before the first flag — operands keep flags, so cut at
-		// the first flag-looking operand
+		// the first flag-looking operand; post-`--` operands are ALL paths
+		// (review fix 2026-11-08 P2#5, CC superset semantics: `find -- -x …`
+		// must not fall out of validation entirely)
 		const out: string[] = []
-		for (const op of parsed.operands) {
-			if (op.startsWith("-") && op !== "-") break
-			if (!op.includes("'") && !op.includes('"') && !op.includes("$") && !op.includes("`")) out.push(op)
+		for (let i = 0; i < parsed.operands.length; i++) {
+			const op = parsed.operands[i]!
+			const postDash = parsed.postDashStart !== -1 && i >= parsed.postDashStart
+			if (!postDash && op.startsWith("-") && op !== "-") break
+			if (/[`$*?\[\]"']/.test(op)) continue
+			out.push(op)
 		}
 		return out
 	}
 	if (PATTERN_FIRST.has(parsed.base)) return parsed.args.slice(1)
 	return parsed.args
+}
+
+/**
+ * Review fix 2026-11-08 P1#2 (CC COMMAND_VALIDATOR parity): mv/cp reject
+ * ANY `-`-prefixed argument before `--` — GNU `--target-directory=PATH` /
+ * `-t PATH` can move the destination out of the positional slots and
+ * bypass path extraction. install is deliberately EXCLUDED: `-m 644` is
+ * its most common legitimate form (install stays destination-only,
+ * DEVIATIONS #134). When such a flag is present the command is treated as
+ * a hit (prompt) with the flag text as the label path.
+ */
+const FLAG_SENSITIVE_MOVE_COMMANDS = new Set(["mv", "cp"])
+
+function moveCommandFlagTarget(parsed: ParsedSegment): string | null {
+	if (!FLAG_SENSITIVE_MOVE_COMMANDS.has(parsed.base)) return null
+	const limit = parsed.postDashStart === -1 ? parsed.operands.length : parsed.postDashStart
+	for (let i = 0; i < limit; i++) {
+		const op = parsed.operands[i]!
+		if (op.startsWith("-") && op !== "-") return op
+	}
+	return null
 }
 
 /**
@@ -503,8 +553,19 @@ export function checkBashDenyHit(
 	for (const segment of splitShellSegments(command)) {
 		const parsed = parseSegment(segment)
 		if (parsed) {
+			// P1#2 (2026-11-08): a flagged mv/cp/install cannot be path-validated —
+			// CC's COMMAND_VALIDATOR rejects the form outright; deny so a
+			// hidden destination cannot slip past Edit rules.
+			const flagHit = moveCommandFlagTarget(parsed)
+			if (flagHit !== null) {
+				return {
+					path: flagHit,
+					rule: "mv/cp/install flag form (CC COMMAND_VALIDATOR)",
+					source: "validator",
+				}
+			}
 			if (parsed.base === "sed") {
-				const { inPlace, paths } = analyzeSed(parsed.operands)
+				const { inPlace, paths } = analyzeSed(parsed.operands, parsed.postDashStart)
 				const hit = matchRules(paths, inPlace ? "Edit" : "Read", rules, cwd)
 				if (hit) return hit
 			} else if (W4_READ_COMMANDS.includes(parsed.base)) {

@@ -96,6 +96,7 @@ function ruleMatchesToolCall(
 	toolName: string,
 	input: Record<string, unknown>,
 	cwd: string,
+	opts?: { allowHardening?: boolean },
 ): boolean {
 	const ccTool = mapPiToolToCcTool(toolName)
 	if (!ccTool) return false
@@ -107,8 +108,9 @@ function ruleMatchesToolCall(
 			cmd,
 			rule.ruleValue.ruleContent,
 			rule.behavior,
-			// cwd feeds the P0-1 sensitive-redirection check
-			{ cwd },
+			// cwd feeds the P0-1 sensitive-redirection check; allowHardening
+		// single-sources the switch read (review fix 2026-11-08 P3#10)
+			{ cwd, ...(opts?.allowHardening !== undefined ? { allowHardening: opts.allowHardening } : {}) },
 		)
 	}
 
@@ -150,6 +152,7 @@ export function evaluateToolPermission(
 	input: Record<string, unknown>,
 	cwd: string,
 	rules: PermissionRule[],
+	opts?: { allowHardening?: boolean },
 ): PermissionVerdict {
 	const ccTool = mapPiToolToCcTool(toolName)
 	if (!ccTool) {
@@ -184,7 +187,7 @@ export function evaluateToolPermission(
 	for (const behavior of ["deny", "ask", "allow"] as PermissionBehavior[]) {
 		for (const rule of rules) {
 			if (rule.behavior !== behavior) continue
-			if (!ruleMatchesToolCall(rule, toolName, input, cwd)) continue
+			if (!ruleMatchesToolCall(rule, toolName, input, cwd, opts)) continue
 			return {
 				behavior,
 				rule: permissionRuleValueToString(rule.ruleValue),

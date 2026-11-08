@@ -221,3 +221,29 @@ describe("P1-4 (2026-11-08): pi-own protected paths", () => {
 		expect(checkBashProtectedWrite("rm src/old.ts", CWD)).toBeNull();
 	});
 });
+
+describe("review fixes 2026-11-08 (P2#4/#5): post-`--` semantics", () => {
+	it("sed -- stops flag parsing: `sed -- -i s/x/y/ f` has -i as the script", () => {
+		// NOT in-place → no W3 hit
+		expect(checkBashWriteTargets("sed -- -i s/x/y/ f.txt", CWD)).toBeNull();
+		// W4 routes to Read (not Edit) — a Read deny on f.txt hits
+		const envDeny = [denyRule("Read(./f.txt)"), denyRule("Edit(./f.txt)")];
+		const hit = checkBashDenyHit("sed -- -i s/x/y/ f.txt", CWD, envDeny);
+		expect(hit).toMatchObject({ path: "f.txt", rule: "Read(./f.txt)" });
+	});
+	it("find -- : post-dash operands are all paths (CC superset)", () => {
+		const envDeny = [denyRule("Read(./.env)")];
+		expect(checkBashDenyHit("find -- -x .env -print", CWD, envDeny)).toMatchObject({ path: ".env" });
+	});
+});
+
+describe("review fix 2026-11-08 (P2#6, pinned): compound suppression form", () => {
+	it("a benign redirect segment suppresses the W3 hit on a later segment (documented approximation, bypass-level)", () => {
+		// `echo x > /tmp/log` is non-read-only → cancels the whole check →
+		// `echo y > ~/.zshrc` in the SAME command does not prompt. Pinned as
+		// the accepted trade-off (handoff W3 decision); DEVIATIONS #134③.
+		expect(checkBashWriteTargets("echo x > /tmp/log; echo y > ~/.zshrc", CWD)).toBeNull();
+		// the single-segment form still prompts
+		expect(checkBashWriteTargets("echo y > ~/.zshrc", CWD)).toMatchObject({ path: "~/.zshrc" });
+	});
+});

@@ -1237,7 +1237,11 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       input,
       hasUI: ctx.hasUI,
       cwd: ctx.cwd,
-      verdict: evaluateToolPermission(tool, input, ctx.cwd, mergedPermissionRules),
+      verdict: evaluateToolPermission(tool, input, ctx.cwd, mergedPermissionRules, {
+        // single-source the W5 switch read for this adjudication (review
+        // fix 2026-11-08 P3#10): facts and rule matching share one snapshot
+        allowHardening: safetyOn,
+      }),
       planHardBlock: planHard,
       family: familyMatch
         ? {

@@ -27,7 +27,7 @@ import {
 } from "./shell-rule-matching.ts"
 import { isCcSafetyPath } from "./path-safety.ts"
 import { loadPermissionModesConfig } from "./config.ts"
-import { resolveBashPathChecks } from "./bash-path-check.ts"
+import { resolveBashPathChecks, tokenizeSegment } from "./bash-path-check.ts"
 
 const SAFE_WRAPPER_PREFIXES = [
 	// CC bashPermissions.ts SAFE_WRAPPER_PATTERNS parity (2026-11-08 P2):
@@ -302,13 +302,14 @@ function hasCommandSubstitution(command: string): boolean {
 }
 
 /**
- * Does any redirection target land on a CC-sensitive path? Reuses the W3
- * extractor's tokenizer semantics via a light local scan (segment tokens,
- * redirect operators, quoted-literal unquoting).
+ * Does any redirection target land on a CC-sensitive path? Uses the SAME
+ * tokenizer as the W3 extractor (review fix 2026-11-08 P1#1: the previous
+ * whitespace split missed glued forms like `2>file`, `>>file` and cut
+ * quoted targets containing spaces at the wrong boundary).
  */
 function redirectTargetsSensitivePath(command: string, cwd: string): boolean {
 	for (const segment of splitShellSegments(command)) {
-		const tokens = segment.split(/\s+/).filter(Boolean)
+		const tokens = tokenizeSegment(segment)
 		for (let i = 0; i < tokens.length; i++) {
 			const t = tokens[i]!
 			const base = t.replace(/^\d+/, "")
@@ -383,20 +384,22 @@ export function bashCommandMatchesRuleContent(
 	behavior: "allow" | "deny" | "ask",
 	opts?: { allowHardening?: boolean; cwd?: string },
 ): boolean {
-	if (ruleContent === undefined) {
-		// Bare Bash — matches all commands
-		return true
-	}
 	// P0-1 (2026-11-08): allow rules never match commands carrying command
 	// substitution (outside CC's safe-heredoc form) or a sensitive-path
-	// redirection — they fall back to passthrough so each mode asks. Gated
-	// by the W5 safety tier; opts.allowHardening lets tests pin both states.
+	// redirection — INCLUDING the bare `Bash` rule (no content), an
+	// allow-everything rule that must not bypass the hardening (review fix
+	// 2026-11-08 P2#3). Gated by the W5 safety tier; opts.allowHardening
+	// lets tests pin both states.
 	if (behavior === "allow") {
 		const hardening = opts?.allowHardening ?? safetyTierActive()
 		if (hardening) {
 			if (hasCommandSubstitution(command)) return false
 			if (redirectTargetsSensitivePath(command, opts?.cwd ?? process.cwd())) return false
 		}
+	}
+	if (ruleContent === undefined) {
+		// Bare Bash — matches all commands
+		return true
 	}
 	const rule = parseRuleContent(ruleContent)
 	if (!rule) return false
