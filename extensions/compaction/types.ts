@@ -72,6 +72,7 @@ export type ControllerPhase =
 	| "computing"
 	| "ready"
 	| "proposed"
+	| "refused"
 	| "infeasible-window";
 
 /** Why a snapshot left "ready"/"proposed" without committing (§5.2 codes). */

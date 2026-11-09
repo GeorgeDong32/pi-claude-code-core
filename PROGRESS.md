@@ -675,3 +675,13 @@ spec `../specs/design/DESIGN-MEMORY-V2.md`，报告 `../MEMORY-V2-REPORT.md`（�
 - **S1–S5 回填 spec**：§4.3 结论表（S1 通过→turn_end 落盘成立，降级路径未触发；S2 差分逐项相等；S3 端点合规留待证据；S4 通过；S5 行为表入 §5.9a）+ 夹具层 5 条新宿主事实。
 - **S1⑦ 修正**：run 末提交后第一个可见事件 = `agent_end`（冒烟脚本未订阅所致的记录偏差，§5.2 触发集已覆盖，无需改需求）。
 - **三门禁**：check 0 错；unit 276 pass；contracts 90 pass + 4 todo（既有）。
+
+## Smart Compaction W1（SC，2026-11-09）—— 纯函数核心
+
+- **types.ts 首提交**（§6 W1 行要求）：ControllerMode / BoundaryClass / CutSelection / CutpointResult / §5.2 状态机词汇（ControllerPhase+refused、DiscardReason V1–V10+lost 族、CycleOutcome）/ SUM-04·09 校验形状 / PrecomputedSnapshot（INV-5 载荷）。
+- **policy.ts**：POL-01 有效阈值（缺输入→null 不抛）、POL-04 null 压力不推进、POL-06/08 resolveMode（版本门 > 原生 disabled→shadow > 配置）、POL-07 applyPointSafe（stopReason∈{stop,toolUse}+无待恢复；length 归 completed 不充分）、POL-09 jointFeasibility（keep+S+G≤q·T，S 自适应 1.2×上次摘要，neededTn 给 /compaction status）、POL-10 estimatePost（合成 compactionSummary 消息口径、overhead 校准 clamp[0,0.3·window]、null usage→unknownOverheadTokens）、POL-03 evaluate 全状态机（总函数，cooldown/gap 递减、单飞、proposed 不可再提议、infeasible-window 恢复即评估）。
+- **cutpoint.ts**：容量优先（tailMax=q·T−S−G 下界 keep，窗口空→infeasible 不放宽）；合法性复刻宿主 isCutPointMessage（永不 toolResult/压缩条目/上次边界前）；打分类权重−λ·|tail−nativeTail|/slack，同权取近原生，再同取旧；无候选→原生等价回退；CUT-06 实测 1 万条目 ≈3ms。signals/generic.ts：user/plain-turn/tool-turn/idle-gap 四信号 0/1 触发 + safeSignalWeight（抛错→0，CUT-07）+ W7/W8 注入口。
+- **validate.ts**：SUM-04 双层闸（逐子调用 ①stopReason②叙事下限③reasoning-only④无 toolCall；装配后 ⑤叙事+双标题⑥总长⑦非纯文件清单⑧split 分隔段⑨调用集匹配），门 id 稳定供 BLK-4 钉；SUM-09 classifySubCall 钉 `<conversation>`/`# Conversation` 文案形态。
+- **settings.ts**：ST-02 全键集+附录 C 默认值；POL-02 整组校验（出现键非法或合并后违反序→整组回退+一条 warn，缺失键继承默认）；ST-03 PI_CORE_COMPACTION=off|shadow|on 优先于文件，非法值忽略+warn。
+- **测试**（node:test，`extensions/compaction/tests/` 已登记 nodeTestDirs）：policy 12 例（状态机全边表驱动）、cutpoint 8 例（CUT-01/08 各 2000 种子属性测试）、validate 9 例（E3 970 字符形态、BLK-4 三态）、settings 6 例；helpers.ts 合成夹具（INV-7）。
+- **三门禁**：check 双 project 0 错；unit 全绿（含新增 compaction 套件）；contracts 90+4 todo 不变。
