@@ -722,3 +722,13 @@ spec `../specs/design/DESIGN-MEMORY-V2.md`，报告 `../MEMORY-V2-REPORT.md`（�
 - **docs/{en,zh}/compaction.md**：双语校准记录（机制摘要+指标表+归因+结论）。
 - **测试** `test/lib/compaction-replay.test.ts` 9 例（提取/阈值/延迟模型/模拟/聚合/自检/INV-7 源码检查）。
 - **三门禁**：check 0 错；unit 80 文件全绿；contracts 90+4 todo。
+
+## Smart Compaction W4（SC，2026-11-09）—— 兜底腿与装配（BLK 全绿）
+
+- **fallback.ts**（FB-01..08）：decideFallback 纯函数矩阵（manual 带指令→原生/无指令可用快照→供稿；threshold/overflow ①快照②等待③同步重生成④交回）；hardFitLimitFor 按 reason 用 overflowFitRatio（更严，INV-12）；FB-04 供稿形状（origin=native-backfill）；FB-08 auditNativeSummary（⑤–⑦，只审计不拦截）；FB-06 无 cancel 返回路径（源码扫描钉住）。
+- **index.ts**（装配）：POL-08 版本门（<1.5.0 强制 off）> POL-06（原生 disabled→shadow）> 配置；session_start 重读设置（agentDir 由 sessionDir 推导）+ 重置；apply 点 turn_end/agent_before_settle——先评 start-computing（isApplyPoint:false），tryPropose 内做唯一 propose 迁移（修双重推进 bug）；对账触发集 8 事件（agent_settled 清 POL-07② 恢复标志）；后台计算单 promise 链（inFlight 随 generation 释放——修永不释放 bug；registry transport=modelRegistry.complete，与宿主同源）；提议路径全同步（ledger apply 时重生成+自检→V1–V10→notifyBefore→draft nonce→追加返回）；lost(overridden) 快照存活复提议（按 BLK-2(a) 执行规范，与 §5.2 字面相反——已注明）；fallback 等待=Promise.race 单次 deadline 定时器（INV-2 例外）；/compaction 命令（status/mode，无 UI 不抛）。
+- **extensions/index.ts**：装配行 +compactionController（memory 之后、ccPanels/economy 之前，ST-06）。
+- **脚手架增强**：磁盘 SessionManager（continueRecent 到 agentDir/sessions——jsonl 真落盘+agentDir 可推导）；controllerSettings/postFactories 装载位（H5 后序 handler 位）；pi 侧 compaction 覆盖持久化到 agentDir settings.json（新 SettingsManager 读盘可见）。
+- **BLK-1…5 保护断言全部翻绿（7/7）**：真实 AgentSession+faux 端到端——POL-07 拒提议保恢复（FB 供稿腿按 spec 合法供给）、覆盖→lost→快照存活→clean 边界提交恰一次（seam after 带真实 entryId）、V4' 冲突编辑审计计数（真实 message 目标+替换式编辑——删除式会 void 整个 boundary 提交，发现宿主 appendContextEdit 抛错即中断后续 drafts）、V8a 双路径拒写、SUM-04 拒空前缀、FB-08 原生空摘要审计遥测。
+- **测试**：fallback.test.ts 5 例（node:test）+ compaction-wiring.test.ts 5 例（vitest 源码扫描：ST-06 顺序/INV-2 定时器/INV-3 thinking/FB-06 cancel/APP-04③ core 内 draft 独占）。
+- **三门禁**：check 0 错；unit 81 文件全绿；contracts 90+4 todo + 保护 7/7。

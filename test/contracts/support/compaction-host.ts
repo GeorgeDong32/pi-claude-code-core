@@ -24,7 +24,7 @@
  * - Every session gets isolated tmp agentDir/cwd; cleanup removes the tree.
  * All fixtures are synthetic (INV-7): no real session content in repo.
  */
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -150,8 +150,18 @@ export interface HostOptions {
 	probe?: ProbeConfig;
 	/** Applied via settingsManager.applyOverrides before session creation. */
 	settingsOverrides?: Record<string, unknown>;
-	/** Extra extension factories loaded AFTER the probe (registration order matters for H5/BLK-2). */
+	/**
+	 * Smart Compaction controller: settings written to
+	 * <agentDir>/core-compaction.json + PI_CORE_COMPACTION=on before the
+	 * factories load; the controller factory joins extraFactories (AFTER the
+	 * probe — its H5 position). undefined = no controller (baseline hosts).
+	 */
+	controllerSettings?: Record<string, unknown>;
+	/** Extra extension factories loaded AFTER the probe. */
 	extraFactories?: ExtensionFactory[];
+	/** Extra extension factories loaded AFTER the controller (the H5(b)
+	 * "later handler overrides/appends" position for BLK-2). */
+	postFactories?: ExtensionFactory[];
 }
 
 /**
@@ -191,9 +201,32 @@ export async function createCompactionHost(options: HostOptions = {}): Promise<C
 	const settingsManager = SettingsManager.create(cwd, agentDir);
 	if (options.settingsOverrides) {
 		settingsManager.applyOverrides(options.settingsOverrides as never);
+		// SC W4: the controller creates its OWN SettingsManager (H8), which
+		// reads DISK — persist the compaction overrides into the agentDir's
+		// global settings file so controller-visible thresholds match the
+		// host's (applyOverrides stays for the session's own manager).
+		if (options.settingsOverrides.compaction) {
+			const globalPath = join(agentDir, "settings.json");
+			let globalSettings: Record<string, unknown> = {};
+			try {
+				globalSettings = JSON.parse(readFileSync(globalPath, "utf-8")) as Record<string, unknown>;
+			} catch {
+				/* fresh temp dir */
+			}
+			writeFileSync(globalPath, JSON.stringify({ ...globalSettings, compaction: options.settingsOverrides.compaction }), "utf8");
+		}
+	}
+	if (options.controllerSettings) {
+		// SC W4: the controller resolves its settings file from the agent dir
+		// (derived from the session dir below) — write them BEFORE loading.
+		writeFileSync(join(agentDir, "core-compaction.json"), JSON.stringify(options.controllerSettings), "utf8");
+		process.env.PI_CORE_COMPACTION = "on";
 	}
 
-	const sessionManager = SessionManager.inMemory(cwd);
+	// SC W4: disk-backed session dir under the temp agentDir so the controller
+	// can derive <agentDir> from getSessionDir() AND the jsonl serialization
+	// path is exercised for real (inMemory returned "" for getSessionDir).
+	const sessionManager = SessionManager.continueRecent(cwd, join(agentDir, "sessions"));
 
 	const events: RecordedEvent[] = [];
 	const contextUsage: CompactionHost["contextUsage"] = [];
@@ -263,7 +296,21 @@ export async function createCompactionHost(options: HostOptions = {}): Promise<C
 
 	const eventBus = createEventBus();
 	const extensionRuntime = createExtensionRuntime();
-	const factories = [probeFactory, ...(options.extraFactories ?? [])];
+	// SC W4: controller factory (non-literal on purpose so the contracts tsc
+	// pass cannot resolve it ahead of the module's existence — flip history
+	// preserved; now that extensions/compaction/index.ts exists it resolves).
+	let controllerFactory: ExtensionFactory | undefined;
+	if (options.controllerSettings) {
+		const specifier = "./../../../extensions/compaction/index.ts";
+		const module = (await import(specifier)) as { default: unknown };
+		controllerFactory = module.default as ExtensionFactory;
+	}
+	const factories = [
+		probeFactory,
+		...(options.extraFactories ?? []),
+		...(controllerFactory ? [controllerFactory] : []),
+		...(options.postFactories ?? []),
+	];
 	const extensions = await Promise.all(
 		factories.map((factory, index) =>
 			loadExtensionFromFactory(factory as never, cwd, eventBus, extensionRuntime, `<sc-probe-${index}>`),
@@ -297,7 +344,10 @@ export async function createCompactionHost(options: HostOptions = {}): Promise<C
 		events,
 		contextUsage,
 		requestContexts,
-		cleanup: () => rmSync(tempRoot, { recursive: true, force: true }),
+		cleanup: () => {
+			delete process.env.PI_CORE_COMPACTION;
+			rmSync(tempRoot, { recursive: true, force: true });
+		},
 	};
 }
 

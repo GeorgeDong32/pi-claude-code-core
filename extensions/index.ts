@@ -29,6 +29,11 @@ import reviewExtension from "./review/index.ts";
 // P3: new modules
 import { createRulesExtension } from "./rules/index.ts";
 import memoryExtension from "./memory/index.ts";
+// SC: smart compaction controller (14th module) — after memory/goal/modes so
+// its compaction seam subscribers register after those modules' own hooks
+// (ST-06); only this module returns compaction drafts / session_before_compact
+// results, so the last-wins semantics never matter for ordering.
+import compactionController from "./compaction/index.ts";
 // P4: governance modules (rule families + broker mirror + /core panel)
 import mcpGovExtension from "./mcp-gov/index.ts";
 // BG: background shell — vendored pi-bg-bash, CC-parity /tasks (BG-D1)
@@ -64,6 +69,9 @@ const moduleFactories: ModuleFactory[] = [
 	},
 	mcpGovExtension,
 	bgShell,
+	// SC ST-06: compaction controller after memory/goal/modes (its seam
+	// subscribers must observe their hooks), before ccPanels + economy.
+	compactionController,
 	// CC panels (2026-10-20): one registration point for every core-owned
 	// display:true customType — presentation lives in extensions/ui, after the
 	// owning modules so the shaper table stays a single source.
