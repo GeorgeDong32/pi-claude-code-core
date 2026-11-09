@@ -78,7 +78,7 @@ export interface CompactionSettings {
 
 /**
  * Appendix C defaults. mode: "on" ships as the default per the user's
- * explicit approval on 2026-11-09 (DEVIATIONS.md SC-1, recovery clause ②) —
+ * explicit approval on 2026-11-10 (DEVIATIONS.md SC-1, recovery clause ②) —
  * this is a user override, NOT a gate pass: the W2 local replay fact stands
  * (M1 = 0.52 < 0.90 target; BLK 7/7 green; real-machine H-SC evidence list
  * still open, see DEVIATIONS SC-3). Automatic demotions are unaffected:

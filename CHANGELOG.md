@@ -1,6 +1,6 @@
 ## [未发布] — Smart Compaction(SC,spec 2026-11-08-smart-compaction-takeover.md)
 
-### Changed — compaction default takeover ON (user-approved 2026-11-09)
+### Changed — compaction default takeover ON (user-approved 2026-11-10)
 
 - `extensions/compaction` 默认 `mode:"shadow"` → `"on"`:用户显式批准
   (DEVIATIONS SC-1 恢复条件②)。**user override,非 gate 通过**——跨机
@@ -29,7 +29,7 @@
   - 配置 `~/.pi/agent/core-compaction.json` + `PI_CORE_COMPACTION` +
     `/compaction [status|mode …]`;ST-01 遥测 entry `cc-core-compaction`。
   - **默认 `on` 发布**(曾按发布门槛 M1<0.90 临时以 shadow 发布,
-    2026-11-09 用户显式批准回 on,见 DEVIATIONS.md SC-1);
+    2026-11-10 用户显式批准回 on,见 DEVIATIONS.md SC-1);
     BLK-1…5 阻断性用例 7/7 全绿(真实 AgentSession)。
 - 升级金丝雀 +3:SC-HOST-03(draft 提交覆盖 entries 语义)、H3(draft 落盘
   无 session_compact)、H12(length 恢复谓词)。

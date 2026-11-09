@@ -76,7 +76,7 @@ Configuration: `~/.pi/agent/core-compaction.json` (ST-02), env
 `shadow` = fully passive: no precompute, no drafts, no fallback supply — only
 the FB-08 native-summary audit remains (DEVIATIONS SC-5).
 
-Default: **`on`** — user-approved 2026-11-09 (DEVIATIONS SC-1 recovery
+Default: **`on`** — user-approved 2026-11-10 (DEVIATIONS SC-1 recovery
 clause ②), a user override rather than a gate pass: the replay facts stand
 (cross-machine deduplicated M1 = 39/50 = 0.78 vs the 0.90 full-sample
 target, feasible cohort 92.9%; second-machine corpus now supplied) and the

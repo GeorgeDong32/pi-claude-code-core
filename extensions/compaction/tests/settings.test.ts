@@ -43,7 +43,7 @@ test("ST-02: missing file → defaults, no warns", () => {
 	assert.deepEqual(warned, []);
 });
 
-test("default takeover is ON (user-approved 2026-11-09, DEVIATIONS SC-1 recovery clause ②)", () => {
+test("default takeover is ON (user-approved 2026-11-10, DEVIATIONS SC-1 recovery clause ②)", () => {
 	// pins the shipping default: a user override, not a gate pass — M1=0.52
 	// replay fact stands; PI_CORE_COMPACTION=shadow is the one-line rollback.
 	assert.equal(DEFAULT_COMPACTION_CORE_SETTINGS.mode, "on");
