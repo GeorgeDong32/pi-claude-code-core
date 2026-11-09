@@ -33,7 +33,7 @@ shared primitives     modules, one directory each
   model-id parser, rule-text helpers, effort owner, context budget, economy
   switches, pi compatibility probes. Self-contained by rule — helpers that
   need extension-shaped data use structural typing.
-- `extensions/` holds the twelve modules. Modules talk to each other through
+- `extensions/` holds the fourteen modules. Modules talk to each other through
   two sanctioned seams: **direct imports** (e.g. effort/modes import
   `lib/effort-owner.ts`; web-gov reuses `mcp-gov/family.ts`) and the
   **capability bus** (read-only state).

@@ -1,4 +1,25 @@
-# Changelog
+## [未发布] — Smart Compaction(SC,spec 2026-11-08-smart-compaction-takeover.md)
+
+- **新增第 14 个模块 `extensions/compaction`**:接管式智能压缩控制器。
+  - 后台与主对话并行预生成摘要(`precomputeRatio` 启动),在安全边界
+    (POL-07:`turn_end`/`agent_before_settle`,排除 length/error/aborted 与
+    待恢复窗口)以 boundary draft 提议落盘;以宿主分支上的 nonce 对账确认
+    (`ready → proposed → committed/lost`),快照仅在确认时消耗。
+  - 容量优先切点(合法边界复刻宿主规则 + user/idle-gap/run-closed/
+    goal-step/git-commit/verified 语义信号打分)与 POL-09 联合可行性。
+  - 确定性台账(≤12 000 字符,六级降级阶梯,Tier A/B 自检):goal 复用
+    goal 模块格式化器、rex-flow 只读 board(发现+两步关联,串项目诱饵
+    不进台账)、用户指令 standing/normal 分类与跨轮指针携带。
+  - SUM-04 双层校验闸(逐子调用 + 装配后;E3 空摘要/截断/reasoning-only
+    拒绝)、V8a 硬容量闸(overflow 更严)、FB 兜底供稿腿(单一总 deadline)。
+  - `lib/compaction-seam.ts`:goal/modes/memory 压缩钩子在 draft 路径
+    恰好触发一次(原生路径行为不变)。
+  - 配置 `~/.pi/agent/core-compaction.json` + `PI_CORE_COMPACTION` +
+    `/compaction [status|mode …]`;ST-01 遥测 entry `cc-core-compaction`。
+  - **默认 `shadow` 发布**(发布门槛 M1=0.52<0.90 的临时偏离,见
+    DEVIATIONS.md SC-1);BLK-1…5 阻断性用例 7/7 全绿(真实 AgentSession)。
+- 升级金丝雀 +3:SC-HOST-03(draft 提交覆盖 entries 语义)、H3(draft 落盘
+  无 session_compact)、H12(length 恢复谓词)。
 
 ## Unreleased
 

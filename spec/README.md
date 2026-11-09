@@ -4,11 +4,11 @@
 
 历史执行入口：[剩余任务执行规格](2026-10-08-followup-execution.md) 与 [core 执行 prompt](2026-10-08-execution-prompt.md)；配对 [TUI 索引](../../pi-claude-code-tui/spec/README.md)。原审查与两轮规格核对保留在 [核对记录](2026-10-07-spec-review.md)。
 
-## 新增：Smart Compaction（2026-11-08，DRAFT，待验收后派工）
+## 新增：Smart Compaction（2026-11-08，**已实施完成 W0–W9**，2026-11-09）
 
 | spec | 内容 | 状态 |
 |---|---|---|
-| [Smart Compaction — 接管式压缩控制器](2026-11-08-smart-compaction-takeover.md) | 第 14 个模块 `extensions/compaction/`：后台预压 + 语义切点 + 确定性台账（含 rex-flow orchestrator 档）+ boundary draft **提议并经对账确认提交**，原生仅兜底（供稿腿同样受硬容量闸）；含 W0–W9 派工拆分、阻断性宿主用例 BLK-1…5 与验收矩阵 | W0 已交付（2026-11-09：S1–S5 回填、BLK 基线+expected-fail 钉住、契约登记、三门绿）；W1/W5 可派；旧草案 [候选 A](2026-11-08-smart-compaction.md) 已被取代 |
+| [Smart Compaction — 接管式压缩控制器](2026-11-08-smart-compaction-takeover.md) | 第 14 个模块 `extensions/compaction/`：后台预压 + 语义切点 + 确定性台账（含 rex-flow orchestrator 档）+ boundary draft **提议并经对账确认提交**，原生仅兜底（供稿腿同样受硬容量闸）；含 W0–W9 派工拆分、阻断性宿主用例 BLK-1…5 与验收矩阵 | W0–W9 全部落地（2026-11-09）：BLK-1…5 保护断言 7/7 绿（真实 AgentSession）、三门全绿；默认 mode 临时 shadow（M1=0.52<0.90，DEVIATIONS SC-1）；真机已验加载/运行/遥测/off 无痕，TUI 与 rex-flow 真机项列待证据（DEVIATIONS SC-3）；旧草案 [候选 A](2026-11-08-smart-compaction.md) 已被取代 |
 
 ## 实际状态与续做范围
 

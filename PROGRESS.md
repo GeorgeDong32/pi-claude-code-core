@@ -742,3 +742,12 @@ spec `../specs/design/DESIGN-MEMORY-V2.md`，报告 `../MEMORY-V2-REPORT.md`（�
 - **夹具**（test/fixtures/compaction/rex-flow/，INV-7 合成）：三布局（--sanitized-- / 按 ws_root 命名 / 旧 boards）+ 串项目诱饵 + 2 MiB 超限 board + git origin cwd 临时仓。
 - **测试** rex-flow.test.ts 12 例：三布局发现/诱饵排除/关联 (a)(b) 各例/未关联与超限原因码/哨兵提取/跨轮 run id/run-closed 触发与不重复/CUT-04 run-closed 胜选/W8 三信号（含 verified 失败不触发）。
 - **三门禁**：check 0 错；unit 81 文件全绿；contracts 90+4 todo、BLK 7/7 保持。
+
+## Smart Compaction W9（SC，2026-11-09）—— 真机验收与收口
+
+- **真机已验**（真实 pi 1.5.0 `--print` 沙盒：临时 HOME + 本地扩展仓 + 用户 CPA 模型 glm/glm-5.3-flash）：①扩展整套（14 模块）在真实 pi 进程加载无错；②控制器真实运行——预压在 P≥preRatio 启动，POL-09/切点/准备管道在真实投影上执行并因"无可摘要区"正确 refused，ST-01 遥测（cc-core-compaction）落进真实会话 jsonl；③`PI_CORE_COMPACTION=off` 第二次运行零新增痕迹（H-SC-5 前半）。**--print 单发不触发轮界自压缩（模式限制）→ 兜底供稿腿真机路径未及**。
+- **待证据项**（DEVIATIONS SC-3，含恢复条件）：H-SC-1（TUI 摘要行/无 spinner + 完整多轮提交）、H-SC-2（/resume）、H-SC-3（交互式阈值+供稿真机）、H-SC-4（/compact 手动）、H-SC-6（摘要模型故障链）、H-SC-7（真实 rex-flow run）、第二台机器回放语料、S3 端点合规。
+- **默认 mode 决策**：M1=0.52<0.90 → 按 §7.3 门槛规则**临时 shadow 发布**（DEVIATIONS SC-1，恢复条件：M1 达标或用户 O2 拍板；一行改动回 on）。
+- **金丝雀 +3**（SC-HOST-03/H3/H12——draft 落盘无 session_compact、entries 替换语义、length 恢复谓词 hazard 双向钉住），5/5 绿。
+- **文档收口**：AGENTS.md/AGENTS.zh.md（14 模块、布局、PI_CORE_COMPACTION、core-compaction.json 磁盘行）、docs/{en,zh}/architecture.md（twelve/十二→fourteen/十四）、CHANGELOG（未发布条目）、DEVIATIONS（SC-1..4）、spec/README.md、spec 状态行+附录 C mode 行回填。
+- **三门禁**：check 0 错；unit 81 文件全绿（compaction 套件累计 98 例）；contracts 90+4 todo、BLK 7/7；金丝雀 5/5。

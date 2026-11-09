@@ -3,7 +3,7 @@
 | 项 | 值 |
 |---|---|
 | 日期 | 2026-11-08 |
-| 状态 | **READY（v2.1，2026-11-09）— W0 已交付**（2026-11-09：S1–S5 结论回填 §4.3/§5.9a、BLK-1…5 基线+expected-fail 保护断言落地、契约 §8 全登记；三门全绿）。其余任务按 §6 批次推进（W1/W5 可派）。v2.1 = R1 评审修订（附录 D）+ 用户补充开放点 O1/O2 + 2026-11-09 真实宿主冒烟（S1 / BLK-1 / BLK-2 已复现，§4.4 末） |
+| 状态 | **实施完成（W0–W9，2026-11-09）**。BLK-1…5 保护断言 7/7 全绿（真实 AgentSession）；W0–W8 各自提交、三门全绿；W2 本机回放 M1=0.52（目标 0.90 未达——归因见 docs/zh/compaction.md），**故默认 mode 按 §7.3 门槛规则临时以 shadow 发布（DEVIATIONS.md）**；真机（--print 沙盒）已验：扩展加载、控制器运行、ST-01 遥测落盘、off 模式零痕迹；待证据项：TUI PTY（H-SC-1 TUI 部分/2/4）、交互式多轮真机（H-SC-1 完整/3/6）、真实 rex-flow run（H-SC-7）、第二台机器回放语料——恢复条件见 DEVIATIONS.md |
 | 目标仓 | pi-claude-code-core（新模块 `extensions/compaction/`，第 14 个模块） |
 | 宿主 | pi `@earendil-works/pi-coding-agent` **1.5.0**（本 spec 的宿主事实均在此版本核实） |
 | 取代 | [`2026-11-08-smart-compaction.md`](2026-11-08-smart-compaction.md)（候选 A 草案，未实施；其 §2 的 pi 源码取证仍可参考） |
@@ -625,7 +625,7 @@ bg-3 `pnpm run dev` running · flow-watch r7/t1 (timeout 7200s)
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `mode` | `on` | D2 |
+| `mode` | `shadow`（**临时偏离**：发布门槛 M1=0.52<0.90，2026-11-09 起 shadow 发布，恢复条件见 DEVIATIONS.md；BLK 7/7 全绿） | D2 + §7.3 门槛规则 |
 | `precomputeRatio` / `applyRatio` / `targetPostRatio` | 0.60 / 0.75 / 0.45（×`T_n`） | E7：预压窗口远大于摘要耗时；`q` 为切点容量约束的目标（POL-09），须 `q < p < a` |
 | `hardFitRatio` / `overflowFitRatio` | 0.90 / 0.75（×`T_n`） | V8a：所有路径的硬容量闸；overflow 更严（只有一次恢复机会，H13） |
 | `summaryTokenEstimate` | 12 000 tokens | POL-09 的 `S`；有上次摘要时取 `max(默认, 1.2×上次摘要)` |

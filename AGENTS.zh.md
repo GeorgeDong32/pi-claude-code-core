@@ -7,9 +7,9 @@
 
 `@georgedong32/pi-claude-code-core` —— [pi coding agent](https://github.com/earendil-works/pi-coding-agent)
 的统一核心扩展包。一个 npm 包,经单一扩展入口(`extensions/index.ts`)装配
-**十二个模块**:权限模式、effort、goal、review、rules、memory、mcp-gov、
-web-gov、action-fusion、observation-pack、能力总线(capability bus)与 UI
-适配层。
+**十四个模块**:权限模式、effort、goal、review、rules、memory、mcp-gov、
+web-gov、action-fusion、observation-pack、bg-shell、能力总线
+(capability bus)、智能压缩控制器(compaction)与 UI 适配层。
 
 pi 对每个 manifest 条目只加载一个工厂(见 `package.json` 的 `pi` 字段):
 `extensions/index.ts` 的默认导出按固定顺序依次调用各模块工厂,共享同一个
@@ -21,7 +21,7 @@ pi 对每个 manifest 条目只加载一个工厂(见 `package.json` 的 `pi` �
 |---|---|
 | `pnpm install` | 安装依赖(pnpm 是本仓库的包管理器) |
 | `pnpm run check` | 统一 tsc 门:两遍——主工程(`tsconfig.json`)+ 契约工程(`tsconfig.contracts.json`)。必须 exit 0。 |
-| `pnpm run test` | 单元测试,**按框架分流**:vitest 跑 `test/lib/` + `extensions/modes/`(就近摆放),node:test(经 tsx)跑 `extensions/{effort,goal,review,action-fusion,observation-pack}/tests/` |
+| `pnpm run test` | 单元测试,**按框架分流**:vitest 跑 `test/lib/` + `extensions/modes/`(就近摆放),node:test(经 tsx)跑 `extensions/{effort,goal,review,action-fusion,observation-pack,compaction}/tests/` |
 | `pnpm run contracts` | 跨包契约套件(`test/contracts/`,独立 vitest config)。钉住 globalThis 键、env 变量、status 槽、session entry 类型、磁盘布局。 |
 | `pnpm exec vitest run test/lib/upgrade-canary.test.ts --config vitest.config.ts` | 升级金丝雀——升 Pi 前先跑（ObservationPack 占位符 + then_run 融合识别） |
 
@@ -44,6 +44,7 @@ extensions/
   mcp-gov/           # MCP 规则族 + broker 镜像 + /core 面板(P4)
   action-fusion/     # write/edit + then_run 融合(economy,移植自 SoL-Pi)
   observation-pack/  # 大工具结果投影 + obs_recall(economy)
+  compaction/        # 智能压缩控制器:后台预压 + 边界 draft 提议 + 台账(SC)
   ui/                # 呈现适配层:cctui 优先 + core 兜底
 lib/                 # 共享原语 —— 禁止反向依赖 extensions/
 test/lib/            # lib 与跨模块接线的 vitest 套件
@@ -109,6 +110,7 @@ docs/                # 架构文档(en/ + zh/ 双语分文件)
 | 变量 | 模块 | 作用 |
 |---|---|---|
 | `PI_CORE_EFFORT` | effort | 思考档位硬钉;置位期间显式写入被拒绝 |
+| `PI_CORE_COMPACTION` | compaction | 控制器模式覆盖:`off` \| `shadow` \| `on`(SC ST-03;优先于 core-compaction.json) |
 | `PI_CORE_BASH_PATH_CHECKS` | modes | W3/W4/P0-1/P1-4 bash 路径检查开关:`all`(默认)\|`safety`(W3 弹窗+allow 收紧+保护路径弹窗)\|`deny`(仅 W4)\|`off`;覆盖 `bashPathChecks` 配置键,免 `/reload` 生效(env 仅对新进程生效) |
 | `PI_CORE_MCP_DIRECT_SERVERS` | mcp-gov | 允许认领裸工具名的 server id(如 `exa`) |
 | `PERMISSION_MODES_INHERITED_MODE` | modes | 子代理模式继承(pi-subagents 生产,此处只消费) |
@@ -128,6 +130,7 @@ docs/                # 架构文档(en/ + zh/ 双语分文件)
 | `<cwd>/.pi/goals/` | goal 状态 |
 | `<cwd>/.pi/pi-review/`(`pi-review.json`、`runs/<runId>/`) | review |
 | `<sessionDir>/observation-pack/<sessionId>/` | observation-pack 原文 |
+| `~/.pi/agent/core-compaction.json` | 压缩控制器设置(SC ST-02) |
 
 以上路径由契约套件钉住(P0-CT-09)——视为冻结。
 

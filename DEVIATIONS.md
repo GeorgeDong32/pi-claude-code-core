@@ -357,3 +357,23 @@
 - **P2 已知差距**：deny/ask 子命令展开为单层正则近似（$() 与反引号）；`(...)` 分组与 `{ ...; }` 未展开（CC 用 AST）——真实场景罕见，后续如需完整展开引入 shell AST 解析器。
 - **P0-2/3**：引号脱引号限「整段单/双引号字面量且内部无 $ ` \」——比 CC 的宽松 strip 保守（CC validatePath 只剥首尾引号）。
 - **复核二审增补（2026-11-08 flash review，P1×2/P2×4 已修）**：①P0-1 敏感重定向检查改用与 W3 同一 tokenizeSegment（原 \s+ 分词漏贴连形态 `2>file`/`>>file` 与引号空格目标）；②mv/cp 带 pre-`--` 旗标一律按命中弹窗/拒绝（CC COMMAND_VALIDATOR parity，`-t`/`--target-directory` 可藏目的地）——**install 豁免**（`-m 644` 是最常见合法形态，维持 destination-only）；③裸 `Bash` allow 规则（无内容）同样受 P0-1 硬化（原实现 early-return 跳过）；④`--` 后旗标解析停止（sed `-- -i` 的 -i 是脚本非 flag；find `--` 后全量按路径收集，CC 超集语义）；⑤W5 开关单源化（collectFacts 算一次 allowHardening 穿透 evaluateToolPermission→ruleMatchesToolCall，测试不再依赖环境）；⑥**已知压制形态（钉住不改）**：复合命令中任一段含重定向即非只读 → 整条 W3 取消（`echo x > /tmp/log; echo y > ~/.zshrc` 第二段不弹）——bypass 语境下「交由整体审批」不成立，此为 handoff W3 拍板的刻意近似残余，有测试钉住；⑦P3 未修项：heredoc 余量无 CC 二次安全校验（zmodload 类向量靠单段要求兜住）、`''EOF''` 变异分隔符未移植（fail-closed 方向安全）、`dd of=`/`ln -sf`/`find -delete`/`truncate` 两边都不查（CC parity 成立）。
+
+## Smart Compaction（SPEC SC 2026-11-08-smart-compaction-takeover.md）
+
+SC-1. **默认 mode 临时以 `shadow` 发布（2026-11-09 起）**
+   - 内容：代码默认 `mode:"shadow"`（附录 C 已同步注明），而非 D2 的 `on`。
+   - 理由：§7.3 发布门槛要求 BLK 全绿（✅ 7/7）且 H-SC-1/3/5/6 通过且 **M1 ≥ 90%**；W2 本机回放 M1 = 0.52（12/23，8 次来自单个小窗口会话属 POL-09 设计内不可行 R15、3 次属中位数 T_n 回放近似局限）。按门槛规则"未满足 → 默认改 shadow 发布并记临时偏离"。
+   - 影响面：shadow 下控制器全程观测、写 ST-01 遥测、FB-08 审计，但不提议 draft、供稿腿恒返回 undefined（POL-06 同款降级）。BLK 硬门槛不受 shadow 影响（自动化已全绿）。
+   - **恢复条件**（满足其一即可回 `on`，一行改动+附录 C 回填）：① M1 ≥ 0.90（补第二台机器语料回放/参数校准后复测）；② 用户在 O2 拍板中接受当前 M1 并显式改回。
+
+SC-2. **lost(overridden) 后快照存活（以 BLK-2(a) 执行规范为准）**
+   - 内容：§5.2 字面为"proposed → lost [快照作废]"，但 §4.4 BLK-2(a) 保护断言与对应测试要求"快照不消耗、后续 clean 边界可提交"。实现取后者：lost(overridden) → 回 ready、新 nonce 复提议；lost(branch-changed/dropped) 仍作废快照。
+   - 理由：BLK 用例是阻断性执行规范（发布硬门槛），且语义上 override 丢失的是"提议"而非"快照"（分支未变、V1 仍成立）。已在 index.ts 代码注释注明。
+
+SC-3. **真机验收的已验/待证据拆分（H-SC 未全过即不称完成）**
+   - 已验（真实 pi 1.5.0 --print 沙盒 + 本地扩展仓）：扩展整套加载无错、控制器真实运行（ST-01 遥测落盘真实 jsonl）、POL-09/切点/准备管道在真实投影上执行并正确 refused、`PI_CORE_COMPACTION=off` 零新增痕迹（H-SC-5 前半）。
+   - 待证据：H-SC-1（TUI 摘要行/无 spinner 与完整多轮交互提交）、H-SC-2（/resume）、H-SC-3（交互式触发原生阈值+供稿腿真机）、H-SC-4（/compact 手动）、H-SC-6（摘要模型故障链）、H-SC-7（真实 rex-flow run）、第二台机器回放语料、S3 端点合规（CPA/GLM/MiniMax/OpenAI 兼容端点各一次受控摘要）。
+   - 恢复条件：PTY（tmux/rex）驱动 TUI + §7.3 的 modelOverrides 配置（T_n≈120K、keep≈8K）即可逐项执行；H-SC-7 需一次真实 rex-flow run 的会话。
+
+SC-4. **旧草案 `2026-11-08-smart-compaction.md` 正式取代**
+   - 本 spec 落地后旧草案仅为取证参考（其 §2 pi 源码取证仍有效），不再有实施义务。

@@ -30,7 +30,7 @@ lib/                  extensions/
 - `lib/` 存放跨模块原语:settings JSON、overlay 选择器、model-id 解析器、
   rule-text 助手、effort 所有权、上下文预算、economy 开关、pi 兼容性探针。
   按规则自包含——需要扩展形状数据的助手用结构化类型。
-- `extensions/` 存放十二个模块。模块间通过两条许可的接缝通信:**直接
+- `extensions/` 存放十四个模块。模块间通过两条许可的接缝通信:**直接
   import**(如 effort/modes 引 `lib/effort-owner.ts`;web-gov 复用
   `mcp-gov/family.ts`)与**能力总线**(只读状态)。
 

@@ -7,10 +7,10 @@
 
 `@georgedong32/pi-claude-code-core` — the unified core extension package for the
 [pi coding agent](https://github.com/earendil-works/pi-coding-agent). One npm
-package that assembles **thirteen modules** behind a single extension entry
+package that assembles **fourteen modules** behind a single extension entry
 (`extensions/index.ts`): permission modes, effort, goal, review, rules, memory,
-mcp-gov, web-gov, action-fusion, observation-pack, bg-shell, the capability bus, and the
-UI adapter layer.
+mcp-gov, web-gov, action-fusion, observation-pack, bg-shell, the capability bus, the
+compaction controller, and the UI adapter layer.
 
 pi loads exactly one factory per manifest entry (see the `pi` field in
 `package.json`): the default export of `extensions/index.ts` invokes each
@@ -47,6 +47,7 @@ extensions/
   action-fusion/     # write/edit + then_run fusion (economy, ported from SoL-Pi)
   observation-pack/  # large tool-result projection + obs_recall (economy)
   bg-shell/          # background shell tasks + /tasks panel (vendored pi-bg-bash)
+  compaction/        # smart compaction controller: background precompute + boundary drafts (SC)
   ui/                # presentation adapters: cctui primary + core fallback
 lib/                 # shared primitives — must NOT import from extensions/
 test/lib/            # vitest suites for lib/ and cross-module wiring
@@ -136,6 +137,7 @@ Per-module docs live in [docs/en/](docs/en) / [docs/zh/](docs/zh) — start with
 | `PI_GOAL_AUTO_CONFIRM` | goal | Auto-confirm goal proposals |
 | `CC_CORE_BG_DEBUG` / `CC_CORE_BG_{PROMOTE,GRACE,LOG_LIMIT}_*` | bg-shell | Debug log + test seams for promote/grace/log-limit thresholds |
 | `PI_B4_TEST_HOME` | mcp-gov | Test seam: overrides the home dir for `/core exposure` writes (tests only) |
+| `PI_CORE_COMPACTION` | compaction | Controller mode override: `off` \| `shadow` \| `on` (SC ST-03; wins over core-compaction.json) |
 | `PI_CORE_RECALL_{WARMUP,COOLDOWN}_TURNS` | memory | Recall frequency gates: first-N-turns warmup / min-turns cooldown (≤ 0 disables; test seam) |
 
 `PI_SUBAGENT_*` variables are produced by pi-subagents; core only reads them.
@@ -152,6 +154,7 @@ Per-module docs live in [docs/en/](docs/en) / [docs/zh/](docs/zh) — start with
 | `<cwd>/.pi/goals/` | goal state |
 | `<cwd>/.pi/pi-review/` (+ `pi-review.json`, `runs/<runId>/`) | review |
 | `<sessionDir>/observation-pack/<sessionId>/` | observation-pack originals |
+| `~/.pi/agent/core-compaction.json` | compaction controller settings (SC ST-02) |
 
 These are pinned by the contract suite (P0-CT-09) — treat them as frozen.
 

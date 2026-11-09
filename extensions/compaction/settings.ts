@@ -76,9 +76,15 @@ export interface CompactionSettings {
 	lambda: number;
 }
 
-/** Appendix C defaults (hypotheses until W2 calibration backfills them). */
+/**
+ * Appendix C defaults. mode: "shadow" is a TEMPORARY deviation (2026-11-09,
+ * DEVIATIONS.md): the §7.3 release gate requires M1 ≥ 0.90 but the W2 local
+ * replay measured 0.52 — per the gate rule the default ships as shadow until
+ * the gate is met (BLK 7/7 green; the miss is calibration-level, see
+ * docs/zh/compaction.md). mode:"on" remains a one-line flip.
+ */
 export const DEFAULT_COMPACTION_CORE_SETTINGS: CompactionSettings = Object.freeze({
-	mode: "on",
+	mode: "shadow",
 	precomputeRatio: 0.6,
 	applyRatio: 0.75,
 	targetPostRatio: 0.45,

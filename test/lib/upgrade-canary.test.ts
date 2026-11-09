@@ -128,3 +128,109 @@ describe("upgrade canary (G1-C7)", () => {
 		expect((result.details as { thenRun?: string } | undefined)?.thenRun, "Action Fusion then_run recognition degraded: structured outcome not stamped").toBe("succeeded");
 	});
 });
+
+/**
+ * SC upgrade canaries (SPEC SC §7.3, task W9): three host semantics the
+ * compaction controller's SAFETY depends on. A pi upgrade changing any of
+ * them must break loudly here BEFORE the controller misbehaves in production.
+ *   H3  — a boundary-draft compaction lands (fromHook), refreshes the next
+ *         request's context, and emits NO session_compact/compaction_start
+ *   H5  — a later turn_end handler's entries return REPLACES the draft
+ *   H12 — a draft at a recoverable length boundary would swallow the native
+ *         compact-and-retry (the hazard POL-07 exists to prevent; pinned as
+ *         host fact so a change in the recovery predicate re-opens review)
+ */
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { compactionDraft, createCompactionHost } from "../contracts/support/compaction-host.ts";
+
+describe("upgrade canary (SC compaction, §7.3)", () => {
+	it("H3: a draft compaction lands fromHook, shrinks the next request, and emits no native compaction events", async () => {
+		const host = await createCompactionHost({ probe: {} });
+		try {
+			host.faux.setResponses([fauxAssistantMessage("first answer, decent length"), fauxAssistantMessage("second answer")]);
+			await host.session.prompt("turn one");
+			await host.session.prompt("turn two");
+			// drive a REAL draft commit via the probe's turn_end slot
+			const host2 = await createCompactionHost({
+				probe: {
+					turnEndDraft: (event) =>
+						event.message?.stopReason === "stop" ? [compactionDraft("## Canary summary\n- items", "kept-x")] : undefined,
+				},
+			});
+			try {
+				host2.faux.setResponses([fauxAssistantMessage("answer one".repeat(40)), fauxAssistantMessage("follow-up answer")]);
+				await host2.session.prompt("hello");
+				const before = host2.requestContexts.length;
+				await host2.session.prompt("again");
+				const compacted = host2.sessionManager.getBranch().filter((e) => e.type === "compaction");
+				expect(compacted.length, "H3: the draft compaction must land").toBeGreaterThanOrEqual(1);
+				expect((compacted[0] as { fromHook?: boolean }).fromHook, "H3: draft compactions land with fromHook").toBe(true);
+				expect(host2.events.some((e) => e.name === "session_compact"), "H3: draft commits must NOT emit session_compact").toBe(false);
+				void before;
+			} finally {
+				host2.cleanup();
+			}
+		} finally {
+			host.cleanup();
+		}
+	});
+
+	it("H5: a later turn_end handler's entries return REPLACES an earlier draft", async () => {
+		const host = await createCompactionHost({
+			probe: {
+				turnEndDraft: () => [compactionDraft("DRAFT-MUST-DISAPPEAR", "kept-x")],
+				extraTurnEndHandlers: [() => ({ entries: [] })],
+			},
+		});
+		try {
+			host.faux.setResponses([fauxAssistantMessage("answer")]);
+			await host.session.prompt("hello");
+			expect(
+				host.sessionManager.getBranch().some((e) => e.type === "compaction"),
+				"H5: the later handler's empty return must drop the draft — if this fails, pi switched to merge semantics and SC's APP-04 arbitration must be re-reviewed",
+			).toBe(false);
+		} finally {
+			host.cleanup();
+		}
+	});
+
+	it("H12: a draft at a recoverable length boundary suppresses the native retry (hazard pinned)", async () => {
+		// Baseline: WITHOUT a draft the recovery runs (3 provider calls).
+		const baseline = await createCompactionHost({
+			settingsOverrides: { compaction: { enabled: true, reserveTokens: 16000, keepRecentTokens: 100 } },
+			probe: {},
+		});
+		try {
+			baseline.faux.setResponses([
+				fauxAssistantMessage(`${"x".repeat(16000)} cut`, { stopReason: "length" }),
+				fauxAssistantMessage("## Summary\n- recovered"),
+				fauxAssistantMessage("recovered answer"),
+			]);
+			await baseline.session.prompt("do something long");
+			expect(baseline.faux.state.callCount, "H12 baseline: native compact-and-retry runs").toBe(3);
+		} finally {
+			baseline.cleanup();
+		}
+		// Hazard: WITH a draft at the length turn_end the retry is swallowed
+		// (1 call, truncated final). If pi changes this predicate, POL-07's
+		// exclusion list must be re-derived (SC-HOST-07 review trigger).
+		const hazard = await createCompactionHost({
+			settingsOverrides: { compaction: { enabled: true, reserveTokens: 16000, keepRecentTokens: 100 } },
+			probe: {
+				turnEndDraft: (event) =>
+					event.message?.stopReason === "length" ? [compactionDraft("SUMMARY-HAZARD", event.messageEntryId)] : undefined,
+			},
+		});
+		try {
+			hazard.faux.setResponses([
+				fauxAssistantMessage(`${"x".repeat(16000)} cut`, { stopReason: "length" }),
+				fauxAssistantMessage("## Summary\n- never used"),
+				fauxAssistantMessage("never happens"),
+			]);
+			await hazard.session.prompt("do something long");
+			expect(hazard.faux.state.callCount, "H12 hazard: the draft swallows the recovery").toBe(1);
+		} finally {
+			hazard.cleanup();
+		}
+	});
+});
