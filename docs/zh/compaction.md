@@ -60,6 +60,12 @@ JSON 报告包含预压耗时/提前 token 量的 p50/p90、触发 threshold 兜
 `shadow` = 完全被动：不预压、不提议、不供稿——仅保留 FB-08 原生摘要审计
 （DEVIATIONS SC-5）。
 
+默认：**`on`**——2026-11-09 用户显式批准（DEVIATIONS SC-1 恢复条件②），
+属 user override 而非 gate 通过：回放事实保留（跨机合并 M1 = 39/50 = 0.78
+未达 0.90 全样本目标，可行子集 92.9%；第二台机器语料已补）、真机 H-SC
+待证据清单保留（SC-3）。自动降级不受影响；回滚一行
+（`PI_CORE_COMPACTION=shadow`）。
+
 **POL-07 提议闸（A1，2026-11-10 review 修复）**：draft 路径本身评估 apply-point
 安全性——从边界 branch 读**最后一条 assistant** 的 stopReason（同时覆盖
 `turn_end` 与 `agent_before_settle`）；`length` 边界永不提议，原生恢复不被吞。

@@ -77,14 +77,17 @@ export interface CompactionSettings {
 }
 
 /**
- * Appendix C defaults. mode: "shadow" is a TEMPORARY deviation (2026-11-09,
- * DEVIATIONS.md): the §7.3 release gate requires M1 ≥ 0.90 but the W2 local
- * replay measured 0.52 — per the gate rule the default ships as shadow until
- * the gate is met (BLK 7/7 green; the miss is calibration-level, see
- * docs/zh/compaction.md). mode:"on" remains a one-line flip.
+ * Appendix C defaults. mode: "on" ships as the default per the user's
+ * explicit approval on 2026-11-09 (DEVIATIONS.md SC-1, recovery clause ②) —
+ * this is a user override, NOT a gate pass: the W2 local replay fact stands
+ * (M1 = 0.52 < 0.90 target; BLK 7/7 green; real-machine H-SC evidence list
+ * still open, see DEVIATIONS SC-3). Automatic demotions are unaffected:
+ * native compaction disabled → shadow (POL-06), conflict-edit streak →
+ * shadow. Rollback stays one line: PI_CORE_COMPACTION=shadow or a settings
+ * file with mode:"shadow".
  */
 export const DEFAULT_COMPACTION_CORE_SETTINGS: CompactionSettings = Object.freeze({
-	mode: "shadow",
+	mode: "on",
 	precomputeRatio: 0.6,
 	applyRatio: 0.75,
 	targetPostRatio: 0.45,

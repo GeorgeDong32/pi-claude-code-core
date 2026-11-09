@@ -654,7 +654,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 			}
 			return undefined;
 		} catch (error) {
-			if (process.env.SC_DEBUG) console.error("[compaction] apply-point error:", error);
 			runtime.onApplyError(); // B5 (2026-11-10 review): APP-06 telemetry — emit itself is fail-open
 			return undefined; // APP-06: never throw into pi
 		}
@@ -738,7 +737,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 				snapshotHardFitPassed: runtime.state.phase === "ready" && initial.fit,
 			});
 
-			if (process.env.SC_DEBUG) console.error("[sc-debug] fallback decision:", decision.action, "reason:", event.reason, "phase:", runtime.state.phase, "hasSnapshot:", !!runtime.snapshot);
 			if (decision.action === "supply-snapshot" && runtime.snapshot) {
 				const snapshot = runtime.snapshot;
 				// RB4: reuse the summary gatesForSnapshot ALREADY composed —
@@ -794,10 +792,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 					return undefined;
 				}
 				const afterWait = gatesForSnapshot();
-				// R4 (2026-11-11 pre-release review): metadata only — logging
-				// `afterWait` whole would dump composed.summary into debug logs
-				// (INV-7: no summary/ledger bodies, even behind SC_DEBUG).
-				if (process.env.SC_DEBUG) console.error("[sc-debug] wait-path afterWait:", JSON.stringify({ gates: afterWait.gates, fit: afterWait.fit, estimate: afterWait.estimate }), "phase:", runtime.state.phase);
 				if (runtime.state.phase === "ready" && afterWait.gates && afterWait.fit && runtime.snapshot) {
 					const snapshot = runtime.snapshot;
 					const composed = afterWait.composed; // RB4: reuse the wait-gates compose
@@ -946,7 +940,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 				return undefined;
 			}
 			const kept = (projection.entries as ProjectedEntry[]).slice(cut.cut.firstKeptEntryIndex).flatMap((entry) => entry.messages);
-			if (process.env.SC_DEBUG) console.error("[sc-debug] regenerate summary produced, gating V8a");
 			const estimate = estimatePost({
 				summary: composedRegen.summary,
 				keptMessages: kept,
@@ -992,7 +985,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 	pi.on("session_start" as never, ((event: unknown, ctx: ExtensionContext) => {
 		try {
 			reloadSettings(ctx);
-			if (process.env.SC_DEBUG) console.error("[sc-debug] after reload: mode=", resolvedMode, "configured=", settings.mode, "p=", settings.precomputeRatio, "a=", settings.applyRatio);
 			abortInFlight();
 			runtime.onSessionReset();
 			nativeRecoveryPending = false;
@@ -1042,7 +1034,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 	}
 
 	pi.on("turn_end" as never, ((event: { entries?: unknown[]; message?: { stopReason?: string }; outcome?: string }, ctx: ExtensionContext) => {
-		if (process.env.SC_DEBUG) console.error("[sc-debug] turn_end handler INVOKED, stop=", event.message?.stopReason);
 		return onApplyPoint(event, ctx, true);
 	}) as never);
 

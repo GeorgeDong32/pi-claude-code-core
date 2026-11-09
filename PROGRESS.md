@@ -767,7 +767,7 @@ spec `../specs/design/DESIGN-MEMORY-V2.md`，报告 `../MEMORY-V2-REPORT.md`（�
 - **R1（P1）异步输入一致性**：摘要生成期间 `context_edit`/原生压缩落地时，快照基线（`branchPathIds`）原在**完成后**才记录，V4 识别不出中途编辑 → 修正前内容被重新提交。修复：基线改在读取摘要输入时固定（`launchCompute` 与 `regenerateNow` 一致），regenerate 提交前补 V1 前缀 + V4 编辑冲突校验，冲突走 `onFellthrough`（v1-branch-prefix / v4-conflict-edit）。真实宿主探针红→绿：`precheck=discard(v4-conflict-edit)`、无 precompute 落盘。
 - **R2（P1）继承指令丢源 + 假自检**：逐字指令不带来源后缀，跨轮解析回 `entryId:""`；预算折叠后生成死指针 `[# @?]` 丢尾部约束，LED-08 只查新指令仍报通过。修复：渲染行统一带 `[#entryId @time]` 尾缀；解析区分逐字/头折叠/纯指针（指针锚定行尾，行中 `[#id @t]` 保持字面）；无来源旧行折叠地板为头、绝不造空指针；LED-08 覆盖新+继承指令。默认预算下 25 条新指令场景原文尾部约束不再静默消失（保留可回溯指针）。
 - **R3（P1）伪造台账遮蔽**：`<read-files>`/`<modified-files>` 段（LLM 原文）直拼在真台账块后，伪造块因"取最后一个完整块"规则遮蔽真块，下一轮只继承伪造指令。修复：`composeFinalSummary` 对文件清单段同样 `sanitizeLedgerLine` 中和标签。真实宿主探针：提交摘要恰 1 个活体台账块、伪造指令不进入继承。
-- **R4（P2）INV-7 调试泄漏**：`SC_DEBUG=1` 时 wait-path 日志 JSON.stringify 整个 `afterWait`（含 `composed.summary` 正文）。修复：白名单元数据（phase/reason/布尔/计数/id），不序列化正文。
+- **R4（P2）INV-7 调试泄漏**：`SC_DEBUG=1` 时 wait-path 日志 JSON.stringify 整个 `afterWait`（含 `composed.summary` 正文）。修复演进：先白名单元数据，发版时随 default-on 把 6 处 SC_DEBUG 探针**全量移除**——调试面不再可能写出正文；契约断言改为"零调试输出 + 正文哨兵不落盘 + fallback-start 指标证明 wait-path 真实到达"。
 - **归因措辞修正**：跨机回放"3 次遗漏=回放近似、非控制器缺陷"结论过强——`tokensBefore` 为压缩点上下文量而非配置阈值，跨度不能证明真实触发点更低。docs en/zh、DEVIATIONS SC-1 增补、本文件历史节统一改为"未归因，待真机原因码裁决"。
 - **测试钉档**：`test/contracts/compaction-integrity.test.ts`（3 例，R1/R3/R4，README 已登记）；`ledger.test.ts` 新增 R2 往返/legacy 地板用例并改写 LED-08 空 id 用例（head 地板通过 vs +K 坍缩失败）。
 - **验证**：四个 /tmp 探针（race/ledger/file-tag/privacy）修复后全绿（exit 0）；ledger 34/34；新契约 3/3；四门全绿——check OK，unit 82 vitest 文件 + 987 node:test（compaction 135/135），contracts 18 文件 108 passed + 4 todo，canary 5/5。

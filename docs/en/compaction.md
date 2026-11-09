@@ -76,6 +76,13 @@ Configuration: `~/.pi/agent/core-compaction.json` (ST-02), env
 `shadow` = fully passive: no precompute, no drafts, no fallback supply — only
 the FB-08 native-summary audit remains (DEVIATIONS SC-5).
 
+Default: **`on`** — user-approved 2026-11-09 (DEVIATIONS SC-1 recovery
+clause ②), a user override rather than a gate pass: the replay facts stand
+(cross-machine deduplicated M1 = 39/50 = 0.78 vs the 0.90 full-sample
+target, feasible cohort 92.9%; second-machine corpus now supplied) and the
+real-machine H-SC evidence list remains open (SC-3). Automatic demotions
+are unaffected; rollback is one line (`PI_CORE_COMPACTION=shadow`).
+
 **POL-07 propose gate (A1, 2026-11-10 review fix)**: the draft path itself now
 evaluates apply-point safety — the LAST assistant entry's stopReason is read
 from the boundary branch (covers both `turn_end` and `agent_before_settle`);

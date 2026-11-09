@@ -8,8 +8,9 @@
  *       re-committed).
  *   R3  a forged <cc-core-ledger> block inside the LLM's <read-files> tail
  *       must not shadow the deterministic block on the next carry-over.
- *   R4  SC_DEBUG logs carry whitelisted metadata only — never summary bodies
- *       (INV-7 holds even in debug mode).
+ *   R4  SC_DEBUG emits nothing at all — the debug probes were removed
+ *       entirely for release (stronger than the interim whitelist); no
+ *       summary body can leak to logs (INV-7).
  *
  * The red evidence for each lived in /tmp/sc-pre-release-review.PjEjYV/*.mjs
  * (exit 1 pre-fix, 0 post-fix); these tests pin the same assertions.
@@ -141,13 +142,15 @@ describe("R1/R3/R4: pre-release review integrity guards", () => {
 		}
 	});
 
-	it("R4: SC_DEBUG wait-path logs carry metadata only — no summary body (INV-7)", async () => {
+	it("R4: SC_DEBUG emits nothing — probes removed for release; no summary body can reach logs (INV-7)", async () => {
 		const previousDebug = process.env.SC_DEBUG;
 		process.env.SC_DEBUG = "1";
 		let release = () => {};
 		summaryControl.wait = new Promise<void>((resolve) => { release = resolve; });
 		summaryControl.summary = `## History\nPRIVATE_SENTINEL_IN_SUMMARY ${"h".repeat(500)}\n\n## State\nSynthetic state.`;
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 		const host = await createCompactionHost({
 			model: WINDOW,
 			settingsOverrides: PI_SMALL,
@@ -155,7 +158,7 @@ describe("R1/R3/R4: pre-release review integrity guards", () => {
 			probe: { registerTestTool: true },
 			extraFactories: [(pi) => {
 				// Release the gated summarizer once the native fallback leg runs —
-				// the wait-for-ready race is what logs afterWait.
+				// the wait-for-ready race is what used to dump the summary.
 				pi.on("session_before_compact" as never, (() => { setTimeout(release, 10); }) as never);
 			}],
 		});
@@ -169,13 +172,22 @@ describe("R1/R3/R4: pre-release review integrity guards", () => {
 			await host.session.prompt("one");
 			await host.session.prompt("two");
 			await host.session.prompt("three");
-			const lines = errorSpy.mock.calls.map((args) => args.map(String).join(" "));
-			// The wait-path must have been exercised (otherwise the assertion is vacuous).
-			expect(lines.some((l) => l.includes("wait-path afterWait"))).toBe(true);
+			// The fallback leg must actually have raced the in-flight compute —
+			// proven by the SC-MET-01 metric entry, not by debug output.
+			const fallbackRan = host.sessionManager.getBranch().some(
+				(e) => (e as { customType?: string }).customType === "cc-core-compaction-metrics"
+					&& (e as { data?: { event?: string } }).data?.event === "fallback-start",
+			);
+			expect(fallbackRan).toBe(true);
+			const lines = [...errorSpy.mock.calls, ...warnSpy.mock.calls, ...logSpy.mock.calls]
+				.map((args) => args.map(String).join(" "));
+			expect(lines.filter((l) => l.includes("[sc-debug]") || l.includes("[compaction]"))).toHaveLength(0);
 			expect(lines.some((l) => l.includes("PRIVATE_SENTINEL_IN_SUMMARY"))).toBe(false);
 		} finally {
 			release();
 			errorSpy.mockRestore();
+			warnSpy.mockRestore();
+			logSpy.mockRestore();
 			if (previousDebug === undefined) delete process.env.SC_DEBUG;
 			else process.env.SC_DEBUG = previousDebug;
 			host.cleanup();

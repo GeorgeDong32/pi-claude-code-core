@@ -1,5 +1,17 @@
 ## [未发布] — Smart Compaction(SC,spec 2026-11-08-smart-compaction-takeover.md)
 
+### Changed — compaction default takeover ON (user-approved 2026-11-09)
+
+- `extensions/compaction` 默认 `mode:"shadow"` → `"on"`:用户显式批准
+  (DEVIATIONS SC-1 恢复条件②)。**user override,非 gate 通过**——跨机
+  合并回放 M1=39/50=0.78<0.90 事实保留、真机 H-SC 待证据清单保留
+  (DEVIATIONS SC-3)。自动降级不变(原生禁用→shadow、conflict-edit→
+  shadow);回滚一行 `PI_CORE_COMPACTION=shadow`。新增 settings 测试钉住
+  default-on。
+- 移除 `SC_DEBUG` 调试探针(index.ts 6 处 console.error;仅调试输出,
+  无行为影响)。
+
+
 - **新增第 14 个模块 `extensions/compaction`**:接管式智能压缩控制器。
   - 后台与主对话并行预生成摘要(`precomputeRatio` 启动),在安全边界
     (POL-07:`turn_end`/`agent_before_settle`,排除 length/error/aborted 与
@@ -16,8 +28,9 @@
     恰好触发一次(原生路径行为不变)。
   - 配置 `~/.pi/agent/core-compaction.json` + `PI_CORE_COMPACTION` +
     `/compaction [status|mode …]`;ST-01 遥测 entry `cc-core-compaction`。
-  - **默认 `shadow` 发布**(发布门槛 M1=0.52<0.90 的临时偏离,见
-    DEVIATIONS.md SC-1);BLK-1…5 阻断性用例 7/7 全绿(真实 AgentSession)。
+  - **默认 `on` 发布**(曾按发布门槛 M1<0.90 临时以 shadow 发布,
+    2026-11-09 用户显式批准回 on,见 DEVIATIONS.md SC-1);
+    BLK-1…5 阻断性用例 7/7 全绿(真实 AgentSession)。
 - 升级金丝雀 +3:SC-HOST-03(draft 提交覆盖 entries 语义)、H3(draft 落盘
   无 session_compact)、H12(length 恢复谓词)。
 
@@ -45,7 +58,8 @@
   头部保留、不再生成死指针 `[# @?]`；LED-08 自检覆盖新指令与继承指令。
 - `<read-files>`/`<modified-files>` 段同样中和台账标签——LLM 输出中的伪造
   `<cc-core-ledger>` 块不能遮蔽真块污染下一轮继承。
-- `SC_DEBUG` wait-path 日志改为白名单元数据，不再序列化摘要正文（INV-7）。
+- `SC_DEBUG` wait-path 日志原为白名单元数据修复，发版时进一步将 SC_DEBUG
+  探针全量移除——调试面不再可能写出摘要正文（INV-7）。
 
 ### Fixed — compaction review Batch D (2026-11-10)
 
