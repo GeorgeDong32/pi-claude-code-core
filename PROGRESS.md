@@ -665,3 +665,13 @@ spec `../specs/design/DESIGN-MEMORY-V2.md`，报告 `../MEMORY-V2-REPORT.md`（�
 - **测试** 上游 10 套件 node:test 全量移植（270 tests，framework-follows-origin），适配 HOME 注入（原 XDG_STATE_HOME）与新命名；`run-tests.mjs` 收录 `extensions/bg-shell/tests`。
 - **契约** `BG-DISK-01`（logs 布局）+ `BG-MSG-02`（completion customType `cc-core-bg-shell`）先登记 `test/contracts/README.md` 再落测试。
 - **三门禁** check 0 / 全量 0 fail（含 bg-shell 270）/ contracts 46 pass + 3 todo。
+
+## Smart Compaction W0（SC，2026-11-09）—— 契约 + 宿主保真 + 阻断性用例 + spike 回填
+
+- **契约先行**：SC-HOST-01…10 / SC-ENT-01 / SC-SUM-01 / SC-CFG-01 / SC-ENV-01 全量登记 `test/contracts/README.md`（INV-10/AGENTS 不变量 6），宿主事实测试随后落地。
+- **宿主保真脚手架** `test/contracts/support/compaction-host.ts`（H16 配方）：fauxProvider + ModelRuntime.registerNativeProvider + createAgentSession + SessionManager.inMemory + 仅测试深导入 loadExtensionFromFactory；事件全录探针（S1⑦ 对账触发集观测用）。
+- **契约测试**：H1/H3/H5/H6/H7/H8/H12–H15 全部钉住（`compaction-{support,boundary,native,recovery,summarizer}.test.ts`）；探测不可行者零新增 todo（既有 4 todo 不变）。
+- **BLK-1…5**：基线全部落地且绿（含 BLK-2 a/b/c、BLK-4 四格矩阵、瞬时重试重入）；保护断言 7 条以 `it.fails` 钉在 `compaction-protection.test.ts`（W3/W4 落地后逐条翻绿）。
+- **S1–S5 回填 spec**：§4.3 结论表（S1 通过→turn_end 落盘成立，降级路径未触发；S2 差分逐项相等；S3 端点合规留待证据；S4 通过；S5 行为表入 §5.9a）+ 夹具层 5 条新宿主事实。
+- **S1⑦ 修正**：run 末提交后第一个可见事件 = `agent_end`（冒烟脚本未订阅所致的记录偏差，§5.2 触发集已覆盖，无需改需求）。
+- **三门禁**：check 0 错；unit 276 pass；contracts 90 pass + 4 todo（既有）。

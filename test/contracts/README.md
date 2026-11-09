@@ -44,6 +44,29 @@
 
 | **CB2-B6** 钉 `AgentEndEvent` **当前无 willRetry 字段**（编译期 keyof-extends 断言——红灯亮在 check 的契约 tsc pass；运行时套件恒绿）+ 三个压缩事件（session_before_compact/session_compact/session_compact_failed）带 willRetry 且语义为 overflow recovery 重试。上游引入 agent_end.willRetry 时本契约变红 → 触发 B6 激活评估（逐 agent_end 消费点回答「终态结算是否并入 pre-retry 碎片」——评估记录在 docs/{en,zh}/cherry-batch2-spec.md §B6） | CB2-B6(spec docs/{en,zh}/cherry-batch2-spec.md) | goal 记账 / modes idle-reset / memory automation（激活评估对象） | pi 正式引入 agent_end willRetry 后随激活评估改写 |
 
+## Smart Compaction（spec SC 2026-11-08-smart-compaction-takeover.md，W0 登记 2026-11-09）
+
+宿主事实契约（§8；宿主保真脚手架 = `test/contracts/support/compaction-host.ts`，H16 配方）：
+
+| 契约 | spec ID | 消费方 | 移除条件 |
+|---|---|---|---|
+| 宿主：`session_before_compact` 返回 `{compaction}` → 跳过摘要 LLM 且照常发 `session_compact`；多 handler"最后非空者胜、仅 cancel 提前返回" | SC-HOST-01 | compaction 供稿腿 | pi 改语义时随版本改写 |
+| 宿主：boundary draft `compaction` 经 `appendCompaction(fromHook)` 落盘、刷新下一回合上下文、**不发** `session_compact`/`compaction_start\|end`；`entry_appended`/`compaction_start\|end` 不在扩展事件集中 | SC-HOST-02 | compaction 落盘路径、seam | pi 对 draft 压缩补发事件时 → 本契约变红 → 评估 seam 去重 |
+| 宿主：`emitBoundary` 的 `entries` 为"最后返回者覆盖"，事件携带累计 `entries`；所有 handler 跑完后统一提交（后序 handler 可覆盖/追加，含 `context_edit`） | SC-HOST-03 | compaction 提议（`[...event.entries, draft]`）、对账 | pi 改为合并语义时 |
+| 宿主：`ctx.getContextUsage().tokens` 在压缩后、下一次 assistant 响应前为 `null` | SC-HOST-04 | compaction policy（POL-04） | — |
+| 宿主：公开导出集合（含 `compact`/`generateSummaryWithUsage`/`SettingsManager`/`estimateTokens`/`findCutPoint`/`createAgentSession`）与 **`prepareCompaction` 非公开**（informational：若变公开，可删自建 builder） | SC-HOST-05 | compaction preparation、W0 脚手架 | pi 公开 `prepareCompaction` 时 |
+| 宿主：`SettingsManager.create(cwd).getCompactionSettings(model)` 的 `modelOverrides` 解析（键 `provider/id`，含斜杠） | SC-HOST-06 | compaction policy（POL-01） | pi 暴露 settings 给 ctx 时 |
+| 宿主：**截断/overflow 恢复的时间戳判旧**——最后一条 assistant 早于最新 compaction 时 `_checkCompaction` 跳过恢复；`turn_end.outcome` 把 `stopReason:"length"` 归为 `completed`；`agent_before_settle` 在 `_checkCompaction` 之后触发（BLK-1 的基线） | SC-HOST-07 | compaction POL-07（INV-11） | pi 改恢复判据时 → 红 → 重审 POL-07 |
+| 宿主：**不校验**扩展提供的压缩结果是否装得下（`session_before_compact` 返回值与 boundary draft 均照单全收；BLK-3 基线） | SC-HOST-08 | compaction V8a（INV-12） | pi 增加容量校验时 → 红 → 可放宽 V8a 为 informational |
+| 宿主：**`compact()` 调用面**——可选 `streamFn` 为唯一逐调用观测/注入点；`thinkingLevel:"off"` 仅省略 `reasoning` 参数；无 `maxTokens` 参数；length/error 抛错而 stop+空正文（reasoning-only）放行；split-turn 两次调用与固定合并分隔；两类调用的提示开头形态（`<conversation>` / `# Conversation`） | SC-HOST-09 | compaction summarizer、SUM-03/04/09 | pi 改 compact 内部形态时 → 红 → SUM-09 降级路径生效 |
+| 宿主：**`context_edit` 仅作用于投影内条目**（针对被压区条目的编辑无效果）；`entry_appended` 不在扩展事件集中 | SC-HOST-10 | compaction V4/APP-08、对账 | pi 向扩展暴露提交事件时 → 红 → 对账可简化 |
+| session entry `cc-core-compaction`（display-only；data 见 ST-01，customType 与字段集冻结） | SC-ENT-01 | core 自身、`/compaction status`、回放工具 | 机制下线时 |
+| 摘要内台账块 `<cc-core-ledger v="1">…</cc-core-ledger>` 与 `CompactionEntry.details.ccCore`（`v:1`）——**写入用户会话数据，格式冻结** | SC-SUM-01 | compaction（LED-02b 继承）、回放工具 | 永不静默破坏；升级走新版本号 |
+| 磁盘：`~/.pi/agent/core-compaction.json`（键集见 ST-02） | SC-CFG-01 | compaction settings | 冻结 |
+| 环境变量 `PI_CORE_COMPACTION=off\|shadow\|on` | SC-ENV-01 | compaction settings | — |
+
+SC-ENT-01/SC-SUM-01/SC-CFG-01/SC-ENV-01 的**行为**由 W1（settings/env 单测）与 W3（遥测 entry 单测）落地时钉住；W0 已先在本表登记（INV-10）。宿主事实测试位置：`test/contracts/compaction-*.test.ts`；阻断性用例（BLK-1…5）基线与 expected-fail 保护断言同在其中（spec §4.4）。
+
 维护规约:
 - 新契约必须先在此表登记再写测试;删契约先删表行并注明版本。
 - todo 逃生门(P0-CT-13):跑不通的用例 `test.todo` 且必须带去向 Phase 编号,禁止静默丢弃。

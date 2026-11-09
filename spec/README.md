@@ -8,7 +8,7 @@
 
 | spec | 内容 | 状态 |
 |---|---|---|
-| [Smart Compaction — 接管式压缩控制器](2026-11-08-smart-compaction-takeover.md) | 第 14 个模块 `extensions/compaction/`：后台预压 + 语义切点 + 确定性台账（含 rex-flow orchestrator 档）+ boundary draft **提议并经对账确认提交**，原生仅兜底（供稿腿同样受硬容量闸）；含 W0–W9 派工拆分、阻断性宿主用例 BLK-1…5 与验收矩阵 | READY（v2.1，可派 W0；已吸收评审 R1 与开放点 O1/O2，宿主冒烟见该 spec §4.4 末）；旧草案 [候选 A](2026-11-08-smart-compaction.md) 已被取代 |
+| [Smart Compaction — 接管式压缩控制器](2026-11-08-smart-compaction-takeover.md) | 第 14 个模块 `extensions/compaction/`：后台预压 + 语义切点 + 确定性台账（含 rex-flow orchestrator 档）+ boundary draft **提议并经对账确认提交**，原生仅兜底（供稿腿同样受硬容量闸）；含 W0–W9 派工拆分、阻断性宿主用例 BLK-1…5 与验收矩阵 | W0 已交付（2026-11-09：S1–S5 回填、BLK 基线+expected-fail 钉住、契约登记、三门绿）；W1/W5 可派；旧草案 [候选 A](2026-11-08-smart-compaction.md) 已被取代 |
 
 ## 实际状态与续做范围
 

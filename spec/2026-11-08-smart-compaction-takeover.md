@@ -3,7 +3,7 @@
 | 项 | 值 |
 |---|---|
 | 日期 | 2026-11-08 |
-| 状态 | **READY（v2.1，2026-11-09）— 可派 W0**；其余任务按 §6 批次、经 W0 的阻断性门禁推进。v2.1 = R1 评审修订（附录 D）+ 用户补充开放点 O1/O2 + 2026-11-09 真实宿主冒烟（S1 / BLK-1 / BLK-2 已复现，§4.4 末）。§4.3/§4.4 余下 spike 与阻断性用例由 W0 回填 |
+| 状态 | **READY（v2.1，2026-11-09）— W0 已交付**（2026-11-09：S1–S5 结论回填 §4.3/§5.9a、BLK-1…5 基线+expected-fail 保护断言落地、契约 §8 全登记；三门全绿）。其余任务按 §6 批次推进（W1/W5 可派）。v2.1 = R1 评审修订（附录 D）+ 用户补充开放点 O1/O2 + 2026-11-09 真实宿主冒烟（S1 / BLK-1 / BLK-2 已复现，§4.4 末） |
 | 目标仓 | pi-claude-code-core（新模块 `extensions/compaction/`，第 14 个模块） |
 | 宿主 | pi `@earendil-works/pi-coding-agent` **1.5.0**（本 spec 的宿主事实均在此版本核实） |
 | 取代 | [`2026-11-08-smart-compaction.md`](2026-11-08-smart-compaction.md)（候选 A 草案，未实施；其 §2 的 pi 源码取证仍可参考） |
@@ -148,6 +148,25 @@
 | **S4** | `SettingsManager.create(cwd)` 在扩展内可用，且 `getCompactionSettings(model)` 与 pi 自身一致（含 modelOverrides、project 级 settings） | 单测：对用户真实形态的 settings（`modelOverrides` 里 `provider/id` 含 `/`）与 pi 实际阈值一致 | 若创建有副作用（写文件/锁）→ 改为只读解析 `~/.pi/agent/settings.json` + `<cwd>/.pi/settings.json`（`lib/settings.ts` 的 `readJson`）并复刻 override 解析，差分测试对拍 |
 | **S5** | 审计 goal/modes/memory/recall 的压缩钩子在 draft 路径下的正确行为，产出**逐订阅方行为表**（`before`/`after` 各做什么、`midRun` 时哪些必须跳过、**"before 之后提议丢失（无 after）"时是否有残留副作用**，尤其 goal 的 `queueContinuation` 与 post-compact reminder 的消费点） | 行为表入本 spec；无"双触发 / 漏触发"；"before 无 after"路径无不可逆副作用 | 无（W5 的实现直接以此表为准；表与 §5.9 默认值冲突时以表为准并更新 §5.9） |
 
+#### §4.3 结论回填（W0，2026-11-09；全部在 pi 1.5.0 真实 `AgentSession` + faux provider 或公开纯函数上取得，自动化固化于 `test/contracts/compaction-*.test.ts` 与 `test/spikes/compaction-*`）
+
+| ID | 结论 | 证据去向 | 触发的降级路径 |
+|---|---|---|---|
+| **S1** | **通过（turn_end 与 agent_before_settle 均可落盘）**。①分支出现 `compaction` 条目（`fromHook:true`、`tokensBefore` 由宿主按投影重估——draft 不携带该字段）；②同一 run 下一次 provider 请求上下文缩为 `system, user(=摘要), assistant, toolResult`，工具调用/结果配对未切开；④无 `session_before_compact`/`session_compact`，且 `entry_appended`/`compaction_start\|end` 不在扩展事件集中（类型级钉住）；⑤排队中的 steer 与 followUp 均不丢（steer 进入提交后首次请求；followUp 在 settle 边界作为 continuation 消费或落为独立 user 条目，精确交错属宿主队列机制、非本契约）；⑥`/resume` 投影：以分支条目重建的新 `SessionManager` 投影正确（`system, compactionSummary, …`）；⑦**draft 提交后第一个对扩展可见的事件：run 末提交 = `agent_end`（随后 `agent_before_settle`、`agent_settled`），回合中途提交 = `turn_start`**——均在 §5.2 默认对账触发集内，触发集无需调整 | `compaction-boundary.test.ts`（SC-HOST-02/03/10）；`compaction-recovery`（部分） | **无**——预批的"仅 agent_before_settle"与"ctx.compact 改造"两条降级路径均未触发；`turn_end` 作为 apply 点成立（仍受 POL-07 安全条件约束） |
+| **S1 附属差异（对 §4.4 冒烟记录的修正）** | 一次性冒烟脚本未订阅 `agent_end`，故记"run 末提交后第一个可见事件 = agent_settled"；W0 全事件探针实测为 **`agent_end`**。不改变任何需求（§5.2 触发集已含 `agent_end`），仅修正观察 | `compaction-boundary.test.ts` 文件头注释 + 本行 | — |
+| **S2** | **通过**。公开件（`buildSessionProjection` + `findCutPoint`）构造的 hand preparation 与 dist 内部 `prepareCompaction` oracle 在 `firstKeptEntryId`/`isSplitTurn`/`messagesToSummarize`/`turnPrefixMessages` 上**逐项相等**；`compact()` 接受手工结构（split 时两次子调用）。`previousSummary`/`fileOps` 的差分需要"带前次压缩 + 文件工具调用"夹具与 fileOps 提取复刻，归 W3 的 SUM-01/02 差分测试所有（本夹具两者皆空、天然相等） | `compaction-summarizer.test.ts`（SC-HOST-05）；spike `compaction-summarizer-smoke.ts` | **无**（`compact()` 未拒绝手工结构，未触发范围扩大） |
+| **S3** | **夹具复现通过；注入力学通过；真实端点合规 = 待证据项**。E3 在两层复现：宿主层（原生阈值压缩 + reasoning-only 摘要响应 → 落盘仅剩固定分隔样板，BLK-5 基线）与纯函数层（BLK-4 矩阵）。(a) `thinkingLevel:"off"` 时 `options` 不含 `reasoning` 键（faux 实测；端点是否仍自行推理待真机）；(b) streamFn 包装器在 `options` 注入 `maxTokens` 类型合法（pi-ai `StreamOptions.maxTokens`）且委托方可见——**注入点成立，端点遵守与否待真机**。待证据恢复条件：W9 在 CPA/GLM/MiniMax/OpenAI 兼容端点各跑一次受控摘要（关 thinking / 注入限额 → 输出为正文且不截断）；不可行则按 §4.3 S3 预批处理（`summaryThinking` 改 `minimal` / `maxTokens` 视为不可控） | `compaction-native.test.ts`（H10 基线）；`compaction-summarizer.test.ts`（S3 力学）；`compaction-summarizer-smoke.ts` | 部分（见"待证据项"） |
+| **S4** | **通过**。`SettingsManager.create(cwd, agentDir)` 仅读（创建与 getCompactionSettings 不落任何文件）；`modelOverrides` 键 = `provider/id`（含斜杠），解析序 override > ordinary > 内建默认（16384/20000）；与 pi 自身阈值一致：`shouldCompact(tokens, window, settings)` 边界恰为 `window − 有效 reserveTokens`。无需切换到只读解析复刻方案 | `compaction-support.test.ts`（SC-HOST-06） | **无** |
+| **S5** | **行为表已产出**（回填 §5.9）。要点：draft 路径下三订阅方现有 pi 钩子均不触发（H3/H11 成立，契约钉住）；goal 的 after 动作含三个"before 无 after 时不可取"的副作用（`beginAccounting` 时钟段重置、post-compact reminder 误武装、`queueContinuation` 多余续跑）——W5 seam 必须仅在 committed 后通知 after，且 `midRun` 跳过 `queueContinuation`（SM-03）；memory 的 before（staging）对"before 无 after"幂等无害（同 sessionId 队列合并 + shutdown 兜底再 staging）；modes 的 after 全幂等 | §5.9 表 + `compaction-boundary.test.ts`（draft 路径无 session_compact 事件） | **无** |
+
+**夹具层新发现的宿主事实（W0，供 W3/W4 写测试时引用）**：
+
+1. **会话质量必须超过 `keepRecentTokens`**：`prepareCompaction` 在总内容不足时返回 `undefined`，发生在**任何事件/落盘之前**（`_runAutoCompaction` 在 emit `compaction_start` 前就 return false）——压缩类夹具若太小会"静默无事发生"，与被测行为无关。
+2. **合成 usage 必须带 `cost` 对象**：split-turn 合并调 `combineUsage`，其直接解引用 `usage.cost.input`——缺 `cost` 的合成 usage 会让 `compact()` 抛 `TypeError`（宿主未做防御）。
+3. **`retryAssistantCall` 只重试"响应"不重试"异常"**：包装器要以 stopReason:"error" + retryable errorMessage 的 AssistantMessage **返回**模拟瞬时失败；抛出的异常直接穿透。
+4. **供稿路径的 entry 字段名是 `fromHook`**（`session_compact` 事件上才是 `fromExtension`）：`appendCompaction(..., fromHook)` 的第 5 参在 `_runAutoCompaction` 里传的是 fromExtension 值。
+5. **宿主接受不存在的 `firstKeptEntryId`**（供稿与 draft 均照单全收，投影退化为"仅摘要"）——BLK-3 家族的又一形态，V3 的合法性校验因此必要。
+
 ### 4.4 阻断性用例（W0 必须交付；**任何一条红 → 冻结 W3/W4/W5 不得开工，且不得 `test.todo` 豁免**；若某条在 pi 1.5.0 下不可构造，须回报用户而非降级）
 
 全部在进程内用真实 `AgentSession` + faux provider + 真实 `SessionManager` 实现（H16），放 `test/contracts/compaction-*.test.ts`。每条同时包含"**无保护基线**"（证明风险真实存在，宿主确实如此）与"**有保护断言**"（证明本 spec 的规则能挡住）。W0 先做基线，因为基线即对宿主事实的钉住。
@@ -164,7 +183,7 @@
 
 | 场景 | 观察 | 对应 |
 |---|---|---|
-| S1：run 末回合 `turn_end` 返回 compaction draft（`stop`） | jsonl 出现 1 条 `compaction`（`fromHook:true`）；**无** `session_before_compact`/`session_compact`；投影变为 `system, compactionSummary, assistant`；提交后第一个可见事件 = `agent_settled` | S1①④、H3 |
+| S1：run 末回合 `turn_end` 返回 compaction draft（`stop`） | jsonl 出现 1 条 `compaction`（`fromHook:true`）；**无** `session_before_compact`/`session_compact`；投影变为 `system, compactionSummary, assistant`；提交后第一个可见事件 = `agent_settled`（**W0 修正：全事件探针下实为 `agent_end`，见 §4.3 结论表附行**） | S1①④、H3 |
 | S1（回合中途）：工具回合 `turn_end`（`toolUse`）返回 draft | 同一 run 的**下一次 provider 请求**上下文由 12 条缩到 4 条（`user(=摘要), assistant, toolResult` + system）；工具调用/结果配对未被切开；提交后第一个可见事件 = `turn_start` | S1②⑦、H4、§5.2 对账触发集 |
 | BLK-1 基线：`stopReason:"length"`（可恢复）、**无** draft | `turn_end.outcome=completed`；原生触发 `session_before_compact(reason:"overflow", willRetry:true)` → `session_compact` → 重试回合；provider 调用 3 次 | H12 |
 | BLK-1 hazard：同上但 `turn_end` 返回 draft | **原生恢复被吞**：无 `session_before_compact`、无重试，provider 调用 1 次，最终助手消息停在被截断的 `length` | H12、POL-07、INV-11 |
@@ -172,6 +191,8 @@
 | BLK-2(b)：后序 handler 追加 `context_edit`（targetId=被压区条目，`replacement:null`） | compaction 照常提交；该编辑对投影**无效果**（投影仍为 `system, compactionSummary, assistant`），被编辑内容已在摘要里 | H15、V4'/APP-08 |
 
 未覆盖、留给 W0：`agent_before_settle` 落盘、steer/follow-up 排队不丢、`/resume`、PTY 下 TUI 摘要行、BLK-3（小窗口过大旧快照）、BLK-4（逐子调用校验）、BLK-5。
+
+**W0 落地记录（2026-11-09）**：BLK-1…5 **全部在 pi 1.5.0 下可构造**，基线与保护断言已固化——基线（宿主行为钉住，绿）在 `test/contracts/compaction-{boundary,native,recovery,summarizer}.test.ts`；保护断言（W3/W4 实现后转绿）以 `it.fails` 钉在 `test/contracts/compaction-protection.test.ts`（7 条，BLK-2 拆 a/b/c）。上表冒烟结果全部复现一致，唯一修正见 §4.3 附行（run 末提交后第一个可见事件 = `agent_end` 而非 `agent_settled`，系冒烟探针未订阅该事件）。留 W0 之外的仅剩：PTY 下 TUI 摘要行与无 spinner（③，W9 真机）与磁盘 jsonl 序列化（W0 用 `SessionManager.inMemory` 证明 appendCompaction/投影路径；同一 appendCompaction 代码负责落盘，真机 jsonl 由 W9 复核）。
 
 ---
 
@@ -216,7 +237,7 @@ ready ──(前置校验失败 / session_tree / 窗口变化 / 快照过大)─
 任意 ──(session_shutdown / session_start)──► 中止在途任务并重置（generation++，晚到结果一律丢弃）
 ```
 
-**对账（reconcile）**：`entry_appended` 对扩展不可见（H3），因此在 draft 返回后的**第一个对扩展可见的事件**上（触发集由 S1⑦ 确定，默认 `turn_start`/`context`/`before_provider_request`/`agent_end`/`agent_before_settle`/`agent_settled`/`input`/`session_before_compact`/`session_tree`/`session_shutdown` 的并集，取最先到达者）同步扫描 `ctx.sessionManager.getBranch()` 自叶向前至多 `reconcileScanMax`（默认 50）条：命中 `type==="compaction"` 且 `details.ccCore.proposalId` 相等 → committed；扫描范围内无命中 → lost。committed 时附加审计（V4'：见 APP-08）。**冒烟观察（§4.4）**：回合中途提交后第一个可见事件是 `turn_start`，run 末回合提交后是 `agent_settled`，二者都在默认触发集内；后序 handler 覆盖 draft 时**没有任何事件告知**（BLK-2(a)），对账是唯一的发现途径。
+**对账（reconcile）**：`entry_appended` 对扩展不可见（H3），因此在 draft 返回后的**第一个对扩展可见的事件**上（触发集由 S1⑦ 确定，默认 `turn_start`/`context`/`before_provider_request`/`agent_end`/`agent_before_settle`/`agent_settled`/`input`/`session_before_compact`/`session_tree`/`session_shutdown` 的并集，取最先到达者）同步扫描 `ctx.sessionManager.getBranch()` 自叶向前至多 `reconcileScanMax`（默认 50）条：命中 `type==="compaction"` 且 `details.ccCore.proposalId` 相等 → committed；扫描范围内无命中 → lost。committed 时附加审计（V4'：见 APP-08）。**冒烟观察（§4.4；W0 修正：run 末首个可见事件实为 `agent_end`，见 §4.3 附行）**：回合中途提交后第一个可见事件是 `turn_start`，run 末回合提交后是 `agent_settled`（冒烟探针未订阅 `agent_end`），二者都在默认触发集内；后序 handler 覆盖 draft 时**没有任何事件告知**（BLK-2(a)），对账是唯一的发现途径。
 
 不变量：单飞（同一会话至多一个 computing）；`ready` 快照在 `proposed` 期间保持不可再提议，**仅在 committed/lost 时消耗**（INV-5）；discarded/lost 后至少隔 `minPrecomputeGapTurns` 个回合才可再次 computing；`generation` 计数使任何旧任务的晚到完成/对账结果被忽略（FB-07）。
 
@@ -379,6 +400,18 @@ draft 路径不触发 pi 压缩事件（H3/H11）。`lib/compaction-seam.ts` 提
 | SM-03 | **goal 在 `midRun:true` 时不得 `queueContinuation`**（run 仍在继续，重复排队会产生多余回合）；post-compact reminder 的消费行为以 S5 行为表为准 | 集成测试 + S5 表 |
 | SM-04 | modes：`statsPresenter.invalidate()`、bypass 安全提醒、`persistState` 在 draft **已提交**后（after）同样发生；memory：`stageUnextractedTail` 在提议返回前（`before`）发生 | 集成测试 |
 | SM-05 | 既有订阅方测试**不改期望**即全绿（行为保持证明） | `pnpm run test` |
+
+#### §5.9a S5 逐订阅方行为表（W0 审计回填，2026-11-09；W5 实现以此表为准）
+
+审计基线：`extensions/goal/goal.ts`（`session_before_compact` ~:2012、`session_compact` ~:2017）、`extensions/modes/index.ts`（`session_compact` ~:1664）、`extensions/memory/automation.ts`（`session_before_compact` ~:581）。recall 无压缩钩子（门控按 turn 计）。**draft 路径不触发任何 pi 压缩事件已由契约钉住**（`compaction-boundary.test.ts`：draft 提交全程无 `session_before_compact`/`session_compact`）——故下表"draft 路径"列描述的是 **W5 seam 必须补上的动作**，而非现状。
+
+| 订阅方 | 原生路径 before（`session_before_compact`） | 原生路径 after（`session_compact`） | draft 路径 W5 seam 做法 | midRun 约束 | "before 无 after"残留副作用 |
+|---|---|---|---|---|---|
+| **goal** | `lifecycle.handle({tag:"usage-accounted"})` + `accountProgress(ctx)`（用量记账快照落 ledger） | drafting 直接 return；`persist(ctx)`（focused goal 落盘）→ `beginAccounting()`（**时钟段重置**）→ `shouldArmPostCompactReminder` 时置 `postCompactReminderPending=true`（**reminder 武装**，消费点在下一次 goal prompt 构建，注入一次 `[POST-COMPACTION RESYNC …]` 块后自清）→ `queueContinuation(ctx, true)`（**排队续跑**） | before = usage-accounted + accountProgress（返回 draft 前同步）；after = persist + beginAccounting + reminder 武装 + queueContinuation（**仅 committed 后**，APP-05） | **不得 `queueContinuation`**（run 仍在继续，SM-03）；`persist`/`beginAccounting` 可做；reminder 武装可做（消费点在下一次 goal prompt，midRun 提交后下一次 prompt 仍会到来） | before 两动作无残留（记账反映真实消耗，幂等）；**after 若误发**：时钟段被错误重置（carry 保留、损失段归因）、reminder 误武装（下一次 goal prompt 注入误导性"刚被压缩"文案、一次性）、多余 continuation run——三者即"after 仅 committed"与 SM-03 的依据，均**可自愈、非数据损坏** |
+| **modes** | —（无 before 钩子） | `statsPresenter.invalidate()`（缓存失效，幂等）→ bypass 模式时 `needsBypassSecurityReminder=true`（武装一次性安全提醒）→ `persistState()`（状态文件幂等重写） | after = 三动作原样（committed 后）；before 无动作 | 无特殊约束（三动作全部幂等） | 若 after 误发：stats 失效多余一次（无害）、bypass 提醒多余一次（一次性、无害）、状态文件多重写（幂等）——**无不可逆副作用** |
+| **memory** | `signal.aborted` 早退 → `stageUnextractedTail(ctx,"compact-queued")`（把未提取尾部写**一条**队列记录，同步有界盘写；`session_shutdown` 共用同一函数兜底） | —（无 after 钩子） | before = staging（返回 draft 前同步）；after 无动作 | staging 与 run 状态无关，midRun 可做 | staging 是**内容驱动**而非压缩驱动：即使压缩最终未发生，记录仍会在下次 `session_start` 被提取（提取本身有益无害）；同 sessionId 队列**精确合并**（P0-CT-09）使重复 staging 幂等；`state.flushes++` 计数器多增（仅展示）——**无不可逆副作用** |
+
+结论：SM-02/03/04 的设计（before=意图时点同步动作、after=仅 committed、midRun 跳过 goal 的 queueContinuation）与上表一致；无需调整 §5.9 需求行。
 
 ### 5.10 状态、遥测、配置、开关（`state.ts`/`settings.ts`/`index.ts`）
 
