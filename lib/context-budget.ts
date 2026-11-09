@@ -34,6 +34,12 @@ export const RECALL_QUERY_MAX_CHARS = 4_000;
 /** Recall manifest cap (RV-12): max candidate rows shown to the selector. */
 export const RECALL_MANIFEST_MAX = 200;
 
+/** Smart Compaction ledger cap (SC INV-8 / LED-01): characters the whole
+ * <cc-core-ledger> block may occupy before the degradation ladder kicks in.
+ * Like the recall constants, deliberately NOT part of the published
+ * CONTEXT_BUDGET object (its shape is pinned by rules-wiring tests). */
+export const COMPACTION_LEDGER_MAX = 12_000;
+
 export interface ContextBudget {
 	rulesMax: number;
 	memoryIndexMax: number;

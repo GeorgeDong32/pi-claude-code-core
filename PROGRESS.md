@@ -703,3 +703,14 @@ spec `../specs/design/DESIGN-MEMORY-V2.md`，报告 `../MEMORY-V2-REPORT.md`（�
 - **测试**：39 例（preparation 4 差分含 context_edit 夹具、summarizer 8 脚本化传输、apply 16 全门矩阵+对账矩阵、state 11 生命周期）。
 - **BLK-1/2/4 翻绿说明**：保护断言（it.fails）需经 `extensions/compaction/index.ts` 加载完整控制器——属 W4 装配件；W3 单元层已覆盖其断言的行为面，翻绿随 W4 提交。
 - **三门禁**：check 0 错；unit 79 文件全绿（compaction 套件 39 新例）；contracts 90+4 todo 不变。
+
+## Smart Compaction W6（SC，2026-11-09）—— 台账核心
+
+- **lib/context-budget.ts**：`COMPACTION_LEDGER_MAX = 12_000`（INV-8；与 recall 车道同款——不进已发布 CONTEXT_BUDGET 对象）。
+- **ledger/types.ts**：Tier A/B 形状（OpenIdentity/BgItem/VerificationData/FlowLedgerState——W7 填充）、LedgerProviders 注入口（LED-07）、LedgerDegradation 计数。
+- **ledger/directives.ts**（LED-02/02b）：分类 standing/normal/flow-dispatch（保守 standing 匹配宁多勿少；派单指针不算人类指令）；预算阶梯——oldest normal 先折叠（首 120 字符+[#entryId @time] 指针）→ 纯指针，standing 最后；≥maxDirectiveLines → `+K older…` 计数行；LED-02b 跨轮携带（指针行不消失，未知版本块静默丢弃）。阶梯 fits 计算按渲染后长度（含折叠态）。
+- **ledger/goal.ts**（LED-03）：直接复用 goal 模块 buildCompactionSummary（无第二格式化器）；自检 status 用渲染口径 statusLabel（active+autoContinue→running）。
+- **ledger/verification.ts + files.ts + bg.ts**（LED-04）：会话扫描（确定性、同步、零进程派生）——最后测试命令+判定（toolResult output 口径）、git commit 主题、文件活动清单；在途 bg/subagent/flow-watch 一行一项（完成即从 provider 消失）。
+- **ledger/assemble.ts**（LED-01/06/07/08）：apply 时装配 `<cc-core-ledger v="1">`；LED-01 六级降级阶梯（①Closed 计数化 ②Verification 只留最后测试 ③Directives 强制折叠 ④Background 裸行 ⑤Open 描述字段钳制（身份字段永不钳）⑥maxOpenItems 溢出→外部指针）；provider 独立 try/catch（抛错→unavailable）；LED-08 自检（Tier A id+status、Tier B 逐字或指针可检索，缺失→不提议）；LED-06 叙述头双措辞（board 可信/仅哨兵）。
+- **测试** `tests/ledger.test.ts` 11 例：分类/阶梯/跨轮 3 轮/goal 复用/扫描/隔离/自检（含破坏路径：空 entryId 折叠后既非逐字也无指针→ok:false）/INV-8 上界。
+- **三门禁**：check 0 错；unit 全绿（compaction 套件累计 50 例）；contracts 90+4 todo。
