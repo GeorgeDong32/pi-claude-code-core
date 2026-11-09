@@ -33,6 +33,7 @@ import { getSharedEffortOwner, type OwnerEffortLevel } from "../../lib/effort-ow
 // #canonicalizeMcpTool) and this plan gate consume the same lib predicate,
 // so the gate can never again drift from the family on MCP shapes.
 import { isMcpShapedCall, knownServersSetFromEnv } from "../../lib/mcp-shape.ts";
+import { registerCompactionSubscriber } from "../../lib/compaction-seam.ts";
 import { readFileSync } from "node:fs"
 import { homedir } from "node:os";
 import path from "node:path";
@@ -156,6 +157,10 @@ export interface PmCapability {
 	 * `null` to explicitly CLEAR (session switch/shutdown). */
 	usage?: CoreSnapshot["modes"]["usage"] | null;
 }
+
+// SC §5.9 W5: exactly one live seam registration per process — a factory
+// re-run replaces the previous subscriber instead of stacking duplicates.
+let unregisterModesSeam: (() => void) | undefined;
 
 export default function permissionModesExtension(pi: ExtensionAPI): void {
   // ---- state -------------------------------------------------------------
@@ -1661,13 +1666,25 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     // stay | cancel (Esc): dialog already closed; return silently to the input prompt.
   });
 
-  pi.on("session_compact", async (_event, ctx) => {
+  // Compaction reaction (SC §5.9, W5): one named function driven BOTH by the
+  // native session_compact event and the boundary-draft seam — all three
+  // actions are idempotent, so a duplicate or lost proposal leaves no
+  // residue (§5.9a modes row). Native path behavior unchanged (SM-05).
+  const onCompactionAfter = (): void => {
     statsPresenter.invalidate(); // ST: compaction rewrites the branch
     if (currentMode === "bypass") {
       needsBypassSecurityReminder = true;
     }
     persistState();
+  };
+
+  pi.on("session_compact", async () => {
+    onCompactionAfter();
   });
+
+  // One live registration per process: replace on factory re-run (SC W5).
+  unregisterModesSeam?.();
+  unregisterModesSeam = registerCompactionSubscriber({ after: () => onCompactionAfter() });
 
   // ---- session start / resume -------------------------------------------
   async function onSessionStart(

@@ -49,6 +49,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
+import { registerCompactionSubscriber } from "../../lib/compaction-seam.ts";
 
 import { completeMemoryOps, resolveModelRef, type LlmComplete, type OpsCompletion } from "./llm.ts";
 import { applyMemoryOps, type MemoryOp } from "./store.ts";
@@ -335,6 +336,10 @@ export function automationNotify(ctx: ExtensionContext, message: string): void {
 	}
 }
 
+// SC §5.9 W5: exactly one live seam registration per process — repeated
+// setupAutomation calls (reload, tests) replace instead of stacking.
+let unregisterMemorySeam: (() => void) | undefined;
+
 export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drainPending: (ctx: ExtensionContext) => void } {
 	const { gate, dirs, trigger, state } = args;
 	const deps = args.deps ?? {};
@@ -578,15 +583,37 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 	// ZERO-LLM compact (arch review C2, 2026-10-03): staging instead of the
 	// old awaited flush — /compact must never wait on a side-channel
 	// generation (~10s typical) it does not need.
-	pi.on("session_before_compact", (event, ctx: ExtensionContext) => {
+	// SC §5.9 (W5): the same staging also serves the boundary-draft seam
+	// (before = proposal intent). Staging is content-driven and idempotent
+	// (same-sessionId queue merge, P0-CT-09), so a lost proposal leaves a
+	// beneficial record, never a residue (§5.9a memory row).
+	const stageForCompaction = (ctx: ExtensionContext, label: string): void => {
 		try {
-			const signal = (event as { signal?: AbortSignal }).signal;
-			if (signal?.aborted) return;
-			stageUnextractedTail(ctx, "compact-queued");
+			stageUnextractedTail(ctx, label);
 		} catch (err) {
-			state.lastError = `compact-queued: ${err instanceof Error ? err.message : String(err)}`;
+			state.lastError = `${label}: ${err instanceof Error ? err.message : String(err)}`;
 			/* compaction must never be blocked by staging */
 		}
+	};
+
+	pi.on("session_before_compact", (event, ctx: ExtensionContext) => {
+		const signal = (event as { signal?: AbortSignal }).signal;
+		if (signal?.aborted) return;
+		stageForCompaction(ctx, "compact-queued");
+	});
+
+	// Seam ctx capture: compaction can only happen inside a live session, so
+	// session_start has always run before any seam callback fires.
+	let seamCtx: ExtensionContext | undefined;
+	pi.on("session_start", (_event, ctx: ExtensionContext) => {
+		seamCtx = ctx;
+	});
+
+	unregisterMemorySeam?.();
+	unregisterMemorySeam = registerCompactionSubscriber({
+		before: () => {
+			if (seamCtx) stageForCompaction(seamCtx, "boundary-draft");
+		},
 	});
 
 	// A1 (spec 2026-10-03): reset every per-session closure state when a new

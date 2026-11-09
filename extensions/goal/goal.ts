@@ -3,6 +3,7 @@ import { defineTool, type ExtensionAPI, type ExtensionContext, type Theme } from
 import { notify as uiNotify } from "../ui/notify.ts";
 import { isSubagentChildProcess } from "../modes/permission-forwarding.ts";
 import { coreBus } from "../bus.ts";
+import { registerCompactionSubscriber } from "../../lib/compaction-seam.ts";
 import { Text } from "@earendil-works/pi-tui";
 
 // pi-ai 1.5.0 StringEnum returns a pi-schema `Schema`, which no longer unifies with
@@ -305,6 +306,11 @@ function toolExecutionUsage(event: unknown): { tokens: number; cost: number } | 
 
 // ---------- extension entry point ----------
 
+// SC §5.9 W5: exactly one live seam registration per process — a factory
+// re-run (pi /reload, repeated test instantiation) replaces the previous
+// subscriber instead of stacking a stale-closure duplicate.
+let unregisterGoalSeam: (() => void) | undefined;
+
 export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => number; auditor?: typeof runGoalCompletionAuditor } = {}): void {
 	// P2-2 Steps 1-4: the goal POOL and FOCUS pointer are owned by the
 	// lifecycle module (goal-lifecycle.ts) — the writer verbs with their full
@@ -366,6 +372,11 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 	// turn gets an extra reminder block. Set in session_compact, consumed
 	// (cleared) in before_agent_start.
 	let postCompactReminderPending = false;
+
+	// SC §5.9 (W5): ctx for the compaction-seam callbacks (boundary-draft
+	// commits fire no pi event, so no event ctx arrives with them). Captured
+	// at session_start; see the seam subscription near the compaction hooks.
+	let seamCtx: ExtensionContext | undefined;
 
 	// AR1005-GO-A: the activity clock owns the segment start and per-goal
 	// millisecond remainders (sub-second fragments are no longer lost per
@@ -1987,6 +1998,10 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 	});
 
 	pi.on("session_start", async (event, ctx) => {
+		// SC §5.9 (W5): boundary-draft commits never emit session_compact (H3),
+		// so the compaction seam callbacks need a live ctx — compaction can only
+		// happen inside a session, so this capture always precedes them.
+		seamCtx = ctx;
 		loadState(ctx);
 		// Widget order fix: remount on every session start so the goal block
 		// registers ahead of cc-status's microtask re-registration (goal
@@ -2009,12 +2024,15 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		queueContinuation(ctx, true);
 	});
 
-	pi.on("session_before_compact", async (_event, ctx) => {
+	// Compaction reactions (SC §5.9, W5): one named pair, driven BOTH by the
+	// native pi events and by the boundary-draft seam — native path behavior
+	// is byte-identical to the previous inline handlers (SM-05).
+	const onCompactionBefore = (ctx: ExtensionContext): void => {
 		lifecycle.handle({ tag: "usage-accounted" });
 		accountProgress(ctx);
-	});
+	};
 
-	pi.on("session_compact", async (_event, ctx) => {
+	const onCompactionAfter = (ctx: ExtensionContext, midRun: boolean): void => {
 		if (lifecycle.isDrafting) return;
 		if (lifecycle.focused()) persist(ctx);
 		beginAccounting();
@@ -2023,7 +2041,28 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		if (shouldArmPostCompactReminder(lifecycle.focused())) {
 			postCompactReminderPending = true;
 		}
-		queueContinuation(ctx, true);
+		// SM-03 (§5.9a goal row): a mid-run draft commit must NOT queue a
+		// continuation — the run is still going, a queued continuation would
+		// produce a surplus turn. Native session_compact is always midRun:false.
+		if (!midRun) queueContinuation(ctx, true);
+	};
+
+	pi.on("session_before_compact", async (_event, ctx) => {
+		onCompactionBefore(ctx);
+	});
+
+	pi.on("session_compact", async (_event, ctx) => {
+		onCompactionAfter(ctx, false);
+	});
+
+	unregisterGoalSeam?.();
+	unregisterGoalSeam = registerCompactionSubscriber({
+		before: () => {
+			if (seamCtx) onCompactionBefore(seamCtx);
+		},
+		after: (info) => {
+			if (seamCtx) onCompactionAfter(seamCtx, info.midRun);
+		},
 	});
 
 	pi.on("session_tree", async (_event, ctx) => {

@@ -685,3 +685,11 @@ spec `../specs/design/DESIGN-MEMORY-V2.md`，报告 `../MEMORY-V2-REPORT.md`（�
 - **settings.ts**：ST-02 全键集+附录 C 默认值；POL-02 整组校验（出现键非法或合并后违反序→整组回退+一条 warn，缺失键继承默认）；ST-03 PI_CORE_COMPACTION=off|shadow|on 优先于文件，非法值忽略+warn。
 - **测试**（node:test，`extensions/compaction/tests/` 已登记 nodeTestDirs）：policy 12 例（状态机全边表驱动）、cutpoint 8 例（CUT-01/08 各 2000 种子属性测试）、validate 9 例（E3 970 字符形态、BLK-4 三态）、settings 6 例；helpers.ts 合成夹具（INV-7）。
 - **三门禁**：check 双 project 0 错；unit 全绿（含新增 compaction 套件）；contracts 90+4 todo 不变。
+
+## Smart Compaction W5（SC，2026-11-09）—— seam 与订阅方
+
+- **lib/compaction-seam.ts**（SM-01）：自包含同步 seam——`registerCompactionSubscriber({before,after})` / `notifyBefore`（提议意图，无 entryId）/ `notifyAfter`（对账确认提交，按 entryId 去重恰一次）；逐回调 try/catch 隔离；lib 零 import。
+- **三订阅方函数抽取 + seam 订阅**（§5.9a 行为表落地）：goal（before=usage-accounted+accountProgress；after=persist+beginAccounting+reminder 武装+queueContinuation——**midRun 跳过 queueContinuation（SM-03）**）；modes（after=invalidate+bypass 提醒+persistState，无 before）；memory（before=stageUnextractedTail("boundary-draft")，同 sessionId 队列合并天然幂等）。原生路径行为字节级不变（SM-05：三门全绿、既有期望零改动）。
+- **每模块单活订阅防护**：factory/setupAutomation 重跑时先 unregister 再注册（防 stale 闭包堆叠）；goal/memory 的 seam ctx 在 session_start 捕获（draft 提交无事件 ctx，H3）。
+- **测试** `test/lib/compaction-seam.test.ts`（vitest，12 例）：SM-01/02 机械层 + 真实 factory（goal/modes/memory × FakeHost）{已提交, 提议丢失, 原生}——原生路径 seam 零调用、committed 恰一次、lost 仅 before、midRun 无续跑、memory 双路 staging 合并为一条。
+- **三门禁**：check 0 错；unit 79 文件 1159 pass（+12）；contracts 90+4 todo 不变。
