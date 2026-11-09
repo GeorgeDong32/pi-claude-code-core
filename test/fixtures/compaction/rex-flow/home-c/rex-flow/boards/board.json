@@ -1,0 +1,1 @@
+{"deploy": {"repo": "acme/proj-c", "project_dir": "/Users/x/proj-c", "ws_root": "/Users/x/proj-c"}, "runs": [{"id": "r5", "objective": "legacy run", "stage": "executing", "notes": []}], "tasks": [], "gates": [], "updated": "2026-11-08 10:00:00"}

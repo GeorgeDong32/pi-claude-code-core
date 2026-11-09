@@ -732,3 +732,13 @@ spec `../specs/design/DESIGN-MEMORY-V2.md`，报告 `../MEMORY-V2-REPORT.md`（�
 - **BLK-1…5 保护断言全部翻绿（7/7）**：真实 AgentSession+faux 端到端——POL-07 拒提议保恢复（FB 供稿腿按 spec 合法供给）、覆盖→lost→快照存活→clean 边界提交恰一次（seam after 带真实 entryId）、V4' 冲突编辑审计计数（真实 message 目标+替换式编辑——删除式会 void 整个 boundary 提交，发现宿主 appendContextEdit 抛错即中断后续 drafts）、V8a 双路径拒写、SUM-04 拒空前缀、FB-08 原生空摘要审计遥测。
 - **测试**：fallback.test.ts 5 例（node:test）+ compaction-wiring.test.ts 5 例（vitest 源码扫描：ST-06 顺序/INV-2 定时器/INV-3 thinking/FB-06 cancel/APP-04③ core 内 draft 独占）。
 - **三门禁**：check 0 错；unit 81 文件全绿；contracts 90+4 todo + 保护 7/7。
+
+## Smart Compaction W7+W8（SC，2026-11-09）—— rex-flow 台账与长程信号
+
+- **ledger/rex-flow.ts**（LED-05/05b/05c、INV-6）：只读 fail-open（不写 ~/.rex-flow、不 import rex-flow、2 MiB 上限、损坏/缺失→原因码）；发现三来源（配置 boardPath / 会话用过的 --board·dispatch·evidence 路径 / ~/.rex-flow/projects 枚举 + 旧布局 ~/rex-flow/boards）；**关联两步**——(a) 显式来源即信任，(b) board.deploy.repo === cwd git origin 且 ≥1 run id 被会话观察（哨兵/--run/上轮台账块）——"全机唯一活跃 board"不构成关联（R1-6），串项目诱饵 board 永不进台账；run 级过滤：仅观察到的 run 给全量行（id/objective≤120/stage/spec/tasks 含 branch·tab·rework/open gates/最近哨兵≤12），已闭环一行 ≤8 条+溢出指针，未观察开放 run 只计数；哨兵解析（===FLOW-REPORT===/run-done/--board/dispatch 路径）；previousLedgerRunIds 跨轮携带。
+- **signals/rex-flow.ts**（LED-05c/CUT-04）：run-closed——run-done 哨兵后第一条无 toolCall assistant 之后的边界（最高权重 100），后续 plain assistant 不重复触发。
+- **signals/long-task.ts**（W8）：goal-step（goal 生命周期 custom 条目/goal 文本标记，90）、git-commit（assistant 回合含 git commit 调用，60）、verified（测试命令 toolResult 退出 0/通过标记，55）——全纯函数，CUT-07 隔离。
+- **index.ts 接线**：flow provider 注入 ledger（LED-06 叙述头随 board 关联切换措辞）；W7/W8 四信号加入 compute 的 selectCut。
+- **夹具**（test/fixtures/compaction/rex-flow/，INV-7 合成）：三布局（--sanitized-- / 按 ws_root 命名 / 旧 boards）+ 串项目诱饵 + 2 MiB 超限 board + git origin cwd 临时仓。
+- **测试** rex-flow.test.ts 12 例：三布局发现/诱饵排除/关联 (a)(b) 各例/未关联与超限原因码/哨兵提取/跨轮 run id/run-closed 触发与不重复/CUT-04 run-closed 胜选/W8 三信号（含 verified 失败不触发）。
+- **三门禁**：check 0 错；unit 81 文件全绿；contracts 90+4 todo、BLK 7/7 保持。

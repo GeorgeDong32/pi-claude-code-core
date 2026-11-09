@@ -59,6 +59,9 @@ import {
 	assembleLedger,
 	narrativeHeader,
 } from "./ledger/assemble.ts";
+import { buildFlowLedger, previousLedgerRunIds } from "./ledger/rex-flow.ts";
+import { runClosedSignal } from "./signals/rex-flow.ts";
+import { gitCommitSignal, goalStepSignal, verifiedSignal } from "./signals/long-task.ts";
 import { stripLedgerBlock } from "./validate.ts";
 import {
 	DEFAULT_COMPACTION_CORE_SETTINGS,
@@ -68,6 +71,8 @@ import {
 } from "./settings.ts";
 import { readJson, writeJsonAtomic } from "../../lib/settings.ts";
 import type { PrecomputedSnapshot, ProjectedEntry } from "./types.ts";
+import type { CompressedRegionView } from "./ledger/types.ts";
+type CompressedRegionViewLike = CompressedRegionView;
 
 const RECONCILE_EVENTS = [
 	"turn_start",
@@ -170,7 +175,7 @@ export default function compactionController(pi: ExtensionAPI): void {
 	};
 
 	// ── ledger providers (all synchronous, LED-07-isolated inside assemble) ──
-	const ledgerProviders = (ctx: ExtensionContext) => ({
+	const ledgerProviders = (ctx: ExtensionContext, region?: CompressedRegionViewLike) => ({
 		goal: () => {
 			try {
 				const goals = readActiveGoalFiles({ cwd: ctx.cwd } as never);
@@ -191,6 +196,23 @@ export default function compactionController(pi: ExtensionAPI): void {
 				return undefined;
 			}
 		})(),
+		flow: region
+			? () => {
+					try {
+						const previous = getLatestCompactionEntry(ctx.sessionManager.getBranch())?.summary;
+						const result = buildFlowLedger({
+							cwd: ctx.cwd,
+							homeDir: homedir(),
+							settings,
+							region,
+							previousRunIds: previousLedgerRunIds(previous),
+						});
+						return result.state;
+					} catch {
+						return undefined; // INV-6 fail-open
+					}
+				}
+			: undefined,
 	});
 
 	// ── background compute (single promise chain, SUM-07) ─────────────────
@@ -219,6 +241,8 @@ export default function compactionController(pi: ExtensionAPI): void {
 					weights: settings.weights as unknown as Record<string, number>,
 					lambda: settings.lambda,
 					idleGapMs: settings.idleGapMs,
+					// W7/W8 semantic signals (CUT-04 preference classes).
+					signals: [runClosedSignal, goalStepSignal, gitCommitSignal, verifiedSignal],
 				});
 				if (cut.status === "infeasible") {
 					runtime.onComputeFailed("infeasible-cut");
@@ -306,6 +330,9 @@ export default function compactionController(pi: ExtensionAPI): void {
 		}
 	};
 
+	// LED-06: the narrative header's trust wording follows board association.
+	let lastFlowTrusted = false;
+
 	// ── the proposal path (synchronous, APP-01…08) ────────────────────────
 	const tryPropose = (event: { entries?: unknown[] }, ctx: ExtensionContext, midRun: boolean): { entries: unknown[] } | undefined => {
 		const snapshot = runtime.snapshot;
@@ -326,7 +353,9 @@ export default function compactionController(pi: ExtensionAPI): void {
 		// Ledger at APPLY time (LED-06) + self-check (LED-08).
 		const boundaryStart = entries.findIndex((entry) => entry.sourceEntry.type === "compaction" && entry.messages.length > 0) + 1;
 		const region = { entries: entries.slice(boundaryStart, snapshot.cut.firstKeptEntryIndex) };
-		const ledger = assembleLedger({ region, providers: ledgerProviders(ctx), settings });
+		const providers = ledgerProviders(ctx, region);
+		const ledger = assembleLedger({ region, providers, settings });
+		lastFlowTrusted = providers.flow?.()?.associated ?? false;
 		if (!ledger.selfCheck.ok) {
 			runtime.onDiscarded("v6-summary-invalid", { reason: "ledger-self-check-failed" });
 			return undefined;
@@ -339,7 +368,7 @@ export default function compactionController(pi: ExtensionAPI): void {
 		);
 		const narrative = raw.slice(0, fileIdx).trimEnd();
 		const files = fileIdx < raw.length ? raw.slice(fileIdx) : "";
-		const finalSummary = [narrativeHeader(false), narrative, ledger.block, files].filter((part) => part.length > 0).join("\n\n");
+		const finalSummary = [narrativeHeader(lastFlowTrusted), narrative, ledger.block, files].filter((part) => part.length > 0).join("\n\n");
 
 		// V1–V10 with the REAL final numbers.
 		const keptMessages = entries.slice(snapshot.cut.firstKeptEntryIndex).flatMap((entry) => entry.messages);
