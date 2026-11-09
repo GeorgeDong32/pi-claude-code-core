@@ -693,3 +693,13 @@ spec `../specs/design/DESIGN-MEMORY-V2.md`，报告 `../MEMORY-V2-REPORT.md`（�
 - **每模块单活订阅防护**：factory/setupAutomation 重跑时先 unregister 再注册（防 stale 闭包堆叠）；goal/memory 的 seam ctx 在 session_start 捕获（draft 提交无事件 ctx，H3）。
 - **测试** `test/lib/compaction-seam.test.ts`（vitest，12 例）：SM-01/02 机械层 + 真实 factory（goal/modes/memory × FakeHost）{已提交, 提议丢失, 原生}——原生路径 seam 零调用、committed 恰一次、lost 仅 before、midRun 无续跑、memory 双路 staging 合并为一条。
 - **三门禁**：check 0 错；unit 79 文件 1159 pass（+12）；contracts 90+4 todo 不变。
+
+## Smart Compaction W3（SC，2026-11-09）—— 摘要与提议（单元层）
+
+- **preparation.ts**（SUM-01/02）：buildPreparation 镜像 pi prepareCompaction——投影（含 context_edit 后）切片/previousSummary=叙事部分/fileOps 复刻（assistant toolCall + toolResult nestedCalls + 前次 pi 生成压缩的 details 播种，fromHook 的不播种）；tokensBefore 用投影消息估算（estimateProjectedContextTokens 非公开，H1）。差分测试对拍 dist 内部 oracle（仅测试深导入）。
+- **summarizer.ts**（SUM-03/05/06/07/08）：compact() 经 streamFn 包装器——SUM-09 提示形态分类、options 注入 maxTokens/去 reasoning、同逻辑调用重试重入折叠取末次（SUM-03③）、SUM-04 双层校验失败→硬化指令重试一次→refused（SUM-05）；默认传输 completeSimple（与 compact 缺省路径同源）；SUM-06 模型解析（provider/id→registry→窗口预检→回退会话模型+遥测）；SUM-07 abort 先检/穿透不抛。
+- **apply.ts**（APP-01/02/06/07/08）：runPrechecks V1–V10 总函数（V10=HOLD 快照保活，其余首失败丢弃+原因码）；buildDraft（nonce/origin=precompute/ccCore v1）；mergeDraftEntries 只追加（H5(a)）；reconcile 自叶扫 ≤reconcileScanMax 命中 nonce→committed（带真实 entryId+V4' 冲突编辑计数），未中→lost(overridden/branch-changed)。
+- **state.ts**（ST-01/ST-05/INV-5）：SessionRuntime 组合 policy.evaluate 与效应——快照仅在 committed/lost 消耗、notifyBefore=意图/notifyAfter=仅确认提交、ST-01 遥测（v:1 字段集冻结，emit fail-open）、conflict-edit 累计→shadow 降级、SUM-07 陈旧 generation 丢弃、session-reset 重置。
+- **测试**：39 例（preparation 4 差分含 context_edit 夹具、summarizer 8 脚本化传输、apply 16 全门矩阵+对账矩阵、state 11 生命周期）。
+- **BLK-1/2/4 翻绿说明**：保护断言（it.fails）需经 `extensions/compaction/index.ts` 加载完整控制器——属 W4 装配件；W3 单元层已覆盖其断言的行为面，翻绿随 W4 提交。
+- **三门禁**：check 0 错；unit 79 文件全绿（compaction 套件 39 新例）；contracts 90+4 todo 不变。
