@@ -714,3 +714,11 @@ spec `../specs/design/DESIGN-MEMORY-V2.md`，报告 `../MEMORY-V2-REPORT.md`（�
 - **ledger/assemble.ts**（LED-01/06/07/08）：apply 时装配 `<cc-core-ledger v="1">`；LED-01 六级降级阶梯（①Closed 计数化 ②Verification 只留最后测试 ③Directives 强制折叠 ④Background 裸行 ⑤Open 描述字段钳制（身份字段永不钳）⑥maxOpenItems 溢出→外部指针）；provider 独立 try/catch（抛错→unavailable）；LED-08 自检（Tier A id+status、Tier B 逐字或指针可检索，缺失→不提议）；LED-06 叙述头双措辞（board 可信/仅哨兵）。
 - **测试** `tests/ledger.test.ts` 11 例：分类/阶梯/跨轮 3 轮/goal 复用/扫描/隔离/自检（含破坏路径：空 entryId 折叠后既非逐字也无指针→ok:false）/INV-8 上界。
 - **三门禁**：check 0 错；unit 全绿（compaction 套件累计 50 例）；contracts 90+4 todo。
+
+## Smart Compaction W2（SC，2026-11-09）—— 回放与校准
+
+- **scripts/compaction-replay.mjs**（tsx 运行，TS 模块直import 真 policy/cutpoint）：语料解析（usage 口径 tokens、压缩事件=E1 阻塞代理）→ 逐会话模拟（真 evaluate 全状态机：compute-ok/propose/reconcile 都走 policy；提交后按压缩量折减有效上下文防"跑步机"；lastCommittedAt 独立于 snapshot 存活）；五方案（固定比例/固定提前量 25k·50k·75k/速率自适应）；M1-M10 聚合输出（INV-7 只出聚合）；--self-check + 合成夹具（test/fixtures/compaction/synthetic/）。切点视图按会话 chars/4→usage 校准因子缩放（中位 ≈3.0，即 POL-10 overhead 的回放侧等价物）。
+- **本机全量回放**（1166 jsonl，11 会话可推导阈值，23 次阈值事件）：M1=0.52（12/23，**校准目标 0.90 未达**：8 次来自单个小窗口会话 T_n≈45.7K 属 POL-09 设计内不可行 R15，3 次属中位数 T_n 近似局限）；M3b=1.0、V8b=1.0；M6 原生阻塞 p50 103s/p90 171s（吻合 E1）；M7 10/11 可行；M9 增量 p99 6.5K、max 26.6K、>5K 占 1.9%；M10 固定比例 0.18、固定提前量 0.00、**朴素自适应 0.51+V8b 0.50（严格更差——自适应必须与 POL-09 联合求解的实证）**。O1/O2 对比入 docs；**默认值不变**（O2 待用户拍板）。第二台机器语料=待证据项。
+- **docs/{en,zh}/compaction.md**：双语校准记录（机制摘要+指标表+归因+结论）。
+- **测试** `test/lib/compaction-replay.test.ts` 9 例（提取/阈值/延迟模型/模拟/聚合/自检/INV-7 源码检查）。
+- **三门禁**：check 0 错；unit 80 文件全绿；contracts 90+4 todo。
