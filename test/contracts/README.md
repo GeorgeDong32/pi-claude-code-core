@@ -64,6 +64,8 @@
 | 摘要内台账块 `<cc-core-ledger v="1">…</cc-core-ledger>` 与 `CompactionEntry.details.ccCore`（`v:1`）——**写入用户会话数据，格式冻结** | SC-SUM-01 | compaction（LED-02b 继承）、回放工具 | 永不静默破坏；升级走新版本号 |
 | 磁盘：`~/.pi/agent/core-compaction.json`（键集见 ST-02） | SC-CFG-01 | compaction settings | 冻结 |
 | 环境变量 `PI_CORE_COMPACTION=off\|shadow\|on` | SC-ENV-01 | compaction settings | — |
+| 行为套件 `compaction-off-invariants`：off 模式零 `cc-core-compaction` 遥测 + 零 `details.ccCore` compaction（含原生不合格摘要的 FB-08 审计门，D2）；INV-7 遥测不含摘要正文 | G5/INV-7/SC-ENV-01 | core 自身（compaction 控制器） | 控制器下线时 |
+| 行为套件 `compaction-length-boundary`：ready 快照 + length 边界——recoverable length 后无 precompute draft（stopReason 以 session branch 为权威）、stop 对照恰好 1 条 draft（多行 prompt 回归，D1） | POL-07/INV-11/BLK-1 | core 自身（compaction 控制器） | 控制器下线时 |
 
 SC-ENT-01/SC-SUM-01/SC-CFG-01/SC-ENV-01 的**行为**由 W1（settings/env 单测）与 W3（遥测 entry 单测）落地时钉住；W0 已先在本表登记（INV-10）。宿主事实测试位置：`test/contracts/compaction-*.test.ts`；阻断性用例（BLK-1…5）基线与 expected-fail 保护断言同在其中（spec §4.4）。
 

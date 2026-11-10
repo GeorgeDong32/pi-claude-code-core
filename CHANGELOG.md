@@ -23,6 +23,35 @@
 
 ## Unreleased
 
+### Fixed — compaction review Batch D (2026-11-10)
+
+- **D1（修复 review-fix B1 引入的回归）**:多行用户指令让 LED-08 台账自检
+  永久失败——B1 把指令内换行渲染成续行缩进,而自检仍用原文做
+  `block.includes`,任何含换行的指令都会判 missing → draft 被丢弃、预生成
+  三次后降级。自检改为走与渲染同一条管线(clamp → 续行渲染 → 标签中和,
+  然后取前 40 字符);契约回归:stop 对照用例改用多行 prompt。
+- **D2**:off 模式违反 G5("与未安装字节级一致")——FB-08 原生摘要审计在
+  off 下仍写遥测并 notify。现在 `session_compact`/`session_compact_failed`/
+  `agent_settled` 恢复标记在 off 下全部早退;shadow 保留审计(SC-5)。
+- **D3**:`launchCompute` 在 `tn === null` 时静默 return,phase 永久卡在
+  computing(INV-5 短路后续所有边界)。现在走 `onComputeFailed("no-threshold")`
+  正常 refused+冷却;外层 catch 加代际守卫,旧代异常不再误伤新代。
+- **D4**:伪造台账块遮蔽真台账——最终摘要的 narrative 段是 LLM 输出,回显
+  用户文本里的 `<cc-core-ledger>` 块会让 LED-02b 继承与 run-id 提取先命中
+  伪造块。现在 narrative 先经 sanitize 中和,两个解析点统一取**最后一个**
+  完整 v1 块(`lastLedgerBlockBody`;未知版本仍忽略,INV-9)。
+- **D5**:降级阶梯 ⑤ 对 goal 行整行 clamp,长 id 时会把 status 截断
+  (LED-01⑤ 身份字段永不钳)→ `tierA-status` missing 永久丢弃。新增
+  `clampGoalLine`:id/status 前缀逐字保留,只钳 objective 段。
+- **D6**:指令中段出现的 `[#id @time]` 字面文本被误判为折叠指针,原文
+  丢失且 entryId 被伪造。指针识别现在锚定行尾(折叠行两种形态指针都
+  在行尾,合法解析不受影响)。
+- **D7**:若干 P2 健壮性——regenerateNow 失败走 fellthrough 而非
+  discarded(不再误清 ready 快照);`onOverridden` 只在 proposed 相位生效;
+  验证 provider 抛错即使扫描兜底有数据也标注 unavailable;⑥ 指针按隐藏
+  项实际归属写 .pi/goals/ 与/或 board,不再与格式器自带 `... and N more`
+  双计;focused 不在 goalsById 时不再误报 open。
+
 ### Fixed — compaction review Batch C (2026-11-10)
 
 - C1 deadline timer 泄漏(wait/regenerate 两处 clearTimeout + abort listener
@@ -44,9 +73,10 @@
   recoverable / stop 对照三场景)。
 - **A2 served 转移**:供稿腿消费快照后相位转 idle——重新预压缩,不再对已
   消费 draft 复提议;遥测 outcome `served`(origin native-backfill)。
-- **A3 overridden 上界**:连续 `OVERRIDE_DEGRADE_AFTER = 2`(state.ts 导出
-  常量,与 conflictEditDegradeAfter 同族;无 env 缠——未登记契约的环境变量
-  禁止)次 lost(overridden) 后降级 shadow;每次 overridden 写 APP-08
+- **A3 overridden 上界**:会话内累计 `OVERRIDE_DEGRADE_AFTER = 2`(state.ts
+  导出常量,与 conflictEditDegradeAfter 同族;无 env 缠——未登记契约的环境
+  变量禁止;commit 不清零,仅 session reset 清零)次 lost(overridden) 后
+  降级 shadow;每次 overridden 写 APP-08
   discarded 遥测(reason:"overridden");同批修正 conflictEditTotal 跨会话
   泄漏(reset 现在清零两个降级计数)。DEVIATIONS SC-2 增补在案。
 

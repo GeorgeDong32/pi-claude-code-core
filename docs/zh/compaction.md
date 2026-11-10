@@ -41,6 +41,13 @@ lost(overridden) 复提议有上界——**会话内累计** `OVERRIDE_DEGRADE_A
 session reset 清零）次 overridden 后降级 shadow；**每次** overridden 写
 APP-08 discarded 遥测（`reason:"overridden"`）。
 
+**Batch D 补强（2026-11-10 review）**：`off` 现在完全静默——FB-08 原生
+摘要审计也关闭（G5 字节级一致；`shadow` 仍保留审计，SC-5）。台账继承
+（LED-02b）与 run-id 提取只读上一轮摘要里**最后一个**完整 v1 块，且
+compose 时 narrative 段先经标签中和——LLM 回显用户文本伪造的
+`<cc-core-ledger>` 块不再遮蔽真台账（D4）。降级阶梯 ⑤ 的 goal 行 clamp
+只钳 objective——id/status 等身份字段逐字保留（LED-01⑤，D5）。
+
 ## W2 回放校准记录（2026-11-09）
 
 工具：`tsx scripts/compaction-replay.mjs <语料目录>… [--self-check] [--json]`

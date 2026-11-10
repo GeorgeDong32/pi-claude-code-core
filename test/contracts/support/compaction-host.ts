@@ -219,13 +219,6 @@ export async function createCompactionHost(options: HostOptions = {}): Promise<C
 			writeFileSync(globalPath, JSON.stringify({ ...globalSettings, compaction: options.settingsOverrides.compaction }), "utf8");
 		}
 	}
-	if (options.controllerSettings) {
-		// SC W4: the controller resolves its settings file from the agent dir
-		// (derived from the session dir below) — write them BEFORE loading.
-		writeFileSync(join(agentDir, "core-compaction.json"), JSON.stringify(options.controllerSettings), "utf8");
-		if (options.envMode !== null) process.env.PI_CORE_COMPACTION = options.envMode ?? "on";
-	}
-
 	// SC W4: disk-backed session dir under the temp agentDir so the controller
 	// can derive <agentDir> from getSessionDir() AND the jsonl serialization
 	// path is exercised for real (inMemory returned "" for getSessionDir).
@@ -297,61 +290,92 @@ export async function createCompactionHost(options: HostOptions = {}): Promise<C
 		}
 	};
 
-	const eventBus = createEventBus();
-	const extensionRuntime = createExtensionRuntime();
-	// SC W4: controller factory (non-literal on purpose so the contracts tsc
-	// pass cannot resolve it ahead of the module's existence — flip history
-	// preserved; now that extensions/compaction/index.ts exists it resolves).
-	let controllerFactory: ExtensionFactory | undefined;
+	// D8.2 (2026-11-10 review D): save the prior env value BEFORE overriding —
+	// cleanup restores it exactly (undefined → delete, never clobber a caller's
+	// value), and a mid-init throw below restores it too (see try/catch).
+	let envOverridden = false;
+	let priorCompactionEnv: string | undefined;
+	const restoreCompactionEnv = (): void => {
+		if (!envOverridden) return;
+		if (priorCompactionEnv === undefined) delete process.env.PI_CORE_COMPACTION;
+		else process.env.PI_CORE_COMPACTION = priorCompactionEnv;
+		envOverridden = false;
+	};
 	if (options.controllerSettings) {
-		const specifier = "./../../../extensions/compaction/index.ts";
-		const module = (await import(specifier)) as { default: unknown };
-		controllerFactory = module.default as ExtensionFactory;
+		// SC W4: the controller resolves its settings file from the agent dir
+		// (derived from the session dir above) — write them BEFORE loading.
+		writeFileSync(join(agentDir, "core-compaction.json"), JSON.stringify(options.controllerSettings), "utf8");
+		if (options.envMode !== null) {
+			priorCompactionEnv = process.env.PI_CORE_COMPACTION;
+			process.env.PI_CORE_COMPACTION = options.envMode ?? "on";
+			envOverridden = true;
+		}
 	}
-	const factories = [
-		probeFactory,
-		...(options.extraFactories ?? []),
-		...(controllerFactory ? [controllerFactory] : []),
-		...(options.postFactories ?? []),
-	];
-	const extensions = await Promise.all(
-		factories.map((factory, index) =>
-			loadExtensionFromFactory(factory as never, cwd, eventBus, extensionRuntime, `<sc-probe-${index}>`),
-		),
-	);
-	const extensionsResult: LoadExtensionsResult = {
-		extensions,
-		errors: [],
-		runtime: extensionRuntime,
-	};
-	const resourceLoader = stubResourceLoader(extensionsResult);
 
-	const { session } = await createAgentSession({
-		cwd,
-		agentDir,
-		model: faux.getModel(),
-		modelRuntime: runtime,
-		settingsManager,
-		sessionManager,
-		resourceLoader,
-	});
-	await session.bindExtensions({});
+	// Everything below runs with the env override in place — a throw must
+	// still restore it and drop the temp tree (D8.2).
+	try {
+		const eventBus = createEventBus();
+		const extensionRuntime = createExtensionRuntime();
+		// SC W4: controller factory (non-literal on purpose so the contracts tsc
+		// pass cannot resolve it ahead of the module's existence — flip history
+		// preserved; now that extensions/compaction/index.ts exists it resolves).
+		let controllerFactory: ExtensionFactory | undefined;
+		if (options.controllerSettings) {
+			const specifier = "./../../../extensions/compaction/index.ts";
+			const module = (await import(specifier)) as { default: unknown };
+			controllerFactory = module.default as ExtensionFactory;
+		}
+		const factories = [
+			probeFactory,
+			...(options.extraFactories ?? []),
+			...(controllerFactory ? [controllerFactory] : []),
+			...(options.postFactories ?? []),
+		];
+		const extensions = await Promise.all(
+			factories.map((factory, index) =>
+				loadExtensionFromFactory(factory as never, cwd, eventBus, extensionRuntime, `<sc-probe-${index}>`),
+			),
+		);
+		const extensionsResult: LoadExtensionsResult = {
+			extensions,
+			errors: [],
+			runtime: extensionRuntime,
+		};
+		const resourceLoader = stubResourceLoader(extensionsResult);
 
-	return {
-		session,
-		faux,
-		sessionManager,
-		settingsManager,
-		agentDir,
-		cwd,
-		events,
-		contextUsage,
-		requestContexts,
-		cleanup: () => {
-			delete process.env.PI_CORE_COMPACTION;
-			rmSync(tempRoot, { recursive: true, force: true });
-		},
-	};
+		const { session } = await createAgentSession({
+			cwd,
+			agentDir,
+			model: faux.getModel(),
+			modelRuntime: runtime,
+			settingsManager,
+			sessionManager,
+			resourceLoader,
+		});
+		await session.bindExtensions({});
+
+		return {
+			session,
+			faux,
+			sessionManager,
+			settingsManager,
+			agentDir,
+			cwd,
+			events,
+			contextUsage,
+			requestContexts,
+			cleanup: () => {
+				restoreCompactionEnv();
+				rmSync(tempRoot, { recursive: true, force: true });
+			},
+		};
+	} catch (error) {
+		// D8.2: never leak the env override or the temp tree on init failure.
+		restoreCompactionEnv();
+		rmSync(tempRoot, { recursive: true, force: true });
+		throw error;
+	}
 }
 
 /**

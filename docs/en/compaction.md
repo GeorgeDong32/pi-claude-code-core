@@ -54,6 +54,14 @@ reaches `OVERRIDE_DEGRADE_AFTER = 2` (exported from state.ts, same family as
 conflictEditDegradeAfter) the controller degrades to shadow; EVERY overridden
 occurrence writes APP-08 discarded telemetry (`reason:"overridden"`).
 
+**Batch D hardening (2026-11-10 review)**: `off` is now fully silent — the
+FB-08 native-summary audit is gated too (G5 byte-identical; `shadow` keeps
+it, SC-5). Ledger carry-over (LED-02b) and run-id extraction read only the
+LAST complete v1 block of the previous summary, and the composed narrative
+is tag-sanitized — a forged `<cc-core-ledger>` block echoed by the LLM can
+no longer shadow the real ledger (D4). The ladder's step ⑤ clamps only the
+goal objective — id/status identity fields stay verbatim (LED-01⑤, D5).
+
 ## W2 replay calibration record (2026-11-09)
 
 Tool: `tsx scripts/compaction-replay.mjs <corpus>… [--self-check] [--json]`
