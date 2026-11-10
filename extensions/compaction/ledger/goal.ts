@@ -15,9 +15,9 @@ import type { ClosedItem, GoalLedgerState, OpenIdentity } from "./types.ts";
 export interface GoalSection {
 	/** Tier A open-goal lines for "## Open work". */
 	openLines: string[];
-	/** B2 (2026-11-10): ids the goal renderer actually shows (focused +
-	 * first GOAL_RENDER_CAP others) — the self-check promise set. */
-	visibleIds: string[];
+	/** RB1 (2026-11-10 review rework): other-open goals the renderer hid
+	 * behind its cap ("... and N more") — ⑥'s overflow accounting input. */
+	hiddenOpenCount: number;
 	/** Terminal one-liners for "## Closed". */
 	closed: ClosedItem[];
 	/** Self-check identities (id + status must appear in the block). */
@@ -26,27 +26,35 @@ export interface GoalSection {
 	closedIds: string[];
 }
 
-export function goalSection(state: GoalLedgerState): GoalSection {
+export function goalSection(state: GoalLedgerState, opts?: { capOpenGoals?: number }): GoalSection {
 	// The goal module's own summary text (focused + other open + terminal).
+	// RB1 (2026-11-10 review rework): capOpenGoals is passed THROUGH to the
+	// single formatter (LED-03) so ⑥ controls the cap instead of peeking.
+	const capOpenGoals = opts?.capOpenGoals ?? 20; // goal-compaction.ts default
 	const text = buildCompactionSummary({
 		goalsById: state.goalsById,
 		focusedGoalId: state.focusedGoalId,
 		ledgerEvents: state.ledgerEvents,
+		capOpenGoals,
 	});
 	const openLines: string[] = [];
 	const closed: ClosedItem[] = [];
 	const identities: OpenIdentity[] = [];
 	const closedIds: string[] = [];
 
-	// B2 (2026-11-10 review): expose the set the goal module's renderer can
-	// actually SHOW — its formatter lists the focused goal plus the first
-	// GOAL_RENDER_CAP other-open goals (with a "+K more" count line).
-	// Full `identities` stay complete for ⑥'s overflow accounting; the
-	// LED-08 self-check promises only the visible subset.
-	const GOAL_RENDER_CAP = 20; // mirrors goal-compaction.ts capOpenGoals default
+	// RB1 (2026-11-10 review rework): identities are EXACTLY the open goals
+	// the renderer shows — focused (if open) plus the first capOpenGoals
+	// others, mirroring goal-compaction.ts:84-103. Hidden goals surface via
+	// hiddenOpenCount for ⑥'s single-budget accounting; nothing silently
+	// drops out of the self-check promise set while under maxOpenItems.
 	const openGoals = Array.from(state.goalsById.values()).filter((g) => g.status !== "complete");
 	const otherOpenGoals = openGoals.filter((g) => g.id !== state.focusedGoalId);
-	const visibleIds = [state.focusedGoalId, ...otherOpenGoals.slice(0, GOAL_RENDER_CAP).map((g) => g.id)].filter((id): id is string => id !== null);
+	const focusedIsOpen = state.focusedGoalId !== null && state.goalsById.get(state.focusedGoalId)?.status !== "complete";
+	const renderedGoalIds = new Set<string>([
+		...(focusedIsOpen && state.focusedGoalId ? [state.focusedGoalId] : []),
+		...otherOpenGoals.slice(0, capOpenGoals).map((g) => g.id),
+	]);
+	const hiddenOpenCount = Math.max(0, otherOpenGoals.length - capOpenGoals);
 
 	for (const goal of state.goalsById.values()) {
 		if (goal.status === "complete") {
@@ -58,8 +66,9 @@ export function goalSection(state: GoalLedgerState): GoalSection {
 			continue;
 		}
 		// Self-check status must match what the goal module RENDERS (its
-		// statusLabel maps active+autoContinue → "running", etc.).
-		identities.push({ source: "goal", id: goal.id, status: statusLabel(goal) });
+		// statusLabel maps active+autoContinue → "running", etc.). RB1: only
+		// RENDERED open goals are promised (focused-if-open + capped others).
+		if (renderedGoalIds.has(goal.id)) identities.push({ source: "goal", id: goal.id, status: statusLabel(goal) });
 	}
 
 	// Open-work lines come from the goal module's rendering of OPEN goals —
@@ -73,9 +82,9 @@ export function goalSection(state: GoalLedgerState): GoalSection {
 	const terminal = extractSection(text, "TERMINAL GOALS");
 	if (terminal && closed.length > 0) {
 		// Prefer the goal module's terminal lines as the closed one-liners.
-		return { openLines, closed: closedFromTerminal(terminal, closed), identities, closedIds, visibleIds };
+		return { openLines, closed: closedFromTerminal(terminal, closed), identities, closedIds, hiddenOpenCount };
 	}
-	return { openLines, closed, identities, closedIds, visibleIds };
+	return { openLines, closed, identities, closedIds, hiddenOpenCount };
 }
 
 function closedFromTerminal(terminalLines: string[], fallback: ClosedItem[]): ClosedItem[] {

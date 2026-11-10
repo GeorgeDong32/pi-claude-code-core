@@ -58,6 +58,7 @@ import { buildDraft, mergeDraftEntries, reconcile, runPrechecks } from "./apply.
 import { auditNativeSummary, buildSupplyCompaction, decideFallback, hardFitLimitFor } from "./fallback.ts";
 import {
 	assembleLedger,
+	compressedRegionOf,
 	narrativeHeader,
 } from "./ledger/assemble.ts";
 import { buildFlowLedger, previousLedgerRunIds } from "./ledger/rex-flow.ts";
@@ -260,17 +261,20 @@ export default function compactionController(pi: ExtensionAPI): void {
 					runtime.onComputeFailed("nothing-to-summarize");
 					return;
 				}
-				// B3 (2026-11-10 review): SUM-08 closedIds — same region math as
-				// the apply path (latest compaction → cut), computed between
-				// selectCut and runSummarizer; failures degrade to undefined.
+				// B3 (SUM-08 closedIds) + RB2/RB3 (2026-11-10 review rework): ONE
+				// assemble BEFORE the LLM — an unviable ledger (over-budget /
+				// self-check failed) skips the summarizer call entirely
+				// (refused + cooldown naturally rate-limits retries);
+				// closedIds reuse the same result.
 				let closedIds: string[] | undefined;
 				try {
-					const regionEntries = (projection.entries as ProjectedEntry[]).slice(
-						(projection.entries as ProjectedEntry[]).findIndex((entry) => entry.sourceEntry.type === "compaction" && entry.messages.length > 0) + 1,
-						cut.cut.firstKeptEntryIndex,
-					);
-					const region = { entries: regionEntries };
-					closedIds = assembleLedger({ region, providers: ledgerProviders(ctx, region), settings }).closedIds;
+					const region = compressedRegionOf(projection.entries as ProjectedEntry[], cut.cut.firstKeptEntryIndex);
+					const ledger = assembleLedger({ region, providers: ledgerProviders(ctx, region), settings });
+					if (!ledger.selfCheck.ok) {
+						runtime.onComputeFailed(ledger.selfCheck.missing.includes("ledger-over-budget") ? "ledger-over-budget" : "ledger-self-check-failed");
+						return;
+					}
+					closedIds = ledger.closedIds;
 				} catch {
 					closedIds = undefined;
 				}
@@ -361,8 +365,8 @@ export default function compactionController(pi: ExtensionAPI): void {
 	const composeFinalSummary = (ctx: ExtensionContext, cut: { firstKeptEntryIndex: number }, rawSummary: string) => {
 		try {
 			const entries = ctx.sessionManager.buildSessionProjection().entries as ProjectedEntry[];
-			const boundaryStart = entries.findIndex((entry) => entry.sourceEntry.type === "compaction" && entry.messages.length > 0) + 1;
-			const region = { entries: entries.slice(boundaryStart, cut.firstKeptEntryIndex) };
+			// RB3: single-source region math (last compaction → kept head).
+			const region = compressedRegionOf(entries, cut.firstKeptEntryIndex);
 			const providers = ledgerProviders(ctx, region);
 			const ledger = assembleLedger({ region, providers, settings });
 			if (!ledger.selfCheck.ok) {
@@ -602,14 +606,17 @@ export default function compactionController(pi: ExtensionAPI): void {
 			if (tn === null) return undefined;
 			const deadlineAt = Date.now() + settings.fallbackDeadlineMs;
 			const hasComputing = runtime.state.phase === "computing" && inFlight !== null;
-			const gatesForSnapshot = (): { gates: boolean; fit: boolean; estimate: number; composeFail?: string } => {
+			type Gates = { gates: boolean; fit: boolean; estimate: number; composed?: ReturnType<typeof composeFinalSummary> };
+			const gatesForSnapshot = (): Gates => {
 				const snapshot = runtime.snapshot;
-				if (!snapshot) return { gates: false, fit: false, estimate: Number.POSITIVE_INFINITY, composeFail: "no-snapshot" };
-				// B4: compose FIRST — a failed ledger self-check means the
-				// snapshot cannot be supplied at all (gates false), and the
-				// V8a estimate must use the FINAL summary, never the bare one.
+				if (!snapshot) return { gates: false, fit: false, estimate: Number.POSITIVE_INFINITY };
+				// B4/RB4: compose ONCE — a failed ledger self-check means the
+				// snapshot cannot be supplied at all (gates false), the V8a
+				// estimate uses the FINAL summary, and the supply paths reuse
+				// this exact composed result (no second compose, no drift
+				// between the estimated and the actually-supplied bytes).
 				const composed = composeFinalSummary(ctx, snapshot.cut, snapshot.summary);
-				if (!composed.ok) return { gates: false, fit: false, estimate: Number.POSITIVE_INFINITY, composeFail: composed.reason };
+				if (!composed.ok) return { gates: false, fit: false, estimate: Number.POSITIVE_INFINITY };
 				const projection = ctx.sessionManager.buildSessionProjection();
 				const entries = projection.entries as ProjectedEntry[];
 				const kept = entries.slice(snapshot.cut.firstKeptEntryIndex).flatMap((entry) => entry.messages);
@@ -645,6 +652,7 @@ export default function compactionController(pi: ExtensionAPI): void {
 					gates: prechecks.action !== "discard" || prechecks.reason === "v8a-hard-fit",
 					fit: estimate.total <= hardFitLimitFor(event.reason, settings, tn),
 					estimate: estimate.total,
+					composed,
 				};
 			};
 
@@ -661,13 +669,13 @@ export default function compactionController(pi: ExtensionAPI): void {
 			if (process.env.SC_DEBUG) console.error("[sc-debug] fallback decision:", decision.action, "reason:", event.reason, "phase:", runtime.state.phase, "hasSnapshot:", !!runtime.snapshot);
 			if (decision.action === "supply-snapshot" && runtime.snapshot) {
 				const snapshot = runtime.snapshot;
-				// B4: supply the COMPOSED summary (ledger included, LED-06
-				// instant regeneration); a failed compose → no supply, hand
-				// back to native with the reason in telemetry.
-				const composed = composeFinalSummary(ctx, snapshot.cut, snapshot.summary);
-				if (!composed.ok) {
+				// RB4: reuse the summary gatesForSnapshot ALREADY composed —
+				// one compose per evaluation, zero drift between the V8a
+				// estimate and the actually-supplied bytes.
+				const composed = initial.composed;
+				if (!composed || !composed.ok) {
 					runtime.snapshot = null;
-					runtime.onDiscarded("v6-summary-invalid", { reason: composed.reason });
+					runtime.onDiscarded("v6-summary-invalid", { reason: composed && !composed.ok ? composed.reason : "compose-miss" });
 					return undefined;
 				}
 				const files = fileListsOf(composed.summary);
@@ -710,10 +718,10 @@ export default function compactionController(pi: ExtensionAPI): void {
 				if (process.env.SC_DEBUG) console.error("[sc-debug] wait-path afterWait:", JSON.stringify(afterWait), "phase:", runtime.state.phase);
 				if (runtime.state.phase === "ready" && afterWait.gates && afterWait.fit && runtime.snapshot) {
 					const snapshot = runtime.snapshot;
-					const composed = composeFinalSummary(ctx, snapshot.cut, snapshot.summary);
-					if (!composed.ok) {
+					const composed = afterWait.composed; // RB4: reuse the wait-gates compose
+					if (!composed || !composed.ok) {
 						runtime.snapshot = null;
-						runtime.onDiscarded("v6-summary-invalid", { reason: composed.reason });
+						runtime.onDiscarded("v6-summary-invalid", { reason: composed && !composed.ok ? composed.reason : "compose-miss" });
 						return undefined;
 					}
 					const files = fileListsOf(composed.summary);
@@ -774,16 +782,19 @@ export default function compactionController(pi: ExtensionAPI): void {
 				previousSummaryNarrative: previous ? stripLedgerBlock(previous.summary) : undefined,
 			});
 			if (!preparation) return undefined;
-			// B3 (2026-11-10 review): SUM-08 closedIds from the same region
-			// math the apply path uses, fed to the summarizer prompt.
+			// B3 + RB2/RB3 (2026-11-10 review rework): ledger precheck BEFORE
+			// the LLM — this leg runs inside session_before_compact with the
+			// user BLOCKED; an unviable ledger fails fast back to native
+			// instead of burning the deadline on a doomed summary call.
 			let closedIds: string[] | undefined;
 			try {
-				const regionEntries = (projection.entries as ProjectedEntry[]).slice(
-					(projection.entries as ProjectedEntry[]).findIndex((entry) => entry.sourceEntry.type === "compaction" && entry.messages.length > 0) + 1,
-					cut.cut.firstKeptEntryIndex,
-				);
-				const region = { entries: regionEntries };
-				closedIds = assembleLedger({ region, providers: ledgerProviders(ctx, region), settings }).closedIds;
+				const region = compressedRegionOf(projection.entries as ProjectedEntry[], cut.cut.firstKeptEntryIndex);
+				const ledger = assembleLedger({ region, providers: ledgerProviders(ctx, region), settings });
+				if (!ledger.selfCheck.ok) {
+					runtime.onDiscarded("v6-summary-invalid", { reason: ledger.selfCheck.missing.includes("ledger-over-budget") ? "ledger-over-budget" : "ledger-self-check-failed" });
+					return undefined;
+				}
+				closedIds = ledger.closedIds;
 			} catch {
 				closedIds = undefined;
 			}
@@ -815,7 +826,10 @@ export default function compactionController(pi: ExtensionAPI): void {
 			// estimating with the bare summary under-counts and can pass an
 			// over-budget compaction through.
 			const composedRegen = composeFinalSummary(ctx, cut.cut, outcome.summary);
-			if (!composedRegen.ok) return undefined;
+			if (!composedRegen.ok) {
+				runtime.onDiscarded("v6-summary-invalid", { reason: composedRegen.reason }); // RB2: no silent failure
+				return undefined;
+			}
 			const kept = (projection.entries as ProjectedEntry[]).slice(cut.cut.firstKeptEntryIndex).flatMap((entry) => entry.messages);
 			if (process.env.SC_DEBUG) console.error("[sc-debug] regenerate summary produced, gating V8a");
 			const estimate = estimatePost({

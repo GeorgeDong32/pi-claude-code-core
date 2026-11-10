@@ -88,14 +88,19 @@ export function parseCarriedDirectives(previousSummary: string | undefined): { d
 	const section = sectionOf(block, "Directives");
 	if (section === undefined) return { directives: [], dropped: false };
 	const directives: LedgerDirective[] = [];
+	// RB6 (2026-11-10 review rework): parse in TWO passes — first group each
+	// logical line with its two-space continuations (B1), THEN run pointer
+	// detection and classification over the WHOLE block. A folded pointer
+	// suffix on the last continuation line must not strand the entryId.
+	const logical: string[] = [];
 	for (const raw of section.split("\n")) {
-		// B1: two-space continuation lines stitch back onto the previous
-		// directive (newline restored, indent stripped).
-		if (raw.startsWith("  ") && directives.length > 0) {
-			const prev = directives[directives.length - 1]!;
-			prev.text = `${prev.text}\n${raw.slice(2)}`;
+		if (raw.startsWith("  ") && logical.length > 0) {
+			logical[logical.length - 1] = `${logical[logical.length - 1]!}\n${raw.slice(2)}`;
 			continue;
 		}
+		logical.push(raw);
+	}
+	for (const raw of logical) {
 		const line = raw.trim();
 		if (line.length === 0 || line.startsWith("##")) continue;
 		const pointer = /\[#([^\] ]+) @([^\]]+)\]/.exec(line);

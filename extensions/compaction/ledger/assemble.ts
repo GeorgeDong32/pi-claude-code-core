@@ -69,6 +69,22 @@ function clampDescription(text: string, chars: number): string {
 	return text.length > chars ? `${text.slice(0, chars)}…` : text;
 }
 
+/** RB1: cheap flow probes for ⑥ accounting — never throw (LED-07). */
+function flowProbeState(provider: LedgerProviders["flow"]): ReturnType<NonNullable<LedgerProviders["flow"]>> | undefined {
+	try {
+		return provider?.();
+	} catch {
+		return undefined;
+	}
+}
+function flowProbeRuns(provider: LedgerProviders["flow"]): number {
+	try {
+		return provider?.()?.openRuns.length ?? 0;
+	} catch {
+		return 0;
+	}
+}
+
 function buildSections(input: AssembleLedgerInput, level: number): Sections {
 	const { region, providers, settings } = input;
 	const degradation: LedgerDegradation = { tierADegraded: 0, directivesCollapsed: 0, directivesPointerOnly: 0, openOverflow: 0 };
@@ -88,7 +104,31 @@ function buildSections(input: AssembleLedgerInput, level: number): Sections {
 
 	// ── Open work: goals (+ flow in W7) ──
 	const goalState = safeMarked("goal", providers.goal, undefined);
-	const goal = goalState ? goalSection(goalState) : { openLines: [], closed: [], identities: [], closedIds: [], visibleIds: [] };
+	// RB1 (2026-11-10 review rework): probe the goal section once (default
+	// cap) for ⑥'s accounting, then re-render ONLY if the budget demands a
+	// different cap — the formatter stays the single renderer (LED-03).
+	const goalProbe = goalState ? goalSection(goalState) : undefined;
+	const goalOpenTotal = (goalProbe?.identities.length ?? 0) + (goalProbe?.hiddenOpenCount ?? 0);
+	const flowRunsTotal = flowProbeRuns(providers.flow);
+	let capOpenGoals: number | undefined;
+	let keptRuns: Array<NonNullable<ReturnType<typeof flowProbeState>>["openRuns"][number]> | undefined;
+	let hiddenOpen = 0;
+	{
+		const maxOpen = settings.maxOpenItems;
+		const focusedIsOpen = goalProbe?.identities.some((identity) => identity.id === goalState?.focusedGoalId) ?? false;
+		if (goalOpenTotal + flowRunsTotal > maxOpen) {
+			// over budget: single-budget truncation (goals first, then runs)
+			const keptGoals = Math.min(goalOpenTotal, maxOpen);
+			capOpenGoals = Math.max(0, keptGoals - (focusedIsOpen ? 1 : 0));
+			keptRuns = (flowProbeState(providers.flow)?.openRuns ?? []).slice(0, Math.max(0, maxOpen - keptGoals));
+			hiddenOpen = goalOpenTotal + flowRunsTotal - keptGoals - keptRuns.length;
+		} else if (goalOpenTotal > 20) {
+			// RB1: under maxOpenItems NOTHING may silently hide (LED-01) —
+			// raise the render cap so every open goal is shown.
+			capOpenGoals = Math.max(0, goalOpenTotal - (focusedIsOpen ? 1 : 0));
+		}
+	}
+	const goal = goalState ? goalSection(goalState, capOpenGoals !== undefined ? { capOpenGoals } : undefined) : { openLines: [], closed: [], identities: [], closedIds: [], hiddenOpenCount: 0 };
 	let openLines: string[] = [];
 	if (level >= 5) {
 		// ⑤ clamp description fields — identity fields stay verbatim.
@@ -97,7 +137,11 @@ function buildSections(input: AssembleLedgerInput, level: number): Sections {
 	} else {
 		openLines = [...goal.openLines];
 	}
-	const flowState = safeMarked("flow", providers.flow, undefined);
+	// RB1 (2026-11-10 review rework): flow renders the KEPT run set decided by
+	// ⑥'s single budget above (a run's task/gate/sentinel sublines stay with
+	// their run — whole groups only). bg does NOT consume maxOpenItems.
+	const flowStateRaw = safeMarked("flow", providers.flow, undefined);
+	const flowState = flowStateRaw && keptRuns && keptRuns.length < flowStateRaw.openRuns.length ? { ...flowStateRaw, openRuns: keptRuns as typeof flowStateRaw.openRuns } : flowStateRaw;
 	if (flowState) {
 		openLines.push(...flowLines(flowState, level >= 5 ? 60 : 120));
 		if (level >= 5) degradation.tierADegraded += 1;
@@ -105,37 +149,15 @@ function buildSections(input: AssembleLedgerInput, level: number): Sections {
 	const bgItems = safeMarked("bg", providers.bg, []);
 	const bg = bgSection(bgItems);
 
-	// ⑥ maxOpenItems overflow → TRUNCATE to the first maxOpenItems identity
-	// groups (B2, 2026-11-10 review: LED-01⑥ + INV-08), then a Tier-D pointer.
-	// Goal lines come first; flow-run groups (a run's task/gate sublines stay
-	// with their run) after — whole groups are kept or dropped, never split.
-	// The identity SET truncates with the display (goal → bg → flow), so
-	// selfCheck only demands visibility of what we actually kept.
-	const identityCount = goal.identities.length + (flowState?.openRuns.length ?? 0);
-	let keptFlowRuns: typeof flowState extends undefined ? never[] : Array<NonNullable<typeof flowState>["openRuns"][number]>;
-	keptFlowRuns = [] as never;
-	// B2: the goal side of the promise set is bounded by BOTH maxOpenItems
-	// and what the goal renderer can actually show (visibleIds).
-	let goalIdentities = goal.identities.filter((identity) => goal.visibleIds.includes(identity.id));
-	if (identityCount > settings.maxOpenItems) {
-		const bgCount = bg.identities.length; // bg identities sit between goal and flow
-		const goalKeep = Math.max(0, settings.maxOpenItems - bgCount);
-		goalIdentities = goalIdentities.slice(0, goalKeep);
-		const flowBudget = Math.max(0, settings.maxOpenItems - goalIdentities.length - bgCount);
-		const allRuns = flowState?.openRuns ?? [];
-		keptFlowRuns = allRuns.slice(0, flowBudget);
-		if (goal.identities.length > settings.maxOpenItems) {
-			openLines = openLines.slice(0, settings.maxOpenItems);
-		} else if (flowState && keptFlowRuns.length < allRuns.length) {
-			// rebuild: goal lines (already in) + first `flowBudget` whole flow groups
-			const goalLineCount = openLines.length - flowLines(flowState, level >= 5 ? 60 : 120).length;
-			const truncatedFlow = flowLines({ ...flowState, openRuns: keptFlowRuns as typeof allRuns }, level >= 5 ? 60 : 120);
-			openLines = [...openLines.slice(0, Math.max(0, goalLineCount)), ...truncatedFlow];
-		}
-		const pointer = flowState?.boardPath ? `full list in ${flowState.boardPath}` : "full list in .pi/goals/";
-		openLines.push(`+${identityCount - settings.maxOpenItems} more open items — ${pointer}`);
-		degradation.openOverflow = identityCount - settings.maxOpenItems;
+	// ⑥ overflow pointer (single budget): +K more open items — K counts BOTH
+	// hidden goals and dropped runs (degradation.openOverflow mirrors it).
+	if (hiddenOpen > 0) {
+		const pointer = flowStateRaw?.boardPath ? `full list in ${flowStateRaw.boardPath}` : "full list in .pi/goals/";
+		openLines.push(`+${hiddenOpen} more open items — ${pointer}`);
+		degradation.openOverflow = hiddenOpen;
 	}
+	const goalIdentities = goal.identities;
+	const keptFlowRuns = flowState?.openRuns ?? [];
 
 	// ── Directives: fresh region + LED-02b carry-over ──
 	const fresh = collectDirectives(region, settings.standingPatterns);
@@ -212,6 +234,21 @@ function flowLines(flow: FlowLedgerState, objectiveChars: number): string[] {
 		lines.push(`other open runs on this board (not touched by this session): ${flow.otherOpenRuns}`);
 	}
 	return lines;
+}
+
+/** RB3 (2026-11-10 review rework): LED-06 region — entries after the LAST
+ * compaction (with messages) up to the kept head. Single source for the
+ * draft, supply, regenerate, and precompute paths. */
+export function compressedRegionOf(entries: ReadonlyArray<CompressedRegionView["entries"][number]>, firstKeptEntryIndex: number): CompressedRegionView {
+	let boundaryStart = 0;
+	for (let i = entries.length - 1; i >= 0; i--) {
+		const entry = entries[i]!;
+		if (entry.sourceEntry.type === "compaction" && entry.messages.length > 0) {
+			boundaryStart = i + 1;
+			break;
+		}
+	}
+	return { entries: entries.slice(boundaryStart, firstKeptEntryIndex) as CompressedRegionView["entries"] };
 }
 
 /**

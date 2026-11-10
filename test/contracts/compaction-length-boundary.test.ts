@@ -78,6 +78,14 @@ describe("BLK-1 protection: ready snapshot + length boundary (POL-07/INV-11)", (
 			if (after.length > 0) expect(precomputeOrigin(after[0])).not.toBe("precompute");
 			// and no precompute draft landed anywhere over that stretch either
 			expect(branch.filter((e) => (e as { type?: string }).type === "compaction" && precomputeOrigin(e) === "precompute").length).toBe(0);
+			// RB5 (2026-11-10 review rework): the native overflow recovery USED
+			// our supply (native-backfill) and the supplied summary carries
+			// the composed ledger block — the end-to-end supply assertion.
+			const firstAfter = after[0] as { details?: { ccCore?: { origin?: string } }; summary?: string } | undefined;
+			if (firstAfter) {
+				expect(firstAfter.details?.ccCore?.origin).toBe("native-backfill");
+				expect(firstAfter.summary ?? "").toContain('<cc-core-ledger v="1">');
+			}
 		} finally {
 			host.cleanup();
 		}

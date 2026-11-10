@@ -23,7 +23,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { COMPACTION_LEDGER_MAX } from "../../../lib/context-budget.ts";
-import { assembleLedger, narrativeHeader } from "../ledger/assemble.ts";
+import { assembleLedger, compressedRegionOf, narrativeHeader } from "../ledger/assemble.ts";
 import { collectDirectives, isFlowDispatch, isStanding, parseCarriedDirectives, renderDirectives } from "../ledger/directives.ts";
 import { goalSection } from "../ledger/goal.ts";
 import { bgSection } from "../ledger/bg.ts";
@@ -288,24 +288,74 @@ test("B1 (2026-11-10 review): forged ledger tags in user directives are neutrali
 	assert.ok(carried.directives.some((d) => d.text.includes("keep this real directive")), "later directives not lost");
 });
 
-test("B2 (2026-11-10 review): ⑥ truncates to whole identity groups — 70 goals keep the first 60 ids+statuses and +10 pointer", () => {
-	const goal = (id: string): GoalRecord =>
-		Object.assign(createGoal({ objective: `=== Goal ===\nObjective: goal ${id}`, autoContinue: true, sisyphus: false }, 0), { id });
-	const manyGoals = new Map(Array.from({ length: 70 }, (_, i) => [`g${i}`, goal(`g${i}`)]));
-	const overflow = assembleLedger({
-		region: { entries: [] },
-		providers: { goal: () => ({ goalsById: manyGoals, focusedGoalId: "g0", ledgerEvents: [] }) },
-		settings: settings({ maxOpenItems: 60 }),
-	});
-	assert.ok(overflow.block.length <= COMPACTION_LEDGER_MAX, `INV-8 final clamp: ${overflow.block.length}`);
-	assert.ok(overflow.block.includes("+10 more open items"));
-	// B2: identities truncate WITH the display — the goal renderer shows the
-	// focused goal + first 20 other-open goals, so the self-check demands
-	// exactly that set (21 Tier A identities), no missing entries, g60+ absent.
-	assert.equal(overflow.selfCheck.ok, true);
-	assert.ok(overflow.selfCheck.missing.length === 0, `unexpected missing: ${overflow.selfCheck.missing.slice(0, 3).join(",")}`);
-	for (let i = 0; i <= 20; i++) assert.ok(overflow.block.includes(`g${i}`), `g${i} must be present`);
-	for (let i = 60; i < 70; i++) assert.ok(!overflow.block.includes(`g${i}`), `g${i} must be truncated`);
+const rbGoal = (id: string): GoalRecord =>
+	Object.assign(createGoal({ objective: `=== Goal ===\nObjective: goal ${id}`, autoContinue: true, sisyphus: false }, 0), { id });
+const rbGoals = (n: number) => new Map(Array.from({ length: n }, (_, i) => [`g${i}`, rbGoal(`g${i}`)]));
+const rbAssemble = (providers: LedgerProviders, over: Partial<CompactionSettings> = {}) =>
+	assembleLedger({ region: { entries: [] }, providers, settings: settings(over) });
+
+test("RB1 (2026-11-10 rework): 25 open goals ≤ maxOpenItems — ALL 25 ids+statuses in the block, no pointer, selfCheck ok", () => {
+	const r = rbAssemble({ goal: () => ({ goalsById: rbGoals(25), focusedGoalId: "g0", ledgerEvents: [] }) });
+	for (let i = 0; i < 25; i++) {
+		assert.ok(r.block.includes(`g${i}`), `g${i} must be present (no silent Tier A loss)`);
+		assert.ok(r.block.includes("running"), `g${i} status must be present`);
+	}
+	assert.ok(!r.block.includes("more open items"), "no overflow pointer under maxOpenItems");
+	assert.equal(r.selfCheck.ok, true);
+});
+
+test("RB1: 70 goals (focused g0) — 60 visible, +10 more pointer, g60+ absent, selfCheck ok", () => {
+	const r = rbAssemble({ goal: () => ({ goalsById: rbGoals(70), focusedGoalId: "g0", ledgerEvents: [] }) }, { maxOpenItems: 60 });
+	assert.ok(r.block.includes("+10 more open items"));
+	for (let i = 0; i <= 59; i++) assert.ok(r.block.includes(`g${i}`), `g${i} must be visible`);
+	for (let i = 60; i < 70; i++) assert.ok(!r.block.includes(`g${i}`), `g${i} must be hidden`);
+	assert.equal(r.selfCheck.ok, true);
+	assert.equal(r.degradation.openOverflow, 10);
+});
+
+test("RB1: 50 goals + 20 flow runs — 50 goals + 10 runs visible, +10 more, dropped runs' task sublines absent", () => {
+	const flow = {
+		associated: true,
+		boardPath: "/tmp/board.json",
+		openRuns: Array.from({ length: 20 }, (_, i) => ({
+			runId: `run-${i}`,
+			objective: `objective ${i}`,
+			stage: "executing",
+			tasks: [{ id: `run-${i}/t0`, status: "doing", branch: "w/b" }],
+			openGates: [],
+			lastSentinels: [],
+		})),
+		closed: [],
+		sentinels: [],
+		otherOpenRuns: 0,
+	};
+	const r = rbAssemble(
+		{
+			goal: () => ({ goalsById: rbGoals(50), focusedGoalId: "g0", ledgerEvents: [] }),
+			flow: () => flow,
+		},
+		{ maxOpenItems: 60 },
+	);
+	for (let i = 0; i < 50; i++) assert.ok(r.block.includes(`g${i}`), `goal g${i} must be visible`);
+	for (let i = 0; i < 10; i++) assert.ok(r.block.includes(`run-${i}`), `run-${i} must be visible`);
+	assert.ok(!r.block.includes("run-10"), "run-10 must be dropped");
+	assert.ok(!r.block.includes("run-10/t0"), "dropped run's task sublines must be absent too");
+	assert.ok(r.block.includes("+10 more open items"));
+	assert.equal(r.selfCheck.ok, true);
+});
+
+test("RB1: 3 bg items + 60 goals — all goals AND all bg visible, no pointer (bg never consumes maxOpenItems)", () => {
+	const r = rbAssemble(
+		{
+			goal: () => ({ goalsById: rbGoals(60), focusedGoalId: "g0", ledgerEvents: [] }),
+			bg: () => [1, 2, 3].map((i) => ({ id: `bg-${i}`, kind: "bg", status: "running", label: `l${i}` })),
+		},
+		{ maxOpenItems: 60 },
+	);
+	for (let i = 0; i < 60; i++) assert.ok(r.block.includes(`g${i}`), `g${i} must be visible`);
+	for (let i = 1; i <= 3; i++) assert.ok(r.block.includes(`bg-${i}`), `bg-${i} must be visible`);
+	assert.ok(!r.block.includes("more open items"), "bg does not consume the budget → no pointer");
+	assert.equal(r.selfCheck.ok, true);
 });
 
 test("B2 (2026-11-10 review): ladder-exhausted over-budget → empty block + failed selfCheck (ledger-over-budget), never a hard cut", () => {
@@ -357,4 +407,32 @@ test("B6 (2026-11-10 review): throwing providers render an explicit unavailable 
 	assert.ok(result.block.includes("(verification provider unavailable)"));
 	assert.ok(result.block.includes("keep tests green")); // directives intact
 	assert.ok(result.selfCheck.ok, result.selfCheck.missing.join(","));
+});
+
+test("RB6 (2026-11-10 rework): a multi-line directive folded to head round-trips its entryId", () => {
+	// three-line directive, folded to head → `… [#u9 @t]` sits on the LAST
+	// continuation line; the two-pass parse must still recover id/time/folded.
+	const carried = "- first line of the directive\n  second line with more\n  third… [#u9 @2026-11-10T10:00:00Z]";
+	const parsed = parseCarriedDirectives(["narrative", '<cc-core-ledger v="1">', "## Directives (verbatim)", carried, "</cc-core-ledger>", "tail"].join("\n"));
+	const d = parsed.directives.find((x) => x.text.includes("first line"));
+	assert.ok(d, "directive recovered");
+	assert.equal(d!.entryId, "u9");
+	assert.equal(d!.time, "2026-11-10T10:00:00Z");
+	assert.equal(d!.folded, "pointer");
+	assert.ok(d!.text.includes("second line"), "continuations stitched into the text");
+});
+
+test("RB3 (2026-11-10 rework): compressedRegionOf — no / one / two compaction boundaries", () => {
+	const msg = (id: string) => ({ sourceEntry: { type: "message", id, parentId: null, timestamp: "t" }, messages: [{ role: "user", content: [] }] });
+	const compaction = (id: string) => ({ sourceEntry: { type: "compaction", id, parentId: null, timestamp: "t" }, messages: [{ role: "user", content: [] }] });
+	const empty = (id: string) => ({ sourceEntry: { type: "compaction", id, parentId: null, timestamp: "t" }, messages: [] });
+	// no compaction → whole prefix
+	let region = compressedRegionOf([msg("a"), msg("b")] as never, 2);
+	assert.equal(region.entries.length, 2);
+	// one compaction (with messages) → after it
+	region = compressedRegionOf([msg("a"), compaction("c1"), msg("d"), msg("e")] as never, 4);
+	assert.deepEqual(region.entries.map((e) => (e.sourceEntry as { id: string }).id), ["d", "e"]);
+	// two → after the LAST one (findLast semantics)
+	region = compressedRegionOf([compaction("c1"), msg("b"), empty("c2"), compaction("c3"), msg("e")] as never, 5);
+	assert.deepEqual(region.entries.map((e) => (e.sourceEntry as { id: string }).id), ["e"]);
 });
