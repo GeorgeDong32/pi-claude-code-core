@@ -476,6 +476,7 @@ export default function compactionController(pi: ExtensionAPI): void {
 			providers: ["generic"],
 		});
 		pendingProposal = { proposalId, compressedRegionIds, midRun, summaryChars: finalSummary.length, estPostTokens: estimate.total, proposedAtTurn: runtime.state.turns };
+		sessionTreeSinceProposal = false; // C2 (2026-11-10 review): a fresh proposal clears the stale session_tree flag
 		return mergeDraftEntries((event.entries ?? []) as unknown[], draft);
 	};
 
@@ -697,16 +698,23 @@ export default function compactionController(pi: ExtensionAPI): void {
 			// deadline timer (the INV-2 exception) + the event signal.
 			if (decision.action === "wait-for-ready" && inFlight) {
 				const signal = event.signal;
+				// C1 (2026-11-10 review): timer handles are cleared and the
+				// abort listener detached once the race settles — no leaks.
+				let timerHandle: ReturnType<typeof setTimeout> | undefined;
+				let abortListener: (() => void) | undefined;
 				const timer = new Promise<undefined>((resolveTimer) => {
 					const remaining = Math.max(0, deadlineAt - Date.now());
-					const t = setTimeout(() => resolveTimer(undefined), remaining);
-					t.unref?.();
+					timerHandle = setTimeout(() => resolveTimer(undefined), remaining);
+					timerHandle.unref?.();
 				});
 				const aborted = new Promise<undefined>((resolveAbort) => {
 					if (signal?.aborted) return resolveAbort(undefined);
-					signal?.addEventListener("abort", () => resolveAbort(undefined), { once: true });
+					abortListener = () => resolveAbort(undefined);
+					signal?.addEventListener("abort", abortListener, { once: true });
 				});
 				await Promise.race([inFlight.promise.then(() => "done" as const), timer, aborted]);
+				if (timerHandle !== undefined) clearTimeout(timerHandle);
+				if (abortListener) signal?.removeEventListener("abort", abortListener);
 				if (signal?.aborted || Date.now() >= deadlineAt) {
 					// FB-07: bump generation, abort the old task, return now.
 					runtime.onFellthrough(signal?.aborted ? "aborted" : "deadline");
@@ -798,14 +806,16 @@ export default function compactionController(pi: ExtensionAPI): void {
 			} catch {
 				closedIds = undefined;
 			}
+			let regenTimer: ReturnType<typeof setTimeout> | undefined;
+			const regenAbort = (): void => controller.abort();
 			const deadlinePromise = new Promise<undefined>((resolveTimer) => {
-				const t = setTimeout(() => {
+				regenTimer = setTimeout(() => {
 					controller.abort();
 					resolveTimer(undefined);
 				}, Math.max(0, deadlineAt - Date.now()));
-				t.unref?.();
+				regenTimer.unref?.();
 			});
-			signal?.addEventListener("abort", () => controller.abort(), { once: true });
+			signal?.addEventListener("abort", regenAbort, { once: true });
 			const outcomePromise = runSummarizer({
 				preparation,
 				model: ctx.model!,
@@ -817,6 +827,8 @@ export default function compactionController(pi: ExtensionAPI): void {
 				signal: controller.signal,
 			});
 			const outcome = await Promise.race([outcomePromise, deadlinePromise]);
+			if (regenTimer !== undefined) clearTimeout(regenTimer); // C1: no timer leak
+			signal?.removeEventListener("abort", regenAbort);
 			if (Date.now() >= deadlineAt) {
 				runtime.onFellthrough("deadline"); // B5 (2026-11-10 review)
 				return undefined;
@@ -926,10 +938,27 @@ export default function compactionController(pi: ExtensionAPI): void {
 	}) as never);
 
 	pi.on("agent_before_settle" as never, ((event: { entries?: unknown[]; message?: { stopReason?: string }; outcome?: string }, ctx: ExtensionContext) => {
+		// C3 (2026-11-10 review): reconcile a pending proposal BEFORE
+		// evaluating this boundary (phase "proposed" never re-proposes, so
+		// ordering is safe).
+		try {
+			reconcileIfPending(ctx);
+		} catch {
+			/* never block */
+		}
 		return onApplyPoint(event, ctx, false);
 	}) as never);
 
-	pi.on("session_before_compact" as never, ((event: Parameters<typeof onBeforeCompact>[0], ctx: ExtensionContext) => onBeforeCompact(event, ctx)) as never);
+	pi.on("session_before_compact" as never, ((event: Parameters<typeof onBeforeCompact>[0], ctx: ExtensionContext) => {
+		// C3: entering the fallback leg reconciles first — a still-pending
+		// draft must be settled before we decide supply/wait/regenerate.
+		try {
+			reconcileIfPending(ctx);
+		} catch {
+			/* never block */
+		}
+		return onBeforeCompact(event, ctx);
+	}) as never);
 
 	pi.on("session_compact_failed" as never, (() => {
 		try {

@@ -168,6 +168,11 @@ export function validateRatioGroup(partial: Partial<RatioGroup>): { ratios: Rati
 		if (key === "overflowFitRatio") {
 			if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) merged.overflowFitRatio = raw;
 			else violated = true;
+		} else if (key === "hardFitRatio") {
+			// C4 (2026-11-10 review): spec allows hardFitRatio = 1.0 (the
+			// whole window) — validate 0 < v ≤ 1 instead of strict unit().
+			if (typeof raw === "number" && Number.isFinite(raw) && raw > 0 && raw <= 1) merged.hardFitRatio = raw;
+			else violated = true;
 		} else if (unit(raw)) merged[key] = raw;
 		else violated = true;
 	}

@@ -157,6 +157,9 @@ export interface HostOptions {
 	 * probe — its H5 position). undefined = no controller (baseline hosts).
 	 */
 	controllerSettings?: Record<string, unknown>;
+	/** C6: PI_CORE_COMPACTION override the host sets (default "on"); pass
+	 * null to leave the env unset so controllerSettings.mode decides. */
+	envMode?: string | null;
 	/** Extra extension factories loaded AFTER the probe. */
 	extraFactories?: ExtensionFactory[];
 	/** Extra extension factories loaded AFTER the controller (the H5(b)
@@ -220,7 +223,7 @@ export async function createCompactionHost(options: HostOptions = {}): Promise<C
 		// SC W4: the controller resolves its settings file from the agent dir
 		// (derived from the session dir below) — write them BEFORE loading.
 		writeFileSync(join(agentDir, "core-compaction.json"), JSON.stringify(options.controllerSettings), "utf8");
-		process.env.PI_CORE_COMPACTION = "on";
+		if (options.envMode !== null) process.env.PI_CORE_COMPACTION = options.envMode ?? "on";
 	}
 
 	// SC W4: disk-backed session dir under the temp agentDir so the controller

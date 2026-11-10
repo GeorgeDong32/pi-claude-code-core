@@ -22,7 +22,7 @@ module factory in a fixed order with the same `ExtensionAPI` instance.
 |---|---|
 | `pnpm install` | Install dependencies (pnpm is the package manager) |
 | `pnpm run check` | Unified tsc gate — two passes: main project (`tsconfig.json`) + contract suite (`tsconfig.contracts.json`). Must be exit 0. |
-| `pnpm run test` | Unit tests, **per-framework**: vitest for `test/lib/` + `extensions/modes/` (colocated), node:test via tsx for `extensions/{effort,goal,review,action-fusion,observation-pack,bg-shell}/tests/` |
+| `pnpm run test` | Unit tests, **per-framework**: vitest for `test/lib/` + `extensions/modes/` (colocated), node:test via tsx for `extensions/{effort,goal,review,action-fusion,observation-pack,bg-shell,compaction}/tests/` |
 | `pnpm run contracts` | Cross-package contract suite (`test/contracts/`, own vitest config). Pins globalThis keys, env vars, status slots, session entry types, disk layout. |
 | `pnpm exec vitest run test/lib/upgrade-canary.test.ts --config vitest.config.ts` | 升级金丝雀——升 Pi 前先跑（ObservationPack 占位符 + then_run 融合识别） |
 

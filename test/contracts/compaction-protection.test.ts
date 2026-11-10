@@ -302,11 +302,14 @@ describe("BLK-3 protection: hard capacity gate on every write path (V8a/INV-12)"
 			// recovery. The fallback SUPPLY leg (origin native-backfill) is a
 			// different, spec-legal path — it may legitimately serve the
 			// recovery when its result fits V8a.
-			const drafts = host.sessionManager
+			// C6 (2026-11-10 review): strengthen — in this scenario the
+			// controller must not write ANY compaction carrying details.ccCore
+			// (precompute OR native-backfill); the native leg may still land one.
+			const controllerWritten = host.sessionManager
 				.getBranch()
 				.filter((e) => e.type === "compaction")
-				.filter((e) => (e as { details?: { ccCore?: { origin?: string } } }).details?.ccCore?.origin === "precompute");
-			expect(drafts.length).toBe(0);
+				.filter((e) => (e as { details?: { ccCore?: unknown } }).details?.ccCore !== undefined);
+			expect(controllerWritten.length).toBe(0);
 			expect(host.sessionManager.getBranch().some((e) => e.type === "compaction")).toBe(true);
 		} finally {
 			host.cleanup();

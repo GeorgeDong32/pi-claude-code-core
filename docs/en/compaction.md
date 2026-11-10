@@ -39,6 +39,8 @@ record.
 
 Configuration: `~/.pi/agent/core-compaction.json` (ST-02), env
 `PI_CORE_COMPACTION=off|shadow|on`, command `/compaction [status|mode …]`.
+`shadow` = fully passive: no precompute, no drafts, no fallback supply — only
+the FB-08 native-summary audit remains (DEVIATIONS SC-5).
 
 **POL-07 propose gate (A1, 2026-11-10 review fix)**: the draft path itself now
 evaluates apply-point safety — the LAST assistant entry's stopReason is read

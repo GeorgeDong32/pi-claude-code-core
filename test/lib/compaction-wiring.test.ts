@@ -52,13 +52,15 @@ describe("INV-2 no timers/polling", () => {
 		for (const file of compactionFiles) {
 			const source = readFileSync(file, "utf-8");
 			expect(source, `${file}: setInterval`).not.toContain("setInterval");
-			// The single fallback deadline timers are one-shot setTimeout calls
-			// inside promise constructors (never re-armed, no recursion).
-			const timerUses = source.match(/setTimeout</g) ?? [];
+			// The two one-shot fallback deadline timers (wait + regenerate) —
+			// C6 (2026-11-10 review): exactly 2 setTimeout CALLS in index.ts,
+			// zero elsewhere; both are cleared after their race (C1).
+			const timerUses = source.match(/setTimeout\(/g) ?? [];
 			const recursive = /setTimeout\([^)]*\)\s*[;)].*setTimeout/s.test(source);
 			expect(recursive, `${file}: recursive setTimeout`).toBe(false);
 			if (timerUses.length > 0) {
-				expect(["index.ts"].some((suffix) => file.endsWith(suffix)), `${file}: timers only allowed in the fallback wiring`).toBe(true);
+				expect(file.endsWith("index.ts"), `${file}: timers only allowed in the fallback wiring`).toBe(true);
+				expect(timerUses.length, `${file}: expected exactly 2 setTimeout calls`).toBe(2);
 			}
 		}
 	});

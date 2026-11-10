@@ -28,6 +28,8 @@ fallback 腿可在 `session_before_compact` 向原生路径供稿（预computed 
 
 配置：`~/.pi/agent/core-compaction.json`（ST-02）、环境变量
 `PI_CORE_COMPACTION=off|shadow|on`、命令 `/compaction [status|mode …]`。
+`shadow` = 完全被动：不预压、不提议、不供稿——仅保留 FB-08 原生摘要审计
+（DEVIATIONS SC-5）。
 
 **POL-07 提议闸（A1，2026-11-10 review 修复）**：draft 路径本身评估 apply-point
 安全性——从边界 branch 读**最后一条 assistant** 的 stopReason（同时覆盖

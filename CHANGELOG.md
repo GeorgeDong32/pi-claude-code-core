@@ -23,6 +23,16 @@
 
 ## Unreleased
 
+### Fixed — compaction review Batch C (2026-11-10)
+
+- C1 deadline timer 泄漏(wait/regenerate 两处 clearTimeout + abort listener
+  removeEventListener);C2 新提议清除陈旧 sessionTreeSinceProposal;C3
+  agent_before_settle 与 session_before_compact 入口先对账;C4
+  hardFitRatio 允许 1.0(0<v≤1);C6 护栏(wiring 恰 2 处 setTimeout、BLK-3
+  扩为任何 ccCore compaction 禁写、off 模式零痕迹集成用例、INV-7 遥测
+  无正文哨兵断言);C8 shadow 语义文档对齐 + SC-5 偏离记录。
+
+
 ### Fixed — compaction review P0/Batch A (2026-11-10)
 
 - **A1 POL-07 接线（P0,rework R1 定稿）**:提议路径此前算出 applySafe 即弃、

@@ -363,8 +363,13 @@
 SC-1. **默认 mode 临时以 `shadow` 发布（2026-11-09 起）**
    - 内容：代码默认 `mode:"shadow"`（附录 C 已同步注明），而非 D2 的 `on`。
    - 理由：§7.3 发布门槛要求 BLK 全绿（✅ 7/7）且 H-SC-1/3/5/6 通过且 **M1 ≥ 90%**；W2 本机回放 M1 = 0.52（12/23，8 次来自单个小窗口会话属 POL-09 设计内不可行 R15、3 次属中位数 T_n 回放近似局限）。按门槛规则"未满足 → 默认改 shadow 发布并记临时偏离"。
-   - 影响面：shadow 下控制器全程观测、写 ST-01 遥测、FB-08 审计，但不提议 draft、供稿腿恒返回 undefined（POL-06 同款降级）。BLK 硬门槛不受 shadow 影响（自动化已全绿）。
+   - 影响面：shadow = **不预压、不提议、不供稿**（onApplyPoint 与 fallback 腿均早退），仅保留 FB-08 原生摘要审计（SC-5 记录与 spec §7.3 字面的偏离）。BLK 硬门槛不受 shadow 影响（自动化已全绿）。
    - **恢复条件**（满足其一即可回 `on`，一行改动+附录 C 回填）：① M1 ≥ 0.90（补第二台机器语料回放/参数校准后复测）；② 用户在 O2 拍板中接受当前 M1 并显式改回。
+
+SC-5. **shadow 模式为完全被动（2026-11-10 review C8 对齐）**
+   - 内容：spec §7.3 原文"shadow 仍会在 `session_before_compact` 之外运行预压"；实现中 shadow 与 off 在 onApplyPoint/供稿腿同样早退（index.ts），唯一的 shadow 独占行为是 FB-08 原生摘要审计。
+   - 理由：预压本身消耗摘要 LLM 调用；观测型模式不应产生成本与状态扰动，审计已覆盖"原生路径质量"的观测需求。文档（docs en/zh）已按实现表述。
+   - 恢复条件：若未来需要 shadow 下的预压实测数据（如 M1 对照），恢复 spec 字面行为需在 index.ts 两处早退中放行 start-computing 并补测试。
 
 SC-2. **lost(overridden) 后快照存活（以 BLK-2(a) 执行规范为准）**
    - 内容：§5.2 字面为"proposed → lost [快照作废]"，但 §4.4 BLK-2(a) 保护断言与对应测试要求"快照不消耗、后续 clean 边界可提交"。实现取后者：lost(overridden) → 回 ready、新 nonce 复提议；lost(branch-changed/dropped) 仍作废快照。
