@@ -33,6 +33,16 @@
  * requires the SNAPSHOT to survive an override so a later clean boundary can
  * commit it — resolving the §5.2 wording ("快照作废") in favor of §4.4's
  * "快照不消耗". lost(branch-changed/dropped) DOES void the snapshot.
+ *
+ * Reading guide (review batches A/D):
+ *   - POL-07: BOTH apply points take the assistant stopReason from the
+ *     session branch (ctx.sessionManager.getBranch(), backward scan) —
+ *     never the event payload alone (A1).
+ *   - The fallback supply leg consumes a ready snapshot through the
+ *     `served` transition (ready → idle; A2), not commit/discard.
+ *   - lost(overridden) re-proposal is capped at a per-session CUMULATIVE
+ *     OVERRIDE_DEGRADE_AFTER = 2 (commits don't reset it; session reset
+ *     does) → degrade to shadow (A3).
  */
 
 import { VERSION, SettingsManager, getLatestCompactionEntry, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -60,6 +70,7 @@ import {
 	assembleLedger,
 	compressedRegionOf,
 	narrativeHeader,
+	sanitizeLedgerLine,
 } from "./ledger/assemble.ts";
 import { buildFlowLedger, previousLedgerRunIds } from "./ledger/rex-flow.ts";
 import { runClosedSignal } from "./signals/rex-flow.ts";
@@ -226,7 +237,13 @@ export default function compactionController(pi: ExtensionAPI): void {
 			try {
 				const projection = ctx.sessionManager.buildSessionProjection();
 				const { tn, keep } = thresholdOf(ctx);
-				if (tn === null) return;
+				// D3 (2026-11-10 review D): phase is already "computing" — a
+				// silent return would wedge it there (INV-5 short-circuits every
+				// later boundary until session reset). Fail through the policy.
+				if (tn === null) {
+					runtime.onComputeFailed("no-threshold");
+					return;
+				}
 				const feasibility = jointFeasibility({
 					tn,
 					keepRecentTokens: keep,
@@ -328,6 +345,9 @@ export default function compactionController(pi: ExtensionAPI): void {
 					summaryModelFallback: resolution.fallbackToSession || undefined,
 				});
 			} catch {
+				// D3: a stale generation's crash must not turn the NEW
+				// generation's computing phase into refused.
+				if (generation !== runtime.state.generation) return;
 				// INV-1: a compute crash degrades to refused, never blocks.
 				runtime.onComputeFailed("compute-error");
 			}
@@ -375,7 +395,7 @@ export default function compactionController(pi: ExtensionAPI): void {
 			const fileIdx = Math.min(
 				...[rawSummary.indexOf("<read-files>"), rawSummary.indexOf("<modified-files>")].filter((i) => i >= 0).concat([rawSummary.length]),
 			);
-			const narrative = rawSummary.slice(0, fileIdx).trimEnd();
+			const narrative = sanitizeLedgerLine(rawSummary.slice(0, fileIdx).trimEnd()); // D4: the narrative must never carry a live ledger tag
 			const files = fileIdx < rawSummary.length ? rawSummary.slice(fileIdx) : "";
 			// F1: association comes from the memoized assemble result — no
 			// second provider invocation on the synchronous apply path.
@@ -801,7 +821,10 @@ export default function compactionController(pi: ExtensionAPI): void {
 				const region = compressedRegionOf(projection.entries as ProjectedEntry[], cut.cut.firstKeptEntryIndex);
 				const ledger = assembleLedger({ region, providers: ledgerProviders(ctx, region), settings });
 				if (!ledger.selfCheck.ok) {
-					runtime.onDiscarded("v6-summary-invalid", { reason: ledger.selfCheck.missing.includes("ledger-over-budget") ? "ledger-over-budget" : "ledger-self-check-failed" });
+					// D7.1 (2026-11-10 review D): a regenerate failure falls
+					// through to native — onDiscarded would void a still-ready
+					// snapshot and emit a cycle-less discarded from idle.
+					runtime.onFellthrough(ledger.selfCheck.missing.includes("ledger-over-budget") ? "ledger-over-budget" : "ledger-self-check-failed");
 					return undefined;
 				}
 				closedIds = ledger.closedIds;
@@ -841,7 +864,7 @@ export default function compactionController(pi: ExtensionAPI): void {
 			// over-budget compaction through.
 			const composedRegen = composeFinalSummary(ctx, cut.cut, outcome.summary);
 			if (!composedRegen.ok) {
-				runtime.onDiscarded("v6-summary-invalid", { reason: composedRegen.reason }); // RB2: no silent failure
+				runtime.onFellthrough(composedRegen.reason); // RB2: no silent failure; D7.1: fellthrough, not discarded
 				return undefined;
 			}
 			const kept = (projection.entries as ProjectedEntry[]).slice(cut.cut.firstKeptEntryIndex).flatMap((entry) => entry.messages);
@@ -926,7 +949,7 @@ export default function compactionController(pi: ExtensionAPI): void {
 	for (const name of RECONCILE_EVENTS) {
 		pi.on(name as never, ((_event: unknown, ctx: ExtensionContext) => {
 			try {
-				if (name === "agent_settled") nativeRecoveryPending = false; // POL-07② clear
+				if (name === "agent_settled" && resolvedMode !== "off") nativeRecoveryPending = false; // POL-07② clear (D2: off keeps zero state)
 				reconcileIfPending(ctx);
 			} catch {
 				/* never block */
@@ -964,6 +987,7 @@ export default function compactionController(pi: ExtensionAPI): void {
 
 	pi.on("session_compact_failed" as never, (() => {
 		try {
+			if (resolvedMode === "off") return; // D2: off = byte-identical to not installed (G5)
 			nativeRecoveryPending = true;
 		} catch {
 			/* never block */
@@ -972,6 +996,9 @@ export default function compactionController(pi: ExtensionAPI): void {
 
 	pi.on("session_compact" as never, ((event: { fromExtension?: boolean; summary?: string; entry?: { summary?: string } }, ctx: ExtensionContext) => {
 		try {
+			// D2 (2026-11-10 review D): off = byte-identical to not installed
+			// (G5) — no FB-08 audit telemetry, no notify. shadow keeps it (SC-5).
+			if (resolvedMode === "off") return;
 			if (event.fromExtension) return; // our own supply — seam not involved (FB-04)
 			// FB-08: audit the NATIVE summary (⑤–⑦ only); telemetry + one notify.
 			const summary = event.summary ?? event.entry?.summary ?? "";

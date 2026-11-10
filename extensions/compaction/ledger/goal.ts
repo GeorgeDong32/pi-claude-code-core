@@ -51,7 +51,10 @@ export function goalSection(state: GoalLedgerState, opts?: { capOpenGoals?: numb
 	// drops out of the self-check promise set while under maxOpenItems.
 	const openGoals = Array.from(state.goalsById.values()).filter((g) => g.status !== "complete");
 	const otherOpenGoals = openGoals.filter((g) => g.id !== state.focusedGoalId);
-	const focusedIsOpen = state.focusedGoalId !== null && state.goalsById.get(state.focusedGoalId)?.status !== "complete";
+	// D7.5 (2026-11-10 review D): a focused id that is NOT in goalsById is
+	// not open (the formatter renders no FOCUSED block for it either).
+	const focusedGoal = state.focusedGoalId !== null ? state.goalsById.get(state.focusedGoalId) : undefined;
+	const focusedIsOpen = focusedGoal !== undefined && focusedGoal.status !== "complete";
 	const renderedGoalIds = new Set<string>([
 		...(focusedIsOpen && state.focusedGoalId ? [state.focusedGoalId] : []),
 		...otherOpenGoals.slice(0, capOpenGoals).map((g) => g.id),
@@ -78,7 +81,10 @@ export function goalSection(state: GoalLedgerState, opts?: { capOpenGoals?: numb
 	const openBlock = extractSection(text, "FOCUSED GOAL");
 	const otherOpen = extractSection(text, "OTHER OPEN GOALS");
 	if (openBlock) openLines.push(...openBlock);
-	if (otherOpen) openLines.push(...otherOpen);
+	// D7.4 (2026-11-10 review D): drop the formatter's own "... and N more"
+	// line — hidden goals are reported ONCE by assemble's ⑥ pointer
+	// (hiddenOpenCount), never twice with conflicting counts.
+	if (otherOpen) openLines.push(...otherOpen.filter((line) => !/^\.\.\. and \d+ more$/.test(line.trim())));
 	// Terminal goals: also keep the goal module's rendering for the closed
 	// section when present (ids already collected above).
 	const terminal = extractSection(text, "TERMINAL GOALS");

@@ -263,7 +263,10 @@ export class SessionRuntime {
 	}
 
 	/** B5 (2026-11-10 review): FB-07 — the fallback leg missed its deadline or was aborted. */
-	onFellthrough(why: "deadline" | "aborted"): void {
+	// D7.1 (2026-11-10 review D): reason widened to string — regenerate
+	// failures (ledger precheck / compose) also fall through; still a reason
+	// CODE, never summary text (INV-7).
+	onFellthrough(why: string): void {
 		this.emit({ outcome: "fellthrough", reason: why, origin: "precompute", validated: true });
 	}
 
@@ -275,6 +278,8 @@ export class SessionRuntime {
 	 * (the counter is NOT reset by commits — only by session reset).
 	 */
 	onOverridden(info: { summaryChars: number; estPostTokens?: number }): void {
+		// D7.2 (2026-11-10 review D): only a live proposal can be overridden.
+		if (this.state.phase !== "proposed") return;
 		this.emit({
 			outcome: "discarded",
 			reason: "overridden",

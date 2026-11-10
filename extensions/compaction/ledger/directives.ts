@@ -78,13 +78,44 @@ function textOf(message: AgentMessage): string {
 export const LEDGER_BLOCK_OPEN = '<cc-core-ledger v="1">';
 export const LEDGER_BLOCK_CLOSE = "</cc-core-ledger>";
 
+/**
+ * D1 (2026-11-10 review rework D): the SINGLE render transform for directive
+ * text — newlines become two-space continuations (B1). Exported so the
+ * LED-08 self-check matches through the SAME pipeline (render + sanitize)
+ * instead of the raw text (multiline directives used to fail it forever).
+ */
+export function renderDirectiveText(text: string): string {
+	return text.replace(/\n/g, "\n  ");
+}
+
+/**
+ * D1 (2026-11-10 review rework D): the per-directive verbatim clamp —
+ * exported so the LED-08 self-check reuses the SAME clamp the renderer
+ * applies (then renderDirectiveText, then sanitizeLedgerLine).
+ */
+export function clampDirectiveText(text: string, perDirectiveMax: number): string {
+	return text.length > perDirectiveMax ? `${text.slice(0, perDirectiveMax)}… [truncated]` : text;
+}
+
+/**
+ * D4 (2026-11-10 review D): the body of the LAST complete v1 ledger block.
+ * The final summary is header + NARRATIVE (LLM output) + ledger + files —
+ * a forged block echoed inside the narrative would win a first-index scan;
+ * the real block is always the LAST one appended.
+ */
+export function lastLedgerBlockBody(summary: string | undefined): string | undefined {
+	if (!summary || summary.length === 0) return undefined;
+	const open = summary.lastIndexOf(LEDGER_BLOCK_OPEN);
+	if (open === -1) return undefined;
+	const close = summary.indexOf(LEDGER_BLOCK_CLOSE, open);
+	if (close === -1) return undefined;
+	return summary.slice(open + LEDGER_BLOCK_OPEN.length, close);
+}
+
 /** Parse the Directives section out of a previous summary's ledger block. */
 export function parseCarriedDirectives(previousSummary: string | undefined): { directives: LedgerDirective[]; dropped: boolean } {
-	if (!previousSummary || previousSummary.length === 0) return { directives: [], dropped: false };
-	const open = previousSummary.indexOf(LEDGER_BLOCK_OPEN);
-	const close = previousSummary.indexOf(LEDGER_BLOCK_CLOSE);
-	if (open === -1 || close === -1 || close < open) return { directives: [], dropped: false }; // no block — nothing to carry
-	const block = previousSummary.slice(open + LEDGER_BLOCK_OPEN.length, close);
+	const block = lastLedgerBlockBody(previousSummary);
+	if (block === undefined) return { directives: [], dropped: false }; // no complete block — nothing to carry
 	const section = sectionOf(block, "Directives");
 	if (section === undefined) return { directives: [], dropped: false };
 	const directives: LedgerDirective[] = [];
@@ -103,7 +134,10 @@ export function parseCarriedDirectives(previousSummary: string | undefined): { d
 	for (const raw of logical) {
 		const line = raw.trim();
 		if (line.length === 0 || line.startsWith("##")) continue;
-		const pointer = /\[#([^\] ]+) @([^\]]+)\]/.exec(line);
+		// D6 (2026-11-10 review D): a folded pointer is ALWAYS at the end of
+		// the rendered line — mid-text `[#id @t]` in user content must stay
+		// literal (never reclassified as a folded pointer).
+		const pointer = /\[#([^\] ]+) @([^\]]+)\]\s*$/.exec(line);
 		const kind = line.startsWith("-") || line.startsWith("*") ? line.slice(1).trim() : line;
 		if (pointer) {
 			directives.push({
@@ -166,19 +200,17 @@ export function renderDirectives(directives: LedgerDirective[], budget: Directiv
 
 	const degradation = { collapsed: 0, pointerOnly: 0 };
 	// perDirectiveMax clamp first (verbatim budget per line).
-	const clamp = (text: string): string =>
-		text.length > budget.perDirectiveMax ? `${text.slice(0, budget.perDirectiveMax)}… [truncated]` : text;
+	const clamp = (text: string): string => clampDirectiveText(text, budget.perDirectiveMax);
 
 	// B1 (2026-11-10 review): newlines inside a directive render as a
 	// two-space continuation indent, so user text can never forge a
 	// `## Heading` line that sectionOf would treat as a new section.
 	// parseCarriedDirectives stitches continuations back.
-	const flat = (text: string): string => text.replace(/\n/g, "\n  ");
 	const renderOne = (directive: LedgerDirective, foldLevel: "verbatim" | "head" | "pointer"): string => {
-		if (foldLevel === "verbatim") return `- ${flat(clamp(directive.text))}`;
+		if (foldLevel === "verbatim") return `- ${renderDirectiveText(clamp(directive.text))}`;
 		if (foldLevel === "head") {
 			degradation.collapsed += 1;
-			return `- ${flat(directive.text.slice(0, budget.foldHeadChars))}… [#${directive.entryId} @${directive.time ?? "?"}]`;
+			return `- ${renderDirectiveText(directive.text.slice(0, budget.foldHeadChars))}… [#${directive.entryId} @${directive.time ?? "?"}]`;
 		}
 		degradation.pointerOnly += 1;
 		return `- (see session) [#${directive.entryId} @${directive.time ?? "?"}]`;

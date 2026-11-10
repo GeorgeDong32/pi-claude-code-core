@@ -13,8 +13,9 @@
  *   ③ Directives → force the fold ladder (renderDirectives budget → minimal)
  *   ④ Background → one bare line per item
  *   ⑤ Open work → clamp description fields (id/status/branch/tab/rework
- *      are identity fields and NEVER clamped)
+ *      are identity fields and NEVER clamped — clampGoalLine, D5)
  *   ⑥ Open work items beyond maxOpenItems → "+K more — full list in <…>"
+ *      (<…> = .pi/goals/ and/or the board, by what is hidden — D7.4)
  *
  * LED-08 self-check: every Tier A id+status and every Tier B directive
  * pointer must be findable in the assembled string — a miss is a ledger
@@ -22,7 +23,7 @@
  */
 
 import { COMPACTION_LEDGER_MAX } from "../../../lib/context-budget.ts";
-import { collectDirectives, parseCarriedDirectives, renderDirectives } from "./directives.ts";
+import { clampDirectiveText, collectDirectives, parseCarriedDirectives, renderDirectiveText, renderDirectives } from "./directives.ts";
 import { goalSection } from "./goal.ts";
 import { bgSection } from "./bg.ts";
 import { scanVerification } from "./verification.ts";
@@ -69,6 +70,20 @@ function clampDescription(text: string, chars: number): string {
 	return text.length > chars ? `${text.slice(0, chars)}…` : text;
 }
 
+/**
+ * D5 (2026-11-10 review D): ⑤ clamp for goal lines — identity fields are
+ * NEVER clamped (LED-01⑤). `- <id> — <status> — <objective>` keeps its
+ * id/status prefix verbatim and clamps only the objective; the focused
+ * block's `Goal <id> — <status>` line is left whole; other description
+ * lines (Objective:/Usage:/events…) clamp as before.
+ */
+function clampGoalLine(line: string, chars: number): string {
+	const row = /^(\s*-\s+\S+\s+—\s+[^—]+?\s+—\s+)(.*)$/.exec(line);
+	if (row) return `${row[1]}${clampDescription(row[2]!, chars)}`;
+	if (/^\s*Goal\s+\S+\s+—\s+/.test(line)) return line;
+	return clampDescription(line, chars);
+}
+
 function buildSections(input: AssembleLedgerInput, level: number): Sections {
 	const { region, providers, settings } = input;
 	const degradation: LedgerDegradation = { tierADegraded: 0, directivesCollapsed: 0, directivesPointerOnly: 0, openOverflow: 0 };
@@ -101,6 +116,8 @@ function buildSections(input: AssembleLedgerInput, level: number): Sections {
 	let capOpenGoals: number | undefined;
 	let keptRuns: typeof flowStateRaw extends undefined ? never[] : Array<NonNullable<typeof flowStateRaw>["openRuns"][number]> | undefined;
 	let hiddenOpen = 0;
+	let hiddenGoals = 0;
+	let hiddenRuns = 0;
 	{
 		const maxOpen = settings.maxOpenItems;
 		const focusedIsOpen = goalProbe?.identities.some((identity) => identity.id === goalState?.focusedGoalId) ?? false;
@@ -109,7 +126,9 @@ function buildSections(input: AssembleLedgerInput, level: number): Sections {
 			const keptGoals = Math.min(goalOpenTotal, maxOpen);
 			capOpenGoals = Math.max(0, keptGoals - (focusedIsOpen ? 1 : 0));
 			keptRuns = (flowStateRaw?.openRuns ?? []).slice(0, Math.max(0, maxOpen - keptGoals));
-			hiddenOpen = goalOpenTotal + flowRunsTotal - keptGoals - keptRuns.length;
+			hiddenGoals = goalOpenTotal - keptGoals;
+			hiddenRuns = flowRunsTotal - keptRuns.length;
+			hiddenOpen = hiddenGoals + hiddenRuns;
 		} else {
 			// F2 (2026-11-10 review final): no magic 20 — under budget the
 			// render cap is ALWAYS explicit so nothing can hide behind the
@@ -121,7 +140,7 @@ function buildSections(input: AssembleLedgerInput, level: number): Sections {
 	let openLines: string[] = [];
 	if (level >= 5) {
 		// ⑤ clamp description fields — identity fields stay verbatim.
-		openLines = goal.openLines.map((line) => clampDescription(line, 80));
+		openLines = goal.openLines.map((line) => clampGoalLine(line, 80));
 		degradation.tierADegraded += 1;
 	} else {
 		openLines = [...goal.openLines];
@@ -139,9 +158,13 @@ function buildSections(input: AssembleLedgerInput, level: number): Sections {
 
 	// ⑥ overflow pointer (single budget): +K more open items — K counts BOTH
 	// hidden goals and dropped runs (degradation.openOverflow mirrors it).
+	// D7.4 (2026-11-10 review D): the pointer names where the HIDDEN items
+	// actually live — goals → .pi/goals/, runs → the board, both → both.
 	if (hiddenOpen > 0) {
-		const pointer = flowStateRaw?.boardPath ? `full list in ${flowStateRaw.boardPath}` : "full list in .pi/goals/";
-		openLines.push(`+${hiddenOpen} more open items — ${pointer}`);
+		const targets: string[] = [];
+		if (hiddenGoals > 0) targets.push(".pi/goals/");
+		if (hiddenRuns > 0) targets.push(flowStateRaw?.boardPath ?? "the rex-flow board");
+		openLines.push(`+${hiddenOpen} more open items — full list in ${targets.join(" and ")}`);
 		degradation.openOverflow = hiddenOpen;
 	}
 	const goalIdentities = goal.identities;
@@ -185,7 +208,9 @@ function buildSections(input: AssembleLedgerInput, level: number): Sections {
 	// B6: per-section unavailable markers land in their own sections.
 	if (unavailable.goal || unavailable.flow) openLines.push(...[unavailable.goal ? "(goal provider unavailable)" : "", unavailable.flow ? "(flow provider unavailable)" : ""].filter((l) => l !== ""));
 	if (unavailable.bg && backgroundLines.length === 0) backgroundLines.push("(bg provider unavailable)");
-	if (unavailable.verification && verificationLines.length === 0) verificationLines.push("(verification provider unavailable)");
+	// D7.3 (2026-11-10 review D): a throwing verification provider is ALWAYS
+	// reported (LED-07), even when the region scan fallback produced data.
+	if (unavailable.verification) verificationLines.push("(verification provider unavailable)");
 
 	return {
 		openWork: openLines,
@@ -278,7 +303,13 @@ function selfCheck(sections: Sections, block: string, region: CompressedRegionVi
 	// with a pointer line carrying its entryId.
 	const fresh = collectDirectives(region, settings.standingPatterns).filter((d) => d.class !== "flow-dispatch");
 	for (const directive of fresh) {
-		const verbatim = block.includes(directive.text.slice(0, Math.min(40, directive.text.length)));
+		// D1 (2026-11-10 review D): probe the first 40 chars of the FULLY
+		// rendered line (clamp → continuation indent → tag sanitize, then
+		// slice) — slicing the raw text first would split a ledger tag that
+		// straddles the boundary, and a multiline directive's raw text never
+		// appears verbatim in the block anyway.
+		const rendered = sanitizeLedgerLine(renderDirectiveText(clampDirectiveText(directive.text, settings.perDirectiveMax)));
+		const verbatim = block.includes(rendered.slice(0, Math.min(40, rendered.length)));
 		const pointer = directive.entryId !== "" && block.includes(`#${directive.entryId} @`);
 		if (!verbatim && !pointer) missing.push(`tierB:${directive.entryId}`);
 	}

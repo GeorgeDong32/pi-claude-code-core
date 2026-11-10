@@ -75,17 +75,18 @@ describe("BLK-1 protection: ready snapshot + length boundary (POL-07/INV-11)", (
 			const idx = branch.findIndex((e, i) => isAssistant(e) && assistantStop(e) === "length" && !branch.slice(0, i).some((p) => isAssistant(p) && assistantStop(p) === "length"));
 			expect(idx).toBeGreaterThanOrEqual(0);
 			const after = branch.slice(idx + 1).filter((e) => (e as { type?: string }).type === "compaction");
-			if (after.length > 0) expect(precomputeOrigin(after[0])).not.toBe("precompute");
+			// D8.1 (2026-11-10 review D): unconditional — a recovery compaction
+			// MUST have landed, and it must not be ours.
+			expect(after.length).toBeGreaterThan(0);
+			expect(precomputeOrigin(after[0])).not.toBe("precompute");
 			// and no precompute draft landed anywhere over that stretch either
 			expect(branch.filter((e) => (e as { type?: string }).type === "compaction" && precomputeOrigin(e) === "precompute").length).toBe(0);
 			// RB5 (2026-11-10 review rework): the native overflow recovery USED
 			// our supply (native-backfill) and the supplied summary carries
 			// the composed ledger block — the end-to-end supply assertion.
-			const firstAfter = after[0] as { details?: { ccCore?: { origin?: string } }; summary?: string } | undefined;
-			if (firstAfter) {
-				expect(firstAfter.details?.ccCore?.origin).toBe("native-backfill");
-				expect(firstAfter.summary ?? "").toContain('<cc-core-ledger v="1">');
-			}
+			const firstAfter = after[0] as { details?: { ccCore?: { origin?: string } }; summary?: string };
+			expect(firstAfter.details?.ccCore?.origin).toBe("native-backfill");
+			expect(firstAfter.summary ?? "").toContain('<cc-core-ledger v="1">');
 		} finally {
 			host.cleanup();
 		}
@@ -124,9 +125,12 @@ describe("BLK-1 protection: ready snapshot + length boundary (POL-07/INV-11)", (
 		});
 		try {
 			host.faux.setResponses(responses("stop"));
-			await host.session.prompt("one");
-			await host.session.prompt("two");
-			await host.session.prompt("three");
+			// D1.4 (2026-11-10 review D): MULTILINE prompts — before the D1
+			// self-check fix a newline in the directive text made LED-08 fail
+			// forever, so this control produced 0 drafts.
+			await host.session.prompt("one\nsecond line of the request");
+			await host.session.prompt("two\nanother follow-up line here");
+			await host.session.prompt("three\nfinal multiline instruction");
 			const branch = host.sessionManager.getBranch();
 			const drafts = branch.filter((e) => (e as { type?: string }).type === "compaction" && precomputeOrigin(e) === "precompute");
 			expect(drafts.length).toBe(1);

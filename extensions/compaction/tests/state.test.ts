@@ -217,10 +217,15 @@ test("A2 rework R4: onServed — from ready → idle + served telemetry; non-rea
 
 test("A3 rework R3: onOverridden — telemetry every occurrence, degrade at OVERRIDE_DEGRADE_AFTER, phase back to ready, reset clears", () => {
 	const { rt, emitted } = runtime();
+	driveToProposed(rt, "ov-1"); // D7.2: only a live proposal can be overridden
 	rt.onOverridden({ summaryChars: 900 });
 	assert.equal(rt.state.phase, "ready"); // BLK-2(a): back to ready, fresh nonce slot
 	assert.equal(rt.degraded, false); // 1 < 2
 	assert.ok(emitted.some((e) => e.outcome === "discarded" && e.reason === "overridden" && e.origin === "precompute"));
+	// back to proposed from ready (snapshot survived the override)
+	const again = rt.onBoundary({ type: "boundary", P: 0.8, applySafe: true, isApplyPoint: true, prechecksPassed: true, feasibility: { feasible: true, effectiveSummaryTokens: 12000, expectedGrowth: 3000, tailMax: 9000000, neededTn: 107000 }, mayCompute: true, proposalNonce: "ov-2" });
+	assert.equal(again.action.type, "propose");
+	rt.onProposed({ midRun: false, summaryChars: 800 });
 	rt.onOverridden({ summaryChars: 800, estPostTokens: 1200 });
 	assert.equal(rt.degraded, true); // 2 >= 2 — degraded
 	assert.equal(emitted.filter((e) => e.reason === "overridden").length, 2); // APP-08: EVERY occurrence writes telemetry
@@ -251,4 +256,41 @@ test("B5 (2026-11-10 review): infeasible / apply-error / fellthrough telemetry (
 	assert.ok(outcomes.includes("discarded:apply-error"));
 	assert.ok(outcomes.includes("fellthrough:deadline"));
 	assert.ok(outcomes.includes("fellthrough:aborted"));
+});
+
+test("D7.2 (2026-11-10 review D): onOverridden outside phase proposed → no telemetry, phase unchanged", () => {
+	for (const drive of [(_rt: SessionRuntime) => {}, driveToReady] as const) {
+		const { rt, emitted } = runtime();
+		drive(rt);
+		const phase = rt.state.phase;
+		rt.onOverridden({ summaryChars: 900 });
+		rt.onOverridden({ summaryChars: 900 });
+		assert.equal(rt.state.phase, phase);
+		assert.equal(emitted.filter((e) => e.reason === "overridden").length, 0);
+		assert.equal(rt.degraded, false);
+	}
+});
+
+test("D3 (2026-11-10 review D): computing + onComputeFailed(\"no-threshold\") leaves computing (refused + cooldown)", () => {
+	// index.ts#launchCompute now calls onComputeFailed("no-threshold") when
+	// thresholdOf() yields tn === null instead of returning silently.
+	const { rt, emitted } = runtime();
+	const d = rt.onBoundary({ type: "boundary", P: 0.7, applySafe: true, isApplyPoint: false, prechecksPassed: true, feasibility: { feasible: true, effectiveSummaryTokens: 1, expectedGrowth: 1, tailMax: 1e9, neededTn: 1 }, mayCompute: true });
+	assert.equal(d.action.type, "start-computing");
+	assert.equal(rt.state.phase, "computing");
+	rt.onComputeFailed("no-threshold");
+	assert.notEqual(rt.state.phase, "computing");
+	assert.equal(rt.state.phase, "refused");
+	assert.ok(rt.state.refusedCooldownTurns > 0, "refusal arms the cooldown");
+	assert.ok(emitted.some((e) => e.outcome === "refused" && e.reason === "no-threshold"));
+});
+
+test("D7.1 (2026-11-10 review D): onFellthrough carries regenerate reason codes, phase/snapshot untouched", () => {
+	const { rt, emitted } = runtime();
+	driveToReady(rt);
+	rt.onFellthrough("ledger-self-check-failed");
+	rt.onFellthrough("ledger-compose-error");
+	assert.equal(rt.state.phase, "ready");
+	assert.notEqual(rt.snapshot, null, "a still-ready snapshot is NOT voided by a regenerate failure");
+	assert.deepEqual(emitted.filter((e) => e.outcome === "fellthrough").map((e) => e.reason), ["ledger-self-check-failed", "ledger-compose-error"]);
 });

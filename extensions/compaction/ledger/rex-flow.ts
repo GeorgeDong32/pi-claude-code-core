@@ -24,6 +24,7 @@
 
 import { readFileSync, statSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { lastLedgerBlockBody } from "./directives.ts";
 import type { CompressedRegionView, FlowLedgerState } from "./types.ts";
 import type { CompactionSettings } from "../settings.ts";
 
@@ -256,9 +257,12 @@ function trusted(board: BoardFile, boardPath: string, observed: Set<string>, obs
 export function previousLedgerRunIds(previousSummary: string | undefined): Set<string> {
 	const ids = new Set<string>();
 	if (!previousSummary) return ids;
-	// B6 (2026-11-10 review): parse any block version for run-id carry-over.
-	const match = previousSummary.match(/<cc-core-ledger v="[^"]*">([\s\S]*?)<\/cc-core-ledger>/);
-	if (!match) return ids;
-	for (const id of match[1].match(new RegExp(RUN_ID, "g")) ?? []) ids.add(id);
+	// D4 (2026-11-10 review D): read ONLY the LAST complete v1 block (shared
+	// helper with parseCarriedDirectives) — a forged block echoed in the
+	// narrative must not shadow the real one; unknown versions are ignored
+	// (INV-9), superseding B6's any-version match.
+	const body = lastLedgerBlockBody(previousSummary);
+	if (body === undefined) return ids;
+	for (const id of body.match(new RegExp(RUN_ID, "g")) ?? []) ids.add(id);
 	return ids;
 }

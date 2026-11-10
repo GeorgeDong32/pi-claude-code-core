@@ -9,7 +9,7 @@
  *    itself legitimately carries the narrative; telemetry must not).
  */
 import { describe, expect, it } from "vitest";
-import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxText, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { createCompactionHost } from "./support/compaction-host.ts";
 
 const AGGRESSIVE = {
@@ -62,6 +62,35 @@ describe("C6: off mode + INV-7 telemetry hygiene", () => {
 				.filter((e) => e.type === "compaction")
 				.filter((e) => (e as { details?: { ccCore?: unknown } }).details?.ccCore !== undefined);
 			expect(ccCoreCompactions.length).toBe(0);
+		} finally {
+			host.cleanup();
+		}
+	});
+
+	it("D2 (2026-11-10 review D): mode:'off' + a native INVALID summary — the FB-08 audit writes nothing either (G5)", async () => {
+		const host = await createCompactionHost({
+			// BLK-5 fixture shape: reasoning-only summary → assembled:headings
+			// + assembled:narrative failures → audit would emit
+			// native-summary-invalid telemetry + one notify in ANY live mode.
+			model: { contextWindow: 6000, maxTokens: 1000, reasoning: true },
+			settingsOverrides: { compaction: { enabled: true, reserveTokens: 3000, keepRecentTokens: 300 } },
+			controllerSettings: { ...AGGRESSIVE, mode: "off" },
+			envMode: null, // let controllerSettings.mode decide (C6: no env)
+			probe: {},
+		});
+		try {
+			host.faux.setResponses([
+				fauxAssistantMessage("x".repeat(12000)),
+				fauxAssistantMessage([fauxThinking("only thoughts"), fauxText("")], { stopReason: "stop" }),
+			]);
+			await host.session.prompt("grow then summarize nothing");
+			// The native compaction DID run and its empty summary landed…
+			const native = host.sessionManager.getBranch().filter((e) => e.type === "compaction");
+			expect(native.length).toBe(1);
+			expect((native[0] as { fromHook?: boolean }).fromHook).toBeFalsy();
+			// …but off mode is byte-identical to not installed (G5): no
+			// cc-core-compaction telemetry at all — the audit is gated off.
+			expect(telemetryEntries(host).length).toBe(0);
 		} finally {
 			host.cleanup();
 		}
