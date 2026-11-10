@@ -718,7 +718,7 @@ spec `../specs/design/DESIGN-MEMORY-V2.md`，报告 `../MEMORY-V2-REPORT.md`（�
 ## Smart Compaction W2（SC，2026-11-09）—— 回放与校准
 
 - **scripts/compaction-replay.mjs**（tsx 运行，TS 模块直import 真 policy/cutpoint）：语料解析（usage 口径 tokens、压缩事件=E1 阻塞代理）→ 逐会话模拟（真 evaluate 全状态机：compute-ok/propose/reconcile 都走 policy；提交后按压缩量折减有效上下文防"跑步机"；lastCommittedAt 独立于 snapshot 存活）；五方案（固定比例/固定提前量 25k·50k·75k/速率自适应）；M1-M10 聚合输出（INV-7 只出聚合）；--self-check + 合成夹具（test/fixtures/compaction/synthetic/）。切点视图按会话 chars/4→usage 校准因子缩放（中位 ≈3.0，即 POL-10 overhead 的回放侧等价物）。
-- **本机全量回放**（1166 jsonl，11 会话可推导阈值，23 次阈值事件）：M1=0.52（12/23，**校准目标 0.90 未达**：8 次来自单个小窗口会话 T_n≈45.7K 属 POL-09 设计内不可行 R15，3 次属中位数 T_n 近似局限）；M3b=1.0、V8b=1.0；M6 原生阻塞 p50 103s/p90 171s（吻合 E1）；M7 10/11 可行；M9 增量 p99 6.5K、max 26.6K、>5K 占 1.9%；M10 固定比例 0.18、固定提前量 0.00、**朴素自适应 0.51+V8b 0.50（严格更差——自适应必须与 POL-09 联合求解的实证）**。O1/O2 对比入 docs；**默认值不变**（O2 待用户拍板）。第二台机器语料=待证据项。
+- **本机全量回放**（1166 jsonl，11 会话可推导阈值，23 次阈值事件）：M1=0.52（12/23，**校准目标 0.90 未达**：8 次来自单个小窗口会话 T_n≈45.7K 属 POL-09 设计内不可行 R15，3 次未归因——中位数 T_n 代理下为临界失误，与估算误差相容但未证实，见 2026-11-11 上线前审查节）；M3b=1.0、V8b=1.0；M6 原生阻塞 p50 103s/p90 171s（吻合 E1）；M7 10/11 可行；M9 增量 p99 6.5K、max 26.6K、>5K 占 1.9%；M10 固定比例 0.18、固定提前量 0.00、**朴素自适应 0.51+V8b 0.50（严格更差——自适应必须与 POL-09 联合求解的实证）**。O1/O2 对比入 docs；**默认值不变**（O2 待用户拍板）。第二台机器语料=待证据项。
 - **docs/{en,zh}/compaction.md**：双语校准记录（机制摘要+指标表+归因+结论）。
 - **测试** `test/lib/compaction-replay.test.ts` 9 例（提取/阈值/延迟模型/模拟/聚合/自检/INV-7 源码检查）。
 - **三门禁**：check 0 错；unit 80 文件全绿；contracts 90+4 todo。
@@ -751,3 +751,23 @@ spec `../specs/design/DESIGN-MEMORY-V2.md`，报告 `../MEMORY-V2-REPORT.md`（�
 - **金丝雀 +3**（SC-HOST-03/H3/H12——draft 落盘无 session_compact、entries 替换语义、length 恢复谓词 hazard 双向钉住），5/5 绿。
 - **文档收口**：AGENTS.md/AGENTS.zh.md（14 模块、布局、PI_CORE_COMPACTION、core-compaction.json 磁盘行）、docs/{en,zh}/architecture.md（twelve/十二→fourteen/十四）、CHANGELOG（未发布条目）、DEVIATIONS（SC-1..4）、spec/README.md、spec 状态行+附录 C mode 行回填。
 - **三门禁**：check 0 错；unit 81 文件全绿（compaction 套件累计 98 例）；contracts 90+4 todo、BLK 7/7；金丝雀 5/5。
+
+## Smart Compaction 跨机回放补证（2026-11-10）
+
+- **第二台机器语料已补**：Air 只读取得 367 个 JSONL（391 052 581 bytes），12 个文件具可推导阈值；0 坏 JSONL 行。1 个活跃文件补拉后仍增长，快照比远端最终统计少 3 141 bytes，非原子快照；原文不入库。
+- **同代码/参数/耗时模型复测**：本机原口径 12/23=52.2%，Air 29/29=100%；折叠 44 个内容重复文件和 1 个追加前缀版本，另排除同 id 分叉的 2 个本机文件（各 1 次压缩）后，合并 1 487 个文件、21 个有效文件，M1=39/50=78.0%。未去重原始合计 41/52=78.8%，也未达门槛。
+- **分层诊断**：回放可行子集 39/42=92.9%，1 个推导阈值约 45.7K 的会话贡献 8 次不可行事件。其余 3 次遗漏逐事件 trace 后**未归因**（2026-11-11 上线前审查修正）：中位数 T_n 代理下均为临界失误，与估算误差相容；`tokensBefore` 是压缩落盘时上下文量而非配置阈值，不能证明真实触发点更低，不排除控制器/时序因素，待真机原因码裁决。工具使用历史 `tokensBefore` 中位数与固定 keep=20K，是回放代理而非在线接管率。
+- **用户 O2 拍板（2026-11-10）**：发布口径改为长对话稳定性/可靠性 + 压缩效果 + 时间节约；M1 全样本降级为信息性指标，小窗口（POL-09 不可行）声明为接管范围外。spec §7.3 字面门槛与本口径冲突，spec 未改——记入 DEVIATIONS SC-1 增补。
+- **决策不变**：合并固定比例 M1 高于三种固定提前量（70/74/76%），朴素自适应白做率 33.7%；保留默认参数，不合并、不发版。W2/W9 历史记录中的“第二台机器语料待补”由本节关闭，其余 H-SC/S3 真机证据仍待补。详细双语结果见 docs/{en,zh}/compaction.md。
+
+## Smart Compaction 上线前审查与修复（2026-11-11）
+
+真实 `AgentSession` + faux provider 定向探针复审（`/tmp/sc-pre-release-review.PjEjYV/`，REVIEW.md 存档）发现并修复：
+
+- **R1（P1）异步输入一致性**：摘要生成期间 `context_edit`/原生压缩落地时，快照基线（`branchPathIds`）原在**完成后**才记录，V4 识别不出中途编辑 → 修正前内容被重新提交。修复：基线改在读取摘要输入时固定（`launchCompute` 与 `regenerateNow` 一致），regenerate 提交前补 V1 前缀 + V4 编辑冲突校验，冲突走 `onFellthrough`（v1-branch-prefix / v4-conflict-edit）。真实宿主探针红→绿：`precheck=discard(v4-conflict-edit)`、无 precompute 落盘。
+- **R2（P1）继承指令丢源 + 假自检**：逐字指令不带来源后缀，跨轮解析回 `entryId:""`；预算折叠后生成死指针 `[# @?]` 丢尾部约束，LED-08 只查新指令仍报通过。修复：渲染行统一带 `[#entryId @time]` 尾缀；解析区分逐字/头折叠/纯指针（指针锚定行尾，行中 `[#id @t]` 保持字面）；无来源旧行折叠地板为头、绝不造空指针；LED-08 覆盖新+继承指令。默认预算下 25 条新指令场景原文尾部约束不再静默消失（保留可回溯指针）。
+- **R3（P1）伪造台账遮蔽**：`<read-files>`/`<modified-files>` 段（LLM 原文）直拼在真台账块后，伪造块因"取最后一个完整块"规则遮蔽真块，下一轮只继承伪造指令。修复：`composeFinalSummary` 对文件清单段同样 `sanitizeLedgerLine` 中和标签。真实宿主探针：提交摘要恰 1 个活体台账块、伪造指令不进入继承。
+- **R4（P2）INV-7 调试泄漏**：`SC_DEBUG=1` 时 wait-path 日志 JSON.stringify 整个 `afterWait`（含 `composed.summary` 正文）。修复：白名单元数据（phase/reason/布尔/计数/id），不序列化正文。
+- **归因措辞修正**：跨机回放"3 次遗漏=回放近似、非控制器缺陷"结论过强——`tokensBefore` 为压缩点上下文量而非配置阈值，跨度不能证明真实触发点更低。docs en/zh、DEVIATIONS SC-1 增补、本文件历史节统一改为"未归因，待真机原因码裁决"。
+- **测试钉档**：`test/contracts/compaction-integrity.test.ts`（3 例，R1/R3/R4，README 已登记）；`ledger.test.ts` 新增 R2 往返/legacy 地板用例并改写 LED-08 空 id 用例（head 地板通过 vs +K 坍缩失败）。
+- **验证**：四个 /tmp 探针（race/ledger/file-tag/privacy）修复后全绿（exit 0）；ledger 34/34；新契约 3/3；四门全绿——check OK，unit 82 vitest 文件 + 987 node:test（compaction 135/135），contracts 18 文件 108 passed + 4 todo，canary 5/5。

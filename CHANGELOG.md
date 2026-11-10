@@ -23,6 +23,30 @@
 
 ## Unreleased
 
+### Added — compaction runtime measurements (2026-11-10)
+
+- 新增 `cc-core-compaction-metrics` v1 元数据插桩（仅 on），记录预压启动、
+  就绪、提议、确认提交与原生兜底的时间/token/阶段，不含正文；不改 ST-01、
+  压缩参数、settings 或 env。新增本地只读聚合脚本
+  `scripts/compaction-metrics.mjs`，区分实际提前接管率与回放 M1，不虚报发布门槛达成。
+
+### Fixed — compaction boundary accounting (2026-11-10)
+
+- 同一宿主边界 observation 后提议不再重复推进回合计数；冷却单位/参数和
+  回放行为保持不变。goal 末回合压缩漏续跑疑点经真实宿主证伪，新增 8 个
+  goal 生命周期契约用例，生产 goal 逻辑不改。
+
+### Fixed — compaction pre-release review (2026-11-11)
+
+- 摘要计算期间发生的 `context_edit`/原生压缩不再被误并入快照基线——输入时
+  固定 `branchPathIds`，中途编辑命中被压区时 V4 discard（regenerate 腿同步
+  补 V1/V4 校验），防止把已被修正的旧内容重新带回上下文。
+- 台账指令跨轮携带自身来源后缀 `[#entryId @time]`；无来源旧行折叠地板为
+  头部保留、不再生成死指针 `[# @?]`；LED-08 自检覆盖新指令与继承指令。
+- `<read-files>`/`<modified-files>` 段同样中和台账标签——LLM 输出中的伪造
+  `<cc-core-ledger>` 块不能遮蔽真块污染下一轮继承。
+- `SC_DEBUG` wait-path 日志改为白名单元数据，不再序列化摘要正文（INV-7）。
+
 ### Fixed — compaction review Batch D (2026-11-10)
 
 - **D1（修复 review-fix B1 引入的回归）**:多行用户指令让 LED-08 台账自检
