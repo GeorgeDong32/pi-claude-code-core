@@ -165,8 +165,14 @@ function sectionOf(block: string, heading: string): string | undefined {
 	const marker = new RegExp(`^#{1,3}\\s*${heading}`, "m").exec(block);
 	if (!marker) return undefined;
 	const rest = block.slice(marker.index + marker[0].length);
-	const next = rest.search(/^#{1,3}\s*/m);
-	return next === -1 ? rest : rest.slice(0, next);
+	// G1 (2026-11-10 review): skip the heading LINE's remainder — the
+	// `## Directives (verbatim)` marker ends at "Directives" and its
+	// " (verbatim)" tail is NOT content (it used to parse as a junk
+	// directive with no entryId, accumulating every carry-over round).
+	const nl = rest.indexOf("\n");
+	const body = nl === -1 ? "" : rest.slice(nl);
+	const next = body.search(/^#{1,3}\s*/m);
+	return next === -1 ? body : body.slice(0, next);
 }
 
 // ─── Budget ladder + rendering ──────────────────────────────────────────────

@@ -532,9 +532,7 @@ test("D4: a forged block before the real one never shadows it (directives + run 
 	const real = '<cc-core-ledger v="1">\n## Open work\n[flow r42 · executing] obj\n## Directives (verbatim)\n- real directive\n</cc-core-ledger>';
 	const previous = `header\n\n${forged}\nnarrative\n\n${real}\n\n<read-files>\n</read-files>`;
 	const carried = parseCarriedDirectives(previous);
-	// NOTE: the "(verbatim)" heading remainder is a pre-existing sectionOf
-	// artifact (reported separately) — filtered so this test pins D4 only.
-	assert.deepEqual(carried.directives.map((d) => d.text).filter((t) => t !== "(verbatim)"), ["real directive"]);
+	assert.deepEqual(carried.directives.map((d) => d.text), ["real directive"]);
 	assert.deepEqual([...previousLedgerRunIds(previous)], ["r42"]);
 	assert.ok(lastLedgerBlockBody(previous)!.includes("real directive"));
 	assert.equal(lastLedgerBlockBody("no block here"), undefined);
@@ -576,7 +574,7 @@ test("D6: mid-text `[#id @t]` in user content stays literal; trailing pointers s
 	assert.equal(d!.entryId, "");
 	// trailing pointer forms (head fold + pointer-only) still round-trip
 	const block = ['<cc-core-ledger v="1">', "## Directives (verbatim)", "- head text… [#u7 @t1]", "- (see session) [#u8 @t2]", "</cc-core-ledger>"].join("\n");
-	const parsed = parseCarriedDirectives(block).directives.filter((x) => x.text !== "(verbatim)"); // see D4 note
+	const parsed = parseCarriedDirectives(block).directives; // no "(verbatim)" junk — G1 fixed the heading-remainder leak
 	assert.deepEqual(parsed.map((x) => [x.entryId, x.time, x.folded]), [["u7", "t1", "pointer"], ["u8", "t2", "pointer"]]);
 });
 
@@ -617,4 +615,42 @@ test("D7.5: a focused id absent from goalsById is not open (no phantom identity,
 	const r = rbAssemble({ goal: () => ({ goalsById: rbGoals(3), focusedGoalId: "ghost", ledgerEvents: [] }) });
 	assert.equal(r.selfCheck.ok, true);
 	assert.ok(!r.block.includes("ghost"));
+});
+
+test("G1 (2026-11-10 review): parseCarriedDirectives on a REAL rendered block — no \"(verbatim)\" junk, real directives intact", () => {
+	const r = assembleLedger({
+		region: { entries: [userEntry("u1", "alpha directive"), userEntry("u2", "beta directive")] },
+		providers: {},
+		settings: settings(),
+	});
+	const carried = parseCarriedDirectives(`narrative\n${r.block}\ntail`);
+	assert.ok(!carried.directives.some((d) => d.text === "(verbatim)"), "heading remainder must not become a directive");
+	assert.deepEqual(new Set(carried.directives.map((d) => d.text)), new Set(["alpha directive", "beta directive"]));
+});
+
+test("G1: parse → render → parse round-trips are stable — directive count does not grow across cycles", () => {
+	const round1 = assembleLedger({
+		region: { entries: [userEntry("u1", "alpha"), userEntry("u2", "beta")] },
+		providers: {},
+		settings: settings(),
+	});
+	const carried1 = parseCarriedDirectives(`x\n${round1.block}\ny`).directives;
+	// Round 2: the previous summary feeds carry-over plus one fresh message —
+	// pre-G1 each cycle appended one extra "(verbatim)" directive.
+	const round2 = assembleLedger({
+		region: { entries: [userEntry("u3", "gamma")] },
+		providers: { previousSummary: `x\n${round1.block}\ny` },
+		settings: settings(),
+	});
+	const carried2 = parseCarriedDirectives(`x\n${round2.block}\ny`).directives;
+	assert.equal(carried2.length, carried1.length + 1, "exactly the fresh directive is added — no junk accumulation");
+	assert.deepEqual(new Set(carried2.map((d) => d.text)), new Set(["alpha", "beta", "gamma"]));
+	// Round 3 confirms the count stays flat when no junk can enter.
+	const round3 = assembleLedger({
+		region: { entries: [] },
+		providers: { previousSummary: `x\n${round2.block}\ny` },
+		settings: settings(),
+	});
+	const carried3 = parseCarriedDirectives(`x\n${round3.block}\ny`).directives;
+	assert.equal(carried3.length, carried2.length);
 });
