@@ -11,6 +11,7 @@
 import { describe, expect, it } from "vitest";
 import { fauxAssistantMessage, fauxText, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { createCompactionHost } from "./support/compaction-host.ts";
+import { COMPACTION_METRICS_ENTRY_TYPE } from "../../extensions/compaction/metrics.ts";
 
 const AGGRESSIVE = {
 	targetPostRatio: 0.5,
@@ -34,7 +35,7 @@ const summaries = () => [
 const telemetryEntries = (host: { sessionManager: { getBranch: () => Array<unknown> } }) =>
 	host.sessionManager
 		.getBranch()
-		.filter((e) => (e as { type?: string }).type === "custom" && (e as { customType?: string }).customType === "cc-core-compaction");
+		.filter((e) => (e as { type?: string }).type === "custom" && ["cc-core-compaction", COMPACTION_METRICS_ENTRY_TYPE].includes((e as { customType?: string }).customType ?? ""));
 
 describe("C6: off mode + INV-7 telemetry hygiene", () => {
 	it("mode:'off' — zero controller writes: no telemetry entries, no ccCore compactions", async () => {
@@ -123,6 +124,27 @@ describe("C6: off mode + INV-7 telemetry hygiene", () => {
 			for (const entry of telemetryEntries(host)) {
 				expect(JSON.stringify(entry)).not.toContain("SECRET-NARRATIVE-MARKER");
 			}
+		} finally {
+			host.cleanup();
+		}
+	});
+
+	it("SC-MET-01: shadow retains native audit but writes no runtime metric entries", async () => {
+		const host = await createCompactionHost({
+			model: { contextWindow: 6000, maxTokens: 1000, reasoning: true },
+			settingsOverrides: { compaction: { enabled: true, reserveTokens: 3000, keepRecentTokens: 300 } },
+			controllerSettings: { ...AGGRESSIVE, mode: "shadow" },
+			envMode: null,
+		});
+		try {
+			host.faux.setResponses([
+				fauxAssistantMessage("x".repeat(12000)),
+				fauxAssistantMessage([fauxThinking("only thoughts"), fauxText("")], { stopReason: "stop" }),
+			]);
+			await host.session.prompt("native invalid summary in passive mode");
+			const entries = telemetryEntries(host);
+			expect(entries.some((entry) => (entry as { customType?: string }).customType === "cc-core-compaction")).toBe(true);
+			expect(entries.filter((entry) => (entry as { customType?: string }).customType === COMPACTION_METRICS_ENTRY_TYPE)).toHaveLength(0);
 		} finally {
 			host.cleanup();
 		}

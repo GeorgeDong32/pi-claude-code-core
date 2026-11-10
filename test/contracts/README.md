@@ -61,11 +61,14 @@
 | 宿主：**`compact()` 调用面**——可选 `streamFn` 为唯一逐调用观测/注入点；`thinkingLevel:"off"` 仅省略 `reasoning` 参数；无 `maxTokens` 参数；length/error 抛错而 stop+空正文（reasoning-only）放行；split-turn 两次调用与固定合并分隔；两类调用的提示开头形态（`<conversation>` / `# Conversation`） | SC-HOST-09 | compaction summarizer、SUM-03/04/09 | pi 改 compact 内部形态时 → 红 → SUM-09 降级路径生效 |
 | 宿主：**`context_edit` 仅作用于投影内条目**（针对被压区条目的编辑无效果）；`entry_appended` 不在扩展事件集中 | SC-HOST-10 | compaction V4/APP-08、对账 | pi 向扩展暴露提交事件时 → 红 → 对账可简化 |
 | session entry `cc-core-compaction`（display-only；data 见 ST-01，customType 与字段集冻结） | SC-ENT-01 | core 自身、`/compaction status`、回放工具 | 机制下线时 |
+| 独立 display-only entry `cc-core-compaction-metrics`（`v:1`）：仅 `on` 模式记录 compute-start/compute-ready/proposal/applied/fallback-start/fallback-end 的时间、随机关联 id、token/有效阈值、阶段、固定原因码；不含正文，不改冻结的 ST-01。报告区分实测提前接管率与回放 M1，提议不计成功，manual/overflow 单列 | SC-MET-01（M1 插桩；INV-7/G5，DEVIATIONS SC-6） | 本地 `scripts/compaction-metrics.mjs`、控制器诊断 | 诊断机制下线时；既有 v1 entry 仍可读取 |
 | 摘要内台账块 `<cc-core-ledger v="1">…</cc-core-ledger>` 与 `CompactionEntry.details.ccCore`（`v:1`）——**写入用户会话数据，格式冻结** | SC-SUM-01 | compaction（LED-02b 继承）、回放工具 | 永不静默破坏；升级走新版本号 |
 | 磁盘：`~/.pi/agent/core-compaction.json`（键集见 ST-02） | SC-CFG-01 | compaction settings | 冻结 |
 | 环境变量 `PI_CORE_COMPACTION=off\|shadow\|on` | SC-ENV-01 | compaction settings | — |
 | 行为套件 `compaction-off-invariants`：off 模式零 `cc-core-compaction` 遥测 + 零 `details.ccCore` compaction（含原生不合格摘要的 FB-08 审计门，D2）；INV-7 遥测不含摘要正文 | G5/INV-7/SC-ENV-01 | core 自身（compaction 控制器） | 控制器下线时 |
 | 行为套件 `compaction-length-boundary`：ready 快照 + length 边界——recoverable length 后无 precompute draft（stopReason 以 session branch 为权威）、stop 对照恰好 1 条 draft（多行 prompt 回归，D1） | POL-07/INV-11/BLK-1 | core 自身（compaction 控制器） | 控制器下线时 |
+| 行为套件 `compaction-goal-lifecycle`：真实 goal + AgentSession，最终 stop/toolUse/before_settle/overridden 后提交不漏续跑或重复 checkpoint；无压缩与 autoContinue 关闭对照，实际观察 settle 后新 provider 请求 | SM-03/APP-05（review 续跑疑点证伪后的永久护栏） | goal、compaction seam | goal 续跑或宿主 settle 生命周期替换时随行为改写 |
+| 行为套件 `compaction-integrity`：计算期间 `context_edit` 命中被压区 → V4 discard 无 stale 提交（R1）；`<read-files>` 内伪造台账块不能遮蔽真块（R3）；`SC_DEBUG` wait-path 日志仅白名单元数据、无摘要正文（R4） | APP-08/INV-1/INV-7（2026-11-11 上线前审查修复钉档） | core 自身（compaction 控制器） | 控制器下线时 |
 
 SC-ENT-01/SC-SUM-01/SC-CFG-01/SC-ENV-01 的**行为**由 W1（settings/env 单测）与 W3（遥测 entry 单测）落地时钉住；W0 已先在本表登记（INV-10）。宿主事实测试位置：`test/contracts/compaction-*.test.ts`；阻断性用例（BLK-1…5）基线与 expected-fail 保护断言同在其中（spec §4.4）。
 

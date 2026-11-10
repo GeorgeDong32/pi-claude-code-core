@@ -14,9 +14,13 @@
  *    agent_before_settle). This was the review's P0 failure mode.
  *  - clean stop control: exactly one precompute draft (gate not overblocking).
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
 import { createCompactionHost } from "./support/compaction-host.ts";
+import { metricFromEntry, summarizeCompactionMetrics, type CompactionMetric } from "../../extensions/compaction/metrics.ts";
+import { SessionRuntime } from "../../extensions/compaction/state.ts";
+
+const metricsOf = (entries: unknown[]) => entries.map(metricFromEntry).filter((row): row is CompactionMetric => row !== undefined);
 
 const AGGRESSIVE = {
 	targetPostRatio: 0.5,
@@ -87,6 +91,10 @@ describe("BLK-1 protection: ready snapshot + length boundary (POL-07/INV-11)", (
 			const firstAfter = after[0] as { details?: { ccCore?: { origin?: string } }; summary?: string };
 			expect(firstAfter.details?.ccCore?.origin).toBe("native-backfill");
 			expect(firstAfter.summary ?? "").toContain('<cc-core-ledger v="1">');
+			const metrics = metricsOf(branch);
+			expect(metrics.find((row) => row.event === "fallback-start")?.reason).toBe("overflow");
+			expect(metrics.find((row) => row.event === "fallback-end")?.fromExtension).toBe(true);
+			expect(summarizeCompactionMetrics([metrics]).earlyCommits).toBe(0);
 		} finally {
 			host.cleanup();
 		}
@@ -111,6 +119,7 @@ describe("BLK-1 protection: ready snapshot + length boundary (POL-07/INV-11)", (
 			// R1 regression: nothing precompute-originated may land after it
 			const drafts = branch.filter((e) => (e as { type?: string }).type === "compaction" && precomputeOrigin(e) === "precompute");
 			expect(drafts.length).toBe(0);
+			expect(metricsOf(branch).filter((row) => row.event === "applied")).toHaveLength(0);
 		} finally {
 			host.cleanup();
 		}
@@ -122,6 +131,12 @@ describe("BLK-1 protection: ready snapshot + length boundary (POL-07/INV-11)", (
 			settingsOverrides: PI_SMALL,
 			controllerSettings: AGGRESSIVE,
 			probe: { registerTestTool: true },
+		});
+		const original = SessionRuntime.prototype.onBoundary;
+		let observedRuntime: SessionRuntime | undefined;
+		const boundarySpy = vi.spyOn(SessionRuntime.prototype, "onBoundary").mockImplementation(function (this: SessionRuntime, event) {
+			observedRuntime = this;
+			return original.call(this, event);
 		});
 		try {
 			host.faux.setResponses(responses("stop"));
@@ -137,8 +152,19 @@ describe("BLK-1 protection: ready snapshot + length boundary (POL-07/INV-11)", (
 			// B4 (2026-11-10 review): the landed draft went through
 			// composeFinalSummary — its summary must carry the ledger block.
 			expect((drafts[0] as { summary?: string }).summary ?? "").toContain('<cc-core-ledger v="1">');
+			const metrics = metricsOf(branch);
+			expect(metrics.map((row) => row.event)).toEqual(["compute-start", "compute-ready", "proposal", "applied"]);
+			const applied = metrics.find((row) => row.event === "applied")!;
+			const proposed = metrics.find((row) => row.event === "proposal")!;
+			expect(applied.proposalId).toBe(proposed.proposalId);
+			expect(applied.tokens).toBe(proposed.tokens);
+			expect(applied.tn).toBe(4000);
+			expect(summarizeCompactionMetrics([metrics]).earlyCommits).toBe(1);
+			const boundaries = host.events.filter((event) => event.name === "turn_end" || event.name === "agent_before_settle");
+			expect(observedRuntime?.state.turns).toBe(boundaries.length);
 		} finally {
 			host.cleanup();
+			boundarySpy.mockRestore();
 		}
 	});
 });

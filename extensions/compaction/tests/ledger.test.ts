@@ -136,6 +136,41 @@ test("LED-02b: carry-over — directives survive ≥3 compaction rounds; pointer
 	assert.deepEqual(dropped.directives, []);
 });
 
+test("R2 (2026-11-11 pre-release review): carried directives keep a resolvable source — folding never mints a dead pointer", () => {
+	// Pre-R2: a carried verbatim line lost its entryId on parse; a later
+	// budget fold produced a dead `[# @?]` and silently dropped the tail
+	// while LED-08 still passed.
+	const original = `Always preserve this standing instruction ${"a".repeat(260)} CRITICAL_FLAG=DO_NOT_RELEASE`;
+	const round1 = assembleLedger({
+		region: { entries: [userEntry("original-u1", original)] },
+		providers: {},
+		settings: settings(),
+	});
+	const carried = parseCarriedDirectives(round1.block).directives;
+	assert.equal(carried[0]?.entryId, "original-u1", "verbatim carry keeps the source id");
+	const round2 = assembleLedger({
+		region: { entries: Array.from({ length: 25 }, (_, i) => userEntry(`fresh-${i}`, `Always follow this additional constraint ${i} ${"b".repeat(350)}`)) },
+		providers: { previousSummary: round1.block },
+		settings: settings(),
+	});
+	assert.equal(round2.selfCheck.ok, true, round2.selfCheck.missing.join(","));
+	assert.ok(
+		round2.block.includes("#original-u1 @") || round2.block.includes(original),
+		"carried directive retains its text or a resolvable pointer",
+	);
+	assert.ok(!round2.block.includes("[# @?]"), "no fabricated empty pointer");
+	// A suffix-less line from a pre-R2 block (entryId "") floors at head —
+	// never pointer-only with a fabricated source.
+	const legacy = ['<cc-core-ledger v="1">', "## Directives (verbatim)", `- legacy text ${"z".repeat(200)}`, "</cc-core-ledger>"].join("\n");
+	const round3 = assembleLedger({
+		region: { entries: Array.from({ length: 25 }, (_, i) => userEntry(`f${i}`, `Always another constraint ${i} ${"c".repeat(350)}`)) },
+		providers: { previousSummary: legacy },
+		settings: settings(),
+	});
+	assert.ok(round3.block.includes("legacy text"), "legacy directive head retained");
+	assert.ok(!round3.block.includes("[# @?]"), "legacy line never gains a fake pointer");
+});
+
 test("LED-03: goal section reuses the goal module's formatter (focused + other open + terminal)", () => {
 	const goal = (id: string, status: GoalRecord["status"]): GoalRecord =>
 		Object.assign(createGoal({ objective: `=== Goal ===\nObjective: goal ${id}`, autoContinue: true, sisyphus: false }, Date.UTC(2026, 10, 9)), { id, status });
@@ -241,17 +276,27 @@ test("LED-08 + LED-01: self-check passes; degradation ladder keeps Tier A id+sta
 });
 
 test("LED-08: a directive folded past recognition fails the self-check (no verbatim, no pointer)", () => {
-	// An entry with an EMPTY id folded by the budget ladder has neither a
-	// verbatim line nor a `[#entryId @time]` pointer — exactly the bug class
-	// the self-check exists to catch (do-not-propose signal).
+	// R2 (2026-11-11 pre-release review): an EMPTY-id directive floors at
+	// HEAD — the first foldHeadChars are retained, so the verbatim probe
+	// passes (head retention is the designed floor, never a dead pointer).
 	const longText = `${"必须".repeat(2)} always run the tests before committing ${"padding ".repeat(60)}`;
-	const result = assembleLedger({
-		region: { entries: [userEntry("", longText)] }, // empty entryId → pointer impossible
+	const headFloor = assembleLedger({
+		region: { entries: [userEntry("", longText)] },
 		providers: {},
 		settings: settings({ directivesMax: 1 }), // force folding
 	});
-	assert.equal(result.selfCheck.ok, false);
-	assert.ok(result.selfCheck.missing.some((m) => m.startsWith("tierB:")), result.selfCheck.missing.join(","));
+	assert.equal(headFloor.selfCheck.ok, true, headFloor.selfCheck.missing.join(","));
+	assert.ok(headFloor.block.includes(longText.slice(0, 40)), "head floor keeps the first 120 chars");
+	assert.ok(!headFloor.block.includes("[# @?]"), "no fabricated empty pointer");
+	// …while a directive collapsed into the +K count line still trips the
+	// check — total loss is exactly what the check exists for.
+	const collapsed = assembleLedger({
+		region: { entries: Array.from({ length: 8 }, (_, i) => userEntry(`d${i}`, `directive number ${i}`)) },
+		providers: {},
+		settings: settings({ maxDirectiveLines: 3 }),
+	});
+	assert.equal(collapsed.selfCheck.ok, false);
+	assert.ok(collapsed.selfCheck.missing.some((m) => m.startsWith("tierB:")), collapsed.selfCheck.missing.join(","));
 });
 
 test("files: renderFileActivity caps lists and counts overflow", () => {
@@ -571,7 +616,10 @@ test("D6: mid-text `[#id @t]` in user content stays literal; trailing pointers s
 	assert.ok(d, "directive carried");
 	assert.equal(d!.text, text);
 	assert.equal(d!.folded, undefined);
-	assert.equal(d!.entryId, "");
+	// R2 (2026-11-11): a verbatim line carries its own source suffix, so the
+	// carried parse now recovers the entry id — the mid-text pointer stays
+	// literal inside the text either way.
+	assert.equal(d!.entryId, "u1");
 	// trailing pointer forms (head fold + pointer-only) still round-trip
 	const block = ['<cc-core-ledger v="1">', "## Directives (verbatim)", "- head text… [#u7 @t1]", "- (see session) [#u8 @t2]", "</cc-core-ledger>"].join("\n");
 	const parsed = parseCarriedDirectives(block).directives; // no "(verbatim)" junk — G1 fixed the heading-remainder leak

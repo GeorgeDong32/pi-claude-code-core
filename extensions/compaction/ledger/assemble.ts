@@ -32,6 +32,7 @@ import type {
 	CompressedRegionView,
 	FlowLedgerState,
 	LedgerDegradation,
+	LedgerDirective,
 	LedgerProviders,
 	OpenIdentity,
 } from "./types.ts";
@@ -54,6 +55,10 @@ interface Sections {
 	closed: string[];
 	identities: OpenIdentity[];
 	closedIds: string[];
+	/** LED-02b carried directives — the LED-08 self-check covers them too
+	 * (R2 2026-11-11: folding a carried directive used to drop its content
+	 * AND mint a dead `[# @?]` pointer while the check still passed). */
+	carriedDirectives: LedgerDirective[];
 	degradation: LedgerDegradation;
 }
 
@@ -220,6 +225,7 @@ function buildSections(input: AssembleLedgerInput, level: number): Sections {
 		closed: closedLines,
 		identities: [...goalIdentities, ...bg.identities, ...((keptFlowRuns as Array<{ runId: string; stage: string }>).map((run) => ({ source: "flow" as const, id: run.runId, status: run.stage })))],
 		closedIds: [...goal.closedIds, ...(flowState?.closed.map((item) => item.id) ?? [])],
+		carriedDirectives: carried.directives,
 		degradation,
 	};
 }
@@ -300,9 +306,12 @@ function selfCheck(sections: Sections, block: string, region: CompressedRegionVi
 		if (!block.includes(identity.status)) missing.push(`tierA-status:${identity.id}:${identity.status}`);
 	}
 	// Tier B: every fresh standing/normal directive is verbatim or folded
-	// with a pointer line carrying its entryId.
+	// with a pointer line carrying its entryId. R2 (2026-11-11): carried
+	// directives are checked the same way — the LED-02b carry-over used to
+	// escape the check entirely.
 	const fresh = collectDirectives(region, settings.standingPatterns).filter((d) => d.class !== "flow-dispatch");
-	for (const directive of fresh) {
+	const carried = (sections.carriedDirectives ?? []).filter((d) => d.class !== "flow-dispatch");
+	for (const directive of [...carried, ...fresh]) {
 		// D1 (2026-11-10 review D): probe the first 40 chars of the FULLY
 		// rendered line (clamp → continuation indent → tag sanitize, then
 		// slice) — slicing the raw text first would split a ledger tag that

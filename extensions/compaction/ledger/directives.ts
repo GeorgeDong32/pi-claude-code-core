@@ -140,17 +140,24 @@ export function parseCarriedDirectives(previousSummary: string | undefined): { d
 		const pointer = /\[#([^\] ]+) @([^\]]+)\]\s*$/.exec(line);
 		const kind = line.startsWith("-") || line.startsWith("*") ? line.slice(1).trim() : line;
 		if (pointer) {
+			// R2 (2026-11-11 pre-release review): verbatim lines carry their own
+			// source suffix since this fix, so a trailing pointer is NOT proof
+			// of a fold. `…` before the suffix = head fold; "(see session)" =
+			// pointer-only; anything else = verbatim text + recoverable source.
+			const body = kind.slice(0, kind.length - pointer[0].length).trim();
+			const foldedPointer = body === "(see session)" || body.endsWith("…");
 			directives.push({
 				// Carried lines keep their folded shape; class is re-detected.
-				class: isFlowDispatch(kind) ? "flow-dispatch" : "standing",
-				text: kind.replace(/\s*\[#[^\]]+\]\s*$/, "").trim(),
+				class: isFlowDispatch(body) ? "flow-dispatch" : "standing",
+				text: body,
 				entryId: pointer[1],
 				time: pointer[2],
-				folded: "pointer",
+				folded: foldedPointer ? "pointer" : undefined,
 			});
 			continue;
 		}
 		if (line.startsWith("+") && /older directives/.test(line)) continue; // count line, not a directive
+		if (/^\(see session\)/.test(kind)) continue; // dead pointer remnant from a pre-R2 block (no resolvable source)
 		directives.push({
 			class: isFlowDispatch(kind) ? "flow-dispatch" : "standing",
 			text: kind,
@@ -212,14 +219,21 @@ export function renderDirectives(directives: LedgerDirective[], budget: Directiv
 	// two-space continuation indent, so user text can never forge a
 	// `## Heading` line that sectionOf would treat as a new section.
 	// parseCarriedDirectives stitches continuations back.
+	// R2 (2026-11-11 pre-release review): every rendered directive keeps a
+	// recoverable `[#entryId @time]` source suffix — verbatim lines included
+	// (carried parse used to return entryId:"" so a later fold minted a
+	// dead `[# @?]` pointer). Directives without a source (old blocks) fold
+	// at most to head — never to a fabricated pointer.
+	const sourceOf = (directive: LedgerDirective): string =>
+		directive.entryId ? ` [#${directive.entryId} @${directive.time ?? "?"}]` : "";
 	const renderOne = (directive: LedgerDirective, foldLevel: "verbatim" | "head" | "pointer"): string => {
-		if (foldLevel === "verbatim") return `- ${renderDirectiveText(clamp(directive.text))}`;
+		if (foldLevel === "verbatim") return `- ${renderDirectiveText(clamp(directive.text))}${sourceOf(directive)}`;
 		if (foldLevel === "head") {
 			degradation.collapsed += 1;
-			return `- ${renderDirectiveText(directive.text.slice(0, budget.foldHeadChars))}… [#${directive.entryId} @${directive.time ?? "?"}]`;
+			return `- ${renderDirectiveText(directive.text.slice(0, budget.foldHeadChars))}…${sourceOf(directive)}`;
 		}
 		degradation.pointerOnly += 1;
-		return `- (see session) [#${directive.entryId} @${directive.time ?? "?"}]`;
+		return `- (see session)${sourceOf(directive)}`;
 	};
 
 	// Start all-verbatim and fold oldest normal → head → pointer until the
@@ -230,16 +244,22 @@ export function renderDirectives(directives: LedgerDirective[], budget: Directiv
 	const ranked = [...standing, ...normal];
 	for (const d of ranked) foldState.set(d, d.folded === "pointer" ? "pointer" : "verbatim");
 	const renderedLen = (d: LedgerDirective): number => {
+		const sourceLen = d.entryId ? d.entryId.length + (d.time?.length ?? 1) + 6 : 0;
 		const state = foldState.get(d) ?? "verbatim";
-		if (state === "verbatim") return clamp(d.text).length + 4;
-		if (state === "head") return budget.foldHeadChars + 34;
-		return 34;
+		if (state === "verbatim") return clamp(d.text).length + 2 + sourceLen;
+		if (state === "head") return budget.foldHeadChars + 3 + sourceLen;
+		return 16 + sourceLen;
 	};
 	const fits = (): boolean => ranked.reduce((sum, d) => sum + renderedLen(d), 0) <= budget.directivesMax;
 	const foldOrder = [...normal.slice().reverse(), ...standing.slice().reverse()]; // oldest normal first, standing last
 	const steps: Array<() => void> = [];
 	for (const d of foldOrder) steps.push(() => foldState.set(d, "head"));
-	for (const d of foldOrder) steps.push(() => foldState.set(d, "pointer"));
+	for (const d of foldOrder) {
+		// R2: no pointer-only step without a resolvable source — a carried
+		// pre-fix directive (entryId "") bottoms out at head, keeping its
+		// first foldHeadChars rather than minting a dead `[# @?]` pointer.
+		if (d.entryId) steps.push(() => foldState.set(d, "pointer"));
+	}
 	let stepIdx = 0;
 	while (!fits() && stepIdx < steps.length) steps[stepIdx++]();
 

@@ -43,6 +43,8 @@
  *   - lost(overridden) re-proposal is capped at a per-session CUMULATIVE
  *     OVERRIDE_DEGRADE_AFTER = 2 (commits don't reset it; session reset
  *     does) → degrade to shadow (A3).
+ *   - SC-MET-01 records content-free timing/pressure checkpoints only in
+ *     mode on; proposal and confirmed commit remain separate measurements.
  */
 
 import { VERSION, SettingsManager, getLatestCompactionEntry, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -76,6 +78,7 @@ import { buildFlowLedger, previousLedgerRunIds } from "./ledger/rex-flow.ts";
 import { runClosedSignal } from "./signals/rex-flow.ts";
 import { gitCommitSignal, goalStepSignal, verifiedSignal } from "./signals/long-task.ts";
 import { stripLedgerBlock } from "./validate.ts";
+import { COMPACTION_METRICS_ENTRY_TYPE, recordCompactionMetric, type CompactionMetric } from "./metrics.ts";
 import {
 	DEFAULT_COMPACTION_CORE_SETTINGS,
 	loadCompactionSettings,
@@ -112,6 +115,8 @@ export default function compactionController(pi: ExtensionAPI): void {
 	let sessionTreeSinceProposal = false;
 	let resolvedMode: "off" | "shadow" | "on" = "on";
 	let compatWarningShown = false;
+	let metricCycleId: string | undefined;
+	let fallbackMetric: { attemptId: string; at: number; reason: "threshold" | "overflow" | "manual" } | undefined;
 
 	const emitTelemetry = (pi2: ExtensionAPI) => (data: CompactionTelemetryData) => {
 		try {
@@ -133,6 +138,8 @@ export default function compactionController(pi: ExtensionAPI): void {
 	};
 
 	const reloadSettings = (ctx?: ExtensionContext): void => {
+		metricCycleId = undefined;
+		fallbackMetric = undefined;
 		if (ctx) setCompactionSettingsPath(join(agentDirOf(ctx), "core-compaction.json"));
 		const loaded = loadCompactionSettings();
 		settings = loaded.settings;
@@ -187,6 +194,20 @@ export default function compactionController(pi: ExtensionAPI): void {
 		}
 	};
 
+	const measure = (ctx: ExtensionContext, event: CompactionMetric["event"], extra: Partial<CompactionMetric> = {}): void => {
+		if (resolvedMode !== "on") return;
+		try {
+			recordCompactionMetric((data) => pi.appendEntry(COMPACTION_METRICS_ENTRY_TYPE, data), {
+				event, tokens: pressureOf(ctx), tn: thresholdOf(ctx).tn,
+				phase: runtime.state.phase, degraded: runtime.degraded,
+				precomputeRatio: settings.precomputeRatio, applyRatio: settings.applyRatio,
+				cycleId: metricCycleId, ...extra,
+			});
+		} catch {
+			/* Measurements must never affect proposal/recovery semantics. */
+		}
+	};
+
 	// ── ledger providers (all synchronous, LED-07-isolated inside assemble) ──
 	const ledgerProviders = (ctx: ExtensionContext, region?: CompressedRegionViewLike) => ({
 		goal: () => {
@@ -233,9 +254,20 @@ export default function compactionController(pi: ExtensionAPI): void {
 		const generation = runtime.state.generation;
 		const controller = new AbortController();
 		const started = Date.now();
+		const cycleId = randomUUID();
+		metricCycleId = cycleId;
+		measure(ctx, "compute-start", { cycleId });
 		const promise = (async () => {
 			try {
 				const projection = ctx.sessionManager.buildSessionProjection();
+				// R1 (2026-11-11 pre-release review): the V-gate baseline is the
+				// branch AT INPUT TIME, captured before the first await. Entries
+				// appended while the summarizer runs must land AFTER the snapshot
+				// path so V1–V4 see them as post-snapshot history — previously the
+				// baseline was taken on completion, letting a mid-compute
+				// context_edit on the compressed region pass V4 and resurrecting
+				// edited-away content in the committed summary.
+				const snapshotPathIds = ctx.sessionManager.getBranch().map((entry) => (entry as { id?: string }).id ?? "");
 				const { tn, keep } = thresholdOf(ctx);
 				// D3 (2026-11-10 review D): phase is already "computing" — a
 				// silent return would wedge it there (INV-5 short-circuits every
@@ -334,7 +366,7 @@ export default function compactionController(pi: ExtensionAPI): void {
 				const snapshot: PrecomputedSnapshot = {
 					generation,
 					cut: cut.cut,
-					branchPathIds: ctx.sessionManager.getBranch().map((entry) => (entry as { id?: string }).id ?? ""),
+					branchPathIds: snapshotPathIds,
 					summary: outcome.summary,
 					summaryTokens: Math.ceil(outcome.summary.length / 4),
 					tnAtSnapshot: tn,
@@ -344,6 +376,7 @@ export default function compactionController(pi: ExtensionAPI): void {
 					computeMs: Date.now() - started,
 					summaryModelFallback: resolution.fallbackToSession || undefined,
 				});
+				if (runtime.snapshot === snapshot) measure(ctx, "compute-ready", { cycleId, elapsedMs: Date.now() - started });
 			} catch {
 				// D3: a stale generation's crash must not turn the NEW
 				// generation's computing phase into refused.
@@ -396,7 +429,12 @@ export default function compactionController(pi: ExtensionAPI): void {
 				...[rawSummary.indexOf("<read-files>"), rawSummary.indexOf("<modified-files>")].filter((i) => i >= 0).concat([rawSummary.length]),
 			);
 			const narrative = sanitizeLedgerLine(rawSummary.slice(0, fileIdx).trimEnd()); // D4: the narrative must never carry a live ledger tag
-			const files = fileIdx < rawSummary.length ? rawSummary.slice(fileIdx) : "";
+			// R3 (2026-11-11 pre-release review): the file-list tail is LLM
+			// output too — a forged ledger block inside <read-files> used to
+			// sit AFTER the real block and win the last-block parse on the
+			// next carry-over round. Neutralize it like the narrative so the
+			// deterministic ledger.block is the only live block in the summary.
+			const files = fileIdx < rawSummary.length ? sanitizeLedgerLine(rawSummary.slice(fileIdx)) : "";
 			// F1: association comes from the memoized assemble result — no
 			// second provider invocation on the synchronous apply path.
 			const flowTrusted = ledger.flowAssociated;
@@ -414,6 +452,7 @@ export default function compactionController(pi: ExtensionAPI): void {
 		if (!snapshot || runtime.state.phase !== "ready") return undefined;
 		const { tn } = thresholdOf(ctx);
 		if (tn === null) return undefined;
+		const tokensBefore = pressureOf(ctx);
 		const branch = ctx.sessionManager.getBranch();
 		const projection = ctx.sessionManager.buildSessionProjection();
 		const entries = projection.entries as ProjectedEntry[];
@@ -469,21 +508,11 @@ export default function compactionController(pi: ExtensionAPI): void {
 
 		// Propose: seam BEFORE first (APP-05), then the draft (APP-01).
 		const proposalId = randomUUID();
-		const decision = runtime.onBoundary({
-			type: "boundary",
+		const decision = runtime.onPropose({
+			type: "propose",
 			P: (pressureOf(ctx) ?? 0) / tn,
 			applySafe,
-			isApplyPoint: true,
 			prechecksPassed: true,
-			feasibility: jointFeasibility({
-				tn,
-				keepRecentTokens: thresholdOf(ctx).keep,
-				summaryTokenEstimate: settings.summaryTokenEstimate,
-				precomputeRatio: settings.precomputeRatio,
-				applyRatio: settings.applyRatio,
-				targetPostRatio: settings.targetPostRatio,
-			}),
-			mayCompute: false,
 			proposalNonce: proposalId,
 		});
 		if (decision.action.type !== "propose") return undefined;
@@ -497,8 +526,13 @@ export default function compactionController(pi: ExtensionAPI): void {
 			cutClass: snapshot.cut.boundaryClass,
 			providers: ["generic"],
 		});
-		pendingProposal = { proposalId, compressedRegionIds, midRun, summaryChars: finalSummary.length, estPostTokens: estimate.total, proposedAtTurn: runtime.state.turns };
+		pendingProposal = {
+			proposalId, compressedRegionIds, midRun, summaryChars: finalSummary.length,
+			estPostTokens: estimate.total, proposedAtTurn: runtime.state.turns,
+			tokensBefore, tn, cycleId: metricCycleId, proposedAt: Date.now(),
+		};
 		sessionTreeSinceProposal = false; // C2 (2026-11-10 review): a fresh proposal clears the stale session_tree flag
+		measure(ctx, "proposal", { proposalId, tokens: tokensBefore, tn, estPostTokens: estimate.total });
 		return mergeDraftEntries((event.entries ?? []) as unknown[], draft);
 	};
 
@@ -524,6 +558,10 @@ export default function compactionController(pi: ExtensionAPI): void {
 		summaryChars: number;
 		estPostTokens: number;
 		proposedAtTurn: number;
+		tokensBefore: number | null;
+		tn: number;
+		cycleId?: string;
+		proposedAt: number;
 	} | null = null;
 
 	const reconcileIfPending = (ctx: ExtensionContext): void => {
@@ -539,6 +577,14 @@ export default function compactionController(pi: ExtensionAPI): void {
 			};
 			if (result.status === "committed") {
 				runtime.onReconciled(result, { ...info, tokensAfter: undefined });
+				measure(ctx, "applied", {
+					proposalId: pendingProposal.proposalId, cycleId: pendingProposal.cycleId,
+					// Usage is null immediately after compaction (H7); retain the
+					// pressure at proposal, not a fabricated post-commit sample.
+					tokens: pendingProposal.tokensBefore, tn: pendingProposal.tn,
+					estPostTokens: pendingProposal.estPostTokens,
+					elapsedMs: Date.now() - pendingProposal.proposedAt,
+				});
 				pendingProposal = null;
 			} else if (result.lostReason === "overridden") {
 				// BLK-2(a) executable-spec semantics + A3 bound: onOverridden
@@ -584,7 +630,8 @@ export default function compactionController(pi: ExtensionAPI): void {
 			const applySafe = applyPointSafe({ stopReason, outcome: event.outcome, nativeRecoveryPending });
 			// First evaluation: start-computing decisions ONLY. The propose
 			// transition happens exactly once, inside tryPropose's own
-			// boundary event (after the V-gates pass) — evaluating it here
+			// propose event (after the V-gates pass, without a second tick) —
+			// evaluating it here
 			// would strand the phase at "proposed" with no draft returned.
 			const decision = runtime.onBoundary({
 				type: "boundary",
@@ -625,6 +672,8 @@ export default function compactionController(pi: ExtensionAPI): void {
 			// POL-07②: mark pending native recovery on overflow attempts.
 			if (event.reason === "overflow") nativeRecoveryPending = true;
 			if (resolvedMode === "shadow") return undefined;
+			fallbackMetric = { attemptId: randomUUID(), at: Date.now(), reason: event.reason };
+			measure(ctx, "fallback-start", { attemptId: fallbackMetric.attemptId, reason: event.reason });
 			const { tn } = thresholdOf(ctx);
 			if (tn === null) return undefined;
 			const deadlineAt = Date.now() + settings.fallbackDeadlineMs;
@@ -745,7 +794,10 @@ export default function compactionController(pi: ExtensionAPI): void {
 					return undefined;
 				}
 				const afterWait = gatesForSnapshot();
-				if (process.env.SC_DEBUG) console.error("[sc-debug] wait-path afterWait:", JSON.stringify(afterWait), "phase:", runtime.state.phase);
+				// R4 (2026-11-11 pre-release review): metadata only — logging
+				// `afterWait` whole would dump composed.summary into debug logs
+				// (INV-7: no summary/ledger bodies, even behind SC_DEBUG).
+				if (process.env.SC_DEBUG) console.error("[sc-debug] wait-path afterWait:", JSON.stringify({ gates: afterWait.gates, fit: afterWait.fit, estimate: afterWait.estimate }), "phase:", runtime.state.phase);
 				if (runtime.state.phase === "ready" && afterWait.gates && afterWait.fit && runtime.snapshot) {
 					const snapshot = runtime.snapshot;
 					const composed = afterWait.composed; // RB4: reuse the wait-gates compose
@@ -786,6 +838,11 @@ export default function compactionController(pi: ExtensionAPI): void {
 		const generation = runtime.state.generation;
 		try {
 			const projection = ctx.sessionManager.buildSessionProjection();
+			// R1 (2026-11-11 pre-release review): same input-time baseline as
+			// launchCompute — the regenerate leg awaits the summarizer while a
+			// native compaction is pending; entries landing during that await
+			// must invalidate the produced summary, not be adopted verbatim.
+			const snapshotPathIds = ctx.sessionManager.getBranch().map((entry) => (entry as { id?: string }).id ?? "");
 			const { keep } = thresholdOf(ctx);
 			const feasibility = jointFeasibility({
 				tn,
@@ -859,6 +916,27 @@ export default function compactionController(pi: ExtensionAPI): void {
 				return undefined;
 			}
 			if (!outcome || !outcome.ok) return undefined; // single attempt, no retry (FB-07)
+			// R1: a mid-await compaction or context_edit on the compressed
+			// region invalidates the just-produced summary (its input is the
+			// pre-edit projection) — fall through to native like any other
+			// regenerate failure. Mirrors V1/V2/V4 on the supply path.
+			const branchNow = ctx.sessionManager.getBranch();
+			const baselineHolds = snapshotPathIds.every((id, i) => (branchNow[i] as { id?: string } | undefined)?.id === id);
+			if (!baselineHolds) {
+				runtime.onFellthrough("v1-branch-prefix");
+				return undefined;
+			}
+			const cutAt = snapshotPathIds.indexOf(cut.cut.firstKeptEntryId);
+			const compressedIds = new Set(cutAt >= 0 ? snapshotPathIds.slice(0, cutAt) : []);
+			const invalidated = branchNow.slice(snapshotPathIds.length).some((entry) => {
+				const row = entry as { type?: string; targetId?: unknown };
+				if (row.type === "compaction") return true;
+				return row.type === "context_edit" && typeof row.targetId === "string" && compressedIds.has(row.targetId);
+			});
+			if (invalidated) {
+				runtime.onFellthrough("v4-conflict-edit");
+				return undefined;
+			}
 			// B4: compose the FINAL summary (ledger included) BEFORE V8a —
 			// estimating with the bare summary under-counts and can pass an
 			// over-budget compaction through.
@@ -884,7 +962,7 @@ export default function compactionController(pi: ExtensionAPI): void {
 			const snapshotLike: PrecomputedSnapshot = {
 				generation,
 				cut: cut.cut,
-				branchPathIds: ctx.sessionManager.getBranch().map((entry) => (entry as { id?: string }).id ?? ""),
+				branchPathIds: snapshotPathIds,
 				summary: outcome.summary,
 				summaryTokens: Math.ceil(outcome.summary.length / 4),
 				tnAtSnapshot: tn,
@@ -920,6 +998,8 @@ export default function compactionController(pi: ExtensionAPI): void {
 			nativeRecoveryPending = false;
 			sessionTreeSinceProposal = false;
 			pendingProposal = null;
+			metricCycleId = undefined;
+			fallbackMetric = undefined;
 		} catch {
 			/* never block */
 		}
@@ -930,6 +1010,8 @@ export default function compactionController(pi: ExtensionAPI): void {
 			abortInFlight();
 			runtime.onSessionReset();
 			pendingProposal = null;
+			metricCycleId = undefined;
+			fallbackMetric = undefined;
 		} catch {
 			/* never block */
 		}
@@ -941,6 +1023,8 @@ export default function compactionController(pi: ExtensionAPI): void {
 			abortInFlight();
 			runtime.onSessionReset(); // V1: branch changed — drop custody
 			pendingProposal = null;
+			metricCycleId = undefined;
+			fallbackMetric = undefined;
 		} catch {
 			/* never block */
 		}
@@ -985,10 +1069,14 @@ export default function compactionController(pi: ExtensionAPI): void {
 		return onBeforeCompact(event, ctx);
 	}) as never);
 
-	pi.on("session_compact_failed" as never, (() => {
+	pi.on("session_compact_failed" as never, ((_event: unknown, ctx: ExtensionContext) => {
 		try {
 			if (resolvedMode === "off") return; // D2: off = byte-identical to not installed (G5)
 			nativeRecoveryPending = true;
+			if (fallbackMetric) {
+				measure(ctx, "fallback-end", { attemptId: fallbackMetric.attemptId, reason: fallbackMetric.reason, elapsedMs: Date.now() - fallbackMetric.at, failed: true });
+				fallbackMetric = undefined;
+			}
 		} catch {
 			/* never block */
 		}
@@ -999,6 +1087,13 @@ export default function compactionController(pi: ExtensionAPI): void {
 			// D2 (2026-11-10 review D): off = byte-identical to not installed
 			// (G5) — no FB-08 audit telemetry, no notify. shadow keeps it (SC-5).
 			if (resolvedMode === "off") return;
+			if (fallbackMetric) {
+				measure(ctx, "fallback-end", {
+					attemptId: fallbackMetric.attemptId, reason: fallbackMetric.reason,
+					elapsedMs: Date.now() - fallbackMetric.at, fromExtension: event.fromExtension ?? false,
+				});
+				fallbackMetric = undefined;
+			}
 			if (event.fromExtension) return; // our own supply — seam not involved (FB-04)
 			// FB-08: audit the NATIVE summary (⑤–⑦ only); telemetry + one notify.
 			const summary = event.summary ?? event.entry?.summary ?? "";
