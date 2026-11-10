@@ -47,10 +47,10 @@ from the boundary branch (covers both `turn_end` and `agent_before_settle`);
 **Served transition (A2)**: after the fallback leg supplies a snapshot, the
 phase leaves `ready` (idle) — the controller re-precomputes instead of
 re-proposing a consumed draft. **Overridden bound (A3)**: lost(overridden)
-re-proposals are capped — after `OVERRIDE_DEGRADE_AFTER = 2` (exported from
-state.ts, same family as conflictEditDegradeAfter) consecutive overrides the
-controller degrades to shadow; EVERY overridden occurrence writes APP-08
-discarded telemetry (`reason:"overridden"`).
+re-proposals are capped — once the CUMULATIVE per-session override count
+reaches `OVERRIDE_DEGRADE_AFTER = 2` (exported from state.ts, same family as
+conflictEditDegradeAfter) the controller degrades to shadow; EVERY overridden
+occurrence writes APP-08 discarded telemetry (`reason:"overridden"`).
 
 ## W2 replay calibration record (2026-11-09)
 

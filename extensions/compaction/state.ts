@@ -67,9 +67,9 @@ export interface LedgerMeta {
 }
 
 
-/** A3 (2026-11-10 rework R3): consecutive lost(overridden) count that
- * degrades the controller to shadow — same family as
- * conflictEditDegradeAfter (2). Session-scoped, cleared on reset. */
+/** A3 (2026-11-10 rework R3): CUMULATIVE (per-session) lost(overridden)
+ * count that degrades the controller to shadow — same family as
+ * conflictEditDegradeAfter (2). Cleared on reset. */
 export const OVERRIDE_DEGRADE_AFTER = 2;
 
 export class SessionRuntime {
@@ -249,11 +249,30 @@ export class SessionRuntime {
 	}
 
 	/**
+	 * B5 (2026-11-10 review): POL-09 infeasibility telemetry — emitted once
+	 * per infeasible-window entry (infeasibleReported dedup upstream);
+	 * neededTn rides inside the reason string (ST-01 field set is frozen).
+	 */
+	onInfeasible(neededTn?: number): void {
+		this.emit({ outcome: "infeasible", reason: neededTn !== undefined ? `pol-09:needTn=${Math.round(neededTn)}` : "pol-09", origin: "precompute", validated: false });
+	}
+
+	/** B5 (2026-11-10 review): APP-06 — an apply-path handler error writes telemetry, never throws. */
+	onApplyError(): void {
+		this.emit({ outcome: "discarded", reason: "apply-error", origin: "precompute", validated: true });
+	}
+
+	/** B5 (2026-11-10 review): FB-07 — the fallback leg missed its deadline or was aborted. */
+	onFellthrough(why: "deadline" | "aborted"): void {
+		this.emit({ outcome: "fellthrough", reason: why, origin: "precompute", validated: true });
+	}
+
+	/**
 	 * A3 (2026-11-10, rework R3): lost(overridden) — every occurrence writes
 	 * the APP-08 discarded telemetry, then the BLK-2(a) semantics run: phase
-	 * back to ready with a fresh nonce slot. After OVERRIDE_DEGRADE_AFTER
-	 * consecutive overrides the controller degrades to shadow. Session-scoped
-	 * counter, cleared on reset.
+	 * back to ready with a fresh nonce slot. Once the CUMULATIVE per-session
+	 * count reaches OVERRIDE_DEGRADE_AFTER the controller degrades to shadow
+	 * (the counter is NOT reset by commits — only by session reset).
 	 */
 	onOverridden(info: { summaryChars: number; estPostTokens?: number }): void {
 		this.emit({

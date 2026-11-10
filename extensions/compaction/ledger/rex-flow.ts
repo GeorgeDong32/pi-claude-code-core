@@ -256,7 +256,8 @@ function trusted(board: BoardFile, boardPath: string, observed: Set<string>, obs
 export function previousLedgerRunIds(previousSummary: string | undefined): Set<string> {
 	const ids = new Set<string>();
 	if (!previousSummary) return ids;
-	const match = previousSummary.match(/<cc-core-ledger v="1">([\s\S]*?)<\/cc-core-ledger>/);
+	// B6 (2026-11-10 review): parse any block version for run-id carry-over.
+	const match = previousSummary.match(/<cc-core-ledger v="[^"]*">([\s\S]*?)<\/cc-core-ledger>/);
 	if (!match) return ids;
 	for (const id of match[1].match(new RegExp(RUN_ID, "g")) ?? []) ids.add(id);
 	return ids;

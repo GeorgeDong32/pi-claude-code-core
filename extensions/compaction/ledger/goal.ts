@@ -15,6 +15,9 @@ import type { ClosedItem, GoalLedgerState, OpenIdentity } from "./types.ts";
 export interface GoalSection {
 	/** Tier A open-goal lines for "## Open work". */
 	openLines: string[];
+	/** B2 (2026-11-10): ids the goal renderer actually shows (focused +
+	 * first GOAL_RENDER_CAP others) — the self-check promise set. */
+	visibleIds: string[];
 	/** Terminal one-liners for "## Closed". */
 	closed: ClosedItem[];
 	/** Self-check identities (id + status must appear in the block). */
@@ -34,6 +37,16 @@ export function goalSection(state: GoalLedgerState): GoalSection {
 	const closed: ClosedItem[] = [];
 	const identities: OpenIdentity[] = [];
 	const closedIds: string[] = [];
+
+	// B2 (2026-11-10 review): expose the set the goal module's renderer can
+	// actually SHOW — its formatter lists the focused goal plus the first
+	// GOAL_RENDER_CAP other-open goals (with a "+K more" count line).
+	// Full `identities` stay complete for ⑥'s overflow accounting; the
+	// LED-08 self-check promises only the visible subset.
+	const GOAL_RENDER_CAP = 20; // mirrors goal-compaction.ts capOpenGoals default
+	const openGoals = Array.from(state.goalsById.values()).filter((g) => g.status !== "complete");
+	const otherOpenGoals = openGoals.filter((g) => g.id !== state.focusedGoalId);
+	const visibleIds = [state.focusedGoalId, ...otherOpenGoals.slice(0, GOAL_RENDER_CAP).map((g) => g.id)].filter((id): id is string => id !== null);
 
 	for (const goal of state.goalsById.values()) {
 		if (goal.status === "complete") {
@@ -60,9 +73,9 @@ export function goalSection(state: GoalLedgerState): GoalSection {
 	const terminal = extractSection(text, "TERMINAL GOALS");
 	if (terminal && closed.length > 0) {
 		// Prefer the goal module's terminal lines as the closed one-liners.
-		return { openLines, closed: closedFromTerminal(terminal, closed), identities, closedIds };
+		return { openLines, closed: closedFromTerminal(terminal, closed), identities, closedIds, visibleIds };
 	}
-	return { openLines, closed, identities, closedIds };
+	return { openLines, closed, identities, closedIds, visibleIds };
 }
 
 function closedFromTerminal(terminalLines: string[], fallback: ClosedItem[]): ClosedItem[] {

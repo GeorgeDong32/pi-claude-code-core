@@ -260,6 +260,20 @@ export default function compactionController(pi: ExtensionAPI): void {
 					runtime.onComputeFailed("nothing-to-summarize");
 					return;
 				}
+				// B3 (2026-11-10 review): SUM-08 closedIds — same region math as
+				// the apply path (latest compaction → cut), computed between
+				// selectCut and runSummarizer; failures degrade to undefined.
+				let closedIds: string[] | undefined;
+				try {
+					const regionEntries = (projection.entries as ProjectedEntry[]).slice(
+						(projection.entries as ProjectedEntry[]).findIndex((entry) => entry.sourceEntry.type === "compaction" && entry.messages.length > 0) + 1,
+						cut.cut.firstKeptEntryIndex,
+					);
+					const region = { entries: regionEntries };
+					closedIds = assembleLedger({ region, providers: ledgerProviders(ctx, region), settings }).closedIds;
+				} catch {
+					closedIds = undefined;
+				}
 				const resolution = resolveSummaryModel(settings.summaryModel, ctx.modelRegistry as never, preparation.tokensBefore, ctx.model);
 				let apiKey: string | undefined;
 				let headers: Record<string, string> | undefined;
@@ -275,6 +289,7 @@ export default function compactionController(pi: ExtensionAPI): void {
 					model: (resolution.model ?? ctx.model)!,
 					apiKey,
 					headers,
+					closedIds,
 					// Registry transport: modelRegistry.complete resolves the
 					// provider API through the session's ModelRuntime — the
 					// same registry the host itself streams through (the
@@ -335,6 +350,37 @@ export default function compactionController(pi: ExtensionAPI): void {
 	let lastFlowTrusted = false;
 
 	// ── the proposal path (synchronous, APP-01…08) ────────────────────────
+	/**
+	 * B4 (2026-11-10 review): single composer for the FINAL summary — ledger
+	 * assembled at the current instant (LED-06), self-checked (LED-08),
+	 * then header + narrative + ledger block + pi file sections. Shared by
+	 * the draft path, both fallback supply paths, and the regenerate path,
+	 * so V8a always estimates with the FINAL summary, never the bare one.
+	 * Also carries closedIds (B3/SUM-08) and the flow-trust flag (LED-06).
+	 */
+	const composeFinalSummary = (ctx: ExtensionContext, cut: { firstKeptEntryIndex: number }, rawSummary: string) => {
+		try {
+			const entries = ctx.sessionManager.buildSessionProjection().entries as ProjectedEntry[];
+			const boundaryStart = entries.findIndex((entry) => entry.sourceEntry.type === "compaction" && entry.messages.length > 0) + 1;
+			const region = { entries: entries.slice(boundaryStart, cut.firstKeptEntryIndex) };
+			const providers = ledgerProviders(ctx, region);
+			const ledger = assembleLedger({ region, providers, settings });
+			if (!ledger.selfCheck.ok) {
+				return { ok: false as const, reason: ledger.selfCheck.missing.includes("ledger-over-budget") ? "ledger-over-budget" : "ledger-self-check-failed" };
+			}
+			const fileIdx = Math.min(
+				...[rawSummary.indexOf("<read-files>"), rawSummary.indexOf("<modified-files>")].filter((i) => i >= 0).concat([rawSummary.length]),
+			);
+			const narrative = rawSummary.slice(0, fileIdx).trimEnd();
+			const files = fileIdx < rawSummary.length ? rawSummary.slice(fileIdx) : "";
+			const flowTrusted = providers.flow?.()?.associated ?? false;
+			const summary = [narrativeHeader(flowTrusted), narrative, ledger.block, files].filter((part) => part.length > 0).join("\n\n");
+			return { ok: true as const, summary, ledgerChars: ledger.chars, flowTrusted, closedIds: ledger.closedIds };
+		} catch {
+			return { ok: false as const, reason: "ledger-compose-error" };
+		}
+	};
+
 	// A1 (review P0, rework R1): applySafe is threaded from the caller (the
 	// propose gate in onApplyPoint, branch-authoritative stopReason).
 	const tryPropose = (event: { entries?: unknown[] }, ctx: ExtensionContext, midRun: boolean, applySafe: boolean): { entries: unknown[] } | undefined => {
@@ -353,25 +399,14 @@ export default function compactionController(pi: ExtensionAPI): void {
 		}
 		const compressedRegionIds = new Set(branch.slice(0, cutBranchIndex).map((entry) => (entry as { id?: string }).id ?? ""));
 
-		// Ledger at APPLY time (LED-06) + self-check (LED-08).
-		const boundaryStart = entries.findIndex((entry) => entry.sourceEntry.type === "compaction" && entry.messages.length > 0) + 1;
-		const region = { entries: entries.slice(boundaryStart, snapshot.cut.firstKeptEntryIndex) };
-		const providers = ledgerProviders(ctx, region);
-		const ledger = assembleLedger({ region, providers, settings });
-		lastFlowTrusted = providers.flow?.()?.associated ?? false;
-		if (!ledger.selfCheck.ok) {
-			runtime.onDiscarded("v6-summary-invalid", { reason: "ledger-self-check-failed" });
+		// B4: compose the final summary through the shared single path.
+		const composed = composeFinalSummary(ctx, snapshot.cut, snapshot.summary);
+		if (!composed.ok) {
+			runtime.onDiscarded("v6-summary-invalid", { reason: composed.reason });
 			return undefined;
 		}
-
-		// Final summary: header + narrative + ledger + pi's file sections.
-		const raw = snapshot.summary;
-		const fileIdx = Math.min(
-			...[raw.indexOf("<read-files>"), raw.indexOf("<modified-files>")].filter((i) => i >= 0).concat([raw.length]),
-		);
-		const narrative = raw.slice(0, fileIdx).trimEnd();
-		const files = fileIdx < raw.length ? raw.slice(fileIdx) : "";
-		const finalSummary = [narrativeHeader(lastFlowTrusted), narrative, ledger.block, files].filter((part) => part.length > 0).join("\n\n");
+		lastFlowTrusted = composed.flowTrusted;
+		const finalSummary = composed.summary;
 
 		// V1–V10 with the REAL final numbers.
 		const keptMessages = entries.slice(snapshot.cut.firstKeptEntryIndex).flatMap((entry) => entry.messages);
@@ -481,8 +516,9 @@ export default function compactionController(pi: ExtensionAPI): void {
 			} else if (result.lostReason === "overridden") {
 				// BLK-2(a) executable-spec semantics + A3 bound: onOverridden
 				// writes the APP-08 discarded telemetry, moves the phase back
-				// to ready (fresh nonce slot), and degrades to shadow after
-				// OVERRIDE_DEGRADE_AFTER consecutive overrides.
+				// to ready (fresh nonce slot), and degrades to shadow once the
+				// CUMULATIVE per-session override count reaches
+				// OVERRIDE_DEGRADE_AFTER.
 				runtime.onOverridden(info);
 				pendingProposal = null;
 			} else {
@@ -534,6 +570,7 @@ export default function compactionController(pi: ExtensionAPI): void {
 				proposalNonce: randomUUID(),
 			});
 			if (decision.action.type === "start-computing" && !inFlight) launchCompute(ctx);
+			if (decision.action.type === "mark-infeasible") runtime.onInfeasible(feasibility?.neededTn); // B5 (dedup via infeasibleReported)
 			// A1 (review P0): the propose path itself must pass POL-07 —
 			// previously tryPropose hardcoded applySafe:true, letting
 			// length-boundary drafts swallow native recovery. Unknown
@@ -544,6 +581,7 @@ export default function compactionController(pi: ExtensionAPI): void {
 			return undefined;
 		} catch (error) {
 			if (process.env.SC_DEBUG) console.error("[compaction] apply-point error:", error);
+			runtime.onApplyError(); // B5 (2026-11-10 review): APP-06 telemetry — emit itself is fail-open
 			return undefined; // APP-06: never throw into pi
 		}
 	};
@@ -564,14 +602,19 @@ export default function compactionController(pi: ExtensionAPI): void {
 			if (tn === null) return undefined;
 			const deadlineAt = Date.now() + settings.fallbackDeadlineMs;
 			const hasComputing = runtime.state.phase === "computing" && inFlight !== null;
-			const gatesForSnapshot = (): { gates: boolean; fit: boolean; estimate: number } => {
+			const gatesForSnapshot = (): { gates: boolean; fit: boolean; estimate: number; composeFail?: string } => {
 				const snapshot = runtime.snapshot;
-				if (!snapshot) return { gates: false, fit: false, estimate: Number.POSITIVE_INFINITY };
+				if (!snapshot) return { gates: false, fit: false, estimate: Number.POSITIVE_INFINITY, composeFail: "no-snapshot" };
+				// B4: compose FIRST — a failed ledger self-check means the
+				// snapshot cannot be supplied at all (gates false), and the
+				// V8a estimate must use the FINAL summary, never the bare one.
+				const composed = composeFinalSummary(ctx, snapshot.cut, snapshot.summary);
+				if (!composed.ok) return { gates: false, fit: false, estimate: Number.POSITIVE_INFINITY, composeFail: composed.reason };
 				const projection = ctx.sessionManager.buildSessionProjection();
 				const entries = projection.entries as ProjectedEntry[];
 				const kept = entries.slice(snapshot.cut.firstKeptEntryIndex).flatMap((entry) => entry.messages);
 				const estimate = estimatePost({
-					summary: snapshot.summary,
+					summary: composed.summary,
 					keptMessages: kept,
 					currentProjectionMessages: projection.messages,
 					ctxTokensUsage: pressureOf(ctx),
@@ -618,10 +661,19 @@ export default function compactionController(pi: ExtensionAPI): void {
 			if (process.env.SC_DEBUG) console.error("[sc-debug] fallback decision:", decision.action, "reason:", event.reason, "phase:", runtime.state.phase, "hasSnapshot:", !!runtime.snapshot);
 			if (decision.action === "supply-snapshot" && runtime.snapshot) {
 				const snapshot = runtime.snapshot;
-				const files = fileListsOf(snapshot.summary);
+				// B4: supply the COMPOSED summary (ledger included, LED-06
+				// instant regeneration); a failed compose → no supply, hand
+				// back to native with the reason in telemetry.
+				const composed = composeFinalSummary(ctx, snapshot.cut, snapshot.summary);
+				if (!composed.ok) {
+					runtime.snapshot = null;
+					runtime.onDiscarded("v6-summary-invalid", { reason: composed.reason });
+					return undefined;
+				}
+				const files = fileListsOf(composed.summary);
 				const supply = buildSupplyCompaction({
 					snapshot,
-					summary: snapshot.summary,
+					summary: composed.summary,
 					tokensBefore: pressureOf(ctx) ?? snapshot.tnAtSnapshot,
 					readFiles: files.readFiles,
 					modifiedFiles: files.modifiedFiles,
@@ -649,6 +701,7 @@ export default function compactionController(pi: ExtensionAPI): void {
 				await Promise.race([inFlight.promise.then(() => "done" as const), timer, aborted]);
 				if (signal?.aborted || Date.now() >= deadlineAt) {
 					// FB-07: bump generation, abort the old task, return now.
+					runtime.onFellthrough(signal?.aborted ? "aborted" : "deadline");
 					abortInFlight();
 					runtime.onSessionReset();
 					return undefined;
@@ -657,10 +710,16 @@ export default function compactionController(pi: ExtensionAPI): void {
 				if (process.env.SC_DEBUG) console.error("[sc-debug] wait-path afterWait:", JSON.stringify(afterWait), "phase:", runtime.state.phase);
 				if (runtime.state.phase === "ready" && afterWait.gates && afterWait.fit && runtime.snapshot) {
 					const snapshot = runtime.snapshot;
-					const files = fileListsOf(snapshot.summary);
+					const composed = composeFinalSummary(ctx, snapshot.cut, snapshot.summary);
+					if (!composed.ok) {
+						runtime.snapshot = null;
+						runtime.onDiscarded("v6-summary-invalid", { reason: composed.reason });
+						return undefined;
+					}
+					const files = fileListsOf(composed.summary);
 					const supply = buildSupplyCompaction({
 						snapshot,
-						summary: snapshot.summary,
+						summary: composed.summary,
 						tokensBefore: pressureOf(ctx) ?? snapshot.tnAtSnapshot,
 						readFiles: files.readFiles,
 						modifiedFiles: files.modifiedFiles,
@@ -715,6 +774,19 @@ export default function compactionController(pi: ExtensionAPI): void {
 				previousSummaryNarrative: previous ? stripLedgerBlock(previous.summary) : undefined,
 			});
 			if (!preparation) return undefined;
+			// B3 (2026-11-10 review): SUM-08 closedIds from the same region
+			// math the apply path uses, fed to the summarizer prompt.
+			let closedIds: string[] | undefined;
+			try {
+				const regionEntries = (projection.entries as ProjectedEntry[]).slice(
+					(projection.entries as ProjectedEntry[]).findIndex((entry) => entry.sourceEntry.type === "compaction" && entry.messages.length > 0) + 1,
+					cut.cut.firstKeptEntryIndex,
+				);
+				const region = { entries: regionEntries };
+				closedIds = assembleLedger({ region, providers: ledgerProviders(ctx, region), settings }).closedIds;
+			} catch {
+				closedIds = undefined;
+			}
 			const deadlinePromise = new Promise<undefined>((resolveTimer) => {
 				const t = setTimeout(() => {
 					controller.abort();
@@ -726,6 +798,7 @@ export default function compactionController(pi: ExtensionAPI): void {
 			const outcomePromise = runSummarizer({
 				preparation,
 				model: ctx.model!,
+				closedIds,
 				transport: { call: (model, context, options) => ctx.modelRegistry.complete(model, context as never, options as never) as never },
 				summaryThinking: settings.summaryThinking,
 				summaryMaxTokens: settings.summaryMaxTokens,
@@ -733,12 +806,20 @@ export default function compactionController(pi: ExtensionAPI): void {
 				signal: controller.signal,
 			});
 			const outcome = await Promise.race([outcomePromise, deadlinePromise]);
+			if (Date.now() >= deadlineAt) {
+				runtime.onFellthrough("deadline"); // B5 (2026-11-10 review)
+				return undefined;
+			}
 			if (!outcome || !outcome.ok) return undefined; // single attempt, no retry (FB-07)
-			// V8a with the strict ratio for this reason.
+			// B4: compose the FINAL summary (ledger included) BEFORE V8a —
+			// estimating with the bare summary under-counts and can pass an
+			// over-budget compaction through.
+			const composedRegen = composeFinalSummary(ctx, cut.cut, outcome.summary);
+			if (!composedRegen.ok) return undefined;
 			const kept = (projection.entries as ProjectedEntry[]).slice(cut.cut.firstKeptEntryIndex).flatMap((entry) => entry.messages);
 			if (process.env.SC_DEBUG) console.error("[sc-debug] regenerate summary produced, gating V8a");
 			const estimate = estimatePost({
-				summary: outcome.summary,
+				summary: composedRegen.summary,
 				keptMessages: kept,
 				currentProjectionMessages: projection.messages,
 				ctxTokensUsage: pressureOf(ctx),
@@ -748,7 +829,7 @@ export default function compactionController(pi: ExtensionAPI): void {
 			// V8a with THIS reason's ratio (overflow stricter, INV-12).
 			if (estimate.total > hardFitLimitFor(reason, settings, tn)) return undefined;
 			void generation;
-			const files = fileListsOf(outcome.summary);
+			const files = fileListsOf(composedRegen.summary);
 			const snapshotLike: PrecomputedSnapshot = {
 				generation,
 				cut: cut.cut,
@@ -760,7 +841,7 @@ export default function compactionController(pi: ExtensionAPI): void {
 			};
 			return buildSupplyCompaction({
 				snapshot: snapshotLike,
-				summary: outcome.summary,
+				summary: composedRegen.summary,
 				tokensBefore: pressureOf(ctx) ?? tn,
 				readFiles: files.readFiles,
 				modifiedFiles: files.modifiedFiles,

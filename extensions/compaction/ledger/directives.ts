@@ -89,6 +89,13 @@ export function parseCarriedDirectives(previousSummary: string | undefined): { d
 	if (section === undefined) return { directives: [], dropped: false };
 	const directives: LedgerDirective[] = [];
 	for (const raw of section.split("\n")) {
+		// B1: two-space continuation lines stitch back onto the previous
+		// directive (newline restored, indent stripped).
+		if (raw.startsWith("  ") && directives.length > 0) {
+			const prev = directives[directives.length - 1]!;
+			prev.text = `${prev.text}\n${raw.slice(2)}`;
+			continue;
+		}
 		const line = raw.trim();
 		if (line.length === 0 || line.startsWith("##")) continue;
 		const pointer = /\[#([^\] ]+) @([^\]]+)\]/.exec(line);
@@ -157,11 +164,16 @@ export function renderDirectives(directives: LedgerDirective[], budget: Directiv
 	const clamp = (text: string): string =>
 		text.length > budget.perDirectiveMax ? `${text.slice(0, budget.perDirectiveMax)}… [truncated]` : text;
 
+	// B1 (2026-11-10 review): newlines inside a directive render as a
+	// two-space continuation indent, so user text can never forge a
+	// `## Heading` line that sectionOf would treat as a new section.
+	// parseCarriedDirectives stitches continuations back.
+	const flat = (text: string): string => text.replace(/\n/g, "\n  ");
 	const renderOne = (directive: LedgerDirective, foldLevel: "verbatim" | "head" | "pointer"): string => {
-		if (foldLevel === "verbatim") return `- ${clamp(directive.text)}`;
+		if (foldLevel === "verbatim") return `- ${flat(clamp(directive.text))}`;
 		if (foldLevel === "head") {
 			degradation.collapsed += 1;
-			return `- ${directive.text.slice(0, budget.foldHeadChars)}… [#${directive.entryId} @${directive.time ?? "?"}]`;
+			return `- ${flat(directive.text.slice(0, budget.foldHeadChars))}… [#${directive.entryId} @${directive.time ?? "?"}]`;
 		}
 		degradation.pointerOnly += 1;
 		return `- (see session) [#${directive.entryId} @${directive.time ?? "?"}]`;

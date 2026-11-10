@@ -139,6 +139,8 @@ export function validateAssembled(input: AssembledInput, thresholds: ValidationT
  */
 export function stripLedgerBlock(summary: string): string {
 	return summary
-		.replace(/<cc-core-ledger v="1">[\s\S]*?<\/cc-core-ledger>\s*/g, "")
+		// B6 (2026-11-10 review): strip ANY ledger version — unknown future
+		// versions must be dropped silently, never treated as narrative.
+		.replace(/<cc-core-ledger v="[^"]*">[\s\S]*?<\/cc-core-ledger>\s*/g, "")
 		.trim();
 }

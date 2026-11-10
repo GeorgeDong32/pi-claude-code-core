@@ -289,17 +289,18 @@ export function evaluate(
 		case "session-reset":
 			return { state: initialState(state.generation + 1), action: { type: "reset" } };
 
-		case "served":
-		// A2 (2026-11-10 rework R4): the fallback leg supplied the snapshot
-		// to native. Only a READY phase transitions (idle + min gap) —
-		// every other phase is a no-op.
-		if (state.phase === "ready") {
-			return {
-				state: { ...state, phase: "idle", precomputeGapTurns: settings.minPrecomputeGapTurns, lastOutcome: { outcome: "served", atTurn: state.turns } },
-				action: { type: "none" },
-			};
+		case "served": {
+			// A2 (2026-11-10 rework R4): the fallback leg supplied the snapshot
+			// to native. Only a READY phase transitions (idle + min gap) —
+			// every other phase is a no-op.
+			if (state.phase === "ready") {
+				return {
+					state: { ...state, phase: "idle", precomputeGapTurns: settings.minPrecomputeGapTurns, lastOutcome: { outcome: "served", atTurn: state.turns } },
+					action: { type: "none" },
+				};
+			}
+			return { state, action: { type: "none" } };
 		}
-		return { state, action: { type: "none" } };
 
 	case "boundary": {
 			const next: ControllerState = {

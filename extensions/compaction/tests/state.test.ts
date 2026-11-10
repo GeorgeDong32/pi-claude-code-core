@@ -187,11 +187,20 @@ test("runtime notify callbacks route through the real seam when wired", () => {
 
 test("A2 rework R4: onServed — from ready → idle + served telemetry; non-ready phase unchanged", () => {
 	const mk = () => runtime();
-	// non-ready: served is a no-op on phase (policy guards ready-only)
-	{
+	// non-ready: served is a no-op on the phase — start from computing AND
+	// proposed (idle would not distinguish the old unconditional impl)
+	for (const phase of ["computing", "proposed"] as const) {
 		const { rt } = mk();
+		// drive to proposed (which passes through computing) or stop at computing
+		const d = rt.onBoundary({ type: "boundary", P: 0.7, applySafe: true, isApplyPoint: false, prechecksPassed: true, feasibility: { feasible: true, effectiveSummaryTokens: 12000, expectedGrowth: 3000, tailMax: 9000000, neededTn: 107000 }, mayCompute: true });
+		assert.equal(d.action.type, "start-computing");
+		if (phase === "proposed") {
+			rt.onComputeSucceeded(snapshot(rt.state.generation), { computeMs: 5 });
+			rt.onBoundary({ type: "boundary", P: 0.8, applySafe: true, isApplyPoint: true, prechecksPassed: true, feasibility: { feasible: true, effectiveSummaryTokens: 12000, expectedGrowth: 3000, tailMax: 9000000, neededTn: 107000 }, mayCompute: true, proposalNonce: "sn-1" });
+		}
+		assert.equal(rt.state.phase, phase);
 		rt.onServed();
-		assert.equal(rt.state.phase, "idle"); // was idle, stays idle (unchanged)
+		assert.equal(rt.state.phase, phase, `served must not move a ${phase} phase`);
 	}
 	// ready → idle via the policy served event + snapshot cleared + telemetry
 	{
@@ -225,4 +234,21 @@ test("A3/R5: conflictEditTotal reset leak — 1 + reset + 1 does NOT degrade (cr
 	rt.onSessionReset();
 	rt.noteConflictEdits(1); // session B: fresh counter — must NOT reach 2
 	assert.equal(rt.degraded, false);
+});
+
+test("B5 (2026-11-10 review): infeasible / apply-error / fellthrough telemetry (no phase change)", () => {
+	const { rt, emitted } = runtime();
+	const phaseBefore = rt.state.phase;
+	rt.onInfeasible(123_456);
+	rt.onInfeasible();
+	rt.onApplyError();
+	rt.onFellthrough("deadline");
+	rt.onFellthrough("aborted");
+	assert.equal(rt.state.phase, phaseBefore); // telemetry-only
+	const outcomes = emitted.map((e) => `${e.outcome}:${e.reason}`);
+	assert.ok(outcomes.includes("infeasible:pol-09:needTn=123456"));
+	assert.ok(outcomes.includes("infeasible:pol-09"));
+	assert.ok(outcomes.includes("discarded:apply-error"));
+	assert.ok(outcomes.includes("fellthrough:deadline"));
+	assert.ok(outcomes.includes("fellthrough:aborted"));
 });

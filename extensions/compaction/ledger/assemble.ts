@@ -72,10 +72,23 @@ function clampDescription(text: string, chars: number): string {
 function buildSections(input: AssembleLedgerInput, level: number): Sections {
 	const { region, providers, settings } = input;
 	const degradation: LedgerDegradation = { tierADegraded: 0, directivesCollapsed: 0, directivesPointerOnly: 0, openOverflow: 0 };
+	// B6 (2026-11-10 review): a THROWING provider renders an explicit
+	// "(x provider unavailable)" line in its own section (LED-07/INV-9) —
+	// never a throw, never a silent gap.
+	const unavailable = { goal: false, flow: false, bg: false, verification: false };
+	const safeMarked = <T>(label: keyof typeof unavailable, provider: (() => T) | undefined, fallback: T): T => {
+		if (!provider) return fallback;
+		try {
+			return provider() ?? fallback;
+		} catch {
+			unavailable[label] = true;
+			return fallback;
+		}
+	};
 
 	// ── Open work: goals (+ flow in W7) ──
-	const goalState = safe("goal", providers.goal, undefined);
-	const goal = goalState ? goalSection(goalState) : { openLines: [], closed: [], identities: [], closedIds: [] };
+	const goalState = safeMarked("goal", providers.goal, undefined);
+	const goal = goalState ? goalSection(goalState) : { openLines: [], closed: [], identities: [], closedIds: [], visibleIds: [] };
 	let openLines: string[] = [];
 	if (level >= 5) {
 		// ⑤ clamp description fields — identity fields stay verbatim.
@@ -84,14 +97,41 @@ function buildSections(input: AssembleLedgerInput, level: number): Sections {
 	} else {
 		openLines = [...goal.openLines];
 	}
-	const flowState = safe("flow", providers.flow, undefined);
+	const flowState = safeMarked("flow", providers.flow, undefined);
 	if (flowState) {
 		openLines.push(...flowLines(flowState, level >= 5 ? 60 : 120));
 		if (level >= 5) degradation.tierADegraded += 1;
 	}
-	// ⑥ maxOpenItems overflow → external pointer (Tier D).
+	const bgItems = safeMarked("bg", providers.bg, []);
+	const bg = bgSection(bgItems);
+
+	// ⑥ maxOpenItems overflow → TRUNCATE to the first maxOpenItems identity
+	// groups (B2, 2026-11-10 review: LED-01⑥ + INV-08), then a Tier-D pointer.
+	// Goal lines come first; flow-run groups (a run's task/gate sublines stay
+	// with their run) after — whole groups are kept or dropped, never split.
+	// The identity SET truncates with the display (goal → bg → flow), so
+	// selfCheck only demands visibility of what we actually kept.
 	const identityCount = goal.identities.length + (flowState?.openRuns.length ?? 0);
+	let keptFlowRuns: typeof flowState extends undefined ? never[] : Array<NonNullable<typeof flowState>["openRuns"][number]>;
+	keptFlowRuns = [] as never;
+	// B2: the goal side of the promise set is bounded by BOTH maxOpenItems
+	// and what the goal renderer can actually show (visibleIds).
+	let goalIdentities = goal.identities.filter((identity) => goal.visibleIds.includes(identity.id));
 	if (identityCount > settings.maxOpenItems) {
+		const bgCount = bg.identities.length; // bg identities sit between goal and flow
+		const goalKeep = Math.max(0, settings.maxOpenItems - bgCount);
+		goalIdentities = goalIdentities.slice(0, goalKeep);
+		const flowBudget = Math.max(0, settings.maxOpenItems - goalIdentities.length - bgCount);
+		const allRuns = flowState?.openRuns ?? [];
+		keptFlowRuns = allRuns.slice(0, flowBudget);
+		if (goal.identities.length > settings.maxOpenItems) {
+			openLines = openLines.slice(0, settings.maxOpenItems);
+		} else if (flowState && keptFlowRuns.length < allRuns.length) {
+			// rebuild: goal lines (already in) + first `flowBudget` whole flow groups
+			const goalLineCount = openLines.length - flowLines(flowState, level >= 5 ? 60 : 120).length;
+			const truncatedFlow = flowLines({ ...flowState, openRuns: keptFlowRuns as typeof allRuns }, level >= 5 ? 60 : 120);
+			openLines = [...openLines.slice(0, Math.max(0, goalLineCount)), ...truncatedFlow];
+		}
 		const pointer = flowState?.boardPath ? `full list in ${flowState.boardPath}` : "full list in .pi/goals/";
 		openLines.push(`+${identityCount - settings.maxOpenItems} more open items — ${pointer}`);
 		degradation.openOverflow = identityCount - settings.maxOpenItems;
@@ -111,7 +151,7 @@ function buildSections(input: AssembleLedgerInput, level: number): Sections {
 	degradation.directivesPointerOnly = rendered.degradation.pointerOnly;
 
 	// ── Verification (② at level ≥2: last test only) ──
-	const verification = safe("verification", providers.verification, undefined)
+	const verification = safeMarked("verification", providers.verification, undefined)
 		?? scanVerification(region);
 	const verificationLines: string[] = [];
 	if (verification.lastTest) {
@@ -122,8 +162,6 @@ function buildSections(input: AssembleLedgerInput, level: number): Sections {
 	}
 
 	// ── Background (④ at level ≥4: bare one-liners) ──
-	const bgItems = safe("bg", providers.bg, []);
-	const bg = bgSection(bgItems);
 	const backgroundLines = level >= 4
 		? bgItems.map((item) => `- ${item.id} [${item.kind}] ${item.status}`)
 		: bg.lines;
@@ -134,13 +172,18 @@ function buildSections(input: AssembleLedgerInput, level: number): Sections {
 		? [`(${closedItems.length} closed items — see session/board)`]
 		: closedItems.map((item) => `- ✔ ${item.id} ${clampDescription(item.label, 60)}${item.detail ? ` — ${item.detail}` : ""}`);
 
+	// B6: per-section unavailable markers land in their own sections.
+	if (unavailable.goal || unavailable.flow) openLines.push(...[unavailable.goal ? "(goal provider unavailable)" : "", unavailable.flow ? "(flow provider unavailable)" : ""].filter((l) => l !== ""));
+	if (unavailable.bg && backgroundLines.length === 0) backgroundLines.push("(bg provider unavailable)");
+	if (unavailable.verification && verificationLines.length === 0) verificationLines.push("(verification provider unavailable)");
+
 	return {
 		openWork: openLines,
 		directives: rendered.lines,
 		verification: verificationLines,
 		background: backgroundLines,
 		closed: closedLines,
-		identities: [...goal.identities, ...bg.identities, ...(flowState?.openRuns.map((run) => ({ source: "flow" as const, id: run.runId, status: run.stage })) ?? [])],
+		identities: [...goalIdentities, ...bg.identities, ...((keptFlowRuns as Array<{ runId: string; stage: string }>).map((run) => ({ source: "flow" as const, id: run.runId, status: run.stage })))],
 		closedIds: [...goal.closedIds, ...(flowState?.closed.map((item) => item.id) ?? [])],
 		degradation,
 	};
@@ -171,12 +214,24 @@ function flowLines(flow: FlowLedgerState, objectiveChars: number): string[] {
 	return lines;
 }
 
+/**
+ * B1 (2026-11-10 review): neutralize forged ledger tags in USER content —
+ * any literal `<cc-core-ledger` / `</cc-core-ledger` (case-insensitive) has
+ * its `<` replaced with ‹ (U+2039) so injected text can never open/close the
+ * real block. Applied at the single rendering chokepoint (renderBlock), to
+ * section content lines only — our own BLOCK_OPEN/CLOSE and headings are
+ * trusted.
+ */
+export function sanitizeLedgerLine(line: string): string {
+	return line.replace(/<\/?cc-core-ledger/gi, (m) => m.replace("<", "\u2039"));
+}
+
 function renderBlock(sections: Sections): string {
 	const parts: string[] = [BLOCK_OPEN];
 	const section = (heading: string, lines: string[]) => {
 		if (lines.length === 0) return;
 		parts.push(`## ${heading}`);
-		parts.push(...lines);
+		parts.push(...lines.map(sanitizeLedgerLine));
 	};
 	section("Open work", sections.openWork);
 	section("Directives (verbatim)", sections.directives);
@@ -214,7 +269,16 @@ export function assembleLedger(input: AssembleLedgerInput): AssembledLedger {
 		block = renderBlock(sections);
 		if (block.length <= COMPACTION_LEDGER_MAX) break;
 	}
-	const check = selfCheck(sections!, block, input.region, input.settings);
+	// B2 (2026-11-10 review): the ladder is exhausted and the block is STILL
+	// over budget → return an empty block with a failed self-check (reason
+	// ledger-over-budget). NEVER hard-truncate the string — that could cut
+	// the closing tag or a Tier A identity field. The caller (tryPropose)
+	// then takes the existing v6-summary-invalid discard path.
+	let check = selfCheck(sections!, block, input.region, input.settings);
+	if (block.length > COMPACTION_LEDGER_MAX) {
+		check = { ok: false, missing: [...check.missing, "ledger-over-budget"] };
+		block = "";
+	}
 	return {
 		block: block.length > 0 ? block : "",
 		chars: block.length,

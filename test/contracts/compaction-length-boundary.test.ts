@@ -122,6 +122,9 @@ describe("BLK-1 protection: ready snapshot + length boundary (POL-07/INV-11)", (
 			const branch = host.sessionManager.getBranch();
 			const drafts = branch.filter((e) => (e as { type?: string }).type === "compaction" && precomputeOrigin(e) === "precompute");
 			expect(drafts.length).toBe(1);
+			// B4 (2026-11-10 review): the landed draft went through
+			// composeFinalSummary — its summary must carry the ledger block.
+			expect((drafts[0] as { summary?: string }).summary ?? "").toContain('<cc-core-ledger v="1">');
 		} finally {
 			host.cleanup();
 		}
