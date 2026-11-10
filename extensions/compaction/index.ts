@@ -377,7 +377,9 @@ export default function compactionController(pi: ExtensionAPI): void {
 			);
 			const narrative = rawSummary.slice(0, fileIdx).trimEnd();
 			const files = fileIdx < rawSummary.length ? rawSummary.slice(fileIdx) : "";
-			const flowTrusted = providers.flow?.()?.associated ?? false;
+			// F1: association comes from the memoized assemble result — no
+			// second provider invocation on the synchronous apply path.
+			const flowTrusted = ledger.flowAssociated;
 			const summary = [narrativeHeader(flowTrusted), narrative, ledger.block, files].filter((part) => part.length > 0).join("\n\n");
 			return { ok: true as const, summary, ledgerChars: ledger.chars, flowTrusted, closedIds: ledger.closedIds };
 		} catch {

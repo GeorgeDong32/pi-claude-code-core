@@ -30,7 +30,9 @@ export function goalSection(state: GoalLedgerState, opts?: { capOpenGoals?: numb
 	// The goal module's own summary text (focused + other open + terminal).
 	// RB1 (2026-11-10 review rework): capOpenGoals is passed THROUGH to the
 	// single formatter (LED-03) so ⑥ controls the cap instead of peeking.
-	const capOpenGoals = opts?.capOpenGoals ?? 20; // goal-compaction.ts default
+	// F2 (2026-11-10 review final): fallback for OTHER callers only —
+	// assemble's ⑥ always passes an explicit cap (goal-compaction.ts:81).
+	const capOpenGoals = opts?.capOpenGoals ?? 20; // mirrors goal-compaction.ts:81
 	const text = buildCompactionSummary({
 		goalsById: state.goalsById,
 		focusedGoalId: state.focusedGoalId,

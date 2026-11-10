@@ -116,6 +116,10 @@ export interface AssembledLedger {
 	selfCheck: { ok: boolean; missing: string[] };
 	/** Closed ids for the narrative prompt (SUM-08). */
 	closedIds: string[];
+	/** F1 (2026-11-10 review final): flow board association, from the
+	 * memoized provider result (false when the provider threw/absent) —
+	 * callers stop re-invoking providers.flow for LED-06 wording. */
+	flowAssociated: boolean;
 }
 
 /** Providers injected by index.ts (W4); each is independently try/caught

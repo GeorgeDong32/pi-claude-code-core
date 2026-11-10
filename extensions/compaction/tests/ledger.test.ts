@@ -436,3 +436,58 @@ test("RB3 (2026-11-10 rework): compressedRegionOf — no / one / two compaction 
 	region = compressedRegionOf([compaction("c1"), msg("b"), empty("c2"), compaction("c3"), msg("e")] as never, 5);
 	assert.deepEqual(region.entries.map((e) => (e.sourceEntry as { id: string }).id), ["e"]);
 });
+
+test("F1 (2026-11-10 final): each provider runs at most ONCE per assembleLedger (ladder included)", () => {
+	let flowCalls = 0;
+	let goalCalls = 0;
+	// deep degradation ladder: 600 runs forces every level (0–6) + the final
+	// over-budget clamp — the historical worst case for provider re-invocation.
+	const flow = () => {
+		flowCalls += 1;
+		return {
+			associated: true,
+			boardPath: "/tmp/board.json",
+			openRuns: Array.from({ length: 600 }, (_, i) => ({
+				runId: `run-${i}`,
+				objective: `objective ${i} ${"o".repeat(80)}`,
+				stage: "executing",
+				tasks: [{ id: `run-${i}/t0`, status: "doing" }],
+				openGates: [],
+				lastSentinels: [],
+			})),
+			closed: [],
+			sentinels: [],
+			otherOpenRuns: 0,
+		};
+	};
+	const goal = () => {
+		goalCalls += 1;
+		return { goalsById: new Map([["g0", Object.assign(createGoal({ objective: "=== Goal ===\nObjective: x", autoContinue: true, sisyphus: false }, 0), { id: "g0" })]]), focusedGoalId: "g0", ledgerEvents: [] };
+	};
+	const result = assembleLedger({ region: { entries: [] }, providers: { flow, goal }, settings: settings() });
+	assert.equal(flowCalls, 1, "flow provider must be called exactly once");
+	assert.equal(goalCalls, 1, "goal provider must be called exactly once");
+	// default maxOpenItems=60 → ⑥ legally truncates the runs; the block
+	// lands under budget — the assertion is the CALL COUNT, not the clamp.
+	assert.ok(result.block.length > 0);
+	assert.ok(result.block.length <= COMPACTION_LEDGER_MAX);
+	assert.equal(result.flowAssociated, true);
+});
+
+test("F1: a throwing provider is called once, still marks its section unavailable, and re-throws consistently", () => {
+	let boomCalls = 0;
+	const result = assembleLedger({
+		region: { entries: [userEntry("u1", "keep tests green")] },
+		providers: {
+			goal: () => {
+				boomCalls += 1;
+				throw new Error("boom-goal");
+			},
+		},
+		settings: settings(),
+	});
+	assert.equal(boomCalls, 1);
+	assert.ok(result.block.includes("(goal provider unavailable)"));
+	assert.equal(result.flowAssociated, false);
+	assert.ok(result.selfCheck.ok, result.selfCheck.missing.join(","));
+});

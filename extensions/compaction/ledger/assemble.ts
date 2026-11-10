@@ -69,22 +69,6 @@ function clampDescription(text: string, chars: number): string {
 	return text.length > chars ? `${text.slice(0, chars)}…` : text;
 }
 
-/** RB1: cheap flow probes for ⑥ accounting — never throw (LED-07). */
-function flowProbeState(provider: LedgerProviders["flow"]): ReturnType<NonNullable<LedgerProviders["flow"]>> | undefined {
-	try {
-		return provider?.();
-	} catch {
-		return undefined;
-	}
-}
-function flowProbeRuns(provider: LedgerProviders["flow"]): number {
-	try {
-		return provider?.()?.openRuns.length ?? 0;
-	} catch {
-		return 0;
-	}
-}
-
 function buildSections(input: AssembleLedgerInput, level: number): Sections {
 	const { region, providers, settings } = input;
 	const degradation: LedgerDegradation = { tierADegraded: 0, directivesCollapsed: 0, directivesPointerOnly: 0, openOverflow: 0 };
@@ -103,15 +87,19 @@ function buildSections(input: AssembleLedgerInput, level: number): Sections {
 	};
 
 	// ── Open work: goals (+ flow in W7) ──
+	// F1 (2026-11-10 review final): resolve flow ONCE here — the ladder
+	// levels all share this result (providers are memoized per assemble),
+	// ⑥ derives its accounting from it, and no probe helpers remain.
+	const flowStateRaw = safeMarked("flow", providers.flow, undefined);
 	const goalState = safeMarked("goal", providers.goal, undefined);
 	// RB1 (2026-11-10 review rework): probe the goal section once (default
 	// cap) for ⑥'s accounting, then re-render ONLY if the budget demands a
 	// different cap — the formatter stays the single renderer (LED-03).
 	const goalProbe = goalState ? goalSection(goalState) : undefined;
 	const goalOpenTotal = (goalProbe?.identities.length ?? 0) + (goalProbe?.hiddenOpenCount ?? 0);
-	const flowRunsTotal = flowProbeRuns(providers.flow);
+	const flowRunsTotal = flowStateRaw?.openRuns.length ?? 0;
 	let capOpenGoals: number | undefined;
-	let keptRuns: Array<NonNullable<ReturnType<typeof flowProbeState>>["openRuns"][number]> | undefined;
+	let keptRuns: typeof flowStateRaw extends undefined ? never[] : Array<NonNullable<typeof flowStateRaw>["openRuns"][number]> | undefined;
 	let hiddenOpen = 0;
 	{
 		const maxOpen = settings.maxOpenItems;
@@ -120,11 +108,12 @@ function buildSections(input: AssembleLedgerInput, level: number): Sections {
 			// over budget: single-budget truncation (goals first, then runs)
 			const keptGoals = Math.min(goalOpenTotal, maxOpen);
 			capOpenGoals = Math.max(0, keptGoals - (focusedIsOpen ? 1 : 0));
-			keptRuns = (flowProbeState(providers.flow)?.openRuns ?? []).slice(0, Math.max(0, maxOpen - keptGoals));
+			keptRuns = (flowStateRaw?.openRuns ?? []).slice(0, Math.max(0, maxOpen - keptGoals));
 			hiddenOpen = goalOpenTotal + flowRunsTotal - keptGoals - keptRuns.length;
-		} else if (goalOpenTotal > 20) {
-			// RB1: under maxOpenItems NOTHING may silently hide (LED-01) —
-			// raise the render cap so every open goal is shown.
+		} else {
+			// F2 (2026-11-10 review final): no magic 20 — under budget the
+			// render cap is ALWAYS explicit so nothing can hide behind the
+			// formatter's default (LED-01).
 			capOpenGoals = Math.max(0, goalOpenTotal - (focusedIsOpen ? 1 : 0));
 		}
 	}
@@ -140,7 +129,6 @@ function buildSections(input: AssembleLedgerInput, level: number): Sections {
 	// RB1 (2026-11-10 review rework): flow renders the KEPT run set decided by
 	// ⑥'s single budget above (a run's task/gate/sentinel sublines stay with
 	// their run — whole groups only). bg does NOT consume maxOpenItems.
-	const flowStateRaw = safeMarked("flow", providers.flow, undefined);
 	const flowState = flowStateRaw && keptRuns && keptRuns.length < flowStateRaw.openRuns.length ? { ...flowStateRaw, openRuns: keptRuns as typeof flowStateRaw.openRuns } : flowStateRaw;
 	if (flowState) {
 		openLines.push(...flowLines(flowState, level >= 5 ? 60 : 120));
@@ -297,12 +285,57 @@ function selfCheck(sections: Sections, block: string, region: CompressedRegionVi
 	return { ok: missing.length === 0, missing };
 }
 
+/**
+ * F1 (2026-11-10 review final): wrap `providers` so EACH provider runs at
+ * most ONCE per assembleLedger call — the ladder re-runs buildSections up to
+ * 7 times and the apply path is synchronous (APP-03: a board read is disk
+ * I/O). Throw behavior is preserved (a throwing provider re-throws on every
+ * call) so safeMarked still marks its section unavailable.
+ */
+function memoizeProviders(providers: LedgerProviders): LedgerProviders {
+	type Memoized<T> = { ok: true; result: T } | { ok: false; error: unknown };
+	const cache = new Map<string, Memoized<unknown>>();
+	const memo = <T>(key: string, provider: (() => T) | undefined): (() => T) | undefined => {
+		if (!provider) return undefined;
+		return (() => {
+			if (cache.has(key)) {
+				const hit = cache.get(key) as Memoized<T>;
+				if (hit.ok) return hit.result;
+				throw hit.error; // rethrow the SAME failure every call
+			}
+			try {
+				const result = provider();
+				cache.set(key, { ok: true, result });
+				return result;
+			} catch (error) {
+				cache.set(key, { ok: false, error });
+				throw error;
+			}
+		}) as () => T;
+	};
+	return {
+		goal: memo("goal", providers.goal) as LedgerProviders["goal"],
+		flow: memo("flow", providers.flow),
+		bg: memo("bg", providers.bg),
+		verification: memo("verification", providers.verification),
+		previousSummary: providers.previousSummary,
+	};
+}
+
 /** Assemble with the LED-01 ladder. Never throws (LED-07). */
 export function assembleLedger(input: AssembleLedgerInput): AssembledLedger {
 	let sections: Sections | undefined;
 	let block = "";
+	const providers = memoizeProviders(input.providers);
+	const memoInput = { ...input, providers };
+	let flowAssociated = false;
+	try {
+		flowAssociated = providers.flow?.()?.associated ?? false;
+	} catch {
+		flowAssociated = false;
+	}
 	for (let level = 0; level <= 6; level += 1) {
-		sections = buildSections(input, level);
+		sections = buildSections(memoInput, level);
 		block = renderBlock(sections);
 		if (block.length <= COMPACTION_LEDGER_MAX) break;
 	}
@@ -322,6 +355,7 @@ export function assembleLedger(input: AssembleLedgerInput): AssembledLedger {
 		degradation: sections!.degradation,
 		selfCheck: check,
 		closedIds: sections!.closedIds,
+		flowAssociated,
 	};
 }
 
