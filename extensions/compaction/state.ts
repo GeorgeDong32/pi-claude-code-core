@@ -9,6 +9,7 @@
  * degrade counters (refusals, conflict-edits). The event wiring itself
  * (which pi event maps to which runtime call) is index.ts (W4) — this class
  * never touches pi objects, so every edge is unit-testable.
+ * Boundary observations own the clock; apply-time proposals do not tick again.
  *
  * ST-01 entry shape is FROZEN (SC-ENT-01): display-only, never enters the
  * LLM context, carries sizes/ids/reason codes only (INV-7: no summary or
@@ -100,6 +101,13 @@ export class SessionRuntime {
 
 	/** Wrap evaluate() so callers get the live state back automatically. */
 	onBoundary(event: Extract<PolicyEvent, { type: "boundary" }>) {
+		const decision = evaluate(this.state, event, this.policySettings());
+		this.state = decision.state;
+		return decision;
+	}
+
+	/** Apply after this host boundary was observed; do not tick twice. */
+	onPropose(event: Extract<PolicyEvent, { type: "propose" }>) {
 		const decision = evaluate(this.state, event, this.policySettings());
 		this.state = decision.state;
 		return decision;

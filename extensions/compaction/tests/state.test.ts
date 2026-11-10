@@ -70,6 +70,25 @@ function driveToProposed(rt: SessionRuntime, nonce = "n-1") {
 	rt.onProposed({ midRun: false, summaryChars: 500, tokensBefore: 90_000 });
 }
 
+test("boundary clock: observation + apply-time proposal tick once; unsafe/repeated proposals never tick", () => {
+	const { rt } = runtime();
+	driveToReady(rt);
+	const before = rt.state.turns;
+	rt.onBoundary({ type: "boundary", P: 0.8, applySafe: true, isApplyPoint: false, prechecksPassed: true, feasibility: null, mayCompute: false });
+	for (const P of [null, Number.NaN, 0.1]) {
+		assert.equal(rt.onPropose({ type: "propose", P, applySafe: true, prechecksPassed: true }).action.type, "none");
+		assert.equal(rt.state.phase, "ready");
+		assert.equal(rt.state.turns, before + 1);
+	}
+	assert.equal(rt.onPropose({ type: "propose", P: 0.8, applySafe: false, prechecksPassed: true }).action.type, "none");
+	assert.equal(rt.onPropose({ type: "propose", P: 0.8, applySafe: true, prechecksPassed: true, proposalNonce: "once" }).action.type, "propose");
+	assert.equal(rt.state.turns, before + 1);
+	assert.equal(rt.state.precomputeGapTurns, 0);
+	assert.equal(rt.state.refusedCooldownTurns, 0);
+	assert.equal(rt.onPropose({ type: "propose", P: 0.8, applySafe: true, prechecksPassed: true }).action.type, "none");
+	assert.equal(rt.state.turns, before + 1);
+});
+
 test("ST-01: telemetry entry type + frozen field set (SC-ENT-01)", () => {
 	const { type, data } = buildTelemetryEntry({ v: 1, outcome: "applied", origin: "precompute", validated: true, summaryChars: 500 });
 	assert.equal(type, TELEMETRY_ENTRY_TYPE);

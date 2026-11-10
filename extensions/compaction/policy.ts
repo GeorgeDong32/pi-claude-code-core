@@ -6,10 +6,13 @@
  * The state machine (§5.2) is a total function over (state, event) so tests
  * can enumerate every edge, including cooldowns, single-flight and the
  * "no re-propose while proposed" invariant (INV-5).
+ * Boundary observation owns the clock; an apply-time proposal does not tick
+ * it again. Replay may still use one combined boundary evaluation.
  *
  * Key host facts baked in:
  *   - H7: getContextUsage().tokens is null after a compaction until the next
- *     assistant response — null pressure never advances state (POL-04).
+ *     assistant response — null pressure never starts compute/propose
+ *     (POL-04); existing boundary-clock semantics are preserved.
  *   - H8: T_n must come from the EFFECTIVE compaction settings (modelOverrides
  *     resolved by the caller via SettingsManager); POL-01 refuses to guess.
  *   - H12: outcome==="completed" is NOT sufficient safety; POL-07 checks the
@@ -240,6 +243,7 @@ export type PolicyEvent =
 			mayCompute: boolean;
 	  }
 	| { type: "compute-ok" }
+	| { type: "propose"; P: number | null; applySafe: boolean; prechecksPassed: boolean; proposalNonce?: string }
 	| { type: "compute-failed"; retryExhausted: boolean }
 	| { type: "discard"; reason: DiscardReason }
 	| { type: "reconcile-committed" }
@@ -275,6 +279,23 @@ export interface PolicySettings {
 	minPrecomputeGapTurns: number;
 }
 
+function propose(state: ControllerState, event: Extract<PolicyEvent, { type: "propose" }> | Extract<PolicyEvent, { type: "boundary" }>, settings: PolicySettings): PolicyDecision {
+	if (state.phase !== "ready" || !event.applySafe || event.P === null || !(event.P >= settings.applyRatio)) {
+		return { state, action: { type: "none" } };
+	}
+	if (!event.prechecksPassed) {
+		return {
+			state: {
+				...state, phase: "idle", precomputeGapTurns: settings.minPrecomputeGapTurns,
+				lastOutcome: { outcome: "discarded", reason: "v-gate", atTurn: state.turns },
+			},
+			action: { type: "none" },
+		};
+	}
+	const proposalId = event.proposalNonce ?? `prop-${state.generation}-${state.turns}`;
+	return { state: { ...state, phase: "proposed", proposalId }, action: { type: "propose", proposalId } };
+}
+
 /**
  * Total transition function (§5.2). Every edge is a table row in the tests;
  * unknown combinations fall through to "none" rather than throwing (INV-1's
@@ -286,6 +307,8 @@ export function evaluate(
 	settings: PolicySettings,
 ): PolicyDecision {
 	switch (event.type) {
+		case "propose":
+			return propose(state, event, settings);
 		case "session-reset":
 			return { state: initialState(state.generation + 1), action: { type: "reset" } };
 
@@ -302,7 +325,7 @@ export function evaluate(
 			return { state, action: { type: "none" } };
 		}
 
-	case "boundary": {
+		case "boundary": {
 			const next: ControllerState = {
 				...state,
 				turns: state.turns + 1,
@@ -321,35 +344,7 @@ export function evaluate(
 				next.phase = "idle";
 			}
 			if (state.phase === "ready") {
-				// Apply-point gate: POL-07 safety + P ≥ applyRatio + V1–V10.
-				if (
-					event.isApplyPoint &&
-					event.applySafe &&
-					event.P !== null &&
-					event.P >= settings.applyRatio
-				) {
-					if (!event.prechecksPassed) {
-						// V-gate failed: snapshot discarded, ready for the next
-						// boundary only after the min gap (§5.2 ready→discarded).
-						return {
-							state: {
-								...next,
-								phase: "idle",
-								precomputeGapTurns: settings.minPrecomputeGapTurns,
-								lastOutcome: { outcome: "discarded", reason: "v-gate", atTurn: next.turns },
-							},
-							action: { type: "none" },
-						};
-					}
-					const proposalId = event.proposalNonce ?? `prop-${next.generation}-${next.turns}`;
-					return {
-						state: { ...next, phase: "proposed", proposalId },
-						action: { type: "propose", proposalId },
-					};
-				}
-				// Not proposing here: keep the snapshot ready (V10 semantics —
-				// the SAME snapshot stays eligible at the next boundary).
-				return { state: next, action: { type: "none" } };
+				return event.isApplyPoint ? propose(next, event, settings) : { state: next, action: { type: "none" } };
 			}
 			// idle (possibly with cooldown / gap outstanding — decremented above).
 			if (next.refusedCooldownTurns > 0 || next.precomputeGapTurns > 0) {
