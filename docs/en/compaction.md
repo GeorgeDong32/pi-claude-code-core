@@ -40,6 +40,16 @@ record.
 Configuration: `~/.pi/agent/core-compaction.json` (ST-02), env
 `PI_CORE_COMPACTION=off|shadow|on`, command `/compaction [status|mode …]`.
 
+**POL-07 propose gate (A1, 2026-11-10 review fix)**: the draft path itself now
+evaluates apply-point safety — the LAST assistant entry's stopReason is read
+from the boundary branch (covers both `turn_end` and `agent_before_settle`);
+`length` boundaries never propose, so native recovery is never swallowed.
+**Served transition (A2)**: after the fallback leg supplies a snapshot, the
+phase leaves `ready` (idle) — the controller re-precomputes instead of
+re-proposing a consumed draft. **Overridden bound (A3)**: lost(overridden)
+re-proposals are capped — after 2 consecutive overrides the controller
+degrades to shadow (test seam `SC_TEST_OVERRIDE_DEGRADE_AFTER`).
+
 ## W2 replay calibration record (2026-11-09)
 
 Tool: `tsx scripts/compaction-replay.mjs <corpus>… [--self-check] [--json]`

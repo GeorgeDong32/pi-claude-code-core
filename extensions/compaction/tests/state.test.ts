@@ -177,3 +177,24 @@ test("runtime notify callbacks route through the real seam when wired", () => {
 	assert.deepEqual(seen, ["before", "after"]);
 	resetCompactionSeam();
 });
+
+test("A2 (2026-11-10): onServed leaves ready, clears snapshot, emits served telemetry", () => {
+	const { rt, emitted } = runtime();
+	// force a ready-ish state via onServed from arbitrary phase — transition is unconditional
+	rt.onServed();
+	assert.equal(rt.state.phase, "idle");
+	assert.equal(rt.snapshot, null);
+	assert.equal(rt.state.lastOutcome?.outcome, "served");
+	assert.ok(emitted.some((e) => e.outcome === "served" && e.origin === "native-backfill"));
+});
+
+test("A3 (2026-11-10): onOverridden degrades after threshold; reset clears counters", () => {
+	const { rt } = runtime();
+	rt.onOverridden(2);
+	assert.equal(rt.degraded, false); // 1 < 2 — still active
+	rt.onOverridden(2);
+	assert.equal(rt.degraded, true); // 2 >= 2 — degraded to shadow behavior
+	// reset clears both degrade counters (conflictEditTotal leak fix included)
+	rt.onSessionReset();
+	assert.equal(rt.degraded, false);
+});

@@ -72,6 +72,8 @@ export class SessionRuntime {
 	computeMs: number | undefined;
 	summaryModelFallback = false;
 	conflictEditTotal = 0;
+	// A3 (2026-11-10): lost(overridden) occurrences this session.
+	overrideTotal = 0;
 
 	private readonly deps: SessionRuntimeDeps;
 
@@ -222,6 +224,35 @@ export class SessionRuntime {
 		this.snapshot = null;
 		this.computeMs = undefined;
 		this.summaryModelFallback = false;
+		// A3 (2026-11-10): degrade counters are session-scoped — a reset must
+		// not carry them across sessions (previously conflictEditTotal leaked).
+		this.conflictEditTotal = 0;
+		this.overrideTotal = 0;
+	}
+
+	/**
+	 * A2 (2026-11-10): the fallback leg supplied the snapshot to native —
+	 * phase leaves "ready" (idle) so the next boundary can precompute again
+	 * instead of re-proposing a consumed draft.
+	 */
+	onServed(): void {
+		this.state = { ...this.state, phase: "idle", lastOutcome: { outcome: "served", atTurn: this.state.turns } };
+		this.snapshot = null;
+		try {
+			this.emit({ outcome: "served", origin: "native-backfill", validated: true });
+		} catch {
+			/* telemetry is best-effort */
+		}
+	}
+
+	/**
+	 * A3 (2026-11-10): lost(overridden) re-propose bound — after `after`
+	 * overrides the controller degrades to shadow. Session-scoped counter,
+	 * cleared on reset.
+	 */
+	onOverridden(after: number): void {
+		this.overrideTotal += 1;
+		if (this.overrideTotal >= after) this.degrade();
 	}
 
 	private emit(data: Omit<CompactionTelemetryData, "v">): void {

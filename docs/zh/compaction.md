@@ -29,6 +29,14 @@ fallback 腿可在 `session_before_compact` 向原生路径供稿（预computed 
 配置：`~/.pi/agent/core-compaction.json`（ST-02）、环境变量
 `PI_CORE_COMPACTION=off|shadow|on`、命令 `/compaction [status|mode …]`。
 
+**POL-07 提议闸（A1，2026-11-10 review 修复）**：draft 路径本身评估 apply-point
+安全性——从边界 branch 读**最后一条 assistant** 的 stopReason（同时覆盖
+`turn_end` 与 `agent_before_settle`）；`length` 边界永不提议，原生恢复不被吞。
+**served 转移（A2）**：供稿腿供出快照后相位离开 `ready`（转 idle）——控制器重新
+预压缩，而不是对已消费的 draft 复提议。**overridden 上界（A3）**：
+lost(overridden) 复提议有上界——连续 2 次 overridden 后降级 shadow（测试缝
+`SC_TEST_OVERRIDE_DEGRADE_AFTER`）。
+
 ## W2 回放校准记录（2026-11-09）
 
 工具：`tsx scripts/compaction-replay.mjs <语料目录>… [--self-check] [--json]`

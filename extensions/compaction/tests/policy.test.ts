@@ -371,3 +371,40 @@ test("POL-10 estimatePost: summary + tail + calibrated overhead; null usage path
 	});
 	assert.equal(clamped.overhead, Math.floor(0.3 * 128_000));
 });
+
+test("A1 (2026-11-10 review P0): length boundary never proposes — ready snapshot + apply window + all gates pass, still idle", () => {
+	// Build a ready state (P above applyRatio, apply-safe, checks passed),
+	// then hit a length boundary: the proposal MUST be withheld so native
+	// recovery (H12/H13) is not swallowed by a draft.
+	let d = evaluate(initialState(), boundary({ P: 0.61 }), SETTINGS);
+	assert.equal(d.action.type, "start-computing");
+	const ready = evaluate(d.state, { type: "compute-ok" }, SETTINGS).state;
+	assert.equal(ready.phase, "ready");
+	d = evaluate(
+		ready,
+		boundary({ P: 0.8, isApplyPoint: true, applySafe: true, prechecksPassed: true, lastAssistantStopReason: "length", proposalNonce: "n1" }),
+		SETTINGS,
+	);
+	assert.equal(d.state.phase, "ready"); // stays ready — no proposal
+	assert.equal(d.action.type, "none");
+	// Same boundary with a clean stop DOES propose.
+	d = evaluate(
+		ready,
+		boundary({ P: 0.8, isApplyPoint: true, applySafe: true, prechecksPassed: true, lastAssistantStopReason: "stop", proposalNonce: "n2" }),
+		SETTINGS,
+	);
+	assert.equal(d.state.phase, "proposed");
+	assert.equal(d.action.type, "propose");
+});
+
+test("A2: served event leaves ready → idle (fallback supply consumed the snapshot)", () => {
+	let d = evaluate(initialState(), boundary({ P: 0.61 }), SETTINGS);
+	const ready = evaluate(d.state, { type: "compute-ok" }, SETTINGS).state;
+	assert.equal(ready.phase, "ready");
+	d = evaluate(ready, boundary({ P: 0.8, served: true }), SETTINGS);
+	assert.equal(d.state.phase, "idle");
+	assert.equal(d.state.lastOutcome?.outcome, "served");
+	// Post-served boundary can start a fresh precompute cycle.
+	d = evaluate(d.state, boundary({ P: 0.61 }), SETTINGS);
+	assert.equal(d.action.type, "start-computing");
+});

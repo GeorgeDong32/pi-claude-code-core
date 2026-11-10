@@ -88,6 +88,10 @@ const RECONCILE_EVENTS = [
 export default function compactionController(pi: ExtensionAPI): void {
 	// ── session-scoped state (rebuilt on session_start) ───────────────────
 	let settings: CompactionSettings = DEFAULT_COMPACTION_CORE_SETTINGS;
+	// A3 (2026-11-10): lost(overridden) re-propose bound — degrade to shadow
+	// after this many overrides (same family as conflictEditDegradeAfter=2).
+	// SC_TEST_OVERRIDE_DEGRADE_AFTER is a test seam ONLY (repro/BLK tests).
+	const OVERRIDE_DEGRADE_AFTER = Number(process.env.SC_TEST_OVERRIDE_DEGRADE_AFTER ?? "2");
 	let runtime = new SessionRuntime({
 		settings,
 		emitTelemetry: () => {},
@@ -334,7 +338,9 @@ export default function compactionController(pi: ExtensionAPI): void {
 	let lastFlowTrusted = false;
 
 	// ── the proposal path (synchronous, APP-01…08) ────────────────────────
-	const tryPropose = (event: { entries?: unknown[] }, ctx: ExtensionContext, midRun: boolean): { entries: unknown[] } | undefined => {
+	// A1 (2026-11-10, review P0): applySafe is threaded from the caller (the
+	// propose gate in onApplyPoint) instead of being hardcoded true.
+	const tryPropose = (event: { entries?: unknown[] }, ctx: ExtensionContext, midRun: boolean, applySafe: boolean): { entries: unknown[] } | undefined => {
 		const snapshot = runtime.snapshot;
 		if (!snapshot || runtime.state.phase !== "ready") return undefined;
 		const { tn } = thresholdOf(ctx);
@@ -389,7 +395,7 @@ export default function compactionController(pi: ExtensionAPI): void {
 			tnAtSnapshot: snapshot.tnAtSnapshot,
 			tnNow: tn,
 			summaryValidated: snapshot.validated,
-			applySafe: true, // caller already evaluated POL-07
+			applySafe,
 			estimatePostTokens: estimate.total,
 			hardFitLimit: settings.hardFitRatio * tn,
 			efficiencyLimit: settings.precomputeRatio * tn,
@@ -408,9 +414,10 @@ export default function compactionController(pi: ExtensionAPI): void {
 		const decision = runtime.onBoundary({
 			type: "boundary",
 			P: (pressureOf(ctx) ?? 0) / tn,
-			applySafe: true,
+			applySafe,
 			isApplyPoint: true,
 			prechecksPassed: true,
+			lastAssistantStopReason: lastAssistantStopOf(event),
 			feasibility: jointFeasibility({
 				tn,
 				keepRecentTokens: thresholdOf(ctx).keep,
@@ -478,7 +485,11 @@ export default function compactionController(pi: ExtensionAPI): void {
 			} else if (result.lostReason === "overridden") {
 				// BLK-2(a) executable-spec semantics: the override lost the
 				// PROPOSAL, not the snapshot — back to ready, re-propose at the
-				// next eligible boundary with a fresh nonce.
+				// next eligible boundary with a fresh nonce. A3 (2026-11-10):
+				// re-propose loops are bounded — after OVERRIDE_DEGRADE_AFTER
+				// overrides the controller degrades to shadow (same family as
+				// conflictEditDegradeAfter).
+				runtime.onOverridden(OVERRIDE_DEGRADE_AFTER);
 				runtime.state = { ...runtime.state, phase: "ready", proposalId: undefined };
 				pendingProposal = null;
 			} else {
@@ -491,6 +502,17 @@ export default function compactionController(pi: ExtensionAPI): void {
 	};
 
 	// ── apply-point boundary evaluation ───────────────────────────────────
+	// A1 (2026-11-10, review P0): POL-07 reads the LAST assistant entry's
+	// stopReason from the boundary's entries — event.message only covers
+	// turn_end; agent_before_settle drafts must be gated the same way.
+	const lastAssistantStopOf = (e: { entries?: unknown[]; message?: { stopReason?: string } }): string | undefined => {
+		const list = e.entries ?? [];
+		for (let i = list.length - 1; i >= 0; i--) {
+			const stop = (list[i] as { message?: { stopReason?: string } } | undefined)?.message?.stopReason;
+			if (typeof stop === "string") return stop;
+		}
+		return e.message?.stopReason;
+	};
 	const onApplyPoint = (event: { entries?: unknown[]; message?: { stopReason?: string }; outcome?: string }, ctx: ExtensionContext, midRun: boolean): { entries: unknown[] } | undefined => {
 		if (resolvedMode === "off" || resolvedMode === "shadow") return undefined;
 		try {
@@ -520,13 +542,26 @@ export default function compactionController(pi: ExtensionAPI): void {
 				applySafe: applyPointSafe({ stopReason, outcome: event.outcome, nativeRecoveryPending }),
 				isApplyPoint: false,
 				prechecksPassed: true, // the real V1–V10 run inside tryPropose
+				lastAssistantStopReason: lastAssistantStopOf(event),
 				feasibility,
 				mayCompute: resolvedMode === "on" && !runtime.degraded && !inFlight,
 				proposalNonce: randomUUID(),
 			});
 			if (decision.action.type === "start-computing" && !inFlight) launchCompute(ctx);
 			if (P !== null && P >= settings.applyRatio) {
-				return tryPropose(event, ctx, midRun);
+				// A1 (review P0): the propose path itself must pass POL-07 —
+				// previously applySafe was computed here and thrown away and
+				// tryPropose hardcoded `true`, letting length-boundary drafts
+				// swallow native recovery. Explicit `length` evidence (entries
+				// or message) is fail-closed; boundaries carrying NO stop
+				// info (agent_before_settle) derive from structure: mid-run
+				// ≈ toolUse, run-end ≈ stop — a truncation surfaces at
+				// turn_end/entries, never structurally here.
+				const lastStop = lastAssistantStopOf(event);
+				const stopForGate = lastStop ?? (midRun ? "toolUse" : "stop");
+				const proposeSafe = applyPointSafe({ stopReason: stopForGate, outcome: event.outcome, nativeRecoveryPending });
+				if (!proposeSafe) return undefined;
+				return tryPropose(event, ctx, midRun, proposeSafe);
 			}
 			return undefined;
 		} catch (error) {
@@ -615,6 +650,7 @@ export default function compactionController(pi: ExtensionAPI): void {
 					proposalId: randomUUID(),
 				});
 				runtime.snapshot = null; // consumed by the supply
+				runtime.onServed(); // A2: leave "ready" — re-precompute, never re-propose the consumed draft
 				return supply;
 			}
 			if (decision.action === "native") return undefined;
@@ -653,6 +689,7 @@ export default function compactionController(pi: ExtensionAPI): void {
 						proposalId: randomUUID(),
 					});
 					runtime.snapshot = null;
+					runtime.onServed(); // A2 (wait-path supply): same transition
 					return supply;
 				}
 				return undefined; // ready but unfit → do not supply, do not regenerate late
