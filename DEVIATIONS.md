@@ -369,7 +369,7 @@ SC-1. **默认 mode 临时以 `shadow` 发布（2026-11-09 起）**
 SC-2. **lost(overridden) 后快照存活（以 BLK-2(a) 执行规范为准）**
    - 内容：§5.2 字面为"proposed → lost [快照作废]"，但 §4.4 BLK-2(a) 保护断言与对应测试要求"快照不消耗、后续 clean 边界可提交"。实现取后者：lost(overridden) → 回 ready、新 nonce 复提议；lost(branch-changed/dropped) 仍作废快照。
    - 理由：BLK 用例是阻断性执行规范（发布硬门槛），且语义上 override 丢失的是"提议"而非"快照"（分支未变、V1 仍成立）。已在 index.ts 代码注释注明。
-   - **增补（2026-11-10 review 修复）**：复提议现有上界——连续 `OVERRIDE_DEGRADE_AFTER`（默认 2）次 overridden 后控制器降级 shadow（与 conflictEditDegradeAfter 同族）；计数会话级、reset 清零（同批修正了 conflictEditTotal 跨会话泄漏）。测试缝 `SC_TEST_OVERRIDE_DEGRADE_AFTER`。
+   - **增补（2026-11-10 review 修复，rework R3 定稿）**：复提议现有上界——连续 `OVERRIDE_DEGRADE_AFTER = 2`（state.ts 导出常量，与 conflictEditDegradeAfter 同族；无 env 缝——未登记契约的环境变量禁止，INV-10）次 overridden 后控制器降级 shadow；**每次** overridden 写 APP-08 discarded 遥测（`reason:"overridden"`，origin precompute）；计数会话级、reset 清零（同批修正了 conflictEditTotal 跨会话泄漏）。
 
 SC-3. **真机验收的已验/待证据拆分（H-SC 未全过即不称完成）**
    - 已验（真实 pi 1.5.0 --print 沙盒 + 本地扩展仓）：扩展整套加载无错、控制器真实运行（ST-01 遥测落盘真实 jsonl）、POL-09/切点/准备管道在真实投影上执行并正确 refused、`PI_CORE_COMPACTION=off` 零新增痕迹（H-SC-5 前半）。

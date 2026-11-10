@@ -1,9 +1,18 @@
 /**
- * BLK-1 protection (A1, 2026-11-10 review P0): a ready snapshot must never
- * draft over a recoverable `length` boundary — the proposal is withheld and
- * native recovery (H12/H13) takes over. Covers both turn_end (message.stopReason)
- * and agent_before_settle (stopReason read from the boundary branch entries).
- * Pinned from the review repro; SC_TEST_OVERRIDE_DEGRADE_AFTER seam unused here.
+ * BLK-1 protection: ready snapshot + length boundary (POL-07/INV-11).
+ *
+ * A1 (2026-11-10 review P0, rework R1/R2): POL-07's stopReason authority is
+ * the SESSION BRANCH (ctx.sessionManager.getBranch(), backward scan for the
+ * last assistant message) — event.message covers turn_end only, and the
+ * host's boundary `entries` are the draft accumulator, never messages.
+ * Pinned scenarios:
+ *  - recoverable length (host retries, final assistant ends at "stop"): no
+ *    precompute draft lands over the truncated stretch, and native overflow
+ *    recovery proceeds (session_before_compact reason "overflow").
+ *  - non-recoverable length (maxTokens 60 — no retry): NO precompute draft
+ *    after the length-stop assistant, at ANY boundary (turn_end or
+ *    agent_before_settle). This was the review's P0 failure mode.
+ *  - clean stop control: exactly one precompute draft (gate not overblocking).
  */
 import { describe, expect, it } from "vitest";
 import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
@@ -19,7 +28,6 @@ const AGGRESSIVE = {
 	refusedCooldownTurns: 0,
 	minPrecomputeGapTurns: 0,
 };
-const SMALL_WINDOW = { contextWindow: 6000, maxTokens: 8000 };
 const PI_SMALL = { compaction: { enabled: true, reserveTokens: 2000, keepRecentTokens: 100 } };
 const grow = (mass: number) => [
 	fauxAssistantMessage([fauxText("inspecting"), fauxToolCall("sc_probe_tool", { value: "r".repeat(mass) })], { stopReason: "toolUse" }),
@@ -29,46 +37,93 @@ const summaries = () => [
 	fauxAssistantMessage(`## History\n- ${"h".repeat(500)}\n\n## State\n- stable`),
 	fauxAssistantMessage(`# P\n${"p".repeat(200)}`),
 ];
+const responses = (finalStop: "length" | "stop") => [
+	...grow(600),
+	...grow(3000).slice(0, 1),
+	...summaries(),
+	fauxAssistantMessage(`closing notes for this run — ${"n".repeat(560)}`),
+	fauxAssistantMessage(`final answer with substance — ${"f".repeat(1200)}`, { stopReason: finalStop }),
+	fauxAssistantMessage("recovered answer (padding 1)"),
+	fauxAssistantMessage("recovered answer (padding 2)"),
+	fauxAssistantMessage("recovered answer (padding 3)"),
+];
+const precomputeOrigin = (e: unknown) => (e as { details?: { ccCore?: { origin?: string } } }).details?.ccCore?.origin;
+const assistantStop = (e: unknown) => (e as { message?: { stopReason?: string } }).message?.stopReason;
+const isAssistant = (e: unknown) => (e as { type?: string; message?: { role?: string } }).type === "message" && (e as { message?: { role?: string } }).message?.role === "assistant";
 
-describe("REVIEW repro POL-07: ready snapshot + length boundary", () => {
-	for (const finalStop of ["length", "stop"] as const) {
-		it(`final assistant stopReason=${finalStop}`, async () => {
-			const host = await createCompactionHost({
-				model: SMALL_WINDOW,
-				settingsOverrides: PI_SMALL,
-				controllerSettings: AGGRESSIVE,
-				probe: { registerTestTool: true },
-			});
-			try {
-				host.faux.setResponses([
-					...grow(600),
-					...grow(3000).slice(0, 1),
-					...summaries(),
-					fauxAssistantMessage(`closing notes for this run — ${"n".repeat(560)}`),
-					fauxAssistantMessage(`final answer with substance — ${"f".repeat(1200)}`, { stopReason: finalStop }),
-					fauxAssistantMessage("recovered answer (padding 1)"),
-					fauxAssistantMessage("recovered answer (padding 2)"),
-					fauxAssistantMessage("recovered answer (padding 3)"),
-				]);
-				await host.session.prompt("one");
-				await host.session.prompt("two");
-				await host.session.prompt("three");
-				const branch = host.sessionManager.getBranch();
-				const drafts = branch
-					.filter((e) => e.type === "compaction")
-					.filter((e) => (e as { details?: { ccCore?: { origin?: string } } }).details?.ccCore?.origin === "precompute");
-				const lastAssistantStops = branch
-					.filter((e) => e.type === "message" && (e as { message?: { role?: string } }).message?.role === "assistant")
-					.map((e) => (e as { message?: { stopReason?: string } }).message?.stopReason);
-				console.log(
-					`[REPRO finalStop=${finalStop}] precomputeDrafts=${drafts.length} before_compact=${JSON.stringify(
-						host.events.filter((e) => e.name === "session_before_compact").map((e) => e.reason),
-					)} assistantStops=${JSON.stringify(lastAssistantStops)}`,
-				);
-				if (finalStop === "length") expect(drafts.length).toBe(0);
-			} finally {
-				host.cleanup();
-			}
+describe("BLK-1 protection: ready snapshot + length boundary (POL-07/INV-11)", () => {
+	it("recoverable length: no precompute draft over the truncated stretch; native overflow recovery proceeds", async () => {
+		const host = await createCompactionHost({
+			model: { contextWindow: 6000, maxTokens: 8000 },
+			settingsOverrides: PI_SMALL,
+			controllerSettings: AGGRESSIVE,
+			probe: { registerTestTool: true },
 		});
-	}
+		try {
+			host.faux.setResponses(responses("length"));
+			await host.session.prompt("one");
+			await host.session.prompt("two");
+			await host.session.prompt("three");
+			const branch = host.sessionManager.getBranch();
+			// ① native overflow recovery fired (session_before_compact, reason "overflow")
+			const overflows = host.events.filter((e) => e.name === "session_before_compact" && (e as { reason?: string }).reason === "overflow");
+			expect(overflows.length).toBeGreaterThanOrEqual(1);
+			// ② after recovery the final assistant ends at a clean "stop"
+			const stops = branch.filter(isAssistant).map(assistantStop);
+			expect(stops[stops.length - 1]).toBe("stop");
+			// ③ the first compaction AFTER the length-stop assistant is not ours
+			const idx = branch.findIndex((e, i) => isAssistant(e) && assistantStop(e) === "length" && !branch.slice(0, i).some((p) => isAssistant(p) && assistantStop(p) === "length"));
+			expect(idx).toBeGreaterThanOrEqual(0);
+			const after = branch.slice(idx + 1).filter((e) => (e as { type?: string }).type === "compaction");
+			if (after.length > 0) expect(precomputeOrigin(after[0])).not.toBe("precompute");
+			// and no precompute draft landed anywhere over that stretch either
+			expect(branch.filter((e) => (e as { type?: string }).type === "compaction" && precomputeOrigin(e) === "precompute").length).toBe(0);
+		} finally {
+			host.cleanup();
+		}
+	});
+
+	it("non-recoverable length (maxTokens 60): NO precompute draft after the length-stop assistant, at any boundary", async () => {
+		const host = await createCompactionHost({
+			model: { contextWindow: 6000, maxTokens: 60 },
+			settingsOverrides: PI_SMALL,
+			controllerSettings: AGGRESSIVE,
+			probe: { registerTestTool: true },
+		});
+		try {
+			host.faux.setResponses(responses("length"));
+			await host.session.prompt("one");
+			await host.session.prompt("two");
+			await host.session.prompt("three");
+			const branch = host.sessionManager.getBranch();
+			const stops = branch.filter(isAssistant).map(assistantStop);
+			// the truncated run is still sitting at "length" (no retry room)
+			expect(stops[stops.length - 1]).toBe("length");
+			// R1 regression: nothing precompute-originated may land after it
+			const drafts = branch.filter((e) => (e as { type?: string }).type === "compaction" && precomputeOrigin(e) === "precompute");
+			expect(drafts.length).toBe(0);
+		} finally {
+			host.cleanup();
+		}
+	});
+
+	it("clean stop control: exactly one precompute draft (gate not overblocking)", async () => {
+		const host = await createCompactionHost({
+			model: { contextWindow: 6000, maxTokens: 8000 },
+			settingsOverrides: PI_SMALL,
+			controllerSettings: AGGRESSIVE,
+			probe: { registerTestTool: true },
+		});
+		try {
+			host.faux.setResponses(responses("stop"));
+			await host.session.prompt("one");
+			await host.session.prompt("two");
+			await host.session.prompt("three");
+			const branch = host.sessionManager.getBranch();
+			const drafts = branch.filter((e) => (e as { type?: string }).type === "compaction" && precomputeOrigin(e) === "precompute");
+			expect(drafts.length).toBe(1);
+		} finally {
+			host.cleanup();
+		}
+	});
 });

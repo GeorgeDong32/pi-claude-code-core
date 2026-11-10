@@ -53,6 +53,13 @@ function snapshot(generation = 0): PrecomputedSnapshot {
 	};
 }
 
+/** Drive the runtime to phase "ready" via the policy boundary path. */
+function driveToReady(rt: SessionRuntime) {
+	const decision = rt.onBoundary({ type: "boundary", P: 0.7, applySafe: true, isApplyPoint: false, prechecksPassed: true, feasibility: { feasible: true, effectiveSummaryTokens: 12000, expectedGrowth: 3000, tailMax: 9000000, neededTn: 107000 }, mayCompute: true });
+	assert.equal(decision.action.type, "start-computing");
+	rt.onComputeSucceeded(snapshot(rt.state.generation), { computeMs: 12 });
+}
+
 /** Drive the runtime to phase "proposed" via the policy boundary path. */
 function driveToProposed(rt: SessionRuntime, nonce = "n-1") {
 	let decision = rt.onBoundary({ type: "boundary", P: 0.7, applySafe: true, isApplyPoint: false, prechecksPassed: true, feasibility: { feasible: true, effectiveSummaryTokens: 12000, expectedGrowth: 3000, tailMax: 9000000, neededTn: 107000 }, mayCompute: true });
@@ -178,23 +185,44 @@ test("runtime notify callbacks route through the real seam when wired", () => {
 	resetCompactionSeam();
 });
 
-test("A2 (2026-11-10): onServed leaves ready, clears snapshot, emits served telemetry", () => {
-	const { rt, emitted } = runtime();
-	// force a ready-ish state via onServed from arbitrary phase — transition is unconditional
-	rt.onServed();
-	assert.equal(rt.state.phase, "idle");
-	assert.equal(rt.snapshot, null);
-	assert.equal(rt.state.lastOutcome?.outcome, "served");
-	assert.ok(emitted.some((e) => e.outcome === "served" && e.origin === "native-backfill"));
+test("A2 rework R4: onServed — from ready → idle + served telemetry; non-ready phase unchanged", () => {
+	const mk = () => runtime();
+	// non-ready: served is a no-op on phase (policy guards ready-only)
+	{
+		const { rt } = mk();
+		rt.onServed();
+		assert.equal(rt.state.phase, "idle"); // was idle, stays idle (unchanged)
+	}
+	// ready → idle via the policy served event + snapshot cleared + telemetry
+	{
+		const { rt, emitted } = mk();
+		driveToReady(rt);
+		assert.equal(rt.state.phase, "ready");
+		rt.onServed();
+		assert.equal(rt.state.phase, "idle");
+		assert.equal(rt.snapshot, null);
+		assert.equal(rt.state.lastOutcome?.outcome, "served");
+		assert.ok(emitted.some((e) => e.outcome === "served" && e.origin === "native-backfill"));
+	}
 });
 
-test("A3 (2026-11-10): onOverridden degrades after threshold; reset clears counters", () => {
-	const { rt } = runtime();
-	rt.onOverridden(2);
-	assert.equal(rt.degraded, false); // 1 < 2 — still active
-	rt.onOverridden(2);
-	assert.equal(rt.degraded, true); // 2 >= 2 — degraded to shadow behavior
-	// reset clears both degrade counters (conflictEditTotal leak fix included)
+test("A3 rework R3: onOverridden — telemetry every occurrence, degrade at OVERRIDE_DEGRADE_AFTER, phase back to ready, reset clears", () => {
+	const { rt, emitted } = runtime();
+	rt.onOverridden({ summaryChars: 900 });
+	assert.equal(rt.state.phase, "ready"); // BLK-2(a): back to ready, fresh nonce slot
+	assert.equal(rt.degraded, false); // 1 < 2
+	assert.ok(emitted.some((e) => e.outcome === "discarded" && e.reason === "overridden" && e.origin === "precompute"));
+	rt.onOverridden({ summaryChars: 800, estPostTokens: 1200 });
+	assert.equal(rt.degraded, true); // 2 >= 2 — degraded
+	assert.equal(emitted.filter((e) => e.reason === "overridden").length, 2); // APP-08: EVERY occurrence writes telemetry
 	rt.onSessionReset();
+	assert.equal(rt.degraded, false); // counters cleared
+});
+
+test("A3/R5: conflictEditTotal reset leak — 1 + reset + 1 does NOT degrade (cross-session leak fixed)", () => {
+	const { rt } = runtime();
+	rt.noteConflictEdits(1); // session A: 1/2
+	rt.onSessionReset();
+	rt.noteConflictEdits(1); // session B: fresh counter — must NOT reach 2
 	assert.equal(rt.degraded, false);
 });

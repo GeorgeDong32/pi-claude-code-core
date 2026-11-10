@@ -34,8 +34,9 @@ fallback 腿可在 `session_before_compact` 向原生路径供稿（预computed 
 `turn_end` 与 `agent_before_settle`）；`length` 边界永不提议，原生恢复不被吞。
 **served 转移（A2）**：供稿腿供出快照后相位离开 `ready`（转 idle）——控制器重新
 预压缩，而不是对已消费的 draft 复提议。**overridden 上界（A3）**：
-lost(overridden) 复提议有上界——连续 2 次 overridden 后降级 shadow（测试缝
-`SC_TEST_OVERRIDE_DEGRADE_AFTER`）。
+lost(overridden) 复提议有上界——连续 `OVERRIDE_DEGRADE_AFTER = 2`（state.ts
+导出常量，与 conflictEditDegradeAfter 同族）次 overridden 后降级 shadow；
+**每次** overridden 写 APP-08 discarded 遥测（`reason:"overridden"`）。
 
 ## W2 回放校准记录（2026-11-09）
 

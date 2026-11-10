@@ -16,9 +16,11 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import type { ControllerPhase } from "../types.ts";
 
 import {
 	applyPointSafe,
+	lastAssistantStopReason,
 	effectiveThreshold,
 	estimatePost,
 	evaluate,
@@ -372,39 +374,51 @@ test("POL-10 estimatePost: summary + tail + calibrated overhead; null usage path
 	assert.equal(clamped.overhead, Math.floor(0.3 * 128_000));
 });
 
-test("A1 (2026-11-10 review P0): length boundary never proposes — ready snapshot + apply window + all gates pass, still idle", () => {
-	// Build a ready state (P above applyRatio, apply-safe, checks passed),
-	// then hit a length boundary: the proposal MUST be withheld so native
-	// recovery (H12/H13) is not swallowed by a draft.
+test("A1 rework R1: lastAssistantStopReason — backward scan of the session branch", () => {
+	const asst = (stop: unknown) => ({ type: "message", message: { role: "assistant", stopReason: stop } });
+	// empty branch → undefined
+	assert.equal(lastAssistantStopReason([]), undefined);
+	// trailing assistant(length) → "length"
+	assert.equal(lastAssistantStopReason([asst("stop"), asst("length")]), "length");
+	// assistant(stop) followed by toolResult / custom / compaction entries → "stop"
+	assert.equal(
+		lastAssistantStopReason([asst("stop"), { type: "toolResult" }, { type: "custom", data: {} }, { type: "compaction" }]),
+		"stop",
+	);
+	// no assistant at all → undefined
+	assert.equal(lastAssistantStopReason([{ type: "toolResult" }, { type: "message", message: { role: "user", content: [] } }]), undefined);
+	// non-string stopReason → undefined
+	assert.equal(lastAssistantStopReason([asst(123)]), undefined);
+});
+
+test("A1 rework R1: length boundary never proposes (branch authority via applySafe)", () => {
 	let d = evaluate(initialState(), boundary({ P: 0.61 }), SETTINGS);
-	assert.equal(d.action.type, "start-computing");
 	const ready = evaluate(d.state, { type: "compute-ok" }, SETTINGS).state;
-	assert.equal(ready.phase, "ready");
-	d = evaluate(
-		ready,
-		boundary({ P: 0.8, isApplyPoint: true, applySafe: true, prechecksPassed: true, lastAssistantStopReason: "length", proposalNonce: "n1" }),
-		SETTINGS,
-	);
-	assert.equal(d.state.phase, "ready"); // stays ready — no proposal
+	// applySafe:false (length) — no proposal even at/above the apply ratio.
+	d = evaluate(ready, boundary({ P: 0.8, isApplyPoint: true, applySafe: false, prechecksPassed: true, proposalNonce: "n1" }), SETTINGS);
+	assert.equal(d.state.phase, "ready");
 	assert.equal(d.action.type, "none");
-	// Same boundary with a clean stop DOES propose.
-	d = evaluate(
-		ready,
-		boundary({ P: 0.8, isApplyPoint: true, applySafe: true, prechecksPassed: true, lastAssistantStopReason: "stop", proposalNonce: "n2" }),
-		SETTINGS,
-	);
+	// applySafe:true (clean stop) — proposes.
+	d = evaluate(ready, boundary({ P: 0.8, isApplyPoint: true, applySafe: true, prechecksPassed: true, proposalNonce: "n2" }), SETTINGS);
 	assert.equal(d.state.phase, "proposed");
 	assert.equal(d.action.type, "propose");
 });
 
-test("A2: served event leaves ready → idle (fallback supply consumed the snapshot)", () => {
-	let d = evaluate(initialState(), boundary({ P: 0.61 }), SETTINGS);
-	const ready = evaluate(d.state, { type: "compute-ok" }, SETTINGS).state;
-	assert.equal(ready.phase, "ready");
-	d = evaluate(ready, boundary({ P: 0.8, served: true }), SETTINGS);
+test("A2 rework R4: served event — ready→idle+gap; other phases unchanged (table-driven)", () => {
+	const mk = (phase: ControllerPhase) => ({ ...initialState(), phase });
+	for (const phase of ["idle", "computing", "proposed"] as ControllerPhase[]) {
+		const d = evaluate(mk(phase), { type: "served" }, SETTINGS);
+		assert.equal(d.state.phase, phase); // unchanged
+		assert.equal(d.action.type, "none");
+	}
+	const ready = mk("ready");
+	let d = evaluate(ready, { type: "served" }, SETTINGS);
 	assert.equal(d.state.phase, "idle");
 	assert.equal(d.state.lastOutcome?.outcome, "served");
-	// Post-served boundary can start a fresh precompute cycle.
+	assert.equal(d.state.precomputeGapTurns, SETTINGS.minPrecomputeGapTurns);
+	// after the served gap a boundary can precompute again
 	d = evaluate(d.state, boundary({ P: 0.61 }), SETTINGS);
+	assert.equal(d.action.type, "none"); // still inside the min gap (3 turns)
+	d = evaluate({ ...d.state, precomputeGapTurns: 0 }, boundary({ P: 0.61 }), SETTINGS);
 	assert.equal(d.action.type, "start-computing");
 });

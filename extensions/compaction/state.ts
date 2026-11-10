@@ -66,6 +66,12 @@ export interface LedgerMeta {
 	ledgerChars: number;
 }
 
+
+/** A3 (2026-11-10 rework R3): consecutive lost(overridden) count that
+ * degrades the controller to shadow — same family as
+ * conflictEditDegradeAfter (2). Session-scoped, cleared on reset. */
+export const OVERRIDE_DEGRADE_AFTER = 2;
+
 export class SessionRuntime {
 	state: ControllerState = initialState();
 	snapshot: PrecomputedSnapshot | null = null;
@@ -231,28 +237,36 @@ export class SessionRuntime {
 	}
 
 	/**
-	 * A2 (2026-11-10): the fallback leg supplied the snapshot to native —
-	 * phase leaves "ready" (idle) so the next boundary can precompute again
-	 * instead of re-proposing a consumed draft.
+	 * A2 (2026-11-10, rework R4): the fallback leg supplied the snapshot to
+	 * native — the policy's `served` event moves a READY phase to idle (+min
+	 * gap) so the next boundary can precompute again; other phases are a
+	 * no-op. The snapshot is gone either way (consumed by the supply).
 	 */
 	onServed(): void {
-		this.state = { ...this.state, phase: "idle", lastOutcome: { outcome: "served", atTurn: this.state.turns } };
+		this.state = evaluate(this.state, { type: "served" }, this.policySettings()).state;
 		this.snapshot = null;
-		try {
-			this.emit({ outcome: "served", origin: "native-backfill", validated: true });
-		} catch {
-			/* telemetry is best-effort */
-		}
+		this.emit({ outcome: "served", origin: "native-backfill", validated: true });
 	}
 
 	/**
-	 * A3 (2026-11-10): lost(overridden) re-propose bound — after `after`
-	 * overrides the controller degrades to shadow. Session-scoped counter,
-	 * cleared on reset.
+	 * A3 (2026-11-10, rework R3): lost(overridden) — every occurrence writes
+	 * the APP-08 discarded telemetry, then the BLK-2(a) semantics run: phase
+	 * back to ready with a fresh nonce slot. After OVERRIDE_DEGRADE_AFTER
+	 * consecutive overrides the controller degrades to shadow. Session-scoped
+	 * counter, cleared on reset.
 	 */
-	onOverridden(after: number): void {
+	onOverridden(info: { summaryChars: number; estPostTokens?: number }): void {
+		this.emit({
+			outcome: "discarded",
+			reason: "overridden",
+			origin: "precompute",
+			validated: true,
+			summaryChars: info.summaryChars,
+			...(info.estPostTokens !== undefined ? { estPostTokens: info.estPostTokens } : {}),
+		});
 		this.overrideTotal += 1;
-		if (this.overrideTotal >= after) this.degrade();
+		if (this.overrideTotal >= OVERRIDE_DEGRADE_AFTER) this.degrade();
+		this.state = { ...this.state, phase: "ready", proposalId: undefined };
 	}
 
 	private emit(data: Omit<CompactionTelemetryData, "v">): void {

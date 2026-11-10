@@ -90,6 +90,23 @@ export function applyPointSafe(input: ApplyPointSafety): boolean {
 	return true;
 }
 
+/**
+ * A1 (2026-11-10 review P0, rework R1): stopReason of the last assistant
+ * message on the SESSION BRANCH (backward scan). The authority for POL-07 —
+ * `event.entries` is the host's draft-accumulator (runner.js emitBoundary),
+ * never session messages, so it must not be read for stopReasons.
+ */
+export function lastAssistantStopReason(entries: ReadonlyArray<unknown>): string | undefined {
+	for (let i = entries.length - 1; i >= 0; i--) {
+		const entry = entries[i] as { type?: string; message?: { role?: string; stopReason?: unknown } } | undefined;
+		if (entry?.type === "message" && entry.message?.role === "assistant") {
+			const stop = entry.message.stopReason;
+			return typeof stop === "string" ? stop : undefined;
+		}
+	}
+	return undefined;
+}
+
 // ─── POL-09: joint feasibility ──────────────────────────────────────────────
 
 export interface FeasibilityInput {
@@ -221,25 +238,13 @@ export type PolicyEvent =
 			proposalNonce?: string;
 			/** Controller may compute (mode on/shadow, not degraded-out). */
 			mayCompute: boolean;
-			/**
-			 * A1 (2026-11-10, review P0): stopReason of the LAST assistant
-			 * entry on the boundary's branch — "length" marks a truncated
-			 * run whose native recovery a draft must never swallow.
-			 */
-			lastAssistantStopReason?: string | null;
-			/**
-			 * A2 (2026-11-10): set on the first boundary AFTER the fallback
-			 * leg supplied the snapshot to native — phase leaves "ready" so
-			 * the controller re-precomputes instead of re-proposing a
-			 * consumed draft.
-			 */
-			served?: boolean;
 	  }
 	| { type: "compute-ok" }
 	| { type: "compute-failed"; retryExhausted: boolean }
 	| { type: "discard"; reason: DiscardReason }
 	| { type: "reconcile-committed" }
 	| { type: "reconcile-lost"; reason: DiscardReason }
+	| { type: "served" }
 	| { type: "session-reset" };
 
 export function initialState(generation = 0): ControllerState {
@@ -284,7 +289,19 @@ export function evaluate(
 		case "session-reset":
 			return { state: initialState(state.generation + 1), action: { type: "reset" } };
 
-		case "boundary": {
+		case "served":
+		// A2 (2026-11-10 rework R4): the fallback leg supplied the snapshot
+		// to native. Only a READY phase transitions (idle + min gap) —
+		// every other phase is a no-op.
+		if (state.phase === "ready") {
+			return {
+				state: { ...state, phase: "idle", precomputeGapTurns: settings.minPrecomputeGapTurns, lastOutcome: { outcome: "served", atTurn: state.turns } },
+				action: { type: "none" },
+			};
+		}
+		return { state, action: { type: "none" } };
+
+	case "boundary": {
 			const next: ControllerState = {
 				...state,
 				turns: state.turns + 1,
@@ -295,14 +312,6 @@ export function evaluate(
 			// boundaries never start new work (single-flight, no re-propose).
 			if (state.phase === "proposed" || state.phase === "computing") {
 				return { state: next, action: { type: "none" } };
-			}
-			if (event.served) {
-				// A2: fallback supply consumed the snapshot — idle, ready to
-				// precompute again (never re-propose the consumed draft).
-				return {
-					state: { ...next, phase: "idle", lastOutcome: { outcome: "served", atTurn: next.turns } },
-					action: { type: "none" },
-				};
 			}
 			if (state.phase === "infeasible-window") {
 				// Still infeasible → stay; feasibility restored → drop to idle
@@ -315,9 +324,6 @@ export function evaluate(
 				if (
 					event.isApplyPoint &&
 					event.applySafe &&
-					// A1: POL-07 length boundary — never propose over a
-					// truncated run's native recovery.
-					event.lastAssistantStopReason !== "length" &&
 					event.P !== null &&
 					event.P >= settings.applyRatio
 				) {

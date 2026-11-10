@@ -43,9 +43,10 @@ import { randomUUID } from "node:crypto";
 import { versionAtLeast } from "../../lib/pi-compat.ts";
 import { notifyAfter, notifyBefore } from "../../lib/compaction-seam.ts";
 import { readActiveGoalFiles } from "../goal/storage/goal-files.ts";
-import { SessionRuntime, buildTelemetryEntry, type CompactionTelemetryData } from "./state.ts";
+import { SessionRuntime, buildTelemetryEntry, OVERRIDE_DEGRADE_AFTER, type CompactionTelemetryData } from "./state.ts";
 import {
 	applyPointSafe,
+	lastAssistantStopReason,
 	effectiveThreshold,
 	estimatePost,
 	jointFeasibility,
@@ -88,10 +89,6 @@ const RECONCILE_EVENTS = [
 export default function compactionController(pi: ExtensionAPI): void {
 	// ── session-scoped state (rebuilt on session_start) ───────────────────
 	let settings: CompactionSettings = DEFAULT_COMPACTION_CORE_SETTINGS;
-	// A3 (2026-11-10): lost(overridden) re-propose bound — degrade to shadow
-	// after this many overrides (same family as conflictEditDegradeAfter=2).
-	// SC_TEST_OVERRIDE_DEGRADE_AFTER is a test seam ONLY (repro/BLK tests).
-	const OVERRIDE_DEGRADE_AFTER = Number(process.env.SC_TEST_OVERRIDE_DEGRADE_AFTER ?? "2");
 	let runtime = new SessionRuntime({
 		settings,
 		emitTelemetry: () => {},
@@ -338,8 +335,8 @@ export default function compactionController(pi: ExtensionAPI): void {
 	let lastFlowTrusted = false;
 
 	// ── the proposal path (synchronous, APP-01…08) ────────────────────────
-	// A1 (2026-11-10, review P0): applySafe is threaded from the caller (the
-	// propose gate in onApplyPoint) instead of being hardcoded true.
+	// A1 (review P0, rework R1): applySafe is threaded from the caller (the
+	// propose gate in onApplyPoint, branch-authoritative stopReason).
 	const tryPropose = (event: { entries?: unknown[] }, ctx: ExtensionContext, midRun: boolean, applySafe: boolean): { entries: unknown[] } | undefined => {
 		const snapshot = runtime.snapshot;
 		if (!snapshot || runtime.state.phase !== "ready") return undefined;
@@ -417,7 +414,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 			applySafe,
 			isApplyPoint: true,
 			prechecksPassed: true,
-			lastAssistantStopReason: lastAssistantStopOf(event),
 			feasibility: jointFeasibility({
 				tn,
 				keepRecentTokens: thresholdOf(ctx).keep,
@@ -483,14 +479,11 @@ export default function compactionController(pi: ExtensionAPI): void {
 				runtime.onReconciled(result, { ...info, tokensAfter: undefined });
 				pendingProposal = null;
 			} else if (result.lostReason === "overridden") {
-				// BLK-2(a) executable-spec semantics: the override lost the
-				// PROPOSAL, not the snapshot — back to ready, re-propose at the
-				// next eligible boundary with a fresh nonce. A3 (2026-11-10):
-				// re-propose loops are bounded — after OVERRIDE_DEGRADE_AFTER
-				// overrides the controller degrades to shadow (same family as
-				// conflictEditDegradeAfter).
-				runtime.onOverridden(OVERRIDE_DEGRADE_AFTER);
-				runtime.state = { ...runtime.state, phase: "ready", proposalId: undefined };
+				// BLK-2(a) executable-spec semantics + A3 bound: onOverridden
+				// writes the APP-08 discarded telemetry, moves the phase back
+				// to ready (fresh nonce slot), and degrades to shadow after
+				// OVERRIDE_DEGRADE_AFTER consecutive overrides.
+				runtime.onOverridden(info);
 				pendingProposal = null;
 			} else {
 				runtime.onReconciled(result, info);
@@ -502,17 +495,10 @@ export default function compactionController(pi: ExtensionAPI): void {
 	};
 
 	// ── apply-point boundary evaluation ───────────────────────────────────
-	// A1 (2026-11-10, review P0): POL-07 reads the LAST assistant entry's
-	// stopReason from the boundary's entries — event.message only covers
-	// turn_end; agent_before_settle drafts must be gated the same way.
-	const lastAssistantStopOf = (e: { entries?: unknown[]; message?: { stopReason?: string } }): string | undefined => {
-		const list = e.entries ?? [];
-		for (let i = list.length - 1; i >= 0; i--) {
-			const stop = (list[i] as { message?: { stopReason?: string } } | undefined)?.message?.stopReason;
-			if (typeof stop === "string") return stop;
-		}
-		return e.message?.stopReason;
-	};
+	// A1 (2026-11-10 review P0, rework R1): POL-07's stopReason authority is
+	// the SESSION BRANCH (ctx.sessionManager.getBranch()), scanned backward
+	// for the last assistant message — event.message only covers turn_end,
+	// and event.entries is the host's draft accumulator, never messages.
 	const onApplyPoint = (event: { entries?: unknown[]; message?: { stopReason?: string }; outcome?: string }, ctx: ExtensionContext, midRun: boolean): { entries: unknown[] } | undefined => {
 		if (resolvedMode === "off" || resolvedMode === "shadow") return undefined;
 		try {
@@ -531,7 +517,8 @@ export default function compactionController(pi: ExtensionAPI): void {
 				applyRatio: settings.applyRatio,
 				targetPostRatio: settings.targetPostRatio,
 			});
-			const stopReason = event.message?.stopReason;
+			const stopReason = event.message?.stopReason ?? lastAssistantStopReason(ctx.sessionManager.getBranch());
+			const applySafe = applyPointSafe({ stopReason, outcome: event.outcome, nativeRecoveryPending });
 			// First evaluation: start-computing decisions ONLY. The propose
 			// transition happens exactly once, inside tryPropose's own
 			// boundary event (after the V-gates pass) — evaluating it here
@@ -539,29 +526,20 @@ export default function compactionController(pi: ExtensionAPI): void {
 			const decision = runtime.onBoundary({
 				type: "boundary",
 				P,
-				applySafe: applyPointSafe({ stopReason, outcome: event.outcome, nativeRecoveryPending }),
+				applySafe,
 				isApplyPoint: false,
 				prechecksPassed: true, // the real V1–V10 run inside tryPropose
-				lastAssistantStopReason: lastAssistantStopOf(event),
 				feasibility,
 				mayCompute: resolvedMode === "on" && !runtime.degraded && !inFlight,
 				proposalNonce: randomUUID(),
 			});
 			if (decision.action.type === "start-computing" && !inFlight) launchCompute(ctx);
-			if (P !== null && P >= settings.applyRatio) {
-				// A1 (review P0): the propose path itself must pass POL-07 —
-				// previously applySafe was computed here and thrown away and
-				// tryPropose hardcoded `true`, letting length-boundary drafts
-				// swallow native recovery. Explicit `length` evidence (entries
-				// or message) is fail-closed; boundaries carrying NO stop
-				// info (agent_before_settle) derive from structure: mid-run
-				// ≈ toolUse, run-end ≈ stop — a truncation surfaces at
-				// turn_end/entries, never structurally here.
-				const lastStop = lastAssistantStopOf(event);
-				const stopForGate = lastStop ?? (midRun ? "toolUse" : "stop");
-				const proposeSafe = applyPointSafe({ stopReason: stopForGate, outcome: event.outcome, nativeRecoveryPending });
-				if (!proposeSafe) return undefined;
-				return tryPropose(event, ctx, midRun, proposeSafe);
+			// A1 (review P0): the propose path itself must pass POL-07 —
+			// previously tryPropose hardcoded applySafe:true, letting
+			// length-boundary drafts swallow native recovery. Unknown
+			// stopReason stays fail-closed (applyPointSafe semantics).
+			if (applySafe && P !== null && P >= settings.applyRatio) {
+				return tryPropose(event, ctx, midRun, applySafe);
 			}
 			return undefined;
 		} catch (error) {

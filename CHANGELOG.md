@@ -25,16 +25,20 @@
 
 ### Fixed — compaction review P0/Batch A (2026-11-10)
 
-- **A1 POL-07 接线（P0）**:提议路径此前算出 applySafe 即弃、tryPropose 写死
-  `true`,length 边界上 ready 快照会落 draft 吞掉原生恢复;现在 stopReason 从
-  边界 branch 的最后一条 assistant 读取(turn_end 与 agent_before_settle 同
-  源),`length` 永不提议。契约钉住:test/contracts/compaction-length-boundary.test.ts。
+- **A1 POL-07 接线（P0,rework R1 定稿）**:提议路径此前算出 applySafe 即弃、
+  tryPropose 写死 `true`,length 边界上 ready 快照会落 draft 吞掉原生恢复;
+  现在 stopReason 以会话 branch 为权威(`ctx.sessionManager.getBranch()` 倒序
+  扫最后一条 assistant;turn_end 直接用 event.message,agent_before_settle
+  从 branch 读),`length` 永不提议,未知停因保持 fail-closed。契约钉住:
+  test/contracts/compaction-length-boundary.test.ts(recoverable / non-
+  recoverable / stop 对照三场景)。
 - **A2 served 转移**:供稿腿消费快照后相位转 idle——重新预压缩,不再对已
   消费 draft 复提议;遥测 outcome `served`(origin native-backfill)。
-- **A3 overridden 上界**:连续 2 次 lost(overridden) 后降级 shadow(与
-  conflictEditDegradeAfter 同族);同批修正 conflictEditTotal 跨会话泄漏
-  (reset 现在清零两个降级计数)。测试缝 SC_TEST_OVERRIDE_DEGRADE_AFTER。
-  DEVIATIONS SC-2 增补在案。
+- **A3 overridden 上界**:连续 `OVERRIDE_DEGRADE_AFTER = 2`(state.ts 导出
+  常量,与 conflictEditDegradeAfter 同族;无 env 缠——未登记契约的环境变量
+  禁止)次 lost(overridden) 后降级 shadow;每次 overridden 写 APP-08
+  discarded 遥测(reason:"overridden");同批修正 conflictEditTotal 跨会话
+  泄漏(reset 现在清零两个降级计数)。DEVIATIONS SC-2 增补在案。
 
 ### Changed — W1–W5 review fixes P0/P1/P2 (2026-11-08)
 - **P0-1（Breaking，safety 档）allow 规则不再匹配带命令替换/敏感重定向的命令**：`git status $(rm x)`、``git status `rm x` ``、`git status > ~/.zshrc` 此前命中 `Bash(git status:*)` 即静默放行（ask/auto 也不问）；现在落回 passthrough 由各模式默认逻辑处理。CC isSafeHeredoc 已移植：`git commit -m "$(cat <<'EOF'…EOF)"` 形态豁免（引号分隔符 + 行级闭合 + 剩余字符白名单 + 参数位要求，4 个测试钉住）。迁移：被影响的命令会开始弹窗——按需批准或 `bashPathChecks: "deny"`（保留 W4、关闭 W3+P0-1+P1-4）；双机 14 天 11251 条历史回放实测新增询问 0。
