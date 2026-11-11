@@ -3,7 +3,7 @@
 | 项 | 值 |
 |---|---|
 | 日期 | 2026-11-08 |
-| 状态 | **实施完成（W0–W9，2026-11-09）**。BLK-1…5 保护断言 7/7 全绿（真实 AgentSession）；W0–W8 各自提交、三门全绿；W2 本机回放 M1=0.52（目标 0.90 未达——归因见 docs/zh/compaction.md），**故默认 mode 按 §7.3 门槛规则临时以 shadow 发布（DEVIATIONS.md）**；真机（--print 沙盒）已验：扩展加载、控制器运行、ST-01 遥测落盘、off 模式零痕迹；待证据项：TUI PTY（H-SC-1 TUI 部分/2/4）、交互式多轮真机（H-SC-1 完整/3/6）、真实 rex-flow run（H-SC-7）、第二台机器回放语料——恢复条件见 DEVIATIONS.md |
+| 状态 | **代码与自动化实现完成（W0–W9）；真机验收/发布证据待补**。BLK-1…5 保护断言 7/7 全绿（真实 AgentSession）；三门全绿；W2 本机回放 M1=0.52（目标 0.90 未达，归因见 docs/zh/compaction.md）。用户于 2026-11-10 明确授权默认 `mode:"on"`，这是对未达发布门槛的显式风险接受，不代表门槛已通过（见 DEVIATIONS.md SC-1）。真机（--print 沙盒）已验：扩展加载、控制器运行、ST-01 遥测落盘、off 模式零痕迹；待证据项：TUI PTY（H-SC-1 TUI 部分/2/4）、交互式多轮真机（H-SC-1 完整/3/6）、H-SC-2/3/4/6、真实 rex-flow run（H-SC-7）、第二台机器回放语料与 S3 端点合规——恢复条件见 DEVIATIONS.md |
 | 目标仓 | pi-claude-code-core（新模块 `extensions/compaction/`，第 14 个模块） |
 | 宿主 | pi `@earendil-works/pi-coding-agent` **1.5.0**（本 spec 的宿主事实均在此版本核实） |
 | 取代 | [`2026-11-08-smart-compaction.md`](2026-11-08-smart-compaction.md)（候选 A 草案，未实施；其 §2 的 pi 源码取证仍可参考） |
@@ -497,7 +497,9 @@ B5: W9
 | H-SC-6 | 摘要模型被配成返回空内容/报错 | 校验失败→重试→`refused`→原生接手；会话不崩；`/compaction status` 显示原因码 |
 | H-SC-7 | 一次真实 rex-flow run（有开放与已闭环任务）下强制压缩 | 摘要台账含全部**已关联**开放 run/task/open gate，已闭环项仅一行；**机器上另一项目的 board 不出现**；压缩后 orchestrator **无需**重读 board 即可继续派工。**若无法在本期执行，作为"待证据项"列出恢复条件，不得标完成** |
 
-发布门槛：**BLK-1…5 全绿**（自动化、硬门槛）且 H-SC-1/3/5/6 通过且 M1 ≥ 90% → 默认 `mode:"on"` 发布；未满足 → 默认改 `shadow` 发布并在 `DEVIATIONS.md` 记**临时**偏离及恢复条件。BLK 任一红 **不得**以"默认 shadow"绕过发布（shadow 仍会在 `session_before_compact` 之外运行预压，BLK 红说明宿主假设不成立，须先修 spec/实现）。
+发布门槛：**BLK-1…5 全绿**（自动化、硬门槛）且 H-SC-1/3/5/6 通过且 M1 ≥ 90% → 默认 `mode:"on"` 发布；未满足 → 默认改 `shadow` 发布并在 `DEVIATIONS.md` 记偏离及恢复条件。BLK 任一红 **不得**以"默认 shadow"绕过发布（shadow 仍会在 `session_before_compact` 之外运行预压，BLK 红说明宿主假设不成立，须先修 spec/实现）。
+
+**本次发布例外（2026-11-10）**：用户明确授权在上述非 BLK 门槛尚未满足时仍默认 `mode:"on"`。该决定覆盖本次发布的默认模式选择，不改变门槛定义、不将未完成的 H-SC/M1/S3 证据视为通过；风险与恢复条件记录于 `DEVIATIONS.md` SC-1。BLK 任一红仍是绝对阻断条件。
 
 升级金丝雀追加：H3（draft 不发 `session_compact`、刷新上下文）、H5（`entries` 替换语义）、H12（旧于压缩的最后 assistant 跳过恢复）三条，pi 升级前先跑 `pnpm exec vitest run test/lib/upgrade-canary.test.ts --config vitest.config.ts`。
 
@@ -625,7 +627,7 @@ bg-3 `pnpm run dev` running · flow-watch r7/t1 (timeout 7200s)
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `mode` | `shadow`（**临时偏离**：发布门槛 M1=0.52<0.90，2026-11-09 起 shadow 发布，恢复条件见 DEVIATIONS.md；BLK 7/7 全绿） | D2 + §7.3 门槛规则 |
+| `mode` | `on`（**用户明确授权的发布例外，2026-11-10**：M1=0.52<0.90 且 H-SC/S3 真机证据未齐；不代表 §7.3 门槛通过，风险与恢复条件见 DEVIATIONS.md SC-1；BLK 7/7 全绿） | D2 + 本次 §7.3 显式例外 |
 | `precomputeRatio` / `applyRatio` / `targetPostRatio` | 0.60 / 0.75 / 0.45（×`T_n`） | E7：预压窗口远大于摘要耗时；`q` 为切点容量约束的目标（POL-09），须 `q < p < a` |
 | `hardFitRatio` / `overflowFitRatio` | 0.90 / 0.75（×`T_n`） | V8a：所有路径的硬容量闸；overflow 更严（只有一次恢复机会，H13） |
 | `summaryTokenEstimate` | 12 000 tokens | POL-09 的 `S`；有上次摘要时取 `max(默认, 1.2×上次摘要)` |
