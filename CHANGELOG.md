@@ -1,4 +1,4 @@
-## [未发布] — Smart Compaction(SC,spec 2026-11-08-smart-compaction-takeover.md)
+## 0.5.0 (2026-11-11) — Smart Compaction(SC,spec 2026-11-08-smart-compaction-takeover.md)
 
 ### Changed — compaction default takeover ON (user-approved 2026-11-10)
 
@@ -33,8 +33,6 @@
     BLK-1…5 阻断性用例 7/7 全绿(真实 AgentSession)。
 - 升级金丝雀 +3:SC-HOST-03(draft 提交覆盖 entries 语义)、H3(draft 落盘
   无 session_compact)、H12(length 恢复谓词)。
-
-## Unreleased
 
 ### Added — compaction runtime measurements (2026-11-10)
 
