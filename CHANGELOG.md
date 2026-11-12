@@ -1,3 +1,12 @@
+## Unreleased
+
+### Changed
+
+- `/compaction` 命令更名 `/smart-compact`（避开与原生 `/compact` 的相邻
+  误敲；`status`/`mode off|shadow|on` 子命令不变，补齐 description 与参数
+  补全）。pi 的 `RegisteredCommand` 无 hidden/alias 字段，旧名不做兼容
+  别名，一次到位。
+
 ## 0.5.0 (2026-11-11) — Smart Compaction(SC,spec 2026-11-08-smart-compaction-takeover.md)
 
 ### Changed — compaction default takeover ON (user-approved 2026-11-10)

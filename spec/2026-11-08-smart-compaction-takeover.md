@@ -73,7 +73,7 @@
 | NG6 | 修改 rex-flow 仓/协议、写 `~/.rex-flow` | 只读消费 board/dispatch 文件与对话内哨兵 |
 | NG7 | planner / gatekeeper / worker 角色专属台账 | 只做 orchestrator 档；其他角色走通用台账 |
 | NG8 | 压缩 `/compact <自定义指令>`、分支摘要（branch summary） | 保持原生 |
-| NG9 | 经 bus 发布压缩状态 | 本期不碰 bus 快照；只有会话 entry + `/compaction status` |
+| NG9 | 经 bus 发布压缩状态 | 本期不碰 bus 快照；只有会话 entry + `/smart-compact status` |
 | NG10 | 语义检索/向量召回 | 不属压缩范畴 |
 
 ### 2.3 边界（所有权与改动范围）
@@ -144,7 +144,7 @@
 |---|---|---|---|
 | **S1** | `turn_end` / `agent_before_settle` 返回 compaction draft 的端到端行为。**主证据用真实 `AgentSession`（`createAgentSession`）+ faux provider 在进程内取得（H16，可进契约套件）；PTY 仅补 TUI 渲染项③** | ① jsonl 出现 `compaction` 条目（`fromHook:true`）；② 同一 run 的**下一次 provider 请求**上下文已缩小；③ TUI 显示摘要行 + 成本提示且无 spinner（PTY）；④ 无 `session_compact`/`compaction_start\|end`；⑤ 排队中的 steer/follow-up 不丢；⑥ `/resume` 后投影正确；**⑦ 记录"draft 提交后第一个对扩展可见的事件"是哪一个（`turn_start`/`context`/`before_provider_request`/`agent_end`/`agent_settled`…），作为 APP-08 对账触发集的依据** | turn_end 不通过 → **只在 `agent_before_settle` 落盘**（apply 点收窄为 run 结束，POL-07 同步调整）；两者皆不通过 → 落盘改为 `ctx.compact()`+`session_before_compact` 供稿（无 LLM，run 空闲时立即完成），常规压缩降为"run 间落盘"，G1 文字改述并记 DEVIATIONS |
 | **S2** | 手工构造的 `CompactionPreparation` 喂给公开 `compact()` 与 pi 内部 `prepareCompaction` 产出**等价**（H1/H2） | 差分测试：同一 entries+settings，在受控 `keepRecentTokens` 下使内部 cut == 我们的 cut；`messagesToSummarize`/`turnPrefixMessages`/`isSplitTurn`/`firstKeptEntryId`/`previousSummary`/`fileOps` 逐项相等（差分 oracle 允许**仅测试代码**按文件路径导入 dist 内部模块；生产代码禁止） | 不等价 → 以 pi 内部行为为准修 builder；`compact()` 拒绝手工结构 → 改为只用 `generateSummaryWithUsage` 并自行拼装 split-turn（范围变大，须回报用户） |
-| **S3** | 复现 E3（reasoning-only 空摘要）；验证 (a) `compact(..., thinkingLevel:"off")` 在 CPA/GLM/MiniMax/OpenAI 兼容端点上是否真的不再推理（H14：它只是省略 `reasoning` 参数）；(b) **经 `streamFn` 包装器能否在 `options` 上注入 `maxTokens`（及按供应商关闭推理的参数）并被端点遵守** | 复现夹具入库（合成）；关 thinking / 注入限额后输出为正文且不被截断 | 某模型无法关 thinking → `summaryThinking` 默认改 `minimal`；注入不可行 → `maxTokens` 视为不可控，校验闸（SUM-04，逐子调用）是唯一防线并在 `/compaction status` 注明 |
+| **S3** | 复现 E3（reasoning-only 空摘要）；验证 (a) `compact(..., thinkingLevel:"off")` 在 CPA/GLM/MiniMax/OpenAI 兼容端点上是否真的不再推理（H14：它只是省略 `reasoning` 参数）；(b) **经 `streamFn` 包装器能否在 `options` 上注入 `maxTokens`（及按供应商关闭推理的参数）并被端点遵守** | 复现夹具入库（合成）；关 thinking / 注入限额后输出为正文且不被截断 | 某模型无法关 thinking → `summaryThinking` 默认改 `minimal`；注入不可行 → `maxTokens` 视为不可控，校验闸（SUM-04，逐子调用）是唯一防线并在 `/smart-compact status` 注明 |
 | **S4** | `SettingsManager.create(cwd)` 在扩展内可用，且 `getCompactionSettings(model)` 与 pi 自身一致（含 modelOverrides、project 级 settings） | 单测：对用户真实形态的 settings（`modelOverrides` 里 `provider/id` 含 `/`）与 pi 实际阈值一致 | 若创建有副作用（写文件/锁）→ 改为只读解析 `~/.pi/agent/settings.json` + `<cwd>/.pi/settings.json`（`lib/settings.ts` 的 `readJson`）并复刻 override 解析，差分测试对拍 |
 | **S5** | 审计 goal/modes/memory/recall 的压缩钩子在 draft 路径下的正确行为，产出**逐订阅方行为表**（`before`/`after` 各做什么、`midRun` 时哪些必须跳过、**"before 之后提议丢失（无 after）"时是否有残留副作用**，尤其 goal 的 `queueContinuation` 与 post-compact reminder 的消费点） | 行为表入本 spec；无"双触发 / 漏触发"；"before 无 after"路径无不可逆副作用 | 无（W5 的实现直接以此表为准；表与 §5.9 默认值冲突时以表为准并更新 §5.9） |
 
@@ -203,7 +203,7 @@
 ```
 extensions/compaction/
   index.ts           # factory + 事件装配（turn_end / agent_before_settle / session_before_compact /
-                     #   session_start / session_tree / session_shutdown）+ /compaction 命令
+                     #   session_start / session_tree / session_shutdown）+ /smart-compact 命令
   types.ts           # 跨文件共享类型（W1 首先落地，其余任务依赖它）
   policy.ts          # 纯函数：压力采样 → 动作
   cutpoint.ts        # 纯函数：候选边界打分与选择（含 split-turn 判定）
@@ -252,10 +252,10 @@ ready ──(前置校验失败 / session_tree / 窗口变化 / 快照过大)─
 | POL-03 | 决策为**纯函数**：`(state, P, readiness, event) → action`；表驱动测试覆盖状态机每条边（含冷却、单飞、discarded/lost 间隔、proposed 期间不可再提议） | 单测：状态×事件矩阵 |
 | POL-04 | `tokens === null`（H7）→ 不推进状态、不触发 | 单测 |
 | POL-05 | 仅在 `turn_end` / `agent_before_settle`（及 `session_before_compact` 供稿、对账触发集）评估；无定时器（INV-2） | 源码扫描 |
-| POL-06 | 用户设置 `compaction.enabled=false` → 模式强制降为 `shadow` 并在 `/compaction status` 注明；不得自动压缩 | 单测 + H-SC-5 |
+| POL-06 | 用户设置 `compaction.enabled=false` → 模式强制降为 `shadow` 并在 `/smart-compact status` 注明；不得自动压缩 | 单测 + H-SC-5 |
 | POL-07 | **apply 点与安全条件（INV-11，H12）**：apply 点集合 = {`turn_end`, `agent_before_settle`}（S1 判 turn_end 不通过则仅后者）。**`outcome==="completed"` 不是充分条件**。每个 apply 点还必须全部满足：① 被评估的最后一条 assistant 的 `stopReason ∈ {"stop","toolUse"}`——**排除 `"length"`（无论是否可恢复，保守）、`"error"`、`"aborted"`**；② 本 run 当前没有待处理的原生恢复（`_failedResponse`/重试窗口：以 `turn_end.outcome`、`stopReason` 与"同一 run 内刚发生过 overflow 恢复"的会话内标志判定——该标志在 `session_before_compact`(`reason:"overflow"`)/`session_compact_failed` 上置位，下一个 `agent_settled` 清除）；③ `agent_before_settle` 处同样检查最后一条 assistant 的 stopReason 与 outcome（`_checkCompaction` 已先于它运行，但恢复失败时最后一条仍可能是 length/error，此时不提议） | 单测（stopReason×outcome×恢复标志矩阵）+ **BLK-1**（真实宿主：不吞恢复，且恢复后控制器照常工作） |
 | POL-08 | pi 版本 < `1.5.0`（或 `pi-compat` 探测失败）→ 模式强制 `off` + 一条 warn，不阻塞会话 | 单测（沿用 economy 模块的降级写法） |
-| POL-09 | **联合可行性（阈值、尾部预算、V8 联合求解）**：令 `T=T_n`，`p=preRatio`，`a=applyRatio`，`q=targetPostRatio`，`S=summaryTokenEstimate`（默认 12 000 tokens；若已有上次摘要则取 `max(默认, 1.2×上次摘要 token)`），`G(P_s)=max(0, a−P_s)·T`（快照时 `P_s` 到应用阈值之间预期还会增长的量），`keep=keepRecentTokens`。**可行条件**：`keep + S + G(P_s) ≤ q·T`。不可行 → 状态 `infeasible-window`：控制器**不预压**（原生照常工作），`/compaction status` 显示原因与"需要 T_n ≥ …"，遥测一次（每会话一次，不刷屏）。默认参数下 `T_n ≳ (keep+S)/(q+p−a)`≈ 107K | 单测：默认参数下 T_n=40K → infeasible、T_n=200K → feasible；边界值；`S` 随上次摘要自适应 |
+| POL-09 | **联合可行性（阈值、尾部预算、V8 联合求解）**：令 `T=T_n`，`p=preRatio`，`a=applyRatio`，`q=targetPostRatio`，`S=summaryTokenEstimate`（默认 12 000 tokens；若已有上次摘要则取 `max(默认, 1.2×上次摘要 token)`），`G(P_s)=max(0, a−P_s)·T`（快照时 `P_s` 到应用阈值之间预期还会增长的量），`keep=keepRecentTokens`。**可行条件**：`keep + S + G(P_s) ≤ q·T`。不可行 → 状态 `infeasible-window`：控制器**不预压**（原生照常工作），`/smart-compact status` 显示原因与"需要 T_n ≥ …"，遥测一次（每会话一次，不刷屏）。默认参数下 `T_n ≳ (keep+S)/(q+p−a)`≈ 107K | 单测：默认参数下 T_n=40K → infeasible、T_n=200K → feasible；边界值；`S` 随上次摘要自适应 |
 | POL-10 | **估算口径**（供 V8a/V8b/POL-09）：`estimatePost(summary, keptEntries)` = 摘要 token（经 `estimateTokens` 对合成 `compactionSummary` 消息）+ 保留尾部各消息 token（`estimateTokens`，基于**应用 `context_edit` 后的投影**）+ `overhead`；`overhead = clamp(ctxTokens_usage − estimateMessages(currentProjection), 0, 0.3·contextWindow)`（`ctx.getContextUsage().tokens` 可用时校准系统提示/工具定义占用，否则取 `unknownOverheadTokens` 保守默认）。估算偏差由 `hardFitRatio`（默认 0.9）的安全边际吸收，且遥测记录"估算 vs 下一次真实 usage"的偏差供 W2 校准 | 单测（含 context_edit 夹具；overhead 校准；null usage 路径） |
 
 ### 5.4 切点（`cutpoint.ts` + `signals/*`）
@@ -419,8 +419,8 @@ draft 路径不触发 pi 压缩事件（H3/H11）。`lib/compaction-seam.ts` 提
 |---|---|---|
 | ST-01 | **会话 entry** `cc-core-compaction`（`pi.appendEntry`，display-only，不进 LLM）：每个**周期结局**写一条（`applied`/`discarded(lost)` 在对账时写），`data:{v:1, outcome:"applied"\|"served"\|"discarded"\|"refused"\|"fellthrough"\|"infeasible", reason?, origin, cutClass?, summaryChars?, tokensBefore?, tokensAfter?, estPostTokens?, computeMs?, applyMs?, waitedMs?, validated:boolean, summaryModelFallback?:boolean, ledger?:{tierADegraded, directivesCollapsed, directivesPointerOnly, openOverflow}, conflictEdit?:number}`；**不含**摘要/台账正文（INV-7）。customType 与字段集冻结 | 单测 + 契约 SC-ENT-01 |
 | ST-02 | **设置** `~/.pi/agent/core-compaction.json`（经 `lib/settings.ts`：缺失/损坏返回默认、原子写）：`mode:"off"\|"shadow"\|"on"`（默认 `on`）、`precomputeRatio`、`applyRatio`、`targetPostRatio`、`hardFitRatio`、`overflowFitRatio`、`summaryTokenEstimate`、`keepSlackTokens`、`summaryModel`、`summaryThinking`、`summaryMaxTokens`、`fallbackDeadlineMs`、`minNarrativeChars`、`minPrefixChars`、`maxSummaryChars`、`idleGapMs`、`refusedCooldownTurns`、`degradeAfterRefusals`、`conflictEditDegradeAfter`、`minPrecomputeGapTurns`、`reconcileScanMax`、`directivesMax`、`perDirectiveMax`、`maxDirectiveLines`、`maxOpenItems`、`standingPatterns`、`ledger:{rexFlow:{enabled, boardPath?}}`、信号权重表。默认值见附录 C | 单测（缺失/损坏/越界/原子写） |
-| ST-03 | **环境变量** `PI_CORE_COMPACTION=off\|shadow\|on` 优先于配置文件；`/compaction mode …` 写配置并在下一次评估生效（无需 `/reload`，因 settings 在每次 `session_start` 与命令后重读） | 单测 + H-SC-5 |
-| ST-04 | **命令** `/compaction`（= `status`）：输出模式、有效 `T_n`、当前 `P`、状态机状态（含 `proposed`/`infeasible-window` 及"需要 T_n ≥ …"）、最近一次结局与原因码、冷却剩余、台账降级计数；`/compaction mode <off\|shadow\|on>`。无 UI（rpc/print）下不抛 | 单测（stub ctx） |
+| ST-03 | **环境变量** `PI_CORE_COMPACTION=off\|shadow\|on` 优先于配置文件；`/smart-compact mode …` 写配置并在下一次评估生效（无需 `/reload`，因 settings 在每次 `session_start` 与命令后重读） | 单测 + H-SC-5 |
+| ST-04 | **命令** `/smart-compact`（= `status`）：输出模式、有效 `T_n`、当前 `P`、状态机状态（含 `proposed`/`infeasible-window` 及"需要 T_n ≥ …"）、最近一次结局与原因码、冷却剩余、台账降级计数；`/smart-compact mode <off\|shadow\|on>`。无 UI（rpc/print）下不抛 | 单测（stub ctx） |
 | ST-05 | **降级**：SUM-05 的累计拒绝、seam 订阅方异常、`apply-error` 连续出现、APP-08 的 `conflict-edit` 累计、SUM-09 的未知提示形态 → 本会话 `shadow` + 一次 `ctx.ui.notify`（仅 `ctx.hasUI`）；不跨会话持久 | 单测 |
 | ST-06 | 装配：`extensions/index.ts` 中在 `memoryExtension`/`goalExtension`/modes 之后、`ccPanels` 与 economy 之前（`session_before_compact` 为"最后非空者胜"，且仅本模块返回 `compaction`，次序不影响正确性，但记录在案）；pi-compat 失败自禁用（POL-08）；`session_start` 重置会话态 | 装配顺序测试 |
 
@@ -494,7 +494,7 @@ B5: W9
 | H-SC-3 | 让预压来不及（`preRatio=0.99`）使原生 `threshold` 触发 | 兜底腿在 deadline 内同步生成并供稿（过 V8a）；pi 照常发 `session_compact`；goal/modes/memory 钩子各一次；deadline 超时则交回原生且无悬挂任务 |
 | H-SC-4 | `/compact <指令>` 与 `/compact`（无快照） | 走原生（有 spinner）；无我们的介入 |
 | H-SC-5 | `PI_CORE_COMPACTION=off`；以及 `compaction.enabled=false` | 前者与未装模块行为一致；后者降为 shadow 且不自动压缩 |
-| H-SC-6 | 摘要模型被配成返回空内容/报错 | 校验失败→重试→`refused`→原生接手；会话不崩；`/compaction status` 显示原因码 |
+| H-SC-6 | 摘要模型被配成返回空内容/报错 | 校验失败→重试→`refused`→原生接手；会话不崩；`/smart-compact status` 显示原因码 |
 | H-SC-7 | 一次真实 rex-flow run（有开放与已闭环任务）下强制压缩 | 摘要台账含全部**已关联**开放 run/task/open gate，已闭环项仅一行；**机器上另一项目的 board 不出现**；压缩后 orchestrator **无需**重读 board 即可继续派工。**若无法在本期执行，作为"待证据项"列出恢复条件，不得标完成** |
 
 发布门槛：**BLK-1…5 全绿**（自动化、硬门槛）且 H-SC-1/3/5/6 通过且 M1 ≥ 90% → 默认 `mode:"on"` 发布；未满足 → 默认改 `shadow` 发布并在 `DEVIATIONS.md` 记偏离及恢复条件。BLK 任一红 **不得**以"默认 shadow"绕过发布（shadow 仍会在 `session_before_compact` 之外运行预压，BLK 红说明宿主假设不成立，须先修 spec/实现）。
@@ -519,7 +519,7 @@ B5: W9
 | 宿主：**不校验**扩展提供的压缩结果是否装得下（`session_before_compact` 返回值与 boundary draft 均照单全收；BLK-3 基线） | SC-HOST-08 | compaction V8a（INV-12） | pi 增加容量校验时 → 红 → 可放宽 V8a 为 informational |
 | 宿主：**`compact()` 调用面**——可选 `streamFn` 为唯一逐调用观测/注入点；`thinkingLevel:"off"` 仅省略 `reasoning` 参数；无 `maxTokens` 参数；length/error 抛错；split-turn 两次调用与固定合并分隔；两类调用的提示开头形态（`<conversation>` / `# Conversation`） | SC-HOST-09 | compaction summarizer、SUM-03/04/09 | pi 改 compact 内部形态时 → 红 → SUM-09 降级路径生效 |
 | 宿主：**`context_edit` 仅作用于投影内条目**（针对被压区条目的编辑无效果）；`entry_appended` 不在扩展事件集中 | SC-HOST-10 | compaction V4/APP-08、对账 | pi 向扩展暴露提交事件时 → 红 → 对账可简化 |
-| session entry `cc-core-compaction`（display-only；data 见 ST-01，customType 与字段集冻结） | SC-ENT-01 | core 自身、`/compaction status`、回放工具 | 机制下线时 |
+| session entry `cc-core-compaction`（display-only；data 见 ST-01，customType 与字段集冻结） | SC-ENT-01 | core 自身、`/smart-compact status`、回放工具 | 机制下线时 |
 | 摘要内台账块 `<cc-core-ledger v="1">…</cc-core-ledger>` 与 `CompactionEntry.details.ccCore`（`v:1`）——**写入用户会话数据，格式冻结** | SC-SUM-01 | compaction（LED-02b 继承）、回放工具 | 永不静默破坏；升级走新版本号 |
 | 磁盘：`~/.pi/agent/core-compaction.json`（键集见 ST-02） | SC-CFG-01 | compaction settings | 冻结 |
 | 环境变量 `PI_CORE_COMPACTION=off\|shadow\|on` | SC-ENV-01 | compaction settings | — |
@@ -553,10 +553,10 @@ B5: W9
 | R9 | 台账把用户指令原文写入摘要（与原生摘要同类内容，但更"逐字"） | INV-7：遥测不含正文；预算裁剪；文档说明 |
 | R10 | 提前压缩 → 主对话 prompt cache 提前失效 | 压缩后上下文很小，重建 cache 成本低；`applyRatio` 延后落盘以降低压缩频率；W2 报告频率 |
 | R11 | 后序（core 外）handler 在同边界覆盖/追加，使提议丢失或被追溯编辑（H5(b)/H15）——**无法单方面预防** | APP-04 仲裁规则 + APP-08 对账**检测**；`lost` 不消耗快照、不通知 after；`conflict-edit` 计数并降级 shadow；core 内源码扫描保证自身不产生此类 draft |
-| R12 | Tier C（普通对话中的自然语言开放事项）无确定性保障（LED-08）——**明确承认的残余风险** | 叙述 prompt 要求列出开放事项；台账给指令指针与会话文件回溯；W2 植入事实离线抽检；`/compaction status` 暴露降级计数 |
+| R12 | Tier C（普通对话中的自然语言开放事项）无确定性保障（LED-08）——**明确承认的残余风险** | 叙述 prompt 要求列出开放事项；台账给指令指针与会话文件回溯；W2 植入事实离线抽检；`/smart-compact status` 暴露降级计数 |
 | R13 | 估算偏差（系统提示/工具定义占用、`chars/4` 估算）使 V8a 误判 | `hardFitRatio` 0.9 / `overflowFitRatio` 0.75 的安全边际；overhead 用 `getContextUsage` 校准；M8 报告偏差；overflow 路径宁可交回原生 |
 | R14 | 逐调用分类依赖 pi 内部提示文案（SUM-09） | SC-HOST-09 钉住；运行时遇未知形态 → 降级为"仅装配后校验"并置 shadow |
-| R15 | 小窗口/大 keep 配置下 POL-09 判 infeasible，控制器不工作 | 设计内行为（原生照常）；`/compaction status` 明示原因与所需 `T_n`；M7 统计覆盖率 |
+| R15 | 小窗口/大 keep 配置下 POL-09 判 infeasible，控制器不工作 | 设计内行为（原生照常）；`/smart-compact status` 明示原因与所需 `T_n`；M7 统计覆盖率 |
 
 **开放点（不阻塞 W0–W9 主线，均为 W2 数据落地后的候选增强）**：
 

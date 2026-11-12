@@ -60,7 +60,7 @@
 | 宿主：**不校验**扩展提供的压缩结果是否装得下（`session_before_compact` 返回值与 boundary draft 均照单全收；BLK-3 基线） | SC-HOST-08 | compaction V8a（INV-12） | pi 增加容量校验时 → 红 → 可放宽 V8a 为 informational |
 | 宿主：**`compact()` 调用面**——可选 `streamFn` 为唯一逐调用观测/注入点；`thinkingLevel:"off"` 仅省略 `reasoning` 参数；无 `maxTokens` 参数；length/error 抛错而 stop+空正文（reasoning-only）放行；split-turn 两次调用与固定合并分隔；两类调用的提示开头形态（`<conversation>` / `# Conversation`） | SC-HOST-09 | compaction summarizer、SUM-03/04/09 | pi 改 compact 内部形态时 → 红 → SUM-09 降级路径生效 |
 | 宿主：**`context_edit` 仅作用于投影内条目**（针对被压区条目的编辑无效果）；`entry_appended` 不在扩展事件集中 | SC-HOST-10 | compaction V4/APP-08、对账 | pi 向扩展暴露提交事件时 → 红 → 对账可简化 |
-| session entry `cc-core-compaction`（display-only；data 见 ST-01，customType 与字段集冻结） | SC-ENT-01 | core 自身、`/compaction status`、回放工具 | 机制下线时 |
+| session entry `cc-core-compaction`（display-only；data 见 ST-01，customType 与字段集冻结） | SC-ENT-01 | core 自身、`/smart-compact status`、回放工具 | 机制下线时 |
 | 独立 display-only entry `cc-core-compaction-metrics`（`v:1`）：仅 `on` 模式记录 compute-start/compute-ready/proposal/applied/fallback-start/fallback-end 的时间、随机关联 id、token/有效阈值、阶段、固定原因码；不含正文，不改冻结的 ST-01。报告区分实测提前接管率与回放 M1，提议不计成功，manual/overflow 单列 | SC-MET-01（M1 插桩；INV-7/G5，DEVIATIONS SC-6） | 本地 `scripts/compaction-metrics.mjs`、控制器诊断 | 诊断机制下线时；既有 v1 entry 仍可读取 |
 | 摘要内台账块 `<cc-core-ledger v="1">…</cc-core-ledger>` 与 `CompactionEntry.details.ccCore`（`v:1`）——**写入用户会话数据，格式冻结** | SC-SUM-01 | compaction（LED-02b 继承）、回放工具 | 永不静默破坏；升级走新版本号 |
 | 磁盘：`~/.pi/agent/core-compaction.json`（键集见 ST-02） | SC-CFG-01 | compaction settings | 冻结 |

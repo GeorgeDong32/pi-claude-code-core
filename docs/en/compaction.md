@@ -72,7 +72,7 @@ results below have not been recalibrated by adding instrumentation.
   (native path).
 
 Configuration: `~/.pi/agent/core-compaction.json` (ST-02), env
-`PI_CORE_COMPACTION=off|shadow|on`, command `/compaction [status|mode …]`.
+`PI_CORE_COMPACTION=off|shadow|on`, command `/smart-compact [status|mode …]`.
 `shadow` = fully passive: no precompute, no drafts, no fallback supply — only
 the FB-08 native-summary audit remains (DEVIATIONS SC-5).
 

@@ -122,7 +122,7 @@ export interface ControllerState {
 	degraded: boolean;
 	/** infeasible-window telemetry already emitted once this session (POL-09). */
 	infeasibleReported: boolean;
-	/** Last completed-cycle outcome, for /compaction status. */
+	/** Last completed-cycle outcome, for /smart-compact status. */
 	lastOutcome?: { outcome: CycleOutcome; reason?: DiscardReason | string; atTurn?: number };
 	/** Turn counter (boundaries seen), drives cooldowns. */
 	turns: number;

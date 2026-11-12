@@ -23,7 +23,7 @@
  *   session_compact                    FB-08 native-summary audit
  *                                      (fromExtension falsy only)
  *   session_compact_failed             POL-07② recovery flag
- *   /compaction [status|mode off|shadow|on]   ST-04
+ *   /smart-compact [status|mode off|shadow|on]   ST-04
  *
  * Every handler body is try/caught (INV-1) and the proposal path contains no
  * await before returning the draft. pi-compat probe (POL-08) forces mode off
@@ -1114,15 +1114,35 @@ export default function compactionController(pi: ExtensionAPI): void {
 		}
 	}) as never);
 
-	// ── /compaction command (ST-04) ───────────────────────────────────────
-	pi.registerCommand("compaction" as never, {
+	// ── /smart-compact command (ST-04) ──────────────────────────────────────
+	pi.registerCommand("smart-compact" as never, {
+		description: "Smart Compaction controller: bare = status; 'mode <off|shadow|on>'",
+		getArgumentCompletions: (prefix: string) => {
+			const value = prefix.trimStart();
+			const tokens = value.split(/\s+/).filter(Boolean);
+			const trailing = /\s$/.test(value);
+			if (tokens.length === 0 || (tokens.length === 1 && !trailing)) {
+				const first = tokens[0] ?? "";
+				return ["status", "mode"].filter((t) => t.startsWith(first)).map((t) => ({ value: t, label: t }));
+			}
+			// Only while the second token is being typed ("mode " / "mode <p>").
+			// pi replaces the WHOLE argument prefix with item.value, so the value
+			// must re-include the first token.
+			if (tokens[0] === "mode" && tokens.length <= 2 && (tokens.length === 1 || !trailing)) {
+				const second = trailing ? "" : tokens[1] ?? "";
+				return ["off", "shadow", "on"]
+					.filter((t) => t.startsWith(second))
+					.map((t) => ({ value: `mode ${t}`, label: t }));
+			}
+			return null;
+		},
 		handler: async (args: string, ctx: ExtensionContext) => {
 			try {
 				const sub = args.trim().split(/\s+/)[0] ?? "";
 				if (sub === "mode") {
 					const value = args.trim().split(/\s+/)[1] ?? "";
 					if (value !== "off" && value !== "shadow" && value !== "on") {
-						notifyUser(ctx, "usage: /compaction mode <off|shadow|on>");
+						notifyUser(ctx, "usage: /smart-compact mode <off|shadow|on>");
 						return;
 					}
 					const settingsPath = join(agentDirOf(ctx), "core-compaction.json");

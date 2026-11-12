@@ -131,7 +131,7 @@ export interface Feasibility {
 	expectedGrowth: number;
 	/** Capacity upper bound for the kept tail (§5.4 tailMax). */
 	tailMax: number;
-	/** T_n the current configuration would need (for /compaction status). */
+	/** T_n the current configuration would need (for /smart-compact status). */
 	neededTn: number;
 }
 

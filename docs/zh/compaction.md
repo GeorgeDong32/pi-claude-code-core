@@ -56,7 +56,7 @@ JSON 报告包含预压耗时/提前 token 量的 p50/p90、触发 threshold 兜
   恰好一次触发；原生路径走它们自己的 pi 事件。
 
 配置：`~/.pi/agent/core-compaction.json`（ST-02）、环境变量
-`PI_CORE_COMPACTION=off|shadow|on`、命令 `/compaction [status|mode …]`。
+`PI_CORE_COMPACTION=off|shadow|on`、命令 `/smart-compact [status|mode …]`。
 `shadow` = 完全被动：不预压、不提议、不供稿——仅保留 FB-08 原生摘要审计
 （DEVIATIONS SC-5）。
 
