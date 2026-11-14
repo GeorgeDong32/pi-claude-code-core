@@ -1,3 +1,28 @@
+## Unreleased — 清理加固批（CH）
+
+### Changed
+
+- **modes plan 模式只读判定放宽（E1，D-CH-4）**：三类此前被拦的只读写法放行——重定向到 `/dev/null`（精确匹配；`>/dev/nullx`、`2>/dev/null >out` 仍算写）、`git -C <字面路径> <安全子命令>`、`&&` 链中的字面 `cd <目录>`。同时 bash 路径检查（W3/W4/P1-4/旗标）沿 `&&` 链跟踪字面 cd，后续各段的相对路径按 cd 后目录解析——`cd sub && cat ../.env` 仍会命中 `Read(./.env)` 拒绝规则。非字面 cd（`$`/反引号/`~`/`-`/无参数）与 `;`/`||`/管道后的 cd 不放行。
+- **modes classifier 不可用文案（E3）**：分类器不可用时直接给出不可用说明，不再包上「Permission … denied」框架和「加权限规则」建议；真实拒绝文案不变。
+- **modes gitignore 提示改用 `git check-ignore`（E8a）**：本地权限文件的「加入 .gitignore」提示能理解模式写法（如 `.pi/`），不再只认整行精确匹配；git 不可用时回退旧行为。删除空转的 `ensureLocalPermissionsGitignored`。
+- **bg-shell waitFor（E2）**：`"…" never appeared` 提示只在命令转后台那条路径保留；正常退出与报错路径不再追加。参数说明明确「不等待时省略，禁止占位值」。
+- **bg-shell TaskStop 已结束任务（E5）**：对已结束任务调用 TaskStop 时状态行写真实结束状态与退出码（不再把 exit 0 改写成 killed），且不与完成行重复。
+- **bg-shell 任务编号跨进程连续（E6）**：`session_start` 用会话状态行里的最大编号抬高计数器，同会话不再出现 bg-N 复用。
+- **memory 超时原因（E7）**：选择器/ops 内部计时器超时上报 `timeout`（外部 abort 仍为 `aborted`），`/memory` 诊断可区分。
+- **observation-pack CJK token 估算（E11）**：ASCII 按 /4、非 ASCII 码点按 1 计——`"中文测试"` 从 1 修正为 4；`estimated_tokens`、投影 `removedTokens`、bus `tokensAvoided` 数值变化，字段形状不变。
+- **lib writeJsonAtomic 保留权限位（E10）**：未显式传 mode 且目标文件已存在时，临时文件继承原文件权限（手工设的 0600 不再被重写回 0644）。
+- **review 旗标解析（R8）**：旧带值旗标不再吞掉下一个 `--` 开头的旗标——`/review --diff --lite` 现在正确设置 lite。
+- **review `--no-spawn` 真干跑（R12，D-CH-3）**：PR 目标只取 `gh pr view`/`gh pr diff` 元数据，不再完整克隆；输出如实标注 workspace/rules/history 状态。
+- **review bus 状态对账（R11，D-CH-2）**：运行失败/中断/未产出报告时 `review.status` 不再卡在 running——在 `agent_end`、`session_start` 与下一次 `/review` 入口三处对账复位，不新增总线字段。
+- **run-cmd 超时加固（T1–T4）**：超时先 SIGTERM、2s 后 SIGKILL 升级；孙进程占住管道时有界排水后返回；计时器触发时子进程已退出则按真实退出码；`timeoutMs ≤ 0`/非有限值 = 不设上限（文档化）；新增结构化 `timedOut` 结果字段。
+- **review directive 减重（E12）**：评审者共享提示行去重（默认全员 directive 15,311 → 11,363 字符，−26%），新增 `REVIEW_DIRECTIVE_MAX_CHARS` 上限钉住。
+- 内部清理：bash 单次扫描（S1–S3）、adjudicate 去重（S4）、共享 `modelIdentityKey`（S6）、`check.mjs` 死分支与 `run-tests.mjs` 写死 zsh 移除（E8b/E9）、review 死代码与失真注释清理（R4–R7、R10）、memory inFlight 守卫隔离钉测（D1）。
+
+### Fixed
+
+- **review PR HEAD 重取失败不再静默放行（R2）**：重取失败视为硬错误（文案区分「重取失败」与「head 已移动」），不再带着过期工作区继续评审。
+- **review 未跟踪大文件不再整读进内存（R3）**：超过 1MB 的 untracked 文件以占位 hunk + warning 计数呈现，不再把整个文件读入 diff。
+
 ## 0.5.1 (2026-11-14) — 回测加固批（BH）+ 小修批（FX）
 
 ### Security

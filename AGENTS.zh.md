@@ -128,7 +128,7 @@ docs/                # 架构文档(en/ + zh/ 双语分文件)
 | `~/.pi/agent/pi-core-web.json` | web-gov 预批准域名覆盖 |
 | `~/.pi/agent/sessions/permission-modes-forwarding/sessions/<id>/` | 审批转发(pm ↔ pi-subagents) |
 | `<cwd>/.pi/goals/` | goal 状态 |
-| `<cwd>/.pi/pi-review/`(`pi-review.json`、`runs/<runId>/`) | review |
+| `~/.pi/agent/pi-review.json`(配置) + `<cwd>/.pi/pi-review/runs/<runId>/` | review |
 | `<sessionDir>/observation-pack/<sessionId>/` | observation-pack 原文 |
 | `~/.pi/agent/core-compaction.json` | 压缩控制器设置(SC ST-02) |
 

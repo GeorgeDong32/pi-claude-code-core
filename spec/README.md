@@ -21,7 +21,7 @@
 | spec | 内容 | 状态 |
 |---|---|---|
 | [回测加固后续小修](2026-11-14-followup-small-fixes.md) | BH 遗留：FX-1 review-degradation 红项修复 + 本地 fetch 时限（D-FX-1）、FX-2 E5 边界方案 B 覆盖全部宿主切模型途径（D-FX-2）、FX-3 memory 25K 核实、FX-4 SC 默认开启效果评估（含 Air 只读取数，D-FX-3）、FX-5 review/ 模块深度审查；三路并行（W-R/W-E/W-M） | **已实施完成（2026-11-14）**：FX-1…5 全部落地，main `c58ec84` 三门 + 金丝雀全绿且 **test 零失败**（BH-10 关闭）；FX-3 结论 base 即绿无缺陷、FX-4 结论数据不足（SC-1 遗漏仍未裁决）；FX-5 深审 P0=0/P1×1 已修/P2×2+P3×9 记录（REPORT 见仓库根）；三路独立审查均 PASS-with-nits（nit 已修）；台账见 CHANGELOG Unreleased + DEVIATIONS FX-1…6 + PROGRESS 同日节 |
-| [清理与加固](2026-11-15-cleanup-hardening.md) | CH 批：review/ 深审遗留 R2–R12（R9 记录、R11 三处对账 D-CH-2、R12 干跑只取元数据 D-CH-3）、Standards 六异味 S1–S6、run-cmd 超时加固 T1–T4（SIGKILL 升级/竞态/≤0 语义/结构化 timedOut）、D1 memory inFlight 钉测 + D2 FX-2 上游提案草稿、BH P3 小项 E1–E12（E4/E13 不做；E1 放行 cd + 路径追踪 D-CH-4）；三路并行（W-R/W-M/W-B） | 已批准（2026-11-15），实施中 |
+| [清理与加固](2026-11-15-cleanup-hardening.md) | CH 批：review/ 深审遗留 R2–R12（R9 记录、R11 三处对账 D-CH-2、R12 干跑只取元数据 D-CH-3）、Standards 六异味 S1–S6、run-cmd 超时加固 T1–T4（SIGKILL 升级/竞态/≤0 语义/结构化 timedOut）、D1 memory inFlight 钉测 + D2 FX-2 上游提案草稿、BH P3 小项 E1–E12（E4/E13 不做；E1 放行 cd + 路径追踪 D-CH-4）；三路并行（W-R/W-M/W-B） | **已实施完成（2026-11-15）**：22 提交合入（W-B→W-M→W-R 变基 ff），main `d9e610b` 三门 + 金丝雀全绿且 test 零失败（vitest 1249 / node:test 1108）；三路审查均 PASS-with-nits（W-M 审查 P1 引号并置绕过合入前修复 `62a405d`）；E12 directive −26%（15,311→11,363 字符）；台账见 CHANGELOG Unreleased + DEVIATIONS CH-1…10 + PROGRESS 同日节 |
 
 ## 实际状态与续做范围
 

@@ -152,7 +152,7 @@ Per-module docs live in [docs/en/](docs/en) / [docs/zh/](docs/zh) — start with
 | `~/.pi/agent/memory-queue/` | memory pending-extraction queue (shutdown 写 / session_start drain) |
 | `~/.pi/agent/sessions/permission-modes-forwarding/sessions/<id>/` | approval forwarding (pm ↔ pi-subagents) |
 | `<cwd>/.pi/goals/` | goal state |
-| `<cwd>/.pi/pi-review/` (+ `pi-review.json`, `runs/<runId>/`) | review |
+| `~/.pi/agent/pi-review.json` (config) + `<cwd>/.pi/pi-review/runs/<runId>/` | review |
 | `<sessionDir>/observation-pack/<sessionId>/` | observation-pack originals |
 | `~/.pi/agent/core-compaction.json` | compaction controller settings (SC ST-02) |
 

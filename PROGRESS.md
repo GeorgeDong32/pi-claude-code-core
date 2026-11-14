@@ -2,6 +2,17 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## 2026-11-15 清理加固批（SPEC CH，22 项，3 路并行派工 + 独立审查合入）
+
+- **来源**：review/ 深审遗留 R2–R12 + 双轴审查 Standards 六异味 S1–S6 + run-cmd 超时边角 T1–T4（FX-1 审查 N3–N6）+ D1 memory inFlight 钉测 + D2 FX-2 上游提案草稿 + BH spec 非目标 P3 小项 E1–E12（E4 阻塞 task-wait、E13 大文件拆分不做；R9 只记录）。spec `spec/2026-11-15-cleanup-hardening.md`，用户决策 D-CH-1…5。
+- **派工**：3 worker 各自 worktree（ch-wt-r review+超时 / ch-wt-m modes 异味 / ch-wt-b shell+economy），三 worker 一次成功（无 model_provider_unavailable）。逐分支独立只读审查：W-B PASS-with-nits（P3×3 记档不修）；W-M PASS-with-nits + **P1 合入前修复**（`/dev/null` strip 引号并置绕过，orchestrator 修复 `62a405d`，红先绿后）；W-R PASS-with-nits（P3×6 记档不修，含 R11 done-vs-idle 竞态确认无洞）。按 W-B→W-M→W-R 变基 ff 合入，线性历史。
+- **提交**（合入后 main hash）：W-B `723fdb2`(E2/E5/E6)、`6c19416`(E11)、`3cb7270`(E7/D1)、`fa8ec32`(E10)、`c93c550`(E8b/E9)；W-M `764bf16`/`f76b24b`/`229a44d`(S6)、`88bf6e3`(S1–S4+E1)、`5ab9aad`(E3)、`40eca01`(E8a)、`50194a2`(D2)、`a64f5ac`(审查 P1)；W-R `d40bb1f`(R2)、`3dbfd3e`(R3)、`04fc720`(R4–R7)、`c669525`(R8)、`0267e4c`(R10)、`1d360bd`(E12)、`f203435`(R12)、`1d328e2`(R11)、`7f11b7c`(T1–T4)、`d9e610b`(docs)。spec `560bb97`。
+- **红基线**：全部 bug 修复（R2/R3/R8/R11/R12/T1/T2/T3/E1-W4/E3/E8a/E2/E5/E6/E10/E11）在各自 base 560bb97 worktree 先红后绿；纯重构（R4–R7/R10/S1–S4/S6/T4/E12/E8b/E9/D1）零断言变更（R10/E12 用 golden fixture 证明生成脚本逐字节不变——E12 例外为共享行去重，fake-runs 执行证明各评审者 prompt 逐字节一致）。
+- **E12 实测**：默认全员 directive 15,311 → 11,363 字符（−26%），`REVIEW_DIRECTIVE_MAX_CHARS = 12_500` 钉住。
+- **门禁（main d9e610b）**：`pnpm run check` exit 0；`pnpm run test` exit 0 **零失败**——vitest 89 文件 1249/1249 + node:test 九目录 1108 全绿（effort 114 / goal 262 / review 203 / action-fusion 21 / observation-pack 33 / bg-shell 283 / compaction 136 / memory 37 / web-gov 19）；`pnpm run contracts` 108+4todo（冻结面零触碰，仅 README BG-ENTRY-03 措辞更新）；金丝雀 5/5。
+- **台账**：CHANGELOG Unreleased（Changed×15 + Fixed×2）；DEVIATIONS「清理加固批（SPEC CH）」CH-1…10（R9 有意设计、E1 残留、审查 P3 记档、上游草稿未对外提交、AGENTS 磁盘表修正）；docs/{en,zh} 同步（review/bg-shell/memory/observation-pack/modes）。
+- **遗留（下一轮/待授权）**：E4（阻塞式 task-wait 工具）、E13（goal.ts / modes/index.ts 拆分）另行成批；非 `&&` cd 追踪为已记录保守面；SC 长期复测、H-SC 真机验收、各 host todo 不变；push/发版/双机安装仍待用户授权（D-BH-4/D-CH-5：只本地提交）。
+
 ## 2026-11-14 小修批（SPEC FX，5 项，3 路并行派工 + 独立审查合入）
 
 - **来源**：BH 批遗留（review-degradation 红项、E5 手动切模型边界）+ BH spec 非目标三项（review/ 深审、memory 25K 核实、SC 效果评估），spec `spec/2026-11-14-followup-small-fixes.md`。用户决策 D-FX-1…4 见 spec 首节。

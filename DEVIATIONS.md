@@ -480,3 +480,32 @@ FX-7. **发版前双轴审查（code-review skill，519cd86...5db2cc7）与 BH-R
    - **修复：BH-R6 tier 顺序**——spec 要求「任一段命中 soft_deny 即判 soft_deny」，但 adjudicate.ts 的 allow tier（1.5）先于 soft_deny tier（1.5b）返回：某段同时命中两个清单（每段都 allow-match 且任一段 soft_deny-match、且两段均 tier-2 approvable，如 `git add -A && npm test` 配 allow ["git","npm"] + soft_deny ["npm test"]）时被快速放行，与 auto-rule-match.ts 头注释 "soft_deny wins" 相悖。该顺序承自 base（非 BH 批引入）。修复 = 1.5/1.5b 互换（soft_deny 先判，allow 层注释同步），红基线坐实（前置红 → 后置绿，decide 级 + 接线级双钉）。接线级碰撞用例的构造依赖 tier-2 白名单事实（npm test approvable，npm install/publish 不可 approvable 到达不了 allow tier）——已写进用例注释。
    - tier-1（bashTiers.safe）与 soft_deny 的先后未动：safe 是 core 内建只读判定而非用户规则层，「soft_deny wins」语义只约束用户规则两 tier；如需收紧另议。
    - 其余发现（Standards 6 条 + review/ 深审 P2×2+P3×9 + run-cmd N3–N6）记下一轮，不阻发版。
+
+## 清理加固批（SPEC CH 2026-11-15-cleanup-hardening.md，2026-11-15）
+
+来源：review/ 深审遗留 R2–R12 + 双轴审查 Standards 六异味 + run-cmd 超时边角 N3/N4/N6 + FX-2 残余 + BH spec 非目标 P3 小项。用户决策 D-CH-1…5 见 spec 首节（范围、R11 三处对账、R12 元数据干跑、E1 放行 cd + 追踪、批准后直接派工）。三路并行（W-R review+超时 / W-M modes 异味 / W-B shell+economy），三 worker 一次成功（无 model_provider_unavailable）；逐分支独立只读审查（三路均 PASS-with-nits）后按 W-B→W-M→W-R 变基 ff 合入。
+
+CH-1. **R9 不修（有意设计）**：`pr-ref.ts` 的裸 `pull/N` 正则会把正文里的 PR 引述也解析成评审目标——CC 风格设计，`pr-ref.test.ts` 钉住，仅记录。
+
+CH-2. **R7 超出清单一项**：除 spec 列出的 6 处外，`review-report.ts` 的 `runCmd` 值导入同样零消费方，一并删除（与 `spawn`/`RunCmd` 同行导入）。`setRunCmd`/`resetRunCmd` 转出口保留（不在删除清单）。
+
+CH-3. **E12 范围界定**：去重覆盖全体评审者共享的前缀行与 bugbot/security-review 共用的 docsOnly 行、userContext 后缀；各 lane 独有条件行保持内联。`taskLiteralsOf` 测试助手从正则抽取改为真实执行脚本抽取（断言语义不变，golden fixture 钉逐字节一致）。实测默认全员 directive 15,311 → 11,363 字符（−26%），上限常量 12,500。
+
+CH-4. **R11 实现注记**：agent_end 对账仅在「running 发布后经历过一次 agent_start」的回合触发（武装纪律）；报告落地（tool-wrapper 发 done）与 agent_end 的竞态由「仅 running 态复位」守卫覆盖，测试钉住。审查确认无 done→idle 误复位洞。
+
+CH-5. **E1 残留与既有断言修订**：
+   - 非 `&&` 形式的 cd 路径追踪不做（spec 非目标已列）：`;`/`||`/管道后的 cd 与非字面目录（`$`、反引号、`~`、`-`、无参数）整条命令不算 safe，路径解析保持 cwd 相对——shell 实际会延续 cd，属已记录的保守面。
+   - W3 复合近似收紧一处：`rm x && cd sub && ls` 现在提示（base 返回 null）——tracked cd 在 W3 命中后按只读安全处理，与放行方向一致。
+   - `echo git -C x push` 因破坏性匹配同时跑在剥离视图上而 fail-closed（base 的 echo 白名单判 safe）——收紧，有测试。
+   - 一条既有断言按正确语义修订：`cd x && cat a && cat .env` 的复合 deny 用例改为 cd 无关形式 + 新增 cd 相对命中形式（x/.env 本就不该命中 /w/.env 规则）。
+   - **W-M 审查 P1（合入前修复，main `a64f5ac`）**：`/dev/null` 精确匹配的 lookahead 未排除引号，`echo hi >/dev/null"leak"` 被剥离成 safe 而 shell 实际写 `/dev/nullleak`。红证据先行，修复 = lookahead 排除 `'"`，双引号/单引号用例钉住。
+
+CH-6. **W-B 备注（P3×3，不修记档）**：① join-in-flight-kill 路径的注释措辞强于实际保证（第二个并发 TaskStop 仍会追加第二行 killed——既有行为，非本批回归）；② `notifyOnce` 发送失败回滚标志后、下一 poll tick 前 TaskStop 落入会让 E5 路径抢发真实状态行（窄窗口，可见行仍在）；③ run-tests 空测试目录会以无参调 tsx（当前不可达，base 的 zsh glob 行为更差）。
+
+CH-7. **W-B 实现口径**：E11 `estimateTokens` 相对 SoL-Pi 上游（length/4）有意偏离（spec 授权），字段形状不变；E7 计时器与外部信号同时触发时标签取外部 `aborted`（仅纯计时器中止为 `timeout`）；E9 vitest 目标一并转 execFileSync（spec 允许保留）；D1 顺带修正 `memory-index-bypass.test.ts` 的误标注释（inFlight 守卫先于节流生效）。
+
+CH-8. **W-R 备注（P3×6，不修记档）**：run-cmd 边界竞态微窗口（timer 与 exit 同 tick 时仍可能标 timed out，非回归类）；agent_start 武装过宽时无关回合的 agent_end 可把 pending 的 running 复位为 idle（报告工具随后发 done 自愈，化妆品级）；R3 占位 hunk 计入 changedFiles/additions（与 spec「文件仍列出」一致）；T1b 测试遗留 ≤5s 孤儿 sleep（自灭）；两个文件无尾随换行（沿既有风格）。
+
+CH-9. **D2 上游提案**：`UPSTREAM-2026-11-15-pi-same-model-thinking-reset.md`（仓库根，英文）——FX-2 残余（重选当前模型时宿主重置 thinking 但 `modelsAreEqual` 早退不发 model_select）的证据对照安装版 pi 1.5.2 重新核实，提案两方案（同模型跳过重置 / 相等也发事件）。**仅入库，未对外提交**。
+
+CH-10. **AGENTS 磁盘表修正（R5 出模块项）**：`AGENTS.md`/`AGENTS.zh.md` 的 review 行原把 `pi-review.json` 列在 `<cwd>/.pi/pi-review/` 下；实际 config 在 `~/.pi/agent/pi-review.json`（P0-CT-09 冻结），runs 在 `<cwd>/.pi/pi-review/runs/<runId>/`。本次拆行更正。
