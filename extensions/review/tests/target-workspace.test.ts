@@ -45,26 +45,32 @@ interface Script {
 
 /**
  * Scripted workspace cmd runner. Tracks which scratch roots were handed out
- * so tests can verify retry-cleanup behavior.
+ * so tests can verify retry-cleanup behavior. `spawned` records every
+ * clone/fetch invocation with its full opts (FX-5 ceiling assertions).
  */
-function scripted(s: Script): { cmd: Cmd; roots: string[] } {
+function scripted(s: Script): { cmd: Cmd; roots: string[]; spawned: Array<{ cmd: string; args: string[]; opts: { cwd: string; timeoutMs?: number; env?: Record<string, string> } }> } {
 	const roots: string[] = [];
+	const spawned: Array<{ cmd: string; args: string[]; opts: { cwd: string; timeoutMs?: number; env?: Record<string, string> } }> = [];
 	const ghClone = [...(s.ghClone ?? [])];
 	const gitClone = [...(s.gitClone ?? [])];
 	const fetches = [...(s.fetch ?? [])];
 	const fetchHeads = [...(s.fetchHeads ?? [])];
 	return {
 		roots,
+		spawned,
 		cmd: async (cmd, args, opts) => {
 			if (cmd === "gh" && args[0] === "repo") {
 				roots.push(opts.cwd);
+				spawned.push({ cmd, args, opts });
 				return ghClone.shift() ?? { stdout: "", stderr: "", exitCode: 0 };
 			}
 			if (cmd === "git" && args[0] === "clone") {
 				roots.push(opts.cwd);
+				spawned.push({ cmd, args, opts });
 				return gitClone.shift() ?? { stdout: "", stderr: "", exitCode: 0 };
 			}
 			if (cmd === "git" && args[0] === "fetch") {
+				spawned.push({ cmd, args, opts });
 				return fetches.shift() ?? { stdout: "", stderr: "", exitCode: 0 };
 			}
 			if (cmd === "git" && args[0] === "rev-parse") {
@@ -184,6 +190,54 @@ describe("prepareWorkspace — PR path", () => {
 		setRunCmd(cmd);
 		const r = await prepareWorkspace({ cwd, target: { kind: "pr", prRef: PR } });
 		assert.equal(r.workspaceHeadSha, "ZZZ");
+	});
+});
+
+describe("prepareWorkspace — PR command ceilings (FX-5)", () => {
+	const CLONE_CEILING = 120_000;
+	const FETCH_CEILING = 60_000;
+
+	test("gh clone and PR head fetch carry a timeout ceiling + no credential prompts", async () => {
+		const cwd = setup();
+		const { cmd, spawned } = scripted({ fetchHeads: ["H1"], head: "H1" });
+		setRunCmd(cmd);
+		await prepareWorkspace({ cwd, target: { kind: "pr", prRef: PR, expectedHeadSha: "H1" } });
+		const ghClone = spawned.find((s) => s.cmd === "gh" && s.args[0] === "repo");
+		assert.ok(ghClone, "gh repo clone was invoked");
+		assert.equal(ghClone.opts.timeoutMs, CLONE_CEILING);
+		assert.equal(ghClone.opts.env?.GIT_TERMINAL_PROMPT, "0");
+		const fetch = spawned.find((s) => s.cmd === "git" && s.args[0] === "fetch");
+		assert.ok(fetch, "PR head fetch was invoked");
+		assert.equal(fetch.opts.timeoutMs, FETCH_CEILING);
+		assert.equal(fetch.opts.env?.GIT_TERMINAL_PROMPT, "0");
+	});
+
+	test("https clone fallback carries the same ceiling + prompt suppression", async () => {
+		const cwd = setup();
+		const { cmd, spawned } = scripted({
+			ghClone: [{ stdout: "", stderr: "gh missing", exitCode: 1 }],
+			gitClone: [{ stdout: "", stderr: "", exitCode: 0 }],
+			fetchHeads: ["H2"],
+			head: "H2",
+		});
+		setRunCmd(cmd);
+		await prepareWorkspace({ cwd, target: { kind: "pr", prRef: PR, expectedHeadSha: "H2" } });
+		const gitClone = spawned.find((s) => s.cmd === "git" && s.args[0] === "clone");
+		assert.ok(gitClone, "git clone fallback was invoked");
+		assert.equal(gitClone.opts.timeoutMs, CLONE_CEILING);
+		assert.equal(gitClone.opts.env?.GIT_TERMINAL_PROMPT, "0");
+	});
+
+	test("timed-out PR head fetch aborts through the existing hard-error path", async () => {
+		const cwd = setup();
+		const { cmd } = scripted({
+			fetch: [{ stdout: "", stderr: "git fetch timed out after 60000ms", exitCode: 1 }],
+		});
+		setRunCmd(cmd);
+		await assert.rejects(
+			() => prepareWorkspace({ cwd, target: { kind: "pr", prRef: PR } }),
+			/git fetch pull\/9\/head failed.*timed out/,
+		);
 	});
 });
 

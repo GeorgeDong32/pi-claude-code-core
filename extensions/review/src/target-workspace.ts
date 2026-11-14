@@ -17,14 +17,34 @@
  * A failed PR clone is a hard error (not a silent fallback to the user's
  * cwd): a fresh GitHub diff plus a stale local checkout is the #1 false
  * positive source observed in the field (diff@new, files@old).
+ *
+ * FX-5 (2026-11-14): PR-path clone/fetch commands carry hard ceilings
+ * (PR_CLONE_TIMEOUT_MS / PR_HEAD_FETCH_TIMEOUT_MS) and
+ * GIT_TERMINAL_PROMPT=0 so a stalled network or a credential prompt can
+ * never hang /review — failures surface through the existing hard-error
+ * throws with "timed out" in stderr.
  */
-import { spawn } from "node:child_process";
 import { runCmd } from "./run-cmd.js";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { parsePrRepo } from "./review-report.js";
+
+// FX-5 (2026-11-14): PR-path commands get hard ceilings for the same reason
+// D-FX-1 gave the local base fetch one — a stalled network or a git
+// credential prompt must never stall /review indefinitely (the https clone
+// fallback for a private repo without gh would otherwise sit on a
+// username/password prompt forever). Hard constants, deliberately not
+// configurable (no new env/settings key, INV-10). Clone failures remain the
+// documented hard error; a timed-out clone surfaces "timed out" through the
+// same path.
+const PR_CLONE_TIMEOUT_MS = 120_000;
+const PR_HEAD_FETCH_TIMEOUT_MS = 60_000;
+// gh passes env through to its inner git; suppressing terminal prompts is
+// harmless for gh's own auth (gh errors instead of prompting when
+// unauthenticated non-interactively).
+const NO_CREDENTIAL_PROMPTS = { GIT_TERMINAL_PROMPT: "0" };
 
 
 /** Allocate a scratch root under the OS tmpdir; created on disk. */
@@ -115,11 +135,15 @@ export async function prepareWorkspace(input: {
 	const ghClone = await runCmd(
 		"gh",
 		["repo", "clone", `${parsed.owner}/${parsed.repo}`, cloneDir, "--", "--depth", "50"],
-		{ cwd: root },
+		{ cwd: root, timeoutMs: PR_CLONE_TIMEOUT_MS, env: NO_CREDENTIAL_PROMPTS },
 	);
 	const clone = ghClone.exitCode === 0
 		? ghClone
-		: await runCmd("git", ["clone", "--depth", "50", url, cloneDir], { cwd: root });
+		: await runCmd("git", ["clone", "--depth", "50", url, cloneDir], {
+			cwd: root,
+			timeoutMs: PR_CLONE_TIMEOUT_MS,
+			env: NO_CREDENTIAL_PROMPTS,
+		});
 	if (clone.exitCode !== 0) {
 		removeWorkspaceRoot(root);
 		throw new Error(
@@ -132,7 +156,7 @@ export async function prepareWorkspace(input: {
 	const headFetch = await runCmd(
 		"git",
 		["fetch", "origin", `pull/${parsed.number}/head`, "--quiet"],
-		{ cwd: cloneDir },
+		{ cwd: cloneDir, timeoutMs: PR_HEAD_FETCH_TIMEOUT_MS, env: NO_CREDENTIAL_PROMPTS },
 	);
 	if (headFetch.exitCode !== 0) {
 		removeWorkspaceRoot(root);
@@ -150,7 +174,7 @@ export async function prepareWorkspace(input: {
 		const retry = await runCmd(
 			"git",
 			["fetch", "origin", `pull/${parsed.number}/head`, "--quiet"],
-			{ cwd: cloneDir },
+			{ cwd: cloneDir, timeoutMs: PR_HEAD_FETCH_TIMEOUT_MS, env: NO_CREDENTIAL_PROMPTS },
 		);
 		const retryHead = retry.exitCode === 0
 			? (await runCmd("git", ["rev-parse", "FETCH_HEAD"], { cwd: cloneDir })).stdout.trim()

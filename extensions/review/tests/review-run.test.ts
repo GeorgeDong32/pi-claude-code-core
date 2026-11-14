@@ -278,6 +278,69 @@ describe("prepareRun — local base fetch ceiling (D-FX-1)", () => {
 	});
 });
 
+describe("prepareRun — PR command ceilings (FX-5)", () => {
+	const DIFF = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n";
+	const GH_CEILING = 60_000;
+
+	function prCmdsWithOptsCapture(ghCalls: Array<{ args: string[]; opts: FakeCmdOpts }>): FakeCmd {
+		return fakeCmd({
+			gh: (args, opts) => {
+				ghCalls.push({ args, opts });
+				if (args[0] === "pr" && args[1] === "view") {
+					return {
+						stdout: JSON.stringify({ number: "42", baseRefName: "main", baseRefOid: "aaa", headRefOid: "bbb" }),
+						stderr: "",
+						exitCode: 0,
+					};
+				}
+				if (args[0] === "pr" && args[1] === "diff") {
+					return { stdout: DIFF, stderr: "", exitCode: 0 };
+				}
+				return { stdout: "", stderr: "no", exitCode: 1 };
+			},
+		});
+	}
+
+	test("gh pr view + gh pr diff carry a timeout ceiling + no credential prompts", async () => {
+		const cwd = setup();
+		const ghCalls: Array<{ args: string[]; opts: FakeCmdOpts }> = [];
+		setRunCmd(ghThenGit(prCmdsWithOptsCapture(ghCalls), async () => ({ stdout: "", stderr: "", exitCode: 0 })));
+
+		const prepared = await prepareRun({ cwd, input: "https://github.com/o/r/pull/42" });
+		assert.ok(prepared);
+		const view = ghCalls.find((c) => c.args[1] === "view");
+		const diff = ghCalls.find((c) => c.args[1] === "diff");
+		assert.ok(view && diff, "both gh pr calls were invoked");
+		for (const call of [view!, diff!]) {
+			assert.equal(call.opts.timeoutMs, GH_CEILING);
+			assert.equal(call.opts.env?.GIT_TERMINAL_PROMPT, "0");
+		}
+	});
+
+	test("timed-out gh pr diff aborts the run with the timeout visible", async () => {
+		const cwd = setup();
+		setRunCmd(fakeCmd({
+			gh: (args) => {
+				if (args[0] === "pr" && args[1] === "view") {
+					return {
+						stdout: JSON.stringify({ number: "42", baseRefName: "main", headRefOid: "bbb" }),
+						stderr: "",
+						exitCode: 0,
+					};
+				}
+				if (args[0] === "pr" && args[1] === "diff") {
+					return { stdout: "", stderr: "gh pr diff timed out after 60000ms", exitCode: 1 };
+				}
+				return { stdout: "", stderr: "no", exitCode: 1 };
+			},
+		}));
+		await assert.rejects(
+			() => prepareRun({ cwd, input: "https://github.com/o/r/pull/42" }),
+			/gh pr diff failed.*timed out/,
+		);
+	});
+});
+
 describe("loadManifestFor", () => {
 	test("round-trips through writeManifest and read", async () => {
 		const cwd = setup();

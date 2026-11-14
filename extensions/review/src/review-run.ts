@@ -14,8 +14,10 @@
  * D-FX-1 (2026-11-14): the local base fetch (`git fetch origin <base>` in
  * acquireLocalDiff) carries a hard 15s ceiling + GIT_TERMINAL_PROMPT=0 and
  * fails non-fatally into the existing stale-base warning, with distinct
- * "timed out" / "failed" text. PR-path commands (gh pr view/diff, clone,
- * PR-head fetch) keep their existing no-timeout behavior.
+ * "timed out" / "failed" text.
+ * FX-5 (2026-11-14): the PR-path gh calls (`gh pr view` metadata, `gh pr
+ * diff` authority) carry the same hang protection — PR_GH_TIMEOUT_MS = 60s
+ * ceiling; the diff timeout surfaces through the existing hard-error throw.
  */
 import { existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -260,7 +262,7 @@ async function acquirePrDiff(
 	const gh = await runCmd(
 		"gh",
 		["pr", "view", prRef, "--json", "number,baseRefName,baseRefOid,headRefOid,headRepository,headRepositoryOwner"],
-		{ cwd },
+		{ cwd, timeoutMs: PR_GH_TIMEOUT_MS, env: { GIT_TERMINAL_PROMPT: "0" } },
 	);
 	let prMeta: {
 		number?: string;
@@ -284,7 +286,11 @@ async function acquirePrDiff(
 	// that (different merge-base, ref timing), which is exactly the
 	// "diff does not match GitHub" failure class — so we never substitute our
 	// own computation. On failure we stop and tell the user to fix gh.
-	const ghDiff = await runCmd("gh", ["pr", "diff", prRef], { cwd });
+	const ghDiff = await runCmd("gh", ["pr", "diff", prRef], {
+		cwd,
+		timeoutMs: PR_GH_TIMEOUT_MS,
+		env: { GIT_TERMINAL_PROMPT: "0" },
+	});
 	if (ghDiff.exitCode !== 0) {
 		throw new Error(
 			`pi-review: gh pr diff failed for ${prRef} (${ghDiff.stderr.trim().slice(0, 200)}). gh pr diff is the single diff authority (it matches the GitHub web UI exactly), so there is no local fallback — check gh auth/install and re-run. Details: ${ghDiff.stdout.trim().slice(0, 200)}`,
@@ -305,6 +311,14 @@ async function acquirePrDiff(
 // deliberately not configurable (no new env/settings key, INV-10); the
 // PR-path commands are untouched.
 const LOCAL_BASE_FETCH_TIMEOUT_MS = 15_000;
+
+// FX-5 (2026-11-14): the PR-path gh calls get the same hang protection as
+// the local base fetch — `gh pr view` is non-fatal metadata (failure keeps
+// the diff authority), while `gh pr diff` failure stays the documented hard
+// error, now also bounded when the GitHub API stalls. gh reads
+// GIT_TERMINAL_PROMPT through its inner git invocations; it does not prompt
+// for auth non-interactively, so the env is belt-and-braces.
+const PR_GH_TIMEOUT_MS = 60_000;
 
 async function acquireLocalDiff(cwd: string, runDir: string): Promise<DiffAcquisitionResult> {
 	const status = await runCmd("git", ["status", "--porcelain"], { cwd });
