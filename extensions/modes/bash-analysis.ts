@@ -307,11 +307,13 @@ function hasNestedShellExecution(command: string): boolean {
  * before the destructive/safe matching. Covers every redirect-operator
  * shape the tokenizer knows (`>`, `>>`, `N>`, `N>>`, `&>`, `&>>`) with the
  * bare `/dev/null` target. Near-misses stay untouched: `>/dev/nullx`,
- * `>/dev/null/foo`, and a second real redirect (`2>/dev/null >out` still
- * has its `>out` and stays destructive).
+ * `>/dev/null/foo`, a second real redirect (`2>/dev/null >out` still
+ * has its `>out` and stays destructive), and quote juxtaposition
+ * (`>/dev/null"leak"` — the shell concatenates the quote onto the target,
+ * writing `/dev/nullleak`; review P1, CH batch).
  */
 function stripNullRedirects(command: string): string {
-	return command.replace(/(?:&>>|\d+>>|>>|&>|\d*>|>)\/dev\/null(?![\w/.])/g, " ")
+	return command.replace(/(?:&>>|\d+>>|>>|&>|\d*>|>)\/dev\/null(?![\w/.'"])/g, " ")
 }
 
 const GIT_DASH_C_PATTERN =

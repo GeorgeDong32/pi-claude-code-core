@@ -307,6 +307,11 @@ describe("isSafeCommand plan-mode read-only widening (E1, D-CH-4)", () => {
 		expect(isSafeCommand("ls >/dev/nullx")).toBe(false)
 		expect(isSafeCommand("ls 2>/dev/null >out.txt")).toBe(false)
 		expect(isSafeCommand("ls >/dev/null/foo")).toBe(false)
+		// Review P1 (CH batch): quote juxtaposition concatenates onto the
+		// redirect target — the shell writes /dev/null"leak" as the file
+		// `/dev/nullleak`, so a following quote must defeat the strip.
+		expect(isSafeCommand(`echo hi >/dev/null"leak"`)).toBe(false)
+		expect(isSafeCommand(`ls >>/dev/null'x'`)).toBe(false)
 	})
 
 	it("treats `git -C <literal> <safe subcommand>` as a read", () => {
