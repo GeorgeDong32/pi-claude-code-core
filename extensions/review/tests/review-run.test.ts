@@ -761,6 +761,67 @@ describe("gh pr diff is the single diff authority (user decision 2026-08-25)", (
 	});
 });
 
+describe("prepareRun — PR dry run (R12, D-CH-3)", () => {
+	const PR = "https://github.com/o/r/pull/77";
+	const DIFF = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n";
+
+	test("PR dry run: only gh pr view/diff run — no git clone, no git fetch", async () => {
+		const cwd = setup();
+		const calls: string[] = [];
+		setRunCmd(async (cmd, args) => {
+			calls.push(`${cmd} ${args.slice(0, 2).join(" ")}`);
+			if (cmd === "gh" && args[0] === "pr" && args[1] === "view") {
+				return {
+					stdout: JSON.stringify({ number: "77", baseRefName: "main", baseRefOid: "aaa", headRefOid: "bbb" }),
+					stderr: "",
+					exitCode: 0,
+				};
+			}
+			if (cmd === "gh" && args[0] === "pr" && args[1] === "diff") {
+				return { stdout: DIFF, stderr: "", exitCode: 0 };
+			}
+			if (cmd === "git" && (args[0] === "clone" || args[0] === "fetch")) {
+				throw new Error(`dry run must not run git ${args[0]}`);
+			}
+			return { stdout: "", stderr: "", exitCode: 0 };
+		});
+		const prepared = await prepareRun({ cwd, input: PR, dryRun: true });
+		assert.ok(prepared, "PR dry run must prepare from metadata alone");
+		const m = prepared!.manifest;
+		assert.equal(m.workspaceCloned, false, "no clone happened");
+		assert.equal(m.historyAvailable, false, "history not computed on a dry run");
+		assert.deepEqual(m.rulePaths, [], "rules not computed on a PR dry run");
+		assert.ok(m.workspaceWarning?.includes("not cloned"), "workspace marked not cloned");
+		assert.ok(!calls.some((c) => c.startsWith("git clone") || c.startsWith("git fetch")), `no clone/fetch: ${calls.join(" | ")}`);
+		assert.ok(calls.some((c) => c === "gh pr view"), "metadata was fetched");
+		assert.ok(calls.some((c) => c === "gh pr diff"), "diff was fetched");
+	});
+
+	test("local dry run keeps the usual local behavior", async () => {
+		const cwd = setup();
+		writeFileSync(join(cwd, "tracked.ts"), "a\n");
+		setRunCmd(
+			ghThenGit(
+				fakeCmd({
+					"git status": () => ({ stdout: " M tracked.ts\n", stderr: "", exitCode: 0 }),
+					"git diff": () => ({
+						stdout: "diff --git a/tracked.ts b/tracked.ts\n--- a/tracked.ts\n+++ b/tracked.ts\n@@ -1 +1 @@\n-a\n+b\n",
+						stderr: "",
+						exitCode: 0,
+					}),
+					"git rev-parse": () => ({ stdout: "abc\n", stderr: "", exitCode: 0 }),
+				}),
+				async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+			),
+		);
+		const prepared = await prepareRun({ cwd, input: "", dryRun: true });
+		assert.ok(prepared);
+		const m = prepared!.manifest;
+		assert.equal(m.workspacePath, cwd, "local dry run still uses the user cwd");
+		assert.deepEqual(m.changedFiles, ["tracked.ts"]);
+	});
+});
+
 describe("cleanup mechanisms", () => {
 	test("pruneLegacyFlatArtifacts removes 0.5/0.6 flat files but not runs/", () => {
 		const cwd = setup();

@@ -253,7 +253,9 @@ export default function (pi: ExtensionAPI) {
 	});
 }
 
-/** Cheap human summary for `--no-spawn`. */
+/** Cheap human summary for `--no-spawn`. R12: a PR dry run is metadata-only
+ *  (`gh pr view` + `gh pr diff`, no clone) — the workspace/rules/history
+ *  lines say so. */
 async function renderDryRun(
 	ctx: ExtensionCommandContext,
 	parsed: ReturnType<typeof parseReviewArgs>,
@@ -264,25 +266,30 @@ async function renderDryRun(
 		input: parsed.input,
 		lite: parsed.lite,
 		gateModel: parsed.gateModel,
-		// Dry runs must stay side-effect free (no pruning).
+		// Dry runs skip pruning; the run dir itself IS written (manifest +
+		// diff) and is reclaimed by the 24h pruner — this is not
+		// side-effect free, and R12 says so honestly.
 		cleanup: false,
+		dryRun: true,
 	});
 	if (!prepared) return "pi-review dry run: nothing to review.";
 	const m = prepared.manifest;
 	const gate = config.gate;
+	const prDryRun = prepared.dryRun === true && m.targetKind === "pr";
 	const lines = [
 		"pi-review dry run",
 		`input: ${m.targetLabel}`,
 		`mode: ${parsed.lite ? "lite (single agent, no gate)" : `agent-fetch (${m.targetKind})`}`,
 		`runId: ${m.runId}`,
-		`workspace: ${m.workspacePath}`,
+		prDryRun ? "workspace: not cloned (dry run)" : `workspace: ${m.workspacePath}`,
 		`diff sha256: ${m.diffSha256.slice(0, 16)}…`,
 		`changed files: ${m.changedFiles.length}`,
 		`docsOnly: ${m.docsOnly}`,
-		`historyAvailable: ${m.historyAvailable}`,
+		prDryRun ? "historyAvailable: not computed (dry run)" : `historyAvailable: ${m.historyAvailable}`,
 		`threshold: ${gate.threshold}`,
 		`gate: ${gate.enabled ? `yes (${resolveModel(gate.model, undefined)})` : "no"}`,
 	];
-	if (m.rulePaths.length > 0) lines.push(`rules: ${m.rulePaths.join(", ")}`);
+	if (prDryRun) lines.push("rules: not computed (dry run)");
+	else if (m.rulePaths.length > 0) lines.push(`rules: ${m.rulePaths.join(", ")}`);
 	return lines.join("\n");
 }

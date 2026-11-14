@@ -22,6 +22,10 @@
  * UNTRACKED_FILE_MAX_BYTES (1 MB) gets a size-only placeholder hunk (no
  * content read) and a counted note in diffWarning — the binary probe only
  * ever reads within-cap files.
+ * R12 (D-CH-3, 2026-11-15): `dryRun` on a PR target runs ONLY `gh pr view`
+ * + `gh pr diff` — no prepareWorkspace (no clone/fetch/checkout); rules and
+ * history are marked not computed. Local targets are unchanged. The dry run
+ * still writes its run dir (the 24h pruner reclaims it).
  */
 import { existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -48,6 +52,7 @@ import {
 import {
 	prepareWorkspace,
 	removeWorkspaceRoot,
+	type WorkspaceResult,
 } from "./target-workspace.js";
 import type { ReviewTarget } from "./types.js";
 
@@ -60,6 +65,12 @@ export interface PrepareRunInput {
 	gateModel?: string;
 	/** Set false for dry-runs — pruning is a side effect a dry run must not have. */
 	cleanup?: boolean;
+	/** R12 (D-CH-3): PR dry run — run only `gh pr view` + `gh pr diff`
+	 *  (metadata + diff authority); never `prepareWorkspace` (no clone, no
+	 *  fetch). rules/history are marked not computed. Local targets are
+	 *  unchanged. The dry run still writes its run dir (manifest + diff) —
+	 *  the 24h pruner reclaims it. */
+	dryRun?: boolean;
 }
 
 export interface PreparedRun {
@@ -68,6 +79,8 @@ export interface PreparedRun {
 	directive: string;
 	/** Path the main agent will receive as the directive message. */
 	directiveText: string;
+	/** R12: true when this run was prepared in PR dry-run mode. */
+	dryRun?: boolean;
 }
 
 /** Public entrypoint for `index.ts` — prepare a run synchronously. */
@@ -109,23 +122,35 @@ export async function prepareRun(input: PrepareRunInput): Promise<PreparedRun | 
 	}
 	// Pass the diff's head SHA so the workspace checkout can verify it landed
 	// on the same commit (guards the force-push-between-calls TOCTOU window).
-	let workspaceResult = await prepareWorkspace({
-		cwd,
-		target: { kind: target.kind, prRef: target.prRef, expectedHeadSha: diffResult.headSha },
-	});
-	if (workspaceResult.cloned && diffResult.headSha && workspaceResult.workspaceHeadSha &&
-		workspaceResult.workspaceHeadSha !== diffResult.headSha) {
-		// The first clone's scratch root is garbage now — drop it before
-		// retrying so a moving PR does not litter tmpdir with depth-50 clones.
-		removeWorkspaceRoot(dirname(workspaceResult.workspacePath));
+	// R12 (D-CH-3): a PR dry run stops at the metadata — gh pr view + gh pr
+	// diff already ran; no clone, no fetch, no checkout.
+	let workspaceResult: WorkspaceResult;
+	if (input.dryRun && target.kind === "pr") {
+		workspaceResult = {
+			workspacePath: cwd,
+			historyAvailable: false,
+			cloned: false,
+			warning: "not cloned (dry run)",
+		};
+	} else {
 		workspaceResult = await prepareWorkspace({
 			cwd,
 			target: { kind: target.kind, prRef: target.prRef, expectedHeadSha: diffResult.headSha },
 		});
-		if (workspaceResult.workspaceHeadSha && workspaceResult.workspaceHeadSha !== diffResult.headSha) {
-			throw new Error(
-				`pi-review: workspace HEAD ${workspaceResult.workspaceHeadSha.slice(0, 12)} does not match diff head ${diffResult.headSha.slice(0, 12)} — the PR moved during preparation; re-run /review.`,
-			);
+		if (workspaceResult.cloned && diffResult.headSha && workspaceResult.workspaceHeadSha &&
+			workspaceResult.workspaceHeadSha !== diffResult.headSha) {
+			// The first clone's scratch root is garbage now — drop it before
+			// retrying so a moving PR does not litter tmpdir with depth-50 clones.
+			removeWorkspaceRoot(dirname(workspaceResult.workspacePath));
+			workspaceResult = await prepareWorkspace({
+				cwd,
+				target: { kind: target.kind, prRef: target.prRef, expectedHeadSha: diffResult.headSha },
+			});
+			if (workspaceResult.workspaceHeadSha && workspaceResult.workspaceHeadSha !== diffResult.headSha) {
+				throw new Error(
+					`pi-review: workspace HEAD ${workspaceResult.workspaceHeadSha.slice(0, 12)} does not match diff head ${diffResult.headSha.slice(0, 12)} — the PR moved during preparation; re-run /review.`,
+				);
+			}
 		}
 	}
 
@@ -138,7 +163,11 @@ export async function prepareRun(input: PrepareRunInput): Promise<PreparedRun | 
 	// manifest field shape is unchanged). manifest.rulePaths,
 	// ChangeProfile.rulePaths, rulesheriff routing and the directive all
 	// consume this ONE prepared value — nothing re-derives from the caller.
-	const rulePaths = discoverRulePathsLocal(workspaceResult.workspacePath);
+	// R12: a PR dry run never materialized the target workspace, so rule
+	// discovery cannot run — rules are marked not computed (empty).
+	const rulePaths = input.dryRun && target.kind === "pr"
+		? []
+		: discoverRulePathsLocal(workspaceResult.workspacePath);
 
 	const manifest: RunManifest = {
 		runId,
@@ -217,7 +246,7 @@ export async function prepareRun(input: PrepareRunInput): Promise<PreparedRun | 
 
 	const directiveText = directive;
 
-	return { runId, manifest, directive, directiveText };
+	return { runId, manifest, directive, directiveText, dryRun: input.dryRun === true || undefined };
 }
 
 /** Read a previously-prepared manifest from disk. */
