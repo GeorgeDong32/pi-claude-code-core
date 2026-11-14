@@ -40,11 +40,12 @@
 
 **路径规则 glob 语义(BH-S1,2026-11-14)** —— `Read/Edit/Write(路径)` 规则中,单个 `*` 是段内通配(`./.env.*` 匹配 `./.env.local`,不匹配 `./a/.env.local`);`**` 保持跨段语义;其余正则元字符一律按字面匹配。此修复让此前永远无法命中的单星规则(如常见的 `Read(./.env.*)` deny)在 deny、ask、allow 三类规则及 W4 bash 复用路径上全部生效。
 
-**回放加固(BH-R3/R6/R7,2026-11-14)** —— 回放测试发现的鲁棒性修复:
+**回放加固(BH-R3/R6/R7/E4,2026-11-14)** —— 回放测试发现的鲁棒性修复:
 
 - **BH-R3 —— mv/cp 参数位感知 flag。** 此前 `cp -R src dst` / `mv -f a ~/.ssh/x` 会把 FLAG 当路径读。无害短 flag(`r/R/f/i/n/v/a/p/u/b/T/l/H/L/P/d/Z/x`)与长形态一律剥离;带值 flag(`-S`/`--suffix`)消费其值;`-t DIR` / `--target-directory[=DIR]` 使目录本身成为受检目标;未识别的 flag 在所有模式升级为 "mv/cp flag 形态" 弹窗(`bash write targets unverifiable: unrecognized mv/cp flag "X" — approve, or rewrite with explicit paths`)——deny 规则仍然优先,保护路径命中又优先于 flag 弹窗。无害 flag 调用(`mv -v a.ts b.ts`)不再弹窗——修正此前 flag 盲视的 P1-2 行为。另外,喂给远端 shell 的 heredoc 体(`ssh host <<'EOF' … EOF`)在 W3/W4 扫描前被掩蔽——其体不是本地路径上下文(分隔符从原始行解析,`<<'EOF'` 支持;`<<<` 不受影响;未闭合 heredoc 保守保留)。
 - **BH-R6 —— auto 模式规则按 shell 段匹配。** `matchAutoRules` 把 `allow`/`soft_deny` bullet 对每个 `&&`/`;`/`|` 段匹配,而非整条命令:soft_deny 任意段命中即拦,fast-allow 要求每段全部命中、拒绝命令替换(`$()`、反引号、`${}`、`<(`、`>(`)、空命令绝不 fast-allow。单段命令与旧整命令匹配器行为完全一致(测试钉住 parity)。
 - **BH-R7 —— 畸形配置与故障管路降级,绝不崩溃。** `sanitizePermissionModesConfig` 把规则列表过滤为纯字符串、删除非对象 `autoMode`/`permissions` 块并一次性告警;adjudicator check 抛错时以可读原因拒绝(`permission check failed: …`)而非炸掉 tool_call;setMode 被拒绝时经总线发布 `Mode switch failed: …` 通知;bus listener 以 per-listener try/catch 分发,单个 listener 爆炸不再中止整批发布。
+- **BH-E4 —— setMode 副作用按代际门控。** 快速连打模式(plan→auto→bypass 在途)只应用最新请求的副作用:profile 模型/effort 应用、`plan.md` 创建、持久化与总线发布。途经 plan 不停留则不留 `plan.md`;profile 模型已激活时不重复走宿主(无冗余 `setModel` 抖动)。
 
 ### Claude Code 批准清单导入(2026-11-02)
 

@@ -3841,3 +3841,81 @@ function setupProfileBH(cfg: unknown) {
 	writeFileSync(tmp, JSON.stringify(cfg))
 }
 
+describe("BH-E4: setMode generation — side effects only for the newest request", () => {
+	let pi: FakePi
+	let projDir: string
+	let configTmp: string
+
+	beforeEach(async () => {
+		resetCoreBusForTests()
+		pi = createFakePi()
+		projDir = mkdtempSync(join(tmpdir(), "pm-bh-e4-"))
+		configTmp = mkdtempSync(join(tmpdir(), "pm-bh-e4-cfg-"))
+		setConfigPath(join(configTmp, "permission-modes.json"))
+		writeFileSync(
+			join(configTmp, "permission-modes.json"),
+			JSON.stringify({ classifier: { enabled: false } }),
+		)
+	})
+
+	afterEach(() => {
+		rmSync(projDir, { recursive: true, force: true })
+		rmSync(configTmp, { recursive: true, force: true })
+	})
+
+	it("rapid plan→auto→bypass ends in bypass and creates no plan.md", async () => {
+		setupProfileBH({ active: "main", main: { plan: "prov/pm", auto: "prov/am", bypass: "prov/bm" } })
+		pi.flags["model-profile"] = "main"
+		// stagger the fake setModel resolution: a superseded request would
+		// publish its (older) mode AFTER the newest one if not gated
+		const calls = pi.setModelCalls
+		pi.setModel = async (model: unknown) => {
+			const delay = calls.length === 0 ? 30 : calls.length === 1 ? 20 : 5
+			await new Promise((r) => setTimeout(r, delay))
+			calls.push({ model })
+			return true
+		}
+		permissionModesExtension(makeFakePiForExtension(pi))
+		await pi.simulateSessionStart(projDir, undefined, {
+			find: (provider: string, model: string) => ({ provider, id: model }),
+		})
+		const ctx = makeCtx(pi, { cwd: projDir })
+		const p1 = pi.simulateCommand("plan", "", ctx)
+		const p2 = pi.simulateCommand("auto", "", ctx)
+		const p3 = pi.simulateCommand("bypass", "", ctx)
+		await Promise.all([p1, p2, p3])
+		expect(coreBus().snapshot().modes.mode).toBe("bypass")
+		// passing THROUGH plan must not leave plan.md behind
+		expect(existsSync(getPlanFilePath(projDir))).toBe(false)
+	})
+
+	it("skips setModel when the profile model is already active", async () => {
+		setupProfileBH({
+			active: "main",
+			main: { ask: "prov/m", plan: "prov/m", auto: "prov/m", bypass: "prov/m" },
+		})
+		pi.flags["model-profile"] = "main"
+		permissionModesExtension(makeFakePiForExtension(pi))
+		await pi.simulateSessionStart(projDir, undefined, {
+			find: (provider: string, model: string) => ({ provider, id: model }),
+		})
+		const afterSessionStart = pi.setModelCalls.length
+		expect(afterSessionStart).toBeGreaterThan(0) // initial apply sets the model
+		const ctx = makeCtx(pi, {
+			cwd: projDir,
+			model: { provider: "prov", id: "m" },
+		})
+		await pi.simulateCommand("plan", "", ctx)
+		await pi.simulateCommand("auto", "", ctx)
+		await pi.simulateCommand("bypass", "", ctx)
+		expect(pi.setModelCalls.length).toBe(afterSessionStart)
+	})
+
+	it("a single normal entry into plan still creates plan.md", async () => {
+		permissionModesExtension(makeFakePiForExtension(pi))
+		await pi.simulateSessionStart(projDir)
+		await pi.simulateCommand("plan", "", makeCtx(pi, { cwd: projDir }))
+		expect(existsSync(getPlanFilePath(projDir))).toBe(true)
+	})
+})
+

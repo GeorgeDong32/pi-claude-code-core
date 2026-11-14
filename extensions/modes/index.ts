@@ -511,7 +511,20 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
   }
 
   // ---- mode switching ----------------------------------------------------
+  // BH-E4 (spec 2026-11-14-backtest-hardening): every setMode request gets a
+  // generation number; only the NEWEST request executes side effects
+  // (profile apply / setModel / plan file creation / persistence). Rapid
+  // Shift+Tab cycling (e.g. plan→auto→bypass) must not leave plan.md behind
+  // by passing through plan, re-apply a stale profile, or publish a stale
+  // mode. The side-effect tail runs serialized on a promise chain, and the
+  // generation is re-checked when the chain picks the request up (an
+  // in-flight request that got superseded exits without side effects; the
+  // newest request's own setModel — issued later — still lands last).
+  let setModeGeneration = 0;
+  let modeSwitchTail: Promise<void> = Promise.resolve();
+
   async function setMode(mode: Mode, ctx: ExtensionContext): Promise<void> {
+    const gen = ++setModeGeneration;
     const prev = currentMode;
 
     if (prev === "auto" && mode !== "auto" && strippedDangerousRules.length) {
@@ -540,21 +553,32 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       planPhase = "exploring";
       lastExtractedPlanHash = "";
     }
-    if (mode === "plan") {
-      ensurePlanFile(ctx.cwd);
-      if (prev !== "plan") planPhase = "exploring";
-    }
-
     planTodos = [];
     if (ctx.hasUI) clearPlanWidget(ctx);
 
     applyToolRestrictions();
     clearModesStatus(ctx);
     setBypassIndicator(mode === "bypass");
-    await profiles.applyForMode(mode, ctx);
-    persistState();
-    publishInheritedPermissionMode(mode);
-    publishCapability({ mode });
+    if (gen !== setModeGeneration) return; // superseded — no side effects
+
+    const run = modeSwitchTail.then(async () => {
+      if (gen !== setModeGeneration) return; // superseded while queued
+      // plan.md is created only when plan mode SETTLES (BH-E4)
+      if (mode === "plan") {
+        ensurePlanFile(ctx.cwd);
+        if (prev !== "plan") planPhase = "exploring";
+      }
+      await profiles.applyForMode(mode, ctx);
+      if (gen !== setModeGeneration) return; // superseded mid-flight
+      persistState();
+      publishInheritedPermissionMode(mode);
+      publishCapability({ mode });
+    });
+    modeSwitchTail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   }
 
   function cycleMode(ctx: ExtensionContext): void {
