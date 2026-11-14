@@ -15,6 +15,11 @@ NVlabs/SoL-Pi(MIT),SPEC FUS-01..11(0.2.0 吸收)
 
 - 标记语义保持完全一致:后续命令成功则附加 `then_run` 输出;变更失败或
   非零退出路由到 `[then_run:failed]` / `skipped` 形状。
+- **BH-R5(2026-11-14)**:`then_run` 自带 600 秒默认超时
+  (`THEN_RUN_DEFAULT_TIMEOUT_SECONDS`——命名常量,刻意不可配置:不新增
+  环境变量或设置键)。此前挂住的命令会同时卡住整个 turn 与该文件的融合
+  队列。超时错误文本会提示:长时间运行或服务类命令应改用
+  `background: true` 的 bash 调用;工具描述不再建议 start/restart 用法。
 - 指引双通道:`then_run` schema + 工具描述尾部。
 - 渲染直通内置渲染器——零新增渲染表面(CMP-03)。TR 徽标只做加法:融合调用下方包一行 `↳ then_run: <command>`,结果出着色状态行(`✓ ok` / `✗ failed` / `⊘ skipped`)。**AR1005-FU(2026-10-05)**:状态行判定权收敛到 `outcome.ts` 单一解释模块——结构化 `details.thenRun` 为第一权威:生产 `[then_run:succeeded]` token 现在真的显示成功徽标(旧扫描找的是生产从不写的 `[then_run:ok]`),日志正文含相反 marker 不再翻转已知成功;文本兼容(无 metadata 的历史回放、抛出的 failed/skipped 错误结果)改为行锚定——协议行或生产 text block 开头,不再任意行中子串;历史 `ok` alias 继续识别。渲染消费宿主 render facts(`ToolRenderContext.args` / `isPartial`、`ToolRenderResultOptions.isPartial`,契约 AR1005-FU-HOST):args 无 then_run 的调用永不包装(即使正文含 marker)、partial 流不显示终态;缺这些字段的旧宿主回退旧扫描。UI 文案不变(`✓ ok`);协议 token 不改名。普通 write/edit 渲染仍逐字节不变(零包装规则)。
 

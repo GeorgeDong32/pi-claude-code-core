@@ -41,10 +41,13 @@ import {
 } from "./then-run.ts";
 import { Type } from "typebox";
 
+// BH-R5: no start/restart examples — long-running or server-like commands
+// must not be steered into then_run (a hanging command blocks the whole turn
+// and this file's fusion queue; the 600 s default timeout now caps it).
 const EDIT_THEN_RUN_DESCRIPTION =
-	"Command to run next on this file after the edit succeeds — e.g. run, build, start/restart, install, or check it; optional timeout in seconds. Skipped if the edit fails; a non-zero exit is reported but keeps the edit.";
+	"Command to run next on this file after the edit succeeds — e.g. run, build, install, or check it; timeout in seconds (default 600). Short verification commands only — long-running or server-like commands belong in a background bash call. Skipped if the edit fails; a non-zero exit is reported but keeps the edit.";
 const WRITE_THEN_RUN_DESCRIPTION =
-	"Command to run next on this file after the write succeeds — e.g. run, build, start/restart, install, or check it; optional timeout in seconds. Skipped if the write fails; a non-zero exit is reported but keeps the write.";
+	"Command to run next on this file after the write succeeds — e.g. run, build, install, or check it; timeout in seconds (default 600). Short verification commands only — long-running or server-like commands belong in a background bash call. Skipped if the write fails; a non-zero exit is reported but keeps the write.";
 
 /** DEC-03: second guidance channel, appended to the tool description tail. */
 const TOOL_DESCRIPTION_GUIDANCE =

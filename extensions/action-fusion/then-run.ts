@@ -5,6 +5,13 @@
  * APPENDS a text block to the mutation result and stamps the merged details
  * with thenRun: "succeeded" — the structured outcome callers count from,
  * B6; the protocol token text stays byte-identical for upstream compat).
+ *
+ * BH-R5 (2026-11-14, spec 2026-11-14-backtest-hardening): then_run now
+ * carries a 600 s default timeout (THEN_RUN_DEFAULT_TIMEOUT_SECONDS — a
+ * named constant, deliberately NOT configurable: no new env var or setting).
+ * Without it a hanging command blocked the whole turn AND the per-file
+ * fusion queue. A timed-out command's error text hints that long-running or
+ * server-like commands belong in a background bash instead.
  */
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -17,6 +24,16 @@ export const THEN_RUN_SUCCEEDED = "[then_run:succeeded]";
 export const THEN_RUN_FAILED = "[then_run:failed]";
 export const THEN_RUN_SKIPPED = "[then_run:skipped]";
 
+/** BH-R5: the default timeout (seconds) for a then_run command that gives none. Named constant, deliberately not configurable. */
+export const THEN_RUN_DEFAULT_TIMEOUT_SECONDS = 600;
+
+/** pi's bash surfaces a timeout as "Command timed out after N seconds" (its own `timeout:<seconds>` exec error, reformatted). */
+const TIMED_OUT_PATTERN = /Command timed out after \d+(?:\.\d+)? seconds/u;
+
+/** BH-R5: appended to a timeout failure — a hanging command must not be retried here, and servers do not belong in then_run. */
+const TIMEOUT_HINT =
+	"then_run is for short verification commands only: long-running or server-like commands belong in a `background: true` bash call (they would block this file's queue here).";
+
 export interface ThenRunInput {
 	command: string;
 	timeout?: number;
@@ -27,7 +44,9 @@ export function createThenRunSchema(description: string) {
 		Type.Object(
 			{
 				command: Type.String({ description: "Bash command to run" }),
-				timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional, no default timeout)" })),
+				timeout: Type.Optional(
+					Type.Number({ description: "Timeout in seconds (optional; defaults to 600). Long-running or server-like commands do not belong here — use a background bash call." }),
+				),
 			},
 			{ description },
 		),
@@ -123,9 +142,13 @@ export async function executeMutationThenRun<TDetails>({
 		await assertUnchangedBeforeCommand(absolutePath, yieldForInterference);
 		const bash = createBashToolDefinition(ctx.cwd, bashOptions);
 		try {
+			// BH-R5: a then_run command without an explicit timeout gets the 600 s
+			// default — a hanging command used to block the whole turn and this
+			// file's fusion queue forever.
+			const bashParams: ThenRunInput = { ...thenRun, timeout: thenRun.timeout ?? THEN_RUN_DEFAULT_TIMEOUT_SECONDS };
 			// 0.99 types the execute ctx as ExtensionToolContext (superset with
 			// tools/executeTool); runtime provides it. 0.87 accepts ExtensionContext.
-			const bashResult = await bash.execute(`${toolCallId}:then_run`, thenRun, signal, undefined, ctx as Parameters<typeof bash.execute>[4]);
+			const bashResult = await bash.execute(`${toolCallId}:then_run`, bashParams, signal, undefined, ctx as Parameters<typeof bash.execute>[4]);
 			const output = resultText(bashResult);
 			// pi 0.99's bash RETURNS nonzero exits (isError + "Command exited
 			// with code N") instead of throwing like 0.87 — treat both shapes as
@@ -150,7 +173,12 @@ export async function executeMutationThenRun<TDetails>({
 			};
 		} catch (error) {
 			const mutationOutput = resultText(mutationResult);
-			throw new Error([mutationOutput, THEN_RUN_FAILED, errorText(error)].filter(Boolean).join("\n\n"));
+			const detail = errorText(error);
+			// BH-R5: a timed-out command gets the background-bash hint, so the
+			// model moves long-running work out of the fusion queue instead of
+			// retrying it here.
+			const message = TIMED_OUT_PATTERN.test(detail) ? `${detail}\n\n${TIMEOUT_HINT}` : detail;
+			throw new Error([mutationOutput, THEN_RUN_FAILED, message].filter(Boolean).join("\n\n"));
 		}
 	});
 }

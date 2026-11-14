@@ -18,6 +18,13 @@ built-in implementation, then runs the command through the built-in bash tool
 - Marker semantics kept exactly: successful follow-up appends
   `then_run` output; mutation failure or nonzero exit routes to
   `[then_run:failed]` / `skipped` shapes.
+- **BH-R5 (2026-11-14)**: `then_run` carries a 600 s default timeout
+  (`THEN_RUN_DEFAULT_TIMEOUT_SECONDS` — a named constant, deliberately NOT
+  configurable: no new env var or setting). Without it a hanging command
+  blocked the whole turn AND the per-file fusion queue. A timed-out command's
+  error text hints that long-running or server-like commands belong in a
+  `background: true` bash call; the tool descriptions no longer suggest
+  start/restart usage.
 - Guidance is dual-channel: the `then_run` schema + a tool-description tail.
 - Renderers pass through the built-in renderers — zero new rendering surface (CMP-03). TR badges ADD only: a wrapped row `↳ then_run: <command>` under fused calls and a colored status row (`✓ ok` / `✗ failed` / `⊘ skipped`). **AR1005-FU (2026-10-05)**: the status row is decided by `outcome.ts` — the single interpretation authority. The structured `details.thenRun` outcome is FIRST: the production `[then_run:succeeded]` token now actually shows the success badge (the old scan looked for a `[then_run:ok]` token production never writes), and a log body containing the opposite marker can no longer flip a known success. Text compatibility (legacy replays without metadata, thrown failed/skipped error results) is line-anchored — a protocol line or a production text-block start, never a mid-line substring; the legacy `ok` alias stays recognized for history. Renderers consume the host render facts (`ToolRenderContext.args` / `isPartial`, `ToolRenderResultOptions.isPartial`, contract AR1005-FU-HOST): a call whose args carry no then_run is never wrapped even when the body contains a marker, and partial streams show no terminal state; hosts without these fields fall back to the legacy scan. UI label text unchanged (`✓ ok`); the protocol token is NOT renamed.
 

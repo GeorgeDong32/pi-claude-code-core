@@ -8,20 +8,29 @@ import assert from "node:assert/strict";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, it } from "node:test";
+import { describe, it, mock } from "node:test";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { type BashToolOptions, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	assertUnchangedBeforeCommand,
 	executeMutationThenRun,
+	THEN_RUN_DEFAULT_TIMEOUT_SECONDS,
 	THEN_RUN_FAILED,
 	THEN_RUN_SKIPPED,
 	THEN_RUN_SUCCEEDED,
 	type FileQueueFn,
 } from "../then-run.ts";
+import { createActionFusionExtension } from "../index.ts";
 import { withFusedFileQueue } from "../file-queue.ts";
 import { resolveToolPath } from "../tool-path.ts";
 
 const passthroughQueue: FileQueueFn = (_path, work) => work();
+
+/** Run pending microtasks (used between fake-clock ticks). */
+const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+/** The REAL timer, captured before any test enables mock.timers (watchdogs must not depend on mocked time). */
+const realSetTimeout = setTimeout.bind(globalThis);
 
 /** Tolerant session stub: the real bash tool probes several session APIs. */
 function fakeCtx(cwd = "/tmp"): never {
@@ -315,5 +324,163 @@ describe("AR1005-FU display interpretation over real results", () => {
 		const before = JSON.stringify(result);
 		assert.equal(interpretThenRunResult(result), "succeeded");
 		assert.equal(JSON.stringify(result), before); // read-only interpretation
+	});
+});
+
+describe("then_run timeout hardening (BH-R5)", () => {
+	const mutation: AgentToolResult<undefined> = { content: [{ type: "text", text: "wrote" }], details: undefined };
+
+	it("exposes the default as the named constant THEN_RUN_DEFAULT_TIMEOUT_SECONDS (= 600, deliberately not configurable)", () => {
+		assert.equal(THEN_RUN_DEFAULT_TIMEOUT_SECONDS, 600);
+	});
+
+	/** Bash options whose operations record what the delegate passed and finish at once. */
+	function recordingOps(seen: Array<{ command: string; timeout?: number }>): BashToolOptions {
+		return {
+			operations: {
+				exec: async (command, _cwd, { timeout }) => {
+					seen.push({ command, timeout });
+					return { exitCode: 0 };
+				},
+			},
+		};
+	}
+
+	it("applies the 600 s default timeout when then_run gives none, and an explicit timeout still wins", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "fus-r5-default-"));
+		const file = join(dir, "target.txt");
+		await writeFile(file, "content\n", "utf8");
+		const seen: Array<{ command: string; timeout?: number }> = [];
+		const ops = recordingOps(seen);
+		await executeMutationThenRun({
+			toolCallId: "r5-default",
+			absolutePath: file,
+			thenRun: { command: "echo done" },
+			mutate: async () => mutation,
+			bashOptions: ops,
+			signal: undefined,
+			ctx: fakeCtx(dir),
+			queue: passthroughQueue,
+		});
+		assert.equal(seen.length, 1);
+		assert.equal(seen[0].timeout, 600, "BH-R5: then_run without a timeout must carry the 600 s default");
+		seen.length = 0;
+		await executeMutationThenRun({
+			toolCallId: "r5-explicit",
+			absolutePath: file,
+			thenRun: { command: "echo done", timeout: 42 },
+			mutate: async () => mutation,
+			bashOptions: ops,
+			signal: undefined,
+			ctx: fakeCtx(dir),
+			queue: passthroughQueue,
+		});
+		assert.equal(seen[0].timeout, 42, "BH-R5: an explicit timeout must not be overridden");
+	});
+
+	it("terminates a hanging command at the 600 s default timeout, hints at background bash, and frees the file's queue", async () => {
+		mock.timers.enable({ apis: ["setTimeout"] });
+		try {
+			const dir = await mkdtemp(join(tmpdir(), "fus-r5-hang-"));
+			const file = join(dir, "target.txt");
+			await writeFile(file, "content\n", "utf8");
+			// Hangs like a server: settles only via its own timeout timer (pi's
+			// local shell operations enforce the timeout exactly this way), or via
+			// the test-owned escape hatch so a regression cannot hang the suite.
+			let execStarted = false;
+			let escape!: (error: Error) => void;
+			const hangOps: BashToolOptions = {
+				operations: {
+					exec: (_command, _cwd, { signal, timeout }) =>
+						new Promise((_resolve, reject) => {
+							execStarted = true;
+							signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+							if (timeout !== undefined) setTimeout(() => reject(new Error(`timeout:${timeout}`)), timeout * 1000);
+							escape = (error) => reject(error);
+						}),
+				},
+			};
+			const first = executeMutationThenRun({
+				toolCallId: "r5-hang",
+				absolutePath: file,
+				thenRun: { command: "serve --forever" },
+				mutate: async () => mutation,
+				bashOptions: hangOps,
+				signal: undefined,
+				ctx: fakeCtx(dir),
+				queue: withFusedFileQueue,
+			});
+			first.catch(() => {}); // the RED path leaves it rejected-but-unobserved
+			// realpath resolves on the thread pool: wait until exec is actually pending.
+			for (let i = 0; i < 10_000 && !execStarted; i += 1) await flush();
+			assert.ok(execStarted, "the then_run command started");
+			mock.timers.tick(600_000);
+			await flush();
+			const race = Promise.race([
+				first.then(
+					() => "completed" as const,
+					(error) => error,
+				),
+				new Promise<"still-pending">((resolve) => realSetTimeout(() => resolve("still-pending"), 1000)),
+			]);
+			const settled = await race;
+			if (settled === "still-pending") {
+				escape(new Error("released by test")); // keep the queue and the suite unstuck
+				assert.fail("BH-R5: the hanging then_run command must be terminated by the 600 s default timeout");
+			}
+			assert.ok(settled instanceof Error);
+			assert.match(settled.message, /Command timed out after 600 seconds/);
+			assert.ok(settled.message.includes(THEN_RUN_FAILED), "the failure keeps the THEN_RUN_FAILED token");
+			assert.match(
+				settled.message,
+				/belong in a `background: true` bash call/,
+				"the timeout error must point long-running commands at background bash",
+			);
+			// the file's queue is freed: the next fused call on the same file proceeds
+			const seen: Array<{ command: string; timeout?: number }> = [];
+			const second = await executeMutationThenRun({
+				toolCallId: "r5-next",
+				absolutePath: file,
+				thenRun: { command: "echo ok" },
+				mutate: async () => mutation,
+				bashOptions: recordingOps(seen),
+				signal: undefined,
+				ctx: fakeCtx(dir),
+				queue: withFusedFileQueue,
+			});
+			assert.ok(textOf(second).includes(THEN_RUN_SUCCEEDED));
+		} finally {
+			mock.timers.reset();
+		}
+	});
+
+	it("the registered descriptions no longer suggest start/restart, and the schema states the default timeout", async () => {
+		const definitions: Array<Record<string, unknown>> = [];
+		const pi = {
+			registerTool: (definition: Record<string, unknown>) => {
+				definitions.push(definition);
+			},
+			getAllTools: () => [] as never[],
+			on: () => {},
+			registerCommand: () => {},
+		} as unknown as ExtensionAPI;
+		createActionFusionExtension({})(pi);
+		for (const name of ["write", "edit"] as const) {
+			const tool = definitions.find((definition) => definition.name === name) as
+				| { description: string; parameters: { properties: Record<string, { description?: string } & Record<string, unknown>> } }
+				| undefined;
+			assert.ok(tool, `${name} registered`);
+			assert.doesNotMatch(
+				tool.description,
+				/start\/restart/,
+				"BH-R5: long-running or server-like commands must not be steered into then_run",
+			);
+			const thenRun = tool.parameters.properties.then_run as
+				| { description?: string; properties?: Record<string, { description?: string }> }
+				| undefined;
+			assert.ok(thenRun, "then_run stays in the schema");
+			assert.doesNotMatch(thenRun.description ?? "", /start\/restart/);
+			assert.match(thenRun.properties?.timeout?.description ?? "", /defaults to 600/, "BH-R5: the schema states the 600 s default");
+		}
 	});
 });
