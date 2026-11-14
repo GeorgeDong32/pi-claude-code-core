@@ -2,10 +2,14 @@
 // A foreground `bash` call. Pi's own `bash` runs unchanged, over a custom
 // `exec` (its `BashOperations`) that starts the command through the same
 // detached wrapper background tasks use and feeds the log back through `onData`.
-// A command still running after 120 s, with no explicit `timeout` and not
-// starting with `sleep`, is promoted: the same live process becomes a registered
-// task, and `exec` ends as if the command had finished, so the delegate closes
-// its own output and returns what it has. The call then answers with that output
+// A command still running after 120 s, unless it starts with `sleep`, is
+// promoted: the same live process becomes a registered task, and `exec` ends
+// as if the command had finished, so the delegate closes its own output and
+// returns what it has. An explicit `timeout` no longer blocks promotion
+// (BH-R4/D-BH-2 — never guess units: models pass milliseconds as seconds, so
+// a `timeout` like 60000 must not silence the 120 s safety net); it becomes
+// the promoted task's deadline instead, exactly as for a `background: true`
+// call, so the registry poller kills the backgrounded command when it passes. The call then answers with that output
 // and the task id. Nothing in the delegate is left pending or leaked, the turn's
 // abort signal stops reaching the process, and no more output flows to the call.
 // Every running call is in `foregroundRuns()` with a `promote` handle: that is
@@ -69,9 +73,13 @@ function promoteMs(): number {
 	return Number.isFinite(set) && set > 0 ? set : PROMOTE_MS;
 }
 
-/** Whether auto-promotion applies: no explicit timeout, and not a deliberate wait. */
-function promotable(command: string, timeout: number | undefined): boolean {
-	return timeout === undefined && !/^\s*sleep(\s|$)/.test(command);
+/**
+ * Whether auto-promotion applies: only a deliberate `sleep` is exempt. An
+ * explicit `timeout` does NOT block promotion (BH-R4/D-BH-2); on promotion it
+ * becomes the task's deadline.
+ */
+function promotable(command: string): boolean {
+	return !/^\s*sleep(\s|$)/.test(command);
 }
 
 /**
@@ -263,15 +271,18 @@ function operations(ctx: ExtensionContext, run: Run) {
 						// The call shows the output up to here; `TaskOutput` goes on after it.
 						task.readPosition = position;
 						run.elapsedMs = Date.now() - startedAt;
-						// With `waitFor`, an explicit `timeout` becomes the task's deadline, as for `background: true`.
-						if (run.waitFor !== undefined && timeout !== undefined) task.deadline = startedAt + timeout * 1000;
+						// BH-R4: an explicit `timeout` becomes the task's deadline, as for
+						// `background: true` — with or without `waitFor`. The foreground stop
+						// timer died with the call's timers (`finish` clears it), so the
+						// registry poller's deadline kill governs the backgrounded command.
+						if (timeout !== undefined) task.deadline = startedAt + timeout * 1000;
 						run.task = adopt(task);
 						resolve({ exitCode: 0 });
 					});
 				}
 				getRegistry().foreground.add(handle);
 				if (timeout !== undefined) timer = setTimeout(() => stop(new Error(`timeout:${timeout}`)), timeout * 1000);
-				if (promotable(command, timeout)) promoteTimer = setTimeout(() => promote("timer"), promoteMs());
+				if (promotable(command)) promoteTimer = setTimeout(() => promote("timer"), promoteMs());
 				if (ctx.hasUI)
 					hintTimer = setTimeout(() => {
 						try {

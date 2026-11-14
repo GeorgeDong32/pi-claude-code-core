@@ -45,7 +45,10 @@ renderer——first-wins 下会永久遮蔽 TUI 的。独立 watcher 进程（�
 
 `/tasks` 打开管理面板（TUI：enter 看输出、x 确认后杀、q/esc 关闭、1 秒刷新；
 RPC 降级 `ui.select`；无 UI 打印列表）。`ctrl+shift+b` 把前台运行中的调用
-转后台；前台调用超 120 秒（`sleep` 除外）自动转后台。
+转后台；前台调用超 120 秒（`sleep` 除外）自动转后台。显式 `timeout` 不再
+关闭该自动转后台（BH-R4，D-BH-2——不猜单位：模型常把毫秒当秒传，120 秒
+安全网必须保持有效）：调用仍在 120 秒转后台，timeout 变为该任务的截止
+时间，与 `background: true` 一致；小于阈值的 timeout 仍按前台超时硬性终止。
 
 ## 加固（继承自上游，原样保留）
 
@@ -71,3 +74,10 @@ customType）——见 `test/contracts/README.md`。
 CC 的 `/tasks` 还列 agent/teammate/workflow 任务并提供 `f`（重挂前台）。
 我们只管 shell 任务，且 pi 没有 turn 内重挂机制——两者都是刻意的范围裁剪
 （DEVIATIONS）。
+
+## 与上游 pi-bg-bash 的已知偏离
+
+上游 0.5.0+ 完全移除了基于定时器的自动转后台（只剩 `waitFor` 命中与用户
+快捷键两种晋升）。core 保留自动转后台，且自 BH-R4 起扩展到带显式
+`timeout` 的调用（timeout 成为该任务的截止时间）——这是刻意的 vendor
+偏离（D-BH-2；见 DEVIATIONS）。

@@ -363,6 +363,33 @@ describe("a foreground bash call past 120 s", () => {
 		assert.equal(task.deadline, undefined);
 	});
 
+	it("promotes a command with an explicit timeout past the threshold, and the timeout becomes the task's deadline (BH-R4)", async () => {
+		const s = session();
+		const call = s.toolCall("bash", { command: "slow-build", timeout: 600 });
+		const proc = await launched();
+		// Base behaviour: the call hangs until the 600 s foreground timeout kills it
+		// (settle throws "Command timed out after 600 seconds"). Fixed behaviour: the
+		// call settles at 120 s with the promotion text, deadline = start + timeout.
+		const result = await clock.settle(call, 610_000);
+		assert.match(text(result), /^Command still running after 120 s; moved to the background as task bg-1\./);
+		const task = getRegistry().tasks.get("bg-1");
+		assert.ok(task, "the promoted task is registered");
+		assert.equal(task.deadline, task.startedAt + 600_000, "the explicit timeout governs the backgrounded task");
+		assert.equal(proc.pidAlive(), true);
+		assert.match(text(await s.toolCall("TaskList", {})), /^bg-1 \| running \| 2m 0s \| slow-build$/);
+	});
+
+	it("kills a promoted task at its timeout's deadline, and the completion message says it timed out (BH-R4)", async () => {
+		const s = session();
+		const call = s.toolCall("bash", { command: "slow-build", timeout: 600 });
+		const proc = await launched();
+		await clock.settle(call, 610_000);
+		await clock.until(() => s.sent.length > 0, 610_000);
+		assert.deepEqual(proc.signals, ["SIGTERM"]);
+		assert.match(s.sent[0].message.content, /^Background task bg-1 finished: killed \(timed out\), ran 10m/);
+		assert.match(text(await s.toolCall("TaskList", {})), /killed \(timed out\)/);
+	});
+
 	it("promotes a silent command with an empty output section", async () => {
 		const s = session();
 		const call = s.toolCall("bash", { command: "slow-build" });
@@ -518,16 +545,16 @@ describe("a foreground bash call that is not promoted", () => {
 		assert.equal(text(await s.toolCall("TaskList", {})), "No background tasks.");
 	});
 
-	it("is not promoted at 120 s when its timeout is longer", async () => {
+	it("is promoted at 120 s even with a longer timeout, and finishing before the deadline completes normally", async () => {
 		const s = session();
-		let settled = false;
-		const call = s.toolCall("bash", { command: "slow-build", timeout: 300 }).finally(() => (settled = true));
+		const call = s.toolCall("bash", { command: "slow-build", timeout: 300 });
 		const proc = await launched();
 		await clock.advance(200_000);
-		assert.equal(settled, false);
-		assert.equal(text(await s.toolCall("TaskList", {})), "No background tasks.");
+		assert.equal(getRegistry().tasks.size, 1, "an explicit timeout no longer blocks auto-promotion (BH-R4)");
+		proc.write("late\n");
 		proc.exit(0);
-		await clock.settle(call);
+		await clock.until(() => s.sent.length > 0);
+		assert.match(s.sent[0].message.content, /finished: exited \(code 0\), ran 3m/);
 	});
 
 	it("is never promoted when the command starts with sleep", async () => {
@@ -580,6 +607,12 @@ describe("the bash description", () => {
 		const tool = session().tool("bash");
 		assert.ok(tool.description.startsWith(createBashToolDefinition(root).description));
 		assert.match(tool.description, /still running after 120 s.*moves to the background/);
+		assert.doesNotMatch(tool.description, /with no `timeout`/, "BH-R4: an explicit timeout no longer disables auto-promotion");
+		assert.match(
+			(tool.parameters as { properties: { timeout: { description: string } } }).properties.timeout.description,
+			/^Seconds \(not ms\)\. Still running after 120 s → background; timeout becomes its deadline\.$/,
+			"BH-R4: the timeout description states the deadline semantics",
+		);
 	});
 });
 

@@ -51,7 +51,12 @@ follows — otherwise it would queue behind the very turn that did the reading.
 `/tasks` opens the management panel (TUI: enter = output view, x = kill after
 confirm, q/esc closes, 1 s refresh; RPC degrades to `ui.select`; no-UI prints
 the list). `ctrl+shift+b` promotes the running foreground call(s); a foreground
-call outlasting 120 s (unless `sleep`) promotes itself.
+call outlasting 120 s (unless `sleep`) promotes itself. An explicit `timeout`
+no longer disables that auto-promotion (BH-R4, D-BH-2 — never guess units:
+models pass milliseconds as seconds, so the 120 s safety net must stay
+armed): the call still promotes at 120 s and the timeout becomes the promoted
+task's deadline, exactly as for `background: true`; a timeout shorter than
+the threshold still hard-caps the foreground run.
 
 ## Hardening (inherited from upstream, kept intact)
 
@@ -77,3 +82,10 @@ call outlasting 120 s (unless `sleep`) promotes itself.
 CC's `/tasks` also lists agent/teammate/workflow tasks and offers `f`
 (reattach to foreground). We manage shell tasks only and pi has no turn
 reattach — both are deliberate scope cuts (DEVIATIONS).
+
+## Known deviations from upstream pi-bg-bash
+
+Upstream 0.5.0+ removed timer-based auto-promotion entirely (only `waitFor`
+matches or the user shortcut promote now). Core keeps auto-promotion and, since
+BH-R4, extends it to calls with an explicit `timeout` (which becomes the
+promoted task's deadline) — a deliberate vendored deviation (D-BH-2; DEVIATIONS).

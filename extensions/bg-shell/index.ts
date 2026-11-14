@@ -4,6 +4,10 @@
 // Vander Clay, and adapted for pi-claude-code-core (BG-D1): the cc-core log
 // namespace `~/.pi/agent/cc-core/logs/bg-shell/<session-id>/` (BG-P1),
 // CC-parity tool names TaskOutput/TaskStop/TaskList, and the `/tasks` panel.
+// BH-R4 (2026-11-14, D-BH-2): a deliberate vendored deviation — an explicit
+// `timeout` no longer disables auto-promotion; it becomes the promoted task's
+// deadline. Upstream 0.5.0+ instead removed auto-promotion entirely (opposite
+// direction); do not port that.
 //
 // A background call starts the command detached, logs it under the session's
 // log directory, and returns a task id at once. When the command exits the
@@ -31,7 +35,7 @@ const BACKGROUND_DESCRIPTION =
 	"Read a finished task's output with `TaskOutput` — the notification itself carries none. " +
 	"To wait for something outside this machine, such as CI, background one command that blocks until it is done, " +
 	"such as `gh run watch <run-id> --exit-status` or `gh pr checks <number> --watch`, instead of running `sleep N` and a check yourself. " +
-	`A foreground command with no \`timeout\` still running after ${PROMOTE_MS / 1000} s (unless it starts with \`sleep\`) moves to the background on its own.`;
+	`A foreground command still running after ${PROMOTE_MS / 1000} s (unless it starts with \`sleep\`) moves to the background on its own; an explicit \`timeout\` becomes the backgrounded task's deadline.`;
 
 export default function (pi: ExtensionAPI): void {
 	attach(pi);
@@ -52,13 +56,12 @@ export default function (pi: ExtensionAPI): void {
 		description: `${builtin.description} ${BACKGROUND_DESCRIPTION}`,
 		parameters: Type.Object({
 			...builtin.parameters.properties,
-			// D2 (loop-guard spec): teach the omitted-timeout semantics — auto-
-			// backgrounding after PROMOTE_MS (sleep exempt) vs a hard cap.
+			// D2 (loop-guard spec) + BH-R4: the timeout never disables auto-
+			// backgrounding — past PROMOTE_MS the command still moves to the
+			// background and the timeout becomes that task's deadline.
 			timeout: Type.Optional(
 				Type.Number({
-					description:
-						`Optional timeout in seconds. Omitted = the command auto-backgrounds after ${PROMOTE_MS / 1000} s and keeps running (you are notified on completion; commands starting with \`sleep\` are exempt). ` +
-						"An explicit timeout hard-caps the run instead — use it only when a stale command is worse than a killed one.",
+					description: `Seconds (not ms). Still running after ${PROMOTE_MS / 1000} s → background; timeout becomes its deadline.`,
 				}),
 			),
 			waitFor: Type.Optional(
