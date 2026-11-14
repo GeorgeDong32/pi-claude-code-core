@@ -102,6 +102,9 @@ describe("placeholder excerpt (OBS-02)", () => {
 		assert.equal(FULL_SENDS, 2);
 		assert.equal(countLines("a\nb\n"), 2);
 		assert.equal(estimateTokens("abcd"), 1);
+		// CH E11: every non-ASCII code point counts as ~1 token, ASCII stays /4 —
+		// the old length/4 estimate under-counted CJK text by ~4x.
+		assert.equal(estimateTokens("中文测试"), 4);
 	});
 });
 

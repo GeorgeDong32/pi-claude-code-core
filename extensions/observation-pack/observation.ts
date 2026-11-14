@@ -47,8 +47,24 @@ export function hash(value: string | Buffer): string {
 	return createHash("sha256").update(value).digest("hex");
 }
 
+/**
+ * CH E11 (2026-11-15): ASCII code points count /4, every non-ASCII code
+ * point counts 1 — the upstream `length/4` estimate under-counted CJK text
+ * by ~4x (each CJK char reads as ~0.25 tokens), skewing `estimated_tokens:`,
+ * the projection's removedTokens, and the bus's tokensAvoided. Deliberate
+ * deviation from the SoL-Pi original, whose shape (return value semantics:
+ * a pure estimate) is unchanged.
+ */
 export function estimateTokens(text: string): number {
-	return Math.ceil(text.length / CHARS_PER_TOKEN);
+	let ascii = 0;
+	let nonAscii = 0;
+	for (const character of text) {
+		// for..of walks CODE POINTS: an astral char is one non-ASCII unit,
+		// not two UTF-16 surrogates.
+		if (character.codePointAt(0)! < 0x80) ascii += 1;
+		else nonAscii += 1;
+	}
+	return Math.ceil(ascii / CHARS_PER_TOKEN + nonAscii);
 }
 
 export function countLines(text: string): number {
