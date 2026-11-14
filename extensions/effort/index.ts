@@ -22,17 +22,15 @@ import {
   writeFastMode,
 } from "./effort.js";
 import { getSharedEffortOwner, type ExplicitSource } from "../../lib/effort-owner.js";
+// FX-2 / S6: model identity for switch detection — the shared key from
+// lib/model-id (the same provider+id pair the host's modelsAreEqual
+// compares). Single source for effort and modes/profile-apply.
+import { modelIdentityKey } from "../../lib/model-id.js";
 import { coreBus } from "../bus.js";
 import { createEffortUi, type EffortUi } from "./ui/index.js";
 
 function modelName(model: EffortModel | null | undefined): string {
   return model?.id ?? "current model";
-}
-
-// FX-2: model identity for switch detection — the same provider+id pair the
-// host's modelsAreEqual compares.
-function modelKey(model: { provider?: string; id?: string } | null | undefined): string | undefined {
-  return model && typeof model.id === "string" ? `${model.provider ?? ""}\u0000${model.id}` : undefined;
 }
 
 function formatAvailableLevels(model: EffortModel | null | undefined): string {
@@ -130,7 +128,7 @@ export default function effortExtension(pi: ExtensionAPI): void {
   let switchBaselineKey: string | undefined;
 
   function rememberModel(model: { provider?: string; id?: string } | null | undefined): void {
-    const key = modelKey(model);
+    const key = modelIdentityKey(model);
     if (key !== undefined) switchBaselineKey = key;
   }
 
@@ -251,7 +249,7 @@ export default function effortExtension(pi: ExtensionAPI): void {
   // and the reset is adopted as today — pinned by test FX-2⑥.
   pi.on("thinking_level_select", (event, ctx) => {
     if (event.level === owner.lastApplied()) return;
-    const liveKey = modelKey(ctx?.model);
+    const liveKey = modelIdentityKey(ctx?.model);
     const hostSwitch =
       owner.inModelSwitch() ||
       (switchBaselineKey !== undefined && liveKey !== undefined && liveKey !== switchBaselineKey);
@@ -329,7 +327,7 @@ export default function effortExtension(pi: ExtensionAPI): void {
   // ─── model_select: host-switch recovery + sync visible effort UI ──
   pi.on("model_select", (event, ctx) => {
     const previousKey = switchBaselineKey;
-    const nextKey = modelKey(event.model);
+    const nextKey = modelIdentityKey(event.model);
     currentModel = event.model;
     // FX-2: a model_select OUTSIDE the BH-E5 span with a model change is a
     // host-initiated switch (manual /model, ctrl+p). The reset already
