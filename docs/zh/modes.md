@@ -47,6 +47,13 @@
 - **BH-R7 —— 畸形配置与故障管路降级,绝不崩溃。** `sanitizePermissionModesConfig` 把规则列表过滤为纯字符串、删除非对象 `autoMode`/`permissions` 块并一次性告警;adjudicator check 抛错时以可读原因拒绝(`permission check failed: …`)而非炸掉 tool_call;setMode 被拒绝时经总线发布 `Mode switch failed: …` 通知;bus listener 以 per-listener try/catch 分发,单个 listener 爆炸不再中止整批发布。
 - **BH-E4 —— setMode 副作用按代际门控。** 快速连打模式(plan→auto→bypass 在途)只应用最新请求的副作用:profile 模型/effort 应用、`plan.md` 创建、持久化与总线发布。途经 plan 不停留则不留 `plan.md`;profile 模型已激活时不重复走宿主(无冗余 `setModel` 抖动)。
 
+**plan 模式只读放行(E1,2026-11-15)** —— 旧模式表误拦的三类只读写法,以及所有 bash 路径检查的 cd 跟踪对侧:
+
+- 精确重定向到 `/dev/null` 不是写:`N>/dev/null`、`N>>/dev/null`、`&>/dev/null`、`>>/dev/null`、裸 `>/dev/null` 不再触发破坏性重定向规则。近似形仍然拦截(`>/dev/nullx`、`>/dev/null/foo`),第二个真实重定向仍使整条命令不安全(`2>/dev/null >out`)。
+- `git -C <字面路径>` 只是切换仓库位置——SAFE 只读匹配在剥离这些 flag 后的视图上运行(`git -C sub log` 放行)。非字面路径(`git -C $x log`)、小写配置形态(`git -c k=v log`)、非只读子命令(`git -C sub push`)仍拦截。
+- `&&` 链中的字面 `cd <目录>` 段是只读安全的(`cd x && ls` 过第一层)。`cd` 后接 `;`、`||`、管道或无后续、非字面目标(`cd $(x)`、`cd ~`、`cd -`、裸 `cd`)、以及破坏性伴随命令(`cd x && rm y`)仍拦截。
+- **cd 跟踪(D-CH-4):** `&&` 链上的字面 `cd` 为后续所有段移动生效目录,全部路径检查(W3 写目标、W4 deny 规则——规则文本仍锚定会话 cwd,候选路径按 cd 后目录解析:配 `Read(./.env)` deny 时 `cd sub && cat ../.env` 正确拦截)、P1-4 保护写、mv/cp flag 升级全部适用。未跟踪的 cd 形态保持原 cwd 相对解析(已知残留:shell 在那些形态下同样会延续 cd)。
+
 ### Claude Code 批准清单导入(2026-11-02)
 
 `/permissions import-cc [--dry-run]` 读取 Claude Code 的批准清单,经幂等 loader 路径写入 core 的三层权限 scope:

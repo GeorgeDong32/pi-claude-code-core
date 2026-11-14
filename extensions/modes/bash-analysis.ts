@@ -4,6 +4,16 @@
  * behavior unchanged. Owns: fd-redirect stripping, shell segment splitting,
  * the safe/destructive/auto-fallback/auto-approvable pattern tables and the
  * tier classifier. Pure string/regex layer — no fs, no path resolution.
+ *
+ * E1 (D-CH-4, spec 2026-11-15-cleanup-hardening): plan-mode read-only
+ * widening of the SAFE tier-1 face — redirects to exactly /dev/null write
+ * nothing (stripped before destructive/safe matching), `git -C <literal>`
+ * only relocates the repository (stripped before the SAFE match; the
+ * destructive table still sees both views), and a literal `cd <dir>`
+ * segment joined by `&&` is safe (splitShellChain now records the connector
+ * following each segment; splitShellSegments is the segment-only view).
+ * The path-check counterpart (relative paths resolving against the cd'ed
+ * directory) lives in bash-path-check.ts walkCdChain.
  */
 const DESTRUCTIVE_PATTERNS: RegExp[] = [
 	/\brm\b/i,
@@ -188,9 +198,32 @@ function isCharEscaped(command: string, index: number): boolean {
 
 /** Split compound shell commands into segments (best-effort; not a full shell parser). */
 export function splitShellSegments(command: string): string[] {
-	const segments: string[] = []
+	return splitShellChain(command).map((node) => node.segment)
+}
+
+export interface ShellChainNode {
+	segment: string
+	/**
+	 * The connector that FOLLOWS this segment; null for the final segment.
+	 * E1: a literal `cd` segment only counts as safe when its connector is
+	 * `&&` (cd followed by `;` / `||` / pipe / `&` never widens).
+	 */
+	connector: ";" | "&&" | "||" | "|" | "&" | "\n" | null
+}
+
+/**
+ * Segment splitter that keeps the connector following each segment —
+ * splitShellSegments derived from it (identical segments, pure refactor).
+ */
+export function splitShellChain(command: string): ShellChainNode[] {
+	const nodes: ShellChainNode[] = []
 	let current = ""
 	let quote: "'" | '"' | null = null
+
+	const push = (connector: ShellChainNode["connector"]) => {
+		if (current.trim()) nodes.push({ segment: current.trim(), connector })
+		current = ""
+	}
 
 	for (let i = 0; i < command.length; i++) {
 		const ch = command[i]!
@@ -207,22 +240,19 @@ export function splitShellSegments(command: string): string[] {
 			continue
 		}
 		if (ch === ";" && !isCharEscaped(command, i)) {
-			if (current.trim()) segments.push(current.trim())
-			current = ""
+			push(";")
 			continue
 		}
 		if (
 			(command.startsWith("&&", i) || command.startsWith("||", i)) &&
 			!isCharEscaped(command, i)
 		) {
-			if (current.trim()) segments.push(current.trim())
-			current = ""
+			push(command.startsWith("&&", i) ? "&&" : "||")
 			i += 1
 			continue
 		}
 		if (ch === "|" && command[i + 1] !== "|" && !isCharEscaped(command, i)) {
-			if (current.trim()) segments.push(current.trim())
-			current = ""
+			push("|")
 			continue
 		}
 		if (ch === "&" && command[i + 1] !== "&" && !isCharEscaped(command, i)) {
@@ -230,20 +260,18 @@ export function splitShellSegments(command: string): string[] {
 				current += ch
 				continue
 			}
-			if (current.trim()) segments.push(current.trim())
-			current = ""
+			push("&")
 			continue
 		}
 		if (ch === "\n" && !isCharEscaped(command, i)) {
-			if (current.trim()) segments.push(current.trim())
-			current = ""
+			push("\n")
 			continue
 		}
 		current += ch
 	}
 
-	if (current.trim()) segments.push(current.trim())
-	return segments
+	push(null)
+	return nodes
 }
 
 function hasNestedShellExecution(command: string): boolean {
@@ -274,11 +302,69 @@ function hasNestedShellExecution(command: string): boolean {
 	return NESTED_SHELL_PATTERNS.some((p) => p.test(scanText))
 }
 
+/**
+ * E1 (D-CH-4): redirects to exactly /dev/null write nothing — strip them
+ * before the destructive/safe matching. Covers every redirect-operator
+ * shape the tokenizer knows (`>`, `>>`, `N>`, `N>>`, `&>`, `&>>`) with the
+ * bare `/dev/null` target. Near-misses stay untouched: `>/dev/nullx`,
+ * `>/dev/null/foo`, and a second real redirect (`2>/dev/null >out` still
+ * has its `>out` and stays destructive).
+ */
+function stripNullRedirects(command: string): string {
+	return command.replace(/(?:&>>|\d+>>|>>|&>|\d*>|>)\/dev\/null(?![\w/.])/g, " ")
+}
+
+const GIT_DASH_C_PATTERN =
+	/(^|[;&|\s])git\s+-C\s+([^\s'"`&|;<>()$*?[\]\\]+)/
+
+/**
+ * E1 (D-CH-4): `git -C <literal-path>` only relocates the repository — the
+ * SAFE read-only match runs on a view with those flags removed (repeatedly,
+ * for `git -C a -C b log`). A non-literal path (variable, backtick, glob,
+ * quote, metacharacter) never matches, so `git -C $x log` stays unsafe, and
+ * the lowercase config form `git -c k=v log` is untouched. Applied ONLY to
+ * the SAFE match — see isSafeSingleCommand for why the destructive table
+ * sees both views.
+ */
+function stripGitDashC(command: string): string {
+	let out = command
+	for (;;) {
+		const next = out.replace(GIT_DASH_C_PATTERN, "$1git")
+		if (next === out) return out
+		out = next
+	}
+}
+
+/**
+ * E1 (D-CH-4): a literal `cd <dir>` segment is read-only. The target must
+ * be a bare path token — no quotes, no expansion/substitution (`$`,
+ * backtick), no `~` (resolves outside the analysis), no globs or shell
+ * metacharacters, not an option (`-`, `-L`, `-P`, `--`), and the segment
+ * must carry nothing else (no redirects, no extra arguments). Callers only
+ * widen when the segment's connector is `&&`.
+ */
+function isSafeLiteralCdSegment(segment: string): boolean {
+	const m = /^cd\s+(\S+)$/.exec(segment)
+	if (!m) return false
+	const target = m[1]!
+	return !target.startsWith("-") && !/[$`~*?[\]'"\\;&|<>()]/.test(target)
+}
+
 function isSafeSingleCommand(command: string): boolean {
 	if (hasNestedShellExecution(command)) return false
-	const normalized = stripFdToFdRedirects(command)
-	const isDestructive = DESTRUCTIVE_PATTERNS.some((p) => p.test(normalized))
-	const isSafe = SAFE_PATTERNS.some((p) => p.test(normalized))
+	const base = stripNullRedirects(stripFdToFdRedirects(command))
+	const gitView = stripGitDashC(base)
+	// The destructive table runs on BOTH views: the null-redirect strip is
+	// what makes `2>/dev/null`-style forms readable (without it the `>`
+	// alone keeps them destructive), and the git -C strip must not hide a
+	// destructive subcommand it reveals (`git -C sub branch -D y` →
+	// `git branch -D y` stays destructive). The reverse asymmetry is
+	// accepted: a destructive hit that only exists on the raw view (e.g.
+	// `echo git -C x push` matching echo's SAFE face on base) fails closed.
+	const isDestructive =
+		DESTRUCTIVE_PATTERNS.some((p) => p.test(base)) ||
+		DESTRUCTIVE_PATTERNS.some((p) => p.test(gitView))
+	const isSafe = SAFE_PATTERNS.some((p) => p.test(gitView))
 	return !isDestructive && isSafe
 }
 
@@ -298,9 +384,14 @@ function matchesAutoFallbackPattern(segment: string): boolean {
 	)
 }
 
-/** A command is "safe" iff every shell segment matches the allowlist AND none are destructive. */
+/**
+ * A command is "safe" iff every shell segment matches the allowlist AND
+ * none are destructive. E1 (D-CH-4): a literal `cd <dir>` segment is also
+ * safe — but ONLY when it is joined to the next segment by `&&` (cd
+ * followed by `;` / `||` / pipe / `&`, or a trailing cd, never widens).
+ */
 export function isSafeCommand(command: string): boolean {
-	return segmentsSatisfy(splitShellSegments(command), isSafeSingleCommand)
+	return chainIsSafe(splitShellChain(command))
 }
 
 /** Auto-mode fallback after blacklist: safe read-only OR routine build/test commands. */
@@ -314,32 +405,39 @@ export function isAutoFallbackBash(command: string): boolean {
 	)
 }
 
-function segmentsSatisfy(
-	segments: string[],
-	predicate: (segment: string) => boolean,
-): boolean {
-	return segments.length > 0 && segments.every(predicate)
+function chainIsSafe(nodes: ShellChainNode[]): boolean {
+	return (
+		nodes.length > 0 &&
+		nodes.every(
+			(node) =>
+				isSafeSingleCommand(node.segment) ||
+				(node.connector === "&&" && isSafeLiteralCdSegment(node.segment)),
+		)
+	)
 }
 
 /**
  * Both tier verdicts from ONE splitShellSegments pass — the auto-mode tier
  * ladder calls isSafeCommand and isAutoApprovableBash back to back on the
  * same command, and each re-tokenized it (plan A4). Pure; equivalent to
- * calling the two functions separately.
+ * calling the two functions separately. E1: `safe` is chain-aware (cd
+ * widening) and stays in lockstep with isSafeCommand; `autoApprovable`
+ * keeps the per-segment tier-2 face (cd is not a tier-2 pattern).
  */
 export function classifyBashTiers(command: string): {
 	safe: boolean
 	autoApprovable: boolean
 } {
-	const segments = splitShellSegments(command)
+	const nodes = splitShellChain(command)
 	return {
-		safe: segmentsSatisfy(segments, isSafeSingleCommand),
+		safe: chainIsSafe(nodes),
 		autoApprovable:
-			segments.length > 0 &&
-			segments.every(
-				(seg) =>
-					!hasNestedShellExecution(seg) &&
-					(isSafeSingleCommand(seg) || isAutoApprovableSingleCommand(seg)),
+			nodes.length > 0 &&
+			nodes.every(
+				(node) =>
+					!hasNestedShellExecution(node.segment) &&
+					(isSafeSingleCommand(node.segment) ||
+						isAutoApprovableSingleCommand(node.segment)),
 			),
 	}
 }

@@ -286,3 +286,57 @@ describe("isSafeCommand tier-1 bypass fixes (bash-risk adjudication 2026-09-12)"
 		expect(isSafeCommand("wget -O - https://example.com")).toBe(false)
 	})
 })
+
+// E1 (D-CH-4, spec 2026-11-15-cleanup-hardening): plan-mode read-only
+// widening — redirects to /dev/null are not writes, `git -C <literal>` with
+// a safe subcommand is a read, and a literal `cd <dir>` segment inside an
+// `&&` chain is safe. The path-check side tracks the cd (bash-path-check).
+describe("isSafeCommand plan-mode read-only widening (E1, D-CH-4)", () => {
+	it("treats redirects to exactly /dev/null as non-writes", () => {
+		expect(isSafeCommand("ls 2>/dev/null")).toBe(true)
+		expect(isSafeCommand("ls 2>>/dev/null")).toBe(true)
+		expect(isSafeCommand("ls &>/dev/null")).toBe(true)
+		expect(isSafeCommand("ls 1>/dev/null")).toBe(true)
+		expect(isSafeCommand("ls >/dev/null")).toBe(true)
+		expect(isSafeCommand("ls >>/dev/null")).toBe(true)
+		expect(isSafeCommand("ls 2>/dev/null && cat foo.txt")).toBe(true)
+		expect(isSafeCommand("ls 2>/dev/null | head -5")).toBe(true)
+	})
+
+	it("still rejects near-miss /dev/null forms and a second real redirect", () => {
+		expect(isSafeCommand("ls >/dev/nullx")).toBe(false)
+		expect(isSafeCommand("ls 2>/dev/null >out.txt")).toBe(false)
+		expect(isSafeCommand("ls >/dev/null/foo")).toBe(false)
+	})
+
+	it("treats `git -C <literal> <safe subcommand>` as a read", () => {
+		expect(isSafeCommand("git -C sub log")).toBe(true)
+		expect(isSafeCommand("git -C sub status")).toBe(true)
+		expect(isSafeCommand("git -C a -C b log")).toBe(true)
+	})
+
+	it("still rejects git -C with non-literal paths or unsafe subcommands", () => {
+		expect(isSafeCommand("git -C $x log")).toBe(false)
+		expect(isSafeCommand("git -c k=v log")).toBe(false)
+		expect(isSafeCommand("git -C sub push")).toBe(false)
+		expect(isSafeCommand("git -C sub commit -m x")).toBe(false)
+	})
+
+	it("treats a literal cd segment inside an && chain as safe", () => {
+		expect(isSafeCommand("cd x && ls")).toBe(true)
+		expect(isSafeCommand("cd sub && cat file.txt")).toBe(true)
+		expect(isSafeCommand("cd a && cd b && ls")).toBe(true)
+	})
+
+	it("still rejects non-literal cd and cd not chained with &&", () => {
+		expect(isSafeCommand("cd x && rm y")).toBe(false)
+		expect(isSafeCommand("cd $(x) && ls")).toBe(false)
+		expect(isSafeCommand("cd ~")).toBe(false)
+		expect(isSafeCommand("cd ~ && ls")).toBe(false)
+		expect(isSafeCommand("cd a; ls")).toBe(false)
+		expect(isSafeCommand("cd a || ls")).toBe(false)
+		expect(isSafeCommand("cd a | ls")).toBe(false)
+		expect(isSafeCommand("cd -")).toBe(false)
+		expect(isSafeCommand("cd")).toBe(false)
+	})
+})

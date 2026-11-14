@@ -157,6 +157,31 @@ export type Decision =
 	/** Auto tier-3: the classifier seam (auto-engine.ts approveTier3). */
 	| { kind: "classify"; tier3: { command?: string; path?: string } };
 
+// S4 (spec 2026-11-15-cleanup-hardening): the two bash prompt blocks that
+// decide() carries twice — the P1-4 protected-path prompt (bypass branch +
+// step 3.5) and the BH-R3 unrecognized mv/cp flag prompt (bypass branch +
+// step 3.6) — extracted so the wording/category live in one place.
+
+/** P1-4 protected pi-path write prompt (bypass mirror + step 3.5). */
+function bashProtectedWritePrompt(w: { target: string; kind: string }): Decision {
+	return {
+		kind: "prompt",
+		flavor: "permission-options",
+		label: `bash writes protected pi path "${w.target}" (${w.kind})`,
+		category: "protected-path",
+	};
+}
+
+/** BH-R3 unrecognized mv/cp flag prompt (bypass mirror + step 3.6). */
+function bashFlagAskPrompt(flagAsk: string): Decision {
+	return {
+		kind: "prompt",
+		flavor: "permission-options",
+		label: flagAsk,
+		category: "sensitive-path",
+	};
+}
+
 /** The decide function — pure, total, order fixed by the table above. */
 export function decide(f: AdjudicationFacts): Decision {
 	// 1. rule deny (terminal) — CC 1a/1d alignment: an explicit deny rule is
@@ -241,22 +266,12 @@ export function decide(f: AdjudicationFacts): Decision {
 		// prompts in bypass (the all-modes copy lives at step 3.5, after plan
 		// hard limits — bypass returns before it, so it is mirrored here).
 		if (f.bashProtectedWrite) {
-			return {
-				kind: "prompt",
-				flavor: "permission-options",
-				label: `bash writes protected pi path "${f.bashProtectedWrite.target}" (${f.bashProtectedWrite.kind})`,
-				category: "protected-path",
-			};
+			return bashProtectedWritePrompt(f.bashProtectedWrite);
 		}
 		// BH-R3: unrecognized mv/cp flag — targets unverifiable, ask (bypass
 		// mirror of the step 3.6 all-modes prompt).
 		if (f.bashFlagAsk) {
-			return {
-				kind: "prompt",
-				flavor: "permission-options",
-				label: f.bashFlagAsk,
-				category: "sensitive-path",
-			};
+			return bashFlagAskPrompt(f.bashFlagAsk);
 		}
 		const effects: AllowEffects = {};
 		if (f.tool === "edit" || f.tool === "write") effects.trackOutsideWrite = true;
@@ -277,24 +292,14 @@ export function decide(f: AdjudicationFacts): Decision {
 	// Bypass reaches its mirrored copy inside the step-2 branch; plan hard
 	// limits stay ahead so plan denials never degrade into prompts.
 	if (f.bashProtectedWrite) {
-		return {
-			kind: "prompt",
-			flavor: "permission-options",
-			label: `bash writes protected pi path "${f.bashProtectedWrite.target}" (${f.bashProtectedWrite.kind})`,
-			category: "protected-path",
-		};
+		return bashProtectedWritePrompt(f.bashProtectedWrite);
 	}
 
 	// 3.6 unrecognized mv/cp flag (BH-R3, 2026-11-14): the write targets
 	// cannot be path-validated — ask, not the former outright deny; a prompt
 	// keeps the user exit for a heuristic detection.
 	if (f.bashFlagAsk) {
-		return {
-			kind: "prompt",
-			flavor: "permission-options",
-			label: f.bashFlagAsk,
-			category: "sensitive-path",
-		};
+		return bashFlagAskPrompt(f.bashFlagAsk);
 	}
 
 	// 4. verdict allow: outside-write tracking + family adjudication note

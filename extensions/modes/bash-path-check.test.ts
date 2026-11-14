@@ -7,7 +7,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	checkBashDenyHit,
-	checkBashFlagEscalation,
+	checkBashDenyScan,
 	checkBashProtectedWrite,
 	checkBashWriteTargets,
 	resolveBashPathChecks,
@@ -105,7 +105,11 @@ describe("checkBashDenyHit (W4, all modes)", () => {
 		expect(checkBashDenyHit("ls .git/HEAD", CWD, envDeny)).toMatchObject({ path: ".git/HEAD" });
 	});
 	it("compound commands: any hit denies the whole command", () => {
-		expect(checkBashDenyHit("cd x && cat a && cat .env", CWD, envDeny)).toMatchObject({ path: ".env" });
+		// E1 cd tracking: a cd'ed segment resolves against the cd'ed dir, so
+		// the plain-.env form moved to the cd-free command (x/.env is not the
+		// denied /w/.env); the cd-relative form still hits.
+		expect(checkBashDenyHit("cat a && cat b && cat .env", CWD, envDeny)).toMatchObject({ path: ".env" });
+		expect(checkBashDenyHit("cd x && cat a && cat ../.env", CWD, envDeny)).toMatchObject({ path: "../.env" });
 		expect(checkBashDenyHit("cat a | grep x .env", CWD, envDeny)).toMatchObject({ path: ".env" });
 	});
 	it("patterns are not paths: grep first arg, find -name values stay out of scope", () => {
@@ -169,9 +173,10 @@ describe("BH-R3: mv/cp flag analysis + remote heredoc bodies", () => {
 	});
 	it("an unrecognized flag escalates to ask, never deny", () => {
 		expect(checkBashDenyHit("mv -z a b", CWD, unrelated)).toBeNull();
-		expect(checkBashFlagEscalation("mv -z a b", CWD)).toMatchObject({ path: "-z" });
-		expect(checkBashFlagEscalation("cp -R src dst", CWD)).toBeNull();
-		expect(checkBashFlagEscalation("cp -t ~/.ssh src", CWD)).toBeNull();
+		// S3: the flag escalation is its own shape — flag, not a deny path
+		expect(checkBashDenyScan("mv -z a b", CWD, []).flagAsk).toEqual({ flag: "-z" });
+		expect(checkBashDenyScan("cp -R src dst", CWD, []).flagAsk).toBeNull();
+		expect(checkBashDenyScan("cp -t ~/.ssh src", CWD, []).flagAsk).toBeNull();
 	});
 	it("heredoc bodies piped to ssh skip local path checks", () => {
 		expect(checkBashDenyHit("ssh host bash -s <<EOF\nrm ~/.ssh/x\nEOF", CWD, sshRule)).toBeNull();
@@ -307,5 +312,80 @@ describe("review fix 2026-11-08 (P2#6, pinned): compound suppression form", () =
 		expect(checkBashWriteTargets("echo x > /tmp/log; echo y > ~/.zshrc", CWD)).toBeNull();
 		// the single-segment form still prompts
 		expect(checkBashWriteTargets("echo y > ~/.zshrc", CWD)).toMatchObject({ path: "~/.zshrc" });
+	});
+});
+
+// E1 (D-CH-4, spec 2026-11-15-cleanup-hardening): literal cd tracking along
+// `&&` chains — a segment's relative paths resolve against the cd'ed
+// directory for every path check (W3/W4/P1-4/flag escalation).
+describe("cd tracking along && chains (E1, D-CH-4)", () => {
+	it("W4: a Read deny rule hits through a cd-relative path (red on base)", () => {
+		const envDeny = [denyRule("Read(./.env)")];
+		// `../.env` resolved against `sub` lands on <cwd>/.env
+		expect(checkBashDenyHit("cd sub && cat ../.env", CWD, envDeny)).toMatchObject({
+			path: "../.env",
+			rule: "Read(./.env)",
+		});
+	});
+
+	it("W4: chained cds accumulate", () => {
+		const envDeny = [denyRule("Read(./.env)")];
+		// sub/a/.. → sub → .. → <cwd>/.env
+		expect(checkBashDenyHit("cd sub && cd a && cat ../../.env", CWD, envDeny)).toMatchObject({
+			path: "../../.env",
+			rule: "Read(./.env)",
+		});
+	});
+
+	it("residual: cd joined by ; / || keeps cwd resolution (no deny widening)", () => {
+		const envDeny = [denyRule("Read(./.env)")];
+		// `../.env` against <cwd> is outside the ./ rule's reach
+		expect(checkBashDenyHit("cd sub; cat ../.env", CWD, envDeny)).toBeNull();
+		expect(checkBashDenyHit("cd sub || cat ../.env", CWD, envDeny)).toBeNull();
+	});
+
+	it("non-literal cd keeps cwd resolution", () => {
+		const envDeny = [denyRule("Read(./.env)")];
+		expect(checkBashDenyHit("cd $(x) && cat ../.env", CWD, envDeny)).toBeNull();
+	});
+});
+
+// S2 (spec 2026-11-15-cleanup-hardening): the single-scan entry must yield
+// the same two verdicts the old two-pass API produced. Matrix: deny only /
+// flagAsk only / both / neither.
+describe("checkBashDenyScan (S2 single-scan matrix)", () => {
+	const envDeny = [denyRule("Read(./.env)")];
+	const unrelated = [denyRule("Edit(~/.ssh/**)")];
+
+	it("deny only", () => {
+		expect(checkBashDenyScan("cat .env", CWD, envDeny)).toEqual({
+			deny: { path: ".env", rule: "Read(./.env)", source: "global" },
+			flagAsk: null,
+		});
+	});
+
+	it("flagAsk only", () => {
+		expect(checkBashDenyScan("mv -z a b", CWD, unrelated)).toEqual({
+			deny: null,
+			flagAsk: { flag: "-z" },
+		});
+	});
+
+	it("both (deny short-circuits within a segment; a later segment supplies the other verdict)", () => {
+		expect(checkBashDenyScan("mv -z a b && cat .env", CWD, envDeny)).toEqual({
+			deny: { path: ".env", rule: "Read(./.env)", source: "global" },
+			flagAsk: { flag: "-z" },
+		});
+	});
+
+	it("neither", () => {
+		expect(checkBashDenyScan("ls src", CWD, unrelated)).toEqual({
+			deny: null,
+			flagAsk: null,
+		});
+	});
+
+	it("empty command yields both nulls", () => {
+		expect(checkBashDenyScan("", CWD, envDeny)).toEqual({ deny: null, flagAsk: null });
 	});
 });

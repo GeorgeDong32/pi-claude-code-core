@@ -62,13 +62,17 @@ export function pathMatchesRulePattern(
 	targetPath: string,
 	rulePattern: string,
 	cwd: string,
+	targetCwd: string = cwd,
 ): boolean {
 	if (!rulePattern || rulePattern === "*") return true
 
+	// E1 (spec 2026-11-15-cleanup-hardening): the target resolves against
+	// `targetCwd` (the shell's cd-tracked directory); the RULE stays
+	// anchored to the session `cwd`. Defaults keep both at cwd.
 	const resolvedTarget = path.resolve(
 		path.isAbsolute(expandUserPath(targetPath))
 			? expandUserPath(targetPath)
-			: path.resolve(cwd, targetPath),
+			: path.resolve(targetCwd, targetPath),
 	)
 
 	const normalizedTarget =
@@ -132,9 +136,10 @@ export function pathToolMatchesRuleContent(
 	targetPath: string,
 	ruleContent: string | undefined,
 	cwd: string,
+	targetCwd: string = cwd,
 ): boolean {
 	if (ruleContent === undefined) {
 		return true
 	}
-	return pathMatchesRulePattern(targetPath, ruleContent, cwd)
+	return pathMatchesRulePattern(targetPath, ruleContent, cwd, targetCwd)
 }

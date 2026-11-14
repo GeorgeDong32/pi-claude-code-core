@@ -98,7 +98,7 @@ import {
 import { interpretDecision } from "./interpret.ts";
 import { OutsideWriteSnapshot, listTrackedOutsideWrites, popTrackedOutsideWrite, restoreOutsideWrite, trackOutsideWrite } from "./outside-writes.ts";
 import { commandReferencesSensitivePath, findProjectRoot, isCcSafetyPath, isOutsideCwd, isSensitivePath } from "./path-safety.ts";
-import { checkBashDenyHit, checkBashFlagEscalation, checkBashProtectedWrite, checkBashWriteTargets, resolveBashPathChecks, type BashProtectedWrite } from "./bash-path-check.ts";
+import { checkBashDenyScan, checkBashProtectedWrite, checkBashWriteTargets, resolveBashPathChecks, type BashProtectedWrite } from "./bash-path-check.ts";
 import { pathToolMatchesRuleContent } from "./path-permission-match.ts";
 import { TodoItem, ensurePlanFile, extractPlanSection, extractTodoItems, filterSubstantivePlanItems, getPlanFilePath, hashPlan, isPlanFilePath, markCompletedSteps, readPlanFile, resolveWorkspacePath, shouldSyncAssistantPlanToFile, writePlanFile } from "./plan.ts";
 import {
@@ -1257,19 +1257,28 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       : null;
     // W4 (deny): first Read/Edit deny-rule hit through a bash path target —
     // whole-command deny, every mode; reason text carries rule + path + the
-    // switch name so the model does not blind-retry.
+    // switch name so the model does not blind-retry. S2 (spec 2026-11-15-
+    // cleanup-hardening): ONE scan per candidate command yields both the
+    // deny hit and the unrecognized mv/cp flag escalation (the old code ran
+    // the rule scan twice — the second with a hacked empty rule set).
     let bashDenyRule: string | null = null;
     let bashFlagAsk: string | null = null;
     if (denyOn) {
-      const hit = firstHit((c) => checkBashDenyHit(c, ctx.cwd, mergedPermissionRules));
-      if (hit) {
-        bashDenyRule = `Denied by permission rule [${hit.source}]: ${hit.rule} — bash references denied path "${hit.path}". Adjust the rule, or scope/disable via bashPathChecks / PI_CORE_BASH_PATH_CHECKS.`;
+      let denyHit: ReturnType<typeof checkBashDenyScan>["deny"] = null;
+      let flagEsc: ReturnType<typeof checkBashDenyScan>["flagAsk"] = null;
+      for (const c of commandsToCheck) {
+        const scan = checkBashDenyScan(c, ctx.cwd, mergedPermissionRules);
+        if (denyHit === null && scan.deny !== null) denyHit = scan.deny;
+        if (flagEsc === null && scan.flagAsk !== null) flagEsc = scan.flagAsk;
+        if (denyHit !== null && flagEsc !== null) break;
+      }
+      if (denyHit) {
+        bashDenyRule = `Denied by permission rule [${denyHit.source}]: ${denyHit.rule} — bash references denied path "${denyHit.path}". Adjust the rule, or scope/disable via bashPathChecks / PI_CORE_BASH_PATH_CHECKS.`;
       }
       // BH-R3: an unrecognized mv/cp flag escalates to ask (never deny) —
       // the write targets cannot be path-validated.
-      const esc = firstHit((c) => checkBashFlagEscalation(c, ctx.cwd));
-      if (esc) {
-        bashFlagAsk = `bash write targets unverifiable: unrecognized mv/cp flag "${esc.path}" — approve, or rewrite with explicit paths`;
+      if (flagEsc) {
+        bashFlagAsk = `bash write targets unverifiable: unrecognized mv/cp flag "${flagEsc.flag}" — approve, or rewrite with explicit paths`;
       }
     }
     // BH-R6: per-segment auto rule matching (soft_deny wins on ANY segment;

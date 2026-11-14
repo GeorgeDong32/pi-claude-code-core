@@ -47,6 +47,13 @@ Steps 3+ (verdict allow/ask, the auto ladder, ask dispatch) are unchanged — fo
 - **BH-R7 — malformed config and failing plumbing degrade, never crash.** `sanitizePermissionModesConfig` filters rule lists to strings and drops non-object `autoMode`/`permissions` blocks with a one-shot warning; a throwing adjudicator check denies with a readable reason (`permission check failed: …`) instead of crashing the tool_call; a rejected setMode publishes a `Mode switch failed: …` notification; bus listeners are dispatched in per-listener try/catch so one exploding listener cannot abort the publish batch.
 - **BH-E4 — setMode side effects are generation-gated.** Rapid mode cycling (plan→auto→bypass in flight) applies only the newest request's side effects: profile model/effort application, `plan.md` creation, persistence and bus publishes. Passing through plan without stopping leaves no `plan.md`; a profile model that is already active is not re-set through the host (no redundant `setModel` churn).
 
+**Plan-mode read-only widening (E1, 2026-11-15)** — three safe-read forms the old pattern tables blocked, plus the cd-tracking counterpart in every bash path check:
+
+- Redirects to exactly `/dev/null` write nothing: `N>/dev/null`, `N>>/dev/null`, `&>/dev/null`, `>>/dev/null`, plain `>/dev/null` no longer trip the destructive redirect rule. Near-misses stay blocked (`>/dev/nullx`, `>/dev/null/foo`) and a second real redirect keeps the command unsafe (`2>/dev/null >out`).
+- `git -C <literal-path>` only relocates the repository — the SAFE read-only match runs with those flags stripped (`git -C sub log` is safe). Non-literal paths (`git -C $x log`), the lowercase config form (`git -c k=v log`), and non-read subcommands (`git -C sub push`) stay blocked.
+- A literal `cd <dir>` segment joined by `&&` is read-only safe (`cd x && ls` passes tier-1). `cd` followed by `;`, `||`, a pipe, or nothing; non-literal targets (`cd $(x)`, `cd ~`, `cd -`, bare `cd`); and destructive companions (`cd x && rm y`) stay blocked.
+- **cd tracking (D-CH-4):** a literal `cd` along an `&&` chain shifts the effective directory for every subsequent segment in ALL path checks — W3 write-target, W4 deny rules (rule text stays anchored to the session cwd; the candidate resolves against the cd'ed dir: with `Read(./.env)` denied, `cd sub && cat ../.env` is correctly blocked), P1-4 protected write, and the mv/cp flag escalation. Untracked cd forms keep the old cwd-relative resolution (known residual: the shell would persist the cd there too).
+
 ### Claude Code approved-list import (2026-11-02)
 
 `/permissions import-cc [--dry-run]` reads Claude Code's approved lists and writes them into core's three permission scopes through the idempotent loader path:

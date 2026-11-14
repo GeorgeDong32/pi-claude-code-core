@@ -27,7 +27,7 @@
  * `-t DIR` / `--target-directory[=DIR]` consume a value and the DIRECTORY
  * itself joins the checked targets; an unrecognized flag is not silently
  * treated as a path — W3/W4 escalate it as an "mv/cp flag-form" prompt
- * (checkBashFlagEscalation → adjudicate step 3.6, deny still outranks) so
+ * (BashFlagEscalation → adjudicate step 3.6, deny still outranks) so
  * flag-heavy invocations fail closed to the user instead of open.
  *
  * W3.5 (all-modes prompt, 2026-11-08 P1-4): a bash write target landing on
@@ -36,6 +36,14 @@
  * (bypass included; placed after plan hard limits in decide). A deliberate
  * pi superset over CC (which only covers these via the .claude dir segment).
  * BH-R3: the protected candidate wins over the unrecognized-flag prompt.
+ *
+ * E1 (D-CH-4, 2026-11-15-cleanup-hardening): literal cd tracking along
+ * `&&` chains — a literal `cd <dir>` followed by `&&` shifts the effective
+ * directory for every subsequent segment, so relative paths resolve
+ * against the cd'ed directory in ALL path checks (W3/W4/P1-4/flag
+ * escalation). Non-literal cds (`$`, backtick, `~`, `-`, bare) and cds
+ * followed by `;` / `||` / a pipe are NOT tracked — their segments analyze
+ * as-is and resolution stays at the base cwd (known residual, DEVIATIONS).
  *
  * Shared extractor rules (CC BashTool pathValidation parity):
  * - Tokenizer + structural judgment only — NO path-extraction regexes.
@@ -63,7 +71,7 @@
  * Pure string layer — no fs beyond protected-paths' matcher (lexical), no
  * pi imports.
  */
-import { splitShellSegments, isSafeCommand } from "./bash-analysis.ts"
+import { splitShellChain, isSafeCommand } from "./bash-analysis.ts"
 import { isCcSafetyPath, expandUserPath } from "./path-safety.ts"
 import type { PermissionModesConfig } from "./config.ts"
 import type { PermissionRule } from "./permissions.ts"
@@ -332,6 +340,57 @@ function sedInPlace(segment: string): boolean {
 	return analyzeSed(parsed.operands, parsed.postDashStart).inPlace
 }
 
+// ---- E1: literal cd tracking along && chains (D-CH-4) ---------------------
+
+interface ChainNode {
+	segment: string
+	/** Effective directory for this segment (post-cd resolution). */
+	dir: string
+	/** True when this segment is a tracked literal cd (followed by `&&`). */
+	isCd: boolean
+}
+
+/**
+ * E1 (D-CH-4): literal `cd <dir>` detection for path tracking — bare path
+ * token only (same charset rule as bash-analysis's safety-side detector;
+ * quoted/expanded/globbed/option targets and redirect-carrying segments
+ * are not tracked). Tracked only when the segment's connector is `&&`.
+ */
+function literalCdTarget(segment: string): string | null {
+	const parsed = parseSegment(segment)
+	if (!parsed || parsed.base !== "cd") return null
+	if (parsed.redirects.length > 0) return null
+	if (parsed.args.length !== 1) return null
+	const target = parsed.args[0]!
+	if (target.startsWith("-")) return null
+	if (/[$`~*?[\]'"\\;&|<>()]/.test(target)) return null
+	return target
+}
+
+/**
+ * E1 (D-CH-4): walk the `&&` chain and resolve each segment's effective
+ * directory. A literal `cd <dir>` followed by `&&` updates the directory
+ * for every subsequent segment, so relative paths resolve against the
+ * cd'ed directory for ALL path checks (W3 segment check, W4 deny, P1-4
+ * protected write, flag escalation) — mirroring what the shell would
+ * actually touch. A non-literal cd (`$`, backtick, `~`, `-`, bare) or a cd
+ * followed by `;` / `||` / pipe is NOT tracked: its segment is analyzed
+ * as-is and resolution stays at the base cwd (known residual — shell
+ * semantics would persist the cd there too; recorded in DEVIATIONS).
+ */
+function walkCdChain(command: string, cwd: string): ChainNode[] {
+	let dir = cwd
+	return splitShellChain(command).map((node) => {
+		const target = node.connector === "&&" ? literalCdTarget(node.segment) : null
+		if (target !== null) {
+			const nodeDir = dir
+			dir = path.resolve(dir, target)
+			return { segment: node.segment, dir: nodeDir, isCd: true }
+		}
+		return { segment: node.segment, dir, isCd: false }
+	})
+}
+
 // ---- W3: bypass write-target safety check --------------------------------
 
 /** Write commands whose argument slots are write targets. */
@@ -359,18 +418,20 @@ export function checkBashWriteTargets(
 	cwd: string,
 ): BashPathTarget | null {
 	if (!command || !command.trim()) return null
-	const segments = splitShellSegments(command)
+	const chain = walkCdChain(command, cwd)
 	let hit: BashPathTarget | null = null
-	for (const segment of segments) {
+	for (const node of chain) {
 		if (hit !== null) {
 			// A non-read-only segment after a hit cancels the check (CC
 			// approximation: mixed commands are gated as a whole elsewhere).
-			if (!isSafeCommand(segment)) return null
+			// A tracked literal cd is read-only safe (E1).
+			if (!node.isCd && !isSafeCommand(node.segment)) return null
 			continue
 		}
-		const target = w3SegmentCheck(segment, cwd)
+		if (node.isCd) continue
+		const target = w3SegmentCheck(node.segment, node.dir)
 		if (target !== null) hit = target
-		else if (!isSafeCommand(segment)) return null
+		else if (!isSafeCommand(node.segment)) return null
 	}
 	return hit
 }
@@ -408,10 +469,7 @@ function w3SegmentCheck(segment: string, cwd: string): BashPathTarget | null {
 	// --target-directory destinations are checked as the write target.
 	if (parsed.base === "mv" || parsed.base === "cp") {
 		const analysis = analyzeMoveCp(parsed)
-		const candidates = analysis.targetDir !== null
-			? [analysis.targetDir, ...analysis.paths]
-			: analysis.paths
-		for (const p of candidates) {
+		for (const p of checkedPaths(analysis)) {
 			if (isCcSafetyPath(p, cwd)) return { path: p, kind: "argument" }
 		}
 		if (analysis.unrecognizedFlag !== null) {
@@ -459,19 +517,21 @@ export function checkBashProtectedWrite(
 ): BashProtectedWrite | null {
 	if (!command || !command.trim()) return null
 	const home = homedir()
-	for (const segment of splitShellSegments(command)) {
+	for (const node of walkCdChain(command, cwd)) {
+		if (node.isCd) continue
+		const cwdFor = node.dir
 		// redirection targets always count as writes
-		const rawTokens = tokenizeSegment(segment)
+		const rawTokens = tokenizeSegment(node.segment)
 		for (let i = 0; i < rawTokens.length; i++) {
 			if (!isRedirectOp(rawTokens[i]!)) continue
 			const dst = rawTokens[i + 1]
 			if (dst === undefined || dst === "/dev/null" || dst.startsWith("&")) continue
 			const resolved = resolveToken(dst)
 			if (resolved === null) continue
-			const match = matchProtectedPath(resolveAbs(resolved, cwd), { home, cwd })
+			const match = matchProtectedPath(resolveAbs(resolved, cwdFor), { home, cwd: cwdFor })
 			if (match) return { target: resolved, kind: match.kind }
 		}
-		const parsed = parseSegment(segment)
+		const parsed = parseSegment(node.segment)
 		if (!parsed) continue
 		let candidates: string[] | null = null
 		let moveCpUnrecognized: string | null = null
@@ -482,9 +542,7 @@ export function checkBashProtectedWrite(
 			// BH-R3: bare-form analysis; a protected-path candidate wins over
 			// the unrecognized-flag prompt (specific beats generic)
 			const analysis = analyzeMoveCp(parsed)
-			candidates = analysis.targetDir !== null
-				? [analysis.targetDir, ...analysis.paths]
-				: analysis.paths
+			candidates = checkedPaths(analysis)
 			moveCpUnrecognized = analysis.unrecognizedFlag
 		} else if (W3_WRITE_COMMANDS.includes(parsed.base)) {
 			candidates = parsed.base === "install"
@@ -493,7 +551,7 @@ export function checkBashProtectedWrite(
 		}
 		if (!candidates) continue
 		for (const p of candidates) {
-			const match = matchProtectedPath(resolveAbs(p, cwd), { home, cwd })
+			const match = matchProtectedPath(resolveAbs(p, cwdFor), { home, cwd: cwdFor })
 			if (match) return { target: p, kind: match.kind }
 		}
 		// BH-R3: an unrecognized mv/cp flag cannot be path-validated — prompt
@@ -531,6 +589,18 @@ export interface BashDenyHit {
 	source: string
 }
 
+/**
+ * S3 (spec 2026-11-15-cleanup-hardening): the unrecognized mv/cp flag
+ * escalation is its OWN shape — it is not a rule hit and carries no path
+ * (the whole point is that the targets cannot be path-validated). The old
+ * `BashDenyHit` reuse put the flag text in the `path` slot; consumers now
+ * read `flag` directly.
+ */
+export interface BashFlagEscalation {
+	/** The unrecognized mv/cp flag as written (e.g. `-z`). */
+	flag: string
+}
+
 function pathArgsFor(parsed: ParsedSegment): string[] {
 	if (parsed.base === "find") {
 		// only paths before the first flag — operands keep flags, so cut at
@@ -556,7 +626,7 @@ function pathArgsFor(parsed: ParsedSegment): string[] {
  * `--target-directory[=DIR]` alter where mv/cp writes its destination —
  * every other recognized flag is stripped and the BARE positional form is
  * analyzed (all operands stay rule-checked, so nothing can hide). An
- * UNRECOGNIZED flag escalates to ASK (checkBashFlagEscalation) instead of
+ * UNRECOGNIZED flag escalates to ASK (the BashFlagEscalation channel) instead of
  * the former outright deny (82d35c2 treated any flag as a hidden
  * destination). install stays destination-only (DEVIATIONS #134).
  * Over-classifying a non-destination flag as harmless is safe by
@@ -604,6 +674,19 @@ export interface MoveCpAnalysis {
 	paths: string[]
 	/** First unrecognized flag operand — ask escalation (BH-R3). */
 	unrecognizedFlag: string | null
+}
+
+/**
+ * S1 (spec 2026-11-15-cleanup-hardening): the mv/cp rule-check candidate
+ * list — the `-t` destination directory (when present) joined ahead of the
+ * positional operands. One expression, shared by the three consumers
+ * (W3 write-target, P1-4 protected write, W4 deny scan) instead of the
+ * previously triplicated ternary.
+ */
+function checkedPaths(analysis: MoveCpAnalysis): string[] {
+	return analysis.targetDir !== null
+		? [analysis.targetDir, ...analysis.paths]
+		: analysis.paths
 }
 
 function analyzeMoveCp(parsed: ParsedSegment): MoveCpAnalysis {
@@ -808,51 +891,62 @@ function scanBashDeny(
 	command: string,
 	cwd: string,
 	rules: PermissionRule[],
-): { deny: BashDenyHit | null; flagAsk: BashDenyHit | null } {
-	let flagAsk: BashDenyHit | null = null
+): { deny: BashDenyHit | null; flagAsk: BashFlagEscalation | null } {
+	let flagAsk: BashFlagEscalation | null = null
 	const effective = stripRemoteHeredocBodies(command)
-	for (const segment of splitShellSegments(effective)) {
-		const parsed = parseSegment(segment)
+	for (const node of walkCdChain(effective, cwd)) {
+		const cwdFor = node.dir
+		const parsed = parseSegment(node.segment)
 		if (parsed) {
 			if (parsed.base === "mv" || parsed.base === "cp") {
 				const analysis = analyzeMoveCp(parsed)
-				const paths = analysis.targetDir !== null
-					? [analysis.targetDir, ...analysis.paths]
-					: analysis.paths
-				const hit = matchRules(paths, "Edit", rules, cwd)
+				const hit = matchRules(checkedPaths(analysis), "Edit", rules, cwd, cwdFor)
 				if (hit) return { deny: hit, flagAsk }
 				if (analysis.unrecognizedFlag !== null && flagAsk === null) {
-					flagAsk = {
-						path: analysis.unrecognizedFlag,
-						rule: "mv/cp unrecognized flag form (cannot path-validate)",
-						source: "validator",
-					}
+					flagAsk = { flag: analysis.unrecognizedFlag }
 				}
 			} else if (parsed.base === "sed") {
 				const { inPlace, paths } = analyzeSed(parsed.operands, parsed.postDashStart)
-				const hit = matchRules(paths, inPlace ? "Edit" : "Read", rules, cwd)
+				const hit = matchRules(paths, inPlace ? "Edit" : "Read", rules, cwd, cwdFor)
 				if (hit) return { deny: hit, flagAsk }
 			} else if (W4_READ_COMMANDS.includes(parsed.base)) {
-				const hit = matchRules(pathArgsFor(parsed), "Read", rules, cwd)
+				const hit = matchRules(pathArgsFor(parsed), "Read", rules, cwd, cwdFor)
 				if (hit) return { deny: hit, flagAsk }
 			} else if (W4_WRITE_COMMANDS.includes(parsed.base)) {
-				const hit = matchRules(parsed.args, "Edit", rules, cwd)
+				const hit = matchRules(parsed.args, "Edit", rules, cwd, cwdFor)
 				if (hit) return { deny: hit, flagAsk }
 			}
 		}
 		// Redirection targets are Edit-semantic regardless of argv0.
-		const rawTokens = tokenizeSegment(segment)
+		const rawTokens = tokenizeSegment(node.segment)
 		for (let i = 0; i < rawTokens.length; i++) {
 			if (!isRedirectOp(rawTokens[i]!)) continue
 			const dst = rawTokens[i + 1]
 			if (dst === undefined || dst === "/dev/null" || dst.startsWith("&")) continue
 			const resolved = resolveToken(dst)
 			if (resolved === null) continue
-			const hit = matchRules([resolved], "Edit", rules, cwd)
+			const hit = matchRules([resolved], "Edit", rules, cwd, cwdFor)
 			if (hit) return { deny: hit, flagAsk }
 		}
 	}
 	return { deny: null, flagAsk }
+}
+
+/**
+ * S2 (spec 2026-11-15-cleanup-hardening): the single-scan public entry —
+ * ONE pass over the command yields both verdicts: the first Read/Edit
+ * deny-rule hit (whole-command deny) and the first unrecognized mv/cp
+ * flag escalation (ask). Callers that need both (modes/index.ts buildFacts)
+ * must scan each command once here instead of running the deny scan and a
+ * second empty-rules scan (the deleted checkBashFlagEscalation hack).
+ */
+export function checkBashDenyScan(
+	command: string,
+	cwd: string,
+	rules: PermissionRule[],
+): { deny: BashDenyHit | null; flagAsk: BashFlagEscalation | null } {
+	if (!command || !command.trim()) return { deny: null, flagAsk: null }
+	return scanBashDeny(command, cwd, rules)
 }
 
 /**
@@ -871,31 +965,20 @@ export function checkBashDenyHit(
 	return scanBashDeny(command, cwd, rules).deny
 }
 
-/**
- * BH-R3: unrecognized mv/cp flag escalation — the command cannot be
- * path-validated, so the caller PROMPTS (ask) instead of denying. Fires
- * whenever the W4 switch is on, independent of deny-rule presence (it is a
- * validator-parity check, not a rule hit).
- */
-export function checkBashFlagEscalation(
-	command: string,
-	cwd: string,
-): BashDenyHit | null {
-	if (!command || !command.trim()) return null
-	return scanBashDeny(command, cwd, []).flagAsk
-}
-
 function matchRules(
 	paths: string[],
 	ccTool: "Read" | "Edit",
 	rules: PermissionRule[],
 	cwd: string,
+	targetCwd: string = cwd,
 ): BashDenyHit | null {
 	for (const rule of rules) {
 		if (rule.behavior !== "deny") continue
 		if (rule.ruleValue.toolName !== ccTool) continue
 		for (const p of paths) {
-			if (pathToolMatchesRuleContent(ccTool, p, rule.ruleValue.ruleContent, cwd)) {
+			// E1: the candidate resolves against targetCwd (cd-tracked); the
+			// rule text stays anchored to the session cwd.
+			if (pathToolMatchesRuleContent(ccTool, p, rule.ruleValue.ruleContent, cwd, targetCwd)) {
 				return {
 					path: p,
 					rule: `${rule.ruleValue.toolName}(${rule.ruleValue.ruleContent ?? ""})`,
