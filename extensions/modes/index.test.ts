@@ -29,6 +29,7 @@ import { setConfigPath } from "./config.ts"
 import { writeProjectPermissionsFile } from "./permissions-loader.ts"
 import { getProjectId } from "./path-safety.ts"
 import { setModelsPath } from "./profiles.ts"
+import { getSharedEffortOwner } from "../../lib/effort-owner.ts"
 import { OutsideWriteSnapshot, listTrackedOutsideWrites } from "./outside-writes.ts"
 import { getPlanFilePath, writePlanFile } from "./plan.ts"
 import {
@@ -3919,3 +3920,143 @@ describe("BH-E4: setMode generation — side effects only for the newest request
 	})
 })
 
+describe("BH-E5: model-switch thinking reset is not adopted as explicit (modes integration)", () => {
+	let pi: FakePi
+	let projDir: string
+	let configTmp: string
+
+	beforeEach(async () => {
+		resetCoreBusForTests()
+		pi = createFakePi()
+		projDir = mkdtempSync(join(tmpdir(), "pm-bh-e5-"))
+		configTmp = mkdtempSync(join(tmpdir(), "pm-bh-e5-cfg-"))
+		setConfigPath(join(configTmp, "permission-modes.json"))
+		writeFileSync(
+			join(configTmp, "permission-modes.json"),
+			JSON.stringify({ classifier: { enabled: false } }),
+		)
+		// REAL host contract (agent-session.js 2115-2125, 2210-2229): setModel
+		// resolves the model-switch thinking level (per-model effortLevel →
+		// global default → current) and applies it via setThinkingLevel, which
+		// emits thinking_level_select when it changes. The registry models
+		// carry a switchLevel override so every switch from a higher level
+		// emits "medium" — exactly the reset the effort listener must not
+		// adopt as an explicit user choice.
+		pi.setModel = async (model: unknown) => {
+			const switchLevel = (model as { switchLevel?: FakeThinkingLevel } | null)?.switchLevel
+				?? pi.getThinkingLevel()
+			const previous = pi.getThinkingLevel()
+			if (switchLevel !== previous) {
+				pi.setThinkingLevel(switchLevel)
+				// real setThinkingLevel emits when the level changes — the
+				// effort listener runs INSIDE the setModel call
+				for (const h of pi.handlers.get("thinking_level_select") ?? []) {
+					h({ level: switchLevel, previousLevel: previous })
+				}
+			}
+			pi.setModelCalls.push({ model })
+			return true
+		}
+		permissionModesExtension(makeFakePiForExtension(pi))
+		await pi.simulateSessionStart(projDir, undefined, {
+			// reasoning-capable model so the profile effort is not clamped away
+			find: (provider: string, model: string) => ({
+				provider,
+				id: model,
+				reasoning: true,
+				thinkingLevelMap: {
+					minimal: "minimal",
+					low: "low",
+					medium: "medium",
+					high: "high",
+					xhigh: "xhigh",
+					max: "max",
+					off: "off",
+				},
+			}),
+		})
+		// the effort-side listener, bound to the SAME shared owner the modes
+		// module resolves (mirror of extensions/effort/index.ts)
+		const owner = getSharedEffortOwner(pi as never)
+		pi.on("thinking_level_select", (event) => {
+			const e = event as { level: FakeThinkingLevel }
+			if (e.level === owner.lastApplied()) return
+			if (owner.inModelSwitch()) {
+				owner.noteModelSwitchLevel(e.level)
+				return
+			}
+			owner.setExplicit(e.level, "shortcut")
+		})
+	})
+
+	afterEach(() => {
+		rmSync(projDir, { recursive: true, force: true })
+		rmSync(configTmp, { recursive: true, force: true })
+	})
+
+	it("a profile model switch keeps the profile effort authoritative", async () => {
+		setupProfileBH({
+			active: "main",
+			main: {
+				ask: "prov/m0",
+				plan: { model: "prov/pm", effort: "high" },
+				auto: { model: "prov/am", effort: "low" },
+			},
+		})
+		pi.flags["model-profile"] = "main"
+		const owner = getSharedEffortOwner(pi as never)
+		// reasoning-capable model/registry: every provider/model resolves to a
+		// model that supports all thinking tiers (else the profile effort
+		// clamps off); ctx.model must be capable too — clampToSupported reads
+		// the CURRENT model's level map, not the registry entry
+		const capableModel = {
+			provider: "prov",
+			id: "m0",
+			reasoning: true,
+			// per-model switch default (real pi: model.effortLevel) — the
+			// host applies this inside setModel and emits the event
+			switchLevel: "medium" as FakeThinkingLevel,
+			thinkingLevelMap: {
+				minimal: "minimal",
+				low: "low",
+				medium: "medium",
+				high: "high",
+				xhigh: "xhigh",
+				max: "max",
+				off: "off",
+			},
+		}
+		const capableRegistry = {
+			find: (provider: string, model: string) => ({
+				provider,
+				id: model,
+				reasoning: true,
+				switchLevel: "medium" as FakeThinkingLevel,
+				thinkingLevelMap: {
+					minimal: "minimal",
+					low: "low",
+					medium: "medium",
+					high: "high",
+					xhigh: "xhigh",
+					max: "max",
+					off: "off",
+				},
+			}),
+		}
+		const ctx = makeCtx(pi, {
+			cwd: projDir,
+			model: capableModel as unknown as { provider: string; id: string },
+			modelRegistry: capableRegistry,
+		})
+		// enter plan: model switch m0→pm + profile effort high
+		await pi.simulateCommand("plan", "", ctx)
+		expect(pi.getThinkingLevel()).toBe("high")
+		expect(owner.currentSource()).toBe("profile")
+		// switch to auto: model switch pm→am; the host resets thinking to the
+		// new model's switch level BEFORE the profile effort is applied —
+		// that reset must NOT become an explicit user choice
+		await pi.simulateCommand("auto", "", ctx)
+		expect(pi.getThinkingLevel()).toBe("low")
+		expect(owner.currentSource()).toBe("profile")
+	})
+})

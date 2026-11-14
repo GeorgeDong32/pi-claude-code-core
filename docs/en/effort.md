@@ -58,10 +58,22 @@ chain is the only place in core allowed to call it** (P1-EF-07 source scan).
   persists globally for the next applicable model.
 - When modes applies a profile with `:effort`, it calls the owner
   (`setFromProfile`), not pi directly.
+- **BH-E5 (2026-11-14): the host resets thinking INSIDE model switches —
+  do not adopt it.** `AgentSession.setModel` calls
+  `setThinkingLevel(_getThinkingLevelForModelSwitch(model))` (per-model
+  override → global default → current) and the `thinking_level_select`
+  emission happens from inside the `setModel` call, so the listener runs
+  while the host is switching models. The listener distinguishes this case
+  via the owner's model-switch span (`beginModelSwitch`/`endModelSwitch`
+  bracketing in `profile-apply.ts`): such events are recorded with
+  `noteModelSwitchLevel` (echo bookkeeping + stale-profile-slot cleanup)
+  and NEVER promoted to an explicit choice — previously the reset became
+  `source: "session"`, silently beating the profile slot forever. External
+  changes outside the span still adopt (EFF-01 unchanged).
 
 ## Tests
 
 `extensions/effort/tests/` — node:test via tsx (framework kept from origin):
 `effort.test.ts`, `effort-picker.test.ts`, `integration.test.ts`,
-`owner-adopt.test.ts`, `ui.test.ts`. Owner logic additionally covered in
-`test/lib/` via `effort-owner.test.ts` context.
+`owner-adopt.test.ts`, `model-switch-adopt.test.ts`, `ui.test.ts`. Owner
+logic additionally covered in `test/lib/` via `effort-owner.test.ts` context.

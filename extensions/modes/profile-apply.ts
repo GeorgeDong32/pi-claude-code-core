@@ -124,10 +124,33 @@ export function createProfileController(pi: ExtensionAPI, wiring: ProfileWiring)
 			return;
 		}
 
-		const success = await pi.setModel(model);
-		if (!success) {
-			notify(ctx, `No API key available for "${modelId}"`, "warning");
-			return;
+		// BH-E4 (spec 2026-11-14-backtest-hardening): skip the setModel
+		// round-trip when the profile resolves to the model that is already
+		// active — every mode switch re-applies the profile, and a redundant
+		// setModel also makes the host reset the thinking level (BH-E5).
+		const currentModel = ctx.model as { provider?: string; id?: string } | undefined;
+		const sameModel =
+			!!currentModel &&
+			currentModel.provider === parsed.provider &&
+			currentModel.id === parsed.model;
+
+		if (!sameModel) {
+			// BH-E5: the host resets the thinking level INSIDE setModel
+			// (AgentSession.setModel → setThinkingLevel → thinking_level_select);
+			// bracket the switch so the effort owner records that reset as
+			// model-switch-caused instead of an explicit user choice.
+			const owner = getSharedEffortOwner(pi);
+			owner.beginModelSwitch();
+			let success: boolean;
+			try {
+				success = await pi.setModel(model);
+			} finally {
+				owner.endModelSwitch();
+			}
+			if (!success) {
+				notify(ctx, `No API key available for "${modelId}"`, "warning");
+				return;
+			}
 		}
 
 		// undefined = the profile maps a model but expresses no effort → the

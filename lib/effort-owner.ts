@@ -40,6 +40,27 @@ export interface EffortOwner {
 	/** The ① value, or null when env does not pin. */
 	envPin(): OwnerEffortLevel | null;
 	/**
+	 * BH-E5: bracket a host model switch. AgentSession.setModel resets the
+	 * thinking level to the model's switch default and emits
+	 * thinking_level_select from INSIDE the setModel call, so the effort
+	 * listener's external-adoption path must know the change is
+	 * model-switch-caused, not user intent. The listener records such events
+	 * via {@link noteModelSwitchLevel} and never promotes them to ②.
+	 */
+	beginModelSwitch(): void;
+	endModelSwitch(): void;
+	/** True between beginModelSwitch and endModelSwitch. */
+	inModelSwitch(): boolean;
+	/**
+	 * Record a model-switch-caused level change: echo bookkeeping only
+	 * (`lastApplied` stays truthful) and the stale profile slot is cleared —
+	 * the profile's previous effort belonged to the previous model
+	 * application, and the new mode's profile re-asserts it right after.
+	 * The explicit slot (②) and the env pin (①) are NEVER touched by a
+	 * model switch — that is the priority-chain guarantee this fix restores.
+	 */
+	noteModelSwitchLevel(v: OwnerEffortLevel): void;
+	/**
 	 * The level this owner last wrote through pi.setThinkingLevel (null before
 	 * the first apply). The thinking_level_select listener uses it to tell its
 	 * own echoes (skip) from external changes (adopt) — pi updates state and
@@ -74,6 +95,7 @@ function createEffortOwner(pi: ExtensionAPI): EffortOwner {
 	let explicit: { v: OwnerEffortLevel; src: ExplicitSource } | null = null;
 	let profile: { v: OwnerEffortLevel; profile: string } | null = null;
 	let applied: OwnerEffortLevel | null = null;
+	let modelSwitchDepth = 0;
 	const listeners: Array<(v: OwnerEffortLevel) => void> = [];
 
 	function normalize(v: string): OwnerEffortLevel | null {
@@ -127,6 +149,18 @@ function createEffortOwner(pi: ExtensionAPI): EffortOwner {
 			apply();
 		},
 		envPin: () => envLevel,
+		beginModelSwitch() {
+			modelSwitchDepth++;
+		},
+		endModelSwitch() {
+			modelSwitchDepth = Math.max(0, modelSwitchDepth - 1);
+		},
+		inModelSwitch: () => modelSwitchDepth > 0,
+		noteModelSwitchLevel(v) {
+			// echo bookkeeping + stale-profile cleanup only — never a slot write
+			applied = v;
+			profile = null;
+		},
 		lastApplied: () => applied,
 		effective(): OwnerEffortLevel {
 			const r = resolved();

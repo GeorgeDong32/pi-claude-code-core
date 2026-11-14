@@ -52,10 +52,19 @@
   注入;设置仍全局持久化,换到适用的模型后生效。
 - modes 应用带 `:effort` 的 profile 时,调用的是所有者(`setFromProfile`),
   不直接调 pi。
+- **BH-E5(2026-11-14):宿主在模型切换内部重置思考档位——不得采纳。**
+  `AgentSession.setModel` 会调用
+  `setThinkingLevel(_getThinkingLevelForModelSwitch(model))`(模型覆盖 → 全局
+  默认 → 当前档位),且 `thinking_level_select` 事件在 `setModel` 调用**内部**
+  发出——listener 在宿主切换模型的过程中运行。listener 经所有者的模型切换
+  span 区分该场景(`profile-apply.ts` 中 `beginModelSwitch`/`endModelSwitch`
+  括起 `setModel`):此类事件用 `noteModelSwitchLevel` 记录(回声簿记 + 清理
+  过期 profile 槽),绝不提升为显式选择——此前该重置会变成 `source: "session"`,
+  从此永远压过 profile 槽。span 之外的外部变更照旧采纳(EFF-01 不变)。
 
 ## 测试
 
 `extensions/effort/tests/` —— node:test 经 tsx(沿用来源框架):
 `effort.test.ts`、`effort-picker.test.ts`、`integration.test.ts`、
-`owner-adopt.test.ts`、`ui.test.ts`。所有者逻辑另在 `test/lib/` 的
-`effort-owner.test.ts` 覆盖。
+`owner-adopt.test.ts`、`model-switch-adopt.test.ts`、`ui.test.ts`。
+所有者逻辑另在 `test/lib/` 的 `effort-owner.test.ts` 覆盖。

@@ -219,8 +219,18 @@ export default function effortExtension(pi: ExtensionAPI): void {
   // Guard on owner.lastApplied(): the owner's own writes also emit this event,
   // and pi updates state before emitting, so comparing against
   // pi.getThinkingLevel() would false-skip exactly the no-slot case.
+  // BH-E5 (2026-11-14): a change emitted from INSIDE a host model switch
+  // (AgentSession.setModel → setThinkingLevel) is the model's switch
+  // default, not user intent — record it without promoting it to an
+  // explicit choice; the priority chain env > explicit > profile > model
+  // default stays intact.
   pi.on("thinking_level_select", (event) => {
     if (event.level === owner.lastApplied()) return;
+    if (owner.inModelSwitch()) {
+      owner.noteModelSwitchLevel(event.level);
+      coreBus().publish({ effort: { level: pi.getThinkingLevel(), source: owner.currentSource() } });
+      return;
+    }
     const outcome = owner.setExplicit(event.level, "shortcut");
     if (outcome === "pinned-by-env") return;
     // No ctx here: bus sync only; the footer chip reads pi.getThinkingLevel().
