@@ -159,7 +159,7 @@ describe("V2-A completeMemoryOps", () => {
 		expect(r.ops).toHaveLength(1);
 	});
 
-	it("timeout: a hanging completion aborts (never blocks the hook)", async () => {
+	it("timeout: a hanging completion reports `timeout` (CH E7: the lane's own timer, never blocks the hook)", async () => {
 		const r = await completeMemoryOps(
 			fakeModel,
 			fakeRegistry,
@@ -172,7 +172,10 @@ describe("V2-A completeMemoryOps", () => {
 			} as never,
 		);
 		expect(r.ok).toBe(false);
-		expect(r.reason).toBe("aborted");
+		// CH E7: the INTERNAL timer is distinguishable from an external abort —
+		// it reports `timeout`; an externally supplied signal still reports
+		// `aborted` (pinned in memory-llm-timeout.test.ts).
+		expect(r.reason).toBe("timeout");
 	});
 
 	it("empty response text → empty_response (skip, no subprocess fallback by design)", async () => {

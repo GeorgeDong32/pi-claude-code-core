@@ -10,6 +10,12 @@
  * the V2 report). The shutdown path itself stages a queue record and runs
  * ZERO LLM here (queue.ts); this lane drains it at the next session_start.
  *
+ * CH E7 (2026-11-15): the lane's own timeout timer and an external abort are
+ * distinguishable — the timer reports `timeout`, an externally supplied
+ * signal still reports `aborted`. Consumers surface the reason verbatim
+ * (recall stats.lastReason → /memory diagnostics; automation lastError) and
+ * none of them branch on the value.
+ *
  * Response contract: strict JSON in the TEXT channel —
  *   an object whose "operations" field is an array of memory ops.
  * The prompts describe the schema in prose only (no parseable example — a
@@ -23,7 +29,7 @@ import type { MemoryOp } from "./store.ts";
 
 export type LlmComplete = typeof completeSimple;
 
-export type OpsFailure = "no_model" | "no_auth" | "aborted" | "parse_error" | "empty" | "provider_error" | "empty_response";
+export type OpsFailure = "no_model" | "no_auth" | "aborted" | "timeout" | "parse_error" | "empty" | "provider_error" | "empty_response";
 
 export interface OpsCompletion {
 	ok: boolean;
@@ -108,7 +114,15 @@ export async function completeText(
 
 	const controller = new AbortController();
 	const timeoutMs = request.timeoutMs ?? OPS_TIMEOUT_MS;
-	const timer = setTimeout(() => controller.abort(), timeoutMs);
+	// CH E7: the lane's own timer and an externally supplied abort both go
+	// through `controller.abort()`, so the resulting outcome records WHICH one
+	// fired: the internal timer reports `timeout`, an external signal still
+	// reports `aborted` (external behavior unchanged).
+	let internalTimeout = false;
+	const timer = setTimeout(() => {
+		internalTimeout = true;
+		controller.abort();
+	}, timeoutMs);
 	const onExternalAbort = () => controller.abort();
 	request.signal?.addEventListener("abort", onExternalAbort, { once: true });
 	if (request.signal?.aborted) controller.abort();
@@ -144,7 +158,10 @@ export async function completeText(
 			if (!response) throw err;
 		}
 
-		if (request.signal?.aborted || controller.signal.aborted) return { ok: false, text: "", reason: "aborted" };
+		// CH E7: an external abort wins the labeling (the caller asked to stop);
+		// a controller aborted with no external signal is this lane's own timer.
+		if (request.signal?.aborted) return { ok: false, text: "", reason: "aborted" };
+		if (controller.signal.aborted) return { ok: false, text: "", reason: internalTimeout ? "timeout" : "aborted" };
 		if (response.stopReason === "error") {
 			return { ok: false, text: "", reason: "provider_error", error: response.errorMessage };
 		}
@@ -153,7 +170,8 @@ export async function completeText(
 		if (!text) return { ok: false, text: "", reason: "empty_response" };
 		return { ok: true, text };
 	} catch (err) {
-		if (controller.signal.aborted) return { ok: false, text: "", reason: "aborted" };
+		if (request.signal?.aborted) return { ok: false, text: "", reason: "aborted" };
+		if (controller.signal.aborted) return { ok: false, text: "", reason: internalTimeout ? "timeout" : "aborted" };
 		return { ok: false, text: "", reason: "provider_error", error: err instanceof Error ? err.message : String(err) };
 	} finally {
 		clearTimeout(timer);

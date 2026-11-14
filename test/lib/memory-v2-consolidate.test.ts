@@ -26,6 +26,7 @@ import {
 	needsConsolidation,
 } from "../../extensions/memory/consolidate.ts";
 import { resolveMemoryPaths } from "../../extensions/memory/paths.ts";
+import { MEMORY_INDEX_MAX } from "../../lib/context-budget.ts";
 
 let globalsSnapshot: Record<string, unknown>;
 let home: string;
@@ -228,7 +229,10 @@ describe("V2-C directive + trigger state machine", () => {
 		expect(sent.message.customType).toBe(CONSOLIDATE_DIRECTIVE_TYPE);
 		expect((sent.opts as { triggerTurn?: boolean })?.triggerTurn).toBe(true);
 		expect((sent.opts as { deliverAs?: string })?.deliverAs).toBe("followUp");
-		// in-flight: a second turn_end must not re-send
+		// no re-send while the directive turn is in flight — BUT this tick is
+		// also inside the 10-turn throttle window (attempts=1,
+		// turnsSinceAttempt=1 < 10), so BOTH guards block here; the inFlight
+		// guard alone is pinned separately in the isolation test below.
 		await host.fire("turn_end", { turnIndex: 1, message: { role: "assistant" }, toolResults: [] }, ctx);
 		expect(host.sentMessages.length).toBe(1);
 		// settle via agent_settled → throttle window (10 turns) blocks immediate retry
@@ -522,5 +526,28 @@ describe("G2-C13 unified age (effectiveAgeMs)", () => {
 		const content = `---\nname: x\ndescription: d\nmetadata:\n  type: project\n---\n\nbody`;
 		const mtime = now - 12 * 24 * 3600 * 1000;
 		expect(effectiveAgeMs(content, mtime, now)).toBe(12 * 24 * 3600 * 1000);
+	});
+});
+
+// CH D1: the inFlight guard (consolidate.ts onTurnEnd) is isolated here —
+// the throttle tests above pass with BOTH guards active, so they never pin
+// inFlight on its own.
+describe("CH D1 inFlight guard isolation", () => {
+	it("blocks a re-send while in flight even past the throttle window, and releases on settle", () => {
+		mkdirSync(dir, { recursive: true });
+		// Over-budget index so the counterfactual is real: with inFlight
+		// cleared the trigger WOULD fire on this store.
+		writeFileSync(join(dir, "MEMORY.md"), `# idx\n\n${"- [x](x.md) — filler row\n".repeat(1500)}`);
+		expect(needsConsolidation(layerStats(dir), MEMORY_INDEX_MAX)).not.toBeNull();
+		const sent: string[] = [];
+		const trigger = new ConsolidationTrigger({ sendDirective: (layer) => sent.push(layer) });
+		trigger.state.attempts = 1;
+		trigger.state.turnsSinceAttempt = 15; // far past the 10-turn throttle
+		trigger.state.inFlight = true;
+		trigger.onTurnEnd(dir, udir);
+		expect(sent).toEqual([]); // ONLY the inFlight guard can block here
+		trigger.settle(); // the consolidation turn ended
+		trigger.onTurnEnd(dir, udir);
+		expect(sent).toEqual(["project"]); // released: the re-send goes out
 	});
 });
