@@ -35,3 +35,19 @@ export function parseModelId(raw: unknown): ParsedModelId | null {
 
 	return effort === undefined ? { provider, modelId } : { provider, modelId, effort };
 }
+
+/**
+ * S6 (spec 2026-11-15-cleanup-hardening): the single model-identity key —
+ * `"\u0000"`-joined provider+id, matching the host's modelsAreEqual
+ * comparison shape. `undefined` unless `id` is a string (no id → no
+ * identity). Consumers: effort's model-switch detection (FX-2) and
+ * modes/profile-apply's same-model skip (BH-E4). Structural typing only —
+ * callers pass whatever object carries `provider`/`id` fields.
+ */
+export function modelIdentityKey(
+	model: { provider?: string; id?: string } | null | undefined,
+): string | undefined {
+	return model && typeof model.id === "string"
+		? `${model.provider ?? ""}\u0000${model.id}`
+		: undefined;
+}

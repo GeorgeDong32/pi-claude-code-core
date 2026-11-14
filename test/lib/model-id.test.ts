@@ -6,7 +6,7 @@
  * encoded as explicit goldens below.
  */
 import { describe, expect, it } from "vitest";
-import { parseModelId } from "../../lib/model-id.ts";
+import { modelIdentityKey, parseModelId } from "../../lib/model-id.ts";
 
 /** Frozen pm 2.8.0 outputs (null where the old parser returned null). */
 const PM_GOLDENS: Record<string, null | { provider: string; model: string; thinkingLevel?: string }> = {
@@ -78,5 +78,39 @@ describe("P0-LB-02 parseModelId boundaries", () => {
 			provider: "opencode",
 			modelId: "big-pickle",
 		});
+	});
+});
+
+// S6 (spec 2026-11-15-cleanup-hardening): the shared model-identity key —
+// the provider+id pair the host's modelsAreEqual compares. Consumers:
+// extensions/effort (FX-2 switch detection) and modes/profile-apply (BH-E4
+// same-model skip).
+describe("S6 modelIdentityKey", () => {
+	it("joins provider and id with the NUL separator", () => {
+		expect(modelIdentityKey({ provider: "anthropic", id: "claude-opus-4" })).toBe(
+			"anthropic\u0000claude-opus-4",
+		);
+	});
+
+	it("defaults a missing provider to the empty string", () => {
+		expect(modelIdentityKey({ id: "m" })).toBe("\u0000m");
+	});
+
+	it("is undefined without a string id (no identity)", () => {
+		expect(modelIdentityKey(null)).toBeUndefined();
+		expect(modelIdentityKey(undefined)).toBeUndefined();
+		expect(modelIdentityKey({})).toBeUndefined();
+		expect(modelIdentityKey({ provider: "p" })).toBeUndefined();
+		expect(modelIdentityKey({ provider: "p", id: 1 as unknown as string })).toBeUndefined();
+	});
+
+	it("distinguishes equal ids across providers and agrees across consumers", () => {
+		expect(modelIdentityKey({ provider: "a", id: "m" })).not.toBe(
+			modelIdentityKey({ provider: "b", id: "m" }),
+		);
+		// profile-apply's parsed-fields shape vs the live model object
+		expect(
+			modelIdentityKey({ provider: "a", id: "m" }),
+		).toBe(modelIdentityKey({ provider: "a", id: "m" }));
 	});
 });
