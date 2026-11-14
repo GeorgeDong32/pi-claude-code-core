@@ -31,7 +31,13 @@ The second rule family, and the proof that the family seam is real
   rode the preapproved github.com entry). A free-text `query` still claims
   nothing (a search term is not a fetch target). IP literals are hosts:
   `domain:` rules match them normally, but the preapproved list never
-  matches an IP.
+  matches an IP. URLs that fail URL parsing fall back to ask — an explicit
+  domain deny degrades to ask for such inputs (fail-closed; only an
+  exact-string grant can allow them). The first-seen prompt may render the
+  internal marker form (`Allow ?github.com/docs?` for unparsable input,
+  `Allow @evil.example?` for userinfo); the persisted suggested rule is
+  the clean host rule for userinfo and the exact raw-string rule for
+  unparsable input.
 - Assembled BEFORE mcp-gov in `extensions/index.ts` so domain rules take
   precedence over `mcp_*` prefix rules for URL-carrying calls (P4-WB-01).
 

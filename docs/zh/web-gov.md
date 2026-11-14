@@ -26,7 +26,12 @@
   fail-closed 走 ask(旧的前缀正则在 `@` 处截断且接受无 scheme 主机,
   `https://github.com@evil.example/` 曾因此搭预批准 github.com 的便车)。
   自由文本 `query` 依旧不认领(搜索词不是抓取目标)。IP 字面量按主机
-  处理:`domain:` 规则照常匹配,但预批准列表永不匹配 IP。
+  处理:`domain:` 规则照常匹配,但预批准列表永不匹配 IP。无法完成 URL
+  解析的输入一律回落为 ask —— 显式 domain deny 对这类输入也降级为
+  ask(fail-closed;只有对同一原始字符串的精确授权才能放行)。首见弹窗
+  可能渲染内部标记形态(无法解析的输入如 `Allow ?github.com/docs?`,
+  userinfo 如 `Allow @evil.example?`);持久化的建议规则对 userinfo 是
+  干净主机规则,对无法解析输入是原始字符串的精确规则。
 - 在 `extensions/index.ts` 中装配于 mcp-gov **之前**,URL 类调用因此优先
   命中域名规则而非 `mcp_*` 前缀规则(P4-WB-01)。
 
