@@ -22,6 +22,13 @@
  *
  * Diagnostics are RETURNED (DrainSummary[]), never written to shared state
  * by concurrent workers — the caller aggregates after allSettled.
+ *
+ * BH-E2 (spec 2026-11-14-backtest-hardening): validateClaimed checks the
+ * attempt cap and the record age BEFORE the blacklist/projectsDir skips —
+ * expired records take the same settle-with-diagnostic disposal path no
+ * matter their routing, so cross-project records can no longer be
+ * skipped-and-released forever. Age is the record's own savedAt (the
+ * release rename must not reset it).
  */
 
 import type { Api, Model } from "@earendil-works/pi-ai";
@@ -149,19 +156,29 @@ async function drainOneRecord(cap: DrainCap, claim: QueueClaim, ports: QueueDrai
 	return summary;
 }
 
-/** Claim-first validation on the RE-READ record (routing, blacklist,
- *  attempt cap, age). Settle-with-diagnostic, skip, or eligible. */
+/** Claim-first validation on the RE-READ record (expiry, blacklist,
+ *  routing). Settle-with-diagnostic, skip, or eligible.
+ *
+ *  BH-E2 (spec 2026-11-14-backtest-hardening): the attempt-cap and age
+ *  checks run FIRST — on base the projectsDir routing skip preceded them,
+ *  so cross-project records (and, equivalently, blacklisted ones) were
+ *  skipped-and-released forever: never counted, never expired, re-released
+ *  as NEW pending files at every startup. Expired records now take the
+ *  SAME settle-with-diagnostic disposal path regardless of routing. Age
+ *  comes from the record's own `savedAt`, never the file mtime — the
+ *  release rename must not reset a record's age. The blacklist and the
+ *  B1 routing skip keep their semantics for NON-expired records. */
 function validateClaimed(cap: DrainCap, claim: QueueClaim, ports: QueueDrainPorts): { drop?: string; skip?: boolean } {
-	if (ports.blacklistHas(`${claim.original}|${claim.record.sessionId}`)) return { skip: true };
-	// B1 routing: exact projectsDir match (projectKey substring heuristics
-	// can cross-project collide).
-	if (claim.record.projectsDir !== cap.d.projectsDir) return { skip: true };
 	if (claim.record.attempts >= QUEUE_MAX_ATTEMPTS) {
 		return { drop: `flush-queued: dropped after ${claim.record.attempts} attempts` };
 	}
 	if (Date.now() - claim.record.savedAt > QUEUE_MAX_AGE_MS || claim.record.parts.length === 0) {
 		return { drop: "flush-queued: expired record" };
 	}
+	if (ports.blacklistHas(`${claim.original}|${claim.record.sessionId}`)) return { skip: true };
+	// B1 routing: exact projectsDir match (projectKey substring heuristics
+	// can cross-project collide).
+	if (claim.record.projectsDir !== cap.d.projectsDir) return { skip: true };
 	return {};
 }
 
