@@ -2,6 +2,20 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## 2026-11-14 小修批（SPEC FX，5 项，3 路并行派工 + 独立审查合入）
+
+- **来源**：BH 批遗留（review-degradation 红项、E5 手动切模型边界）+ BH spec 非目标三项（review/ 深审、memory 25K 核实、SC 效果评估），spec `spec/2026-11-14-followup-small-fixes.md`。用户决策 D-FX-1…4 见 spec 首节。
+- **派工**：3 worker 各自 worktree（fx-wt-r review / fx-wt-e effort / fx-wt-m memory+compaction）。W-R、W-M 首派死于 model_provider_unavailable（BH 批同款），续派后接手半成品完成；三路均「先红后绿」或「base 即绿+钉缺口」，逐分支独立只读审查（三路均 PASS-with-nits，nit 合入前修复）后按 W-M→W-E→W-R 变基 ff 合入，线性历史。
+- **提交**（合入后 main hash）：FX-3 `cda0375`+`f4081ab`（审查 F1 注释修正）、FX-4 `fdaf3cb`；FX-2 `5aace73`（红测试）+`f0867f5`（修复+docs）+`a2ddfb2`（审查 F2 死代码清理）；FX-1 `aa95682`、FX-5 `8da1729`（R1 P1 修复）+`24a81fd`（深审报告）+`c58ec84`（审查 N1/N2 报告勘误）；spec `2f25dfe`。
+- **FX-1（review-degradation 关闭 BH-10/#131）**：红基线净树两次实测 fetch 5030/6004ms > 5s（复现必须全净树——任何 untracked 文件都会绕开 fetch 路径）；修复 = mkdtemp 隔离 + spy 断言零 fetch + `run-cmd` 可选 timeoutMs/env + base fetch 15s 上限 + `GIT_TERMINAL_PROMPT=0`（不传行为逐字节不变）。main 全量 test 零失败。
+- **FX-2（E5 边界方案 B）**：真实 AgentSession harness 红基线 3 红 2 绿；识别基线 `switchBaselineKey` + `afterHostModelSwitch` 恢复（清 profile 槽 → apply 恢复 env/显式，宿主钳制）；退化场景（model_select 先到）单测钉住。残余：重选当前模型宿主不发 model_select，core 不可识别（DEVIATIONS FX-2，建议上游修）。
+- **FX-3（memory 25K）**：结论 base 即绿、无缺陷；新增 `memory-index-bypass.test.ts` 钉住绕过 writer 场景（变异验证有效）；两机字节数普查均低于上限（本机 user 7,650/项目最大 20,500；Air 6,337/17,723）。
+- **FX-4（SC 评估）**：两机遥测普查——本机真实条目 0（旧「34/2 条」为正文污染，已更正）；Air 3 周期全 applied、接管率 3/3、零兜底零降级；**结论「数据不足」不外推**；SC-1 的 3 次未归因遗漏仍无原因码可查、保持未关闭。docs/{en,zh}/compaction.md 新节。
+- **FX-5（review/ 深审）**：REPORT `REVIEW-2026-11-14-review-module.md`——P0=0；P1×1 已修（PR 路径全子进程加时限：clone 120s/fetch 60s/gh 60s + 禁凭据提示）；P2×2 + P3×9 记录下一轮；25 处 runCmd call site 审计经独立枚举复核属实。
+- **门禁（main c58ec84）**：`bun run check` exit 0；`bun run test` **零失败**——vitest 85 文件 1210/1210 + node:test 九目录全绿（effort 114 / goal 262 / review 188 / action-fusion 21 / observation-pack 33 / bg-shell 278 / compaction 136 / memory 38（含新 bypass 套件）/ web-gov 19）；`bun run contracts` 108+4todo；金丝雀 5/5。BH-10 关闭。
+- **台账**：CHANGELOG Unreleased Fixed +2（FX-2、FX-1/FX-5）；DEVIATIONS「小修批（SPEC FX）」FX-1…6（含 SC-1 未关闭项更新）；docs/{en,zh} 四模块同步（review/effort/compaction）+ REVIEW 报告。
+- **遗留（下一轮）**：review/ 深审 P2×2+P3×9；run-cmd SIGKILL 升级等超时实现边缘（FX-1 审查 N3–N6）；memory in-flight 守卫隔离钉（与既有用例同款缺口）；FX-2 残余（上游 model_select 缺失）待提上游；发版与双机安装仍待用户授权（D-BH-4）。
+
 ## 2026-11-14 回测加固批（SPEC BH，13 项，4 路并行派工 + 独立审查合入）
 
 - **来源**：Devin 会话 `dour-arithmetic` 审查未完成即额度耗尽；本会话补完静态审查 A + 本机/Air 双机回测后定稿 spec BH（`spec/2026-11-14-backtest-hardening.md`）。范围：S1/S2 安全、R1–R7 真实损失、E1–E4 资源与 IO、E5/E6 先复现再修——**13 项全部落地**（E5、E6 均复现成立并修复）。

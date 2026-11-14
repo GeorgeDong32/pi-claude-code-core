@@ -58,6 +58,23 @@
 - **modes setMode 竞态收敛（BH-E4）**：快速连按 Shift+Tab 时只有最新请求
   执行副作用；模型未变化时跳过 setModel（也避免连带的重置 thinking）；
   路经 plan 的切换不再留下 plan.md。
+- **effort 手动切模型不再覆盖档位选择（FX-2）**：经 `/model` 或 ctrl+p 手动
+  切换模型时，宿主在切换内部重置 thinking 级别，此前被 effort 监听器采纳为
+  显式选择——覆盖 `/effort` 选择、使 profile `:effort` 失效、偏离
+  `PI_CORE_EFFORT` 钉死值。现在所有宿主切模型途径（不限 profile 驱动）都会
+  把该重置识别为切换所致：确认切换后自动清除过期 profile 槽，并恢复 env
+  钉死值或显式选择（新模型不支持的档位由宿主钳制）。已知残余：在模型选择器
+  里重选当前模型时宿主不发 `model_select`，core 无法识别（宿主侧限制，见
+  DEVIATIONS FX-2）。已知退化：外部扩展抢先注册 thinking_level_select 处理
+  器并卡住分发时，重置仍被采纳（与修复前一致），已由单测钉住。
+- **review 子进程命令全部加时限，/review 不再无限挂起（FX-1/FX-5）**：
+  本地 base fetch 硬上限 15s 且 `GIT_TERMINAL_PROMPT=0`，超时/失败回落本地
+  `origin/<base>` 并记区分 "timed out"/"failed" 的非致命 diffWarning；PR
+  路径的 gh clone / https clone 兜底（120s）、PR head fetch（60s）、
+  `gh pr view`/`gh pr diff`（60s）同样封顶——此前私有仓库在 gh 不可用时会在
+  凭据提示上永久挂起。常量硬编码不可配置；同时关闭长期红的
+  review-degradation 测试项（BH-10 / #131，三用例改临时目录隔离 + spy 断言
+  零 fetch）。
 
 ## 0.5.0 (2026-11-11) — Smart Compaction(SC,spec 2026-11-08-smart-compaction-takeover.md)
 

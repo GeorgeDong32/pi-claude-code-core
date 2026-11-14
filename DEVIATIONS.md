@@ -367,6 +367,7 @@ SC-1. **默认 mode：`shadow` 期已结束 → 用户显式批准 default-on（
    - **2026-11-10 跨机复测**（语料待证据项已关闭）：Air 29/29，保守去重合并 39/50=0.78（未去重 41/52）；可行子集 39/42=92.9% 不替代发布分母。详见 docs/{en,zh}/compaction.md 跨机复测节。
    - 影响面：default-on 下控制器预计算并提议 draft；自动降级不受影响（原生 compaction 禁用 → shadow，POL-06；conflict-edit 连续超标 → shadow；overridden 累计 2 次 → shadow，SC-2）。回滚一行：`PI_CORE_COMPACTION=shadow` 或配置文件 `mode:"shadow"`。
    - 未关闭项：3 次未归因遗漏待真机 `cc-core-compaction-metrics` 原因码裁决；H-SC 真机证据见 SC-3；压缩效果/时间的真实数据待实跑积累（estPostTokens/computeMs）。
+   - **2026-11-14 FX-4 实测采集**：默认开启后首次真机遥测采集（两机只读；本机真实条目 0——旧「34/2 条」口径经复核为正文污染，见 FX-4/FX-6；Air 3 周期全 applied、接管率 3/3、零兜底零降级，样本 n=3 判数据不足）。**3 次未归因遗漏仍未裁决**：样本零 discarded/refused 事件、无原因码，保持未关闭；需长跑积累。
 
 SC-5. **shadow 模式为完全被动（2026-11-10 review C8 对齐）**
    - 内容：spec §7.3 原文"shadow 仍会在 `session_before_compact` 之外运行预压"；实现中 shadow 与 off 在 onApplyPoint/供稿腿同样早退（index.ts），唯一的 shadow 独占行为是 FB-08 原生摘要审计。
@@ -437,6 +438,39 @@ BH-9. **E5：复现成立，修复为 model-switch 窗口（spec 授权的唯一
    - 修复：`lib/effort-owner.ts` 新增 beginModelSwitch/endModelSwitch 窗口 + noteModelSwitchLevel（仅 echo 记账 + 清陈旧 profile 槽位；显式槽 ② 与 env pin ① 永不被模型切换触碰）；modes/profile-apply.ts 在 `pi.setModel` 前后布窗（仅模型实际变化时）；effort 监听器窗内事件走 noteModelSwitchLevel。优先级链 env pin > 显式 > profile > 模型默认恢复。lib 未新增任何 extensions 导入（不变量 1/2 保持）。
 
 BH-10. **流程注记**
-   - `bun run test` 唯一红项 `test/lib/review-degradation.test.ts > P2-REV-03` 为既有环境敏感项（#131 同款）：干净树触发 `git fetch origin main`，本机实测 fetch 耗时 5.7 s > vitest 5 s 超时（有网也超）；脏树路径 3/3 通过。四路 worker 与两轮独立审查在 base 25e6484 复现同款，非本批回归。
+   - `bun run test` 唯一红项 `test/lib/review-degradation.test.ts > P2-REV-03` 为既有环境敏感项（#131 同款）：干净树触发 `git fetch origin main`，本机实测 fetch 耗时 5.7 s > vitest 5 s 超时（有网也超）；脏树路径 3/3 通过。四路 worker 与两轮独立审查在 base 25e6484 复现同款，非本批回归。**已于 FX-1 关闭（见 FX-1 条目）**。
    - 审查 P2-1：`scripts/run-tests.mjs` 补接 extensions/{memory,web-gov}/tests（memory 既有 3 套件此前从未入 gate；web-gov 为 BH-S2 新增）——memory 既有缺口属 pre-existing，非 W-D 引入。
    - W-A worker 因任务被误标取消未能交付台账稿，其 6 项（S1/R3/R6/R7/E4/E5）由 orchestrator 亲自审查（红基线 21+4 例在 base 复核属实）后代拟本节；W-A 重派 worker 零改动退出避免了同 worktree 对拍污染。
+
+## 小修批（SPEC FX 2026-11-14-followup-small-fixes.md，2026-11-14）
+
+来源：BH 批遗留 + BH spec 非目标三项。用户决策 D-FX-1（测试隔离+fetch 时限）、D-FX-2（E5 方案 B：识别并恢复用户设置）、D-FX-3（三项检查全纳入，授权只读 ssh Air）、D-FX-4（spec 后直接派工）；沿用 D-BH-4 只本地提交。三路并行（W-R review / W-E effort / W-M memory+compaction），逐分支独立审查（三路均 PASS-with-nits）后按 W-M→W-E→W-R 合入。
+
+FX-1. **review-degradation 长期红（BH-10 / #131）关闭**
+   - 红基线（base 2f25dfe，净树）两次实测：`git fetch origin main --quiet` 阻塞 5030ms / 6004ms > vitest 5s 用例上限，base 第 3 用例恰在 5000ms 超时。注意：repo 内任何 untracked 文件（含 spike/测试文件自身）都会把树变脏、绕开 fetch 路径——复现红基线必须在全净树上进行。
+   - 修复（D-FX-1 全按 spec，无偏差）：`run-cmd.ts` 新增可选 `timeoutMs`/`env`（不传行为逐字节不变，旧 fake 签名兼容）；`acquireLocalDiff` base fetch 15s 上限 + `GIT_TERMINAL_PROMPT=0`（常量硬编码不可配置，INV-10），超时/失败共用既有非致命 stale-base warning，文案区分 "timed out"/"failed"；测试改 mkdtemp 隔离 + spy 断言零 fetch + finally reset。main 全量 test 零失败。
+   - 审查 nit（N3–N6，下一轮可顺手处理）：超时仅 SIGTERM 无 SIGKILL 升级；timer 前一刻正常退出的子进程可能被误标 timed out；`stderr.includes("timed out")` 启发式可能把 git 自身的 connection timed out 误归属；`timeoutMs ≤ 0` 语义未文档化（当前无调用方）。
+
+FX-2. **E5 边界方案 B：识别与恢复的落地口径（spec FX-2 节授权，无实质偏离）**
+   - 识别基线 `switchBaselineKey`（provider+id）在 session_start / model_select / agent_start / turn_start 维护；恢复只在确认切换的 model_select（不在 BH-E5 窗口且前后模型不同）触发，且基线更新刻意排在恢复之后——被宿主钳制的恢复写入再入 thinking_level_select 时仍判为切换所致，不会二次采纳。
+   - 退化（spec 明示接受）：外部扩展抢先注册 tls 且分发被卡时 model_select 先到，迟到重置仍采纳为显式——等同修复前行为，单测钉住，docs/{en,zh}/effort.md 记录。
+   - **残余缺口（审查 F1，P2，记台账）**：ctrl+p 模型选择器把当前模型预选为默认项，Enter 重选当前模型时宿主 `setModel` 仍会重置 thinking 但因 `modelsAreEqual` 早退不发 `model_select`——core 无事件可识别，用户显式等级可能被静默降级并固化。属宿主侧限制，建议向 pi 上游提修复（同模型 setModel 跳过重置，或 modelsAreEqual 时也发 model_select）；core 侧无事件可用，不在本批修。
+   - 测试口径注记：② 的「下一次模式切换 profile 生效」以 fixture 命令复现 profile-apply.ts 对共享 owner 的同一 setFromProfile 调用（双 factory 同 api 装载，与生产 assembly 同构）；profile 配置解析本身由 modes 套件覆盖。lib 未新增 extensions 导入（不变量 1/2 保持）。
+
+FX-3. **memory 25K 核实：结论「无缺陷」，base 即绿**
+   - 新增 `test/lib/memory-index-bypass.test.ts` 钉住「绕过 writer 直写 >31K MEMORY.md」场景（注入 ≤ lane 预算且巨型索引不泄漏、`needsConsolidation` 按原始字节数返回 `index N/25000 bytes`、turn_end 发一条 ConsolidationTrigger 指令）；变异验证（裸注入/关触发器均转红）证明断言有效。`extensions/memory/` 零改动。
+   - 两机字节数普查（只读，仅字节数）：本机 user 7,650 / 项目最大 20,500；Air user 6,337 / 项目最大 17,723——均低于各自上限，现实数据无超限。
+   - 审查 nit（F1/F2）：新测试的「不重发」注释初版把 10 轮节流误标为 in-flight 守卫，合入前已修正（in-flight 守卫本身仍未被隔离钉住，与既有 memory-v2-consolidate 用例同款，列入下一轮）。
+
+FX-4. **SC 默认开启后实测：结论「数据不足」，不外推**
+   - 遥测普查修正：orchestrator 早期口径「本机 ST-01 34 条/4 文件、metrics 2 条/1 文件」经严格条目形状复核确认**全部为正文污染**（assistant 消息反引号提及 + observation-pack 文本对象），本机真实遥测条目为 0；Air 无 rg 曾致首轮探测误报 NONE。实测数据全部来自 Air：3 会话 3 周期（时间戳 2026-11-12，默认 mode:on），全部 applied（origin=precompute、validated）、SC-6 实测提前接管率 3/3=1.0、threshold 兜底 0、降级 shadow 0、丢弃/拒绝 0。样本 n=3 判「数据不足」，压缩效果（estPostTokens 34.3%/43.7%/58.5%）与时间节约无法据此下结论。
+   - **SC-1 的 3 次未归因遗漏仍未裁决**：样本零 discarded/refused 事件、无原因码可查，该项保持未关闭；需长跑积累含原因码的遥测。
+   - 观察项（非缺陷）：2 会话的 commit 落在 compute-ready 后数小时（过夜空闲），草稿持有至下一宿主边界，符合设计。docs/{en,zh}/compaction.md 新增「默认开启后实测（2026-11-14）」节。
+
+FX-5. **review/ 模块深度审查（REPORT：REVIEW-2026-11-14-review-module.md）**
+   - P0：0 条。P1：1 条已修——PR 路径全部子进程无时限（私有仓 + gh 不可用 → https 兜底 clone 永久等凭据），修复 clone 120s / pull fetch 60s / `gh pr view`+`gh pr diff` 60s + `GIT_TERMINAL_PROMPT=0`（FX-1 移交裁决项，深审确凿后本批修复，未扩出 review 模块）。
+   - P2：2 条、P3：9 条记录不修（内层 SHA 守卫重试失败静默放行、脏树 untracked 全量读入无上限、workflow-schemas 死代码、config 头注释路径失真等），详见证报告；熔断未触发（P0/P1=1 ≤ 5）。审查 nit（N1/N2，报告初版 R1 行号引用混用修复后状态、门槛计数 183 未更新为 188）已修正。
+
+FX-6. **流程注记**
+   - W-R 与 W-M 首派 worker 死于 model_provider_unavailable（与 BH 批 W-C 同款），续派（resume）后各自接手半成品完成；W-R 半成品经逐行复核后沿用，缺失的红基线证据由续派 worker 补齐（净树 spy 两次实测）。
+   - 台账更正一处 orchestrator 错误：FX-4 节所记「34/2 条」基线为正文污染（见 FX-4），以严格形状复核为准。

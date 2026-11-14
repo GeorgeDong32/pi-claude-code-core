@@ -20,7 +20,7 @@
 
 | spec | 内容 | 状态 |
 |---|---|---|
-| [回测加固后续小修](2026-11-14-followup-small-fixes.md) | BH 遗留：FX-1 review-degradation 红项修复 + 本地 fetch 时限（D-FX-1）、FX-2 E5 边界方案 B 覆盖全部宿主切模型途径（D-FX-2）、FX-3 memory 25K 核实、FX-4 SC 默认开启效果评估（含 Air 只读取数，D-FX-3）、FX-5 review/ 模块深度审查；三路并行（W-R/W-E/W-M） | **派工中（2026-11-14）**：决策 D-FX-1…4 见 spec 首节；完成后回填 |
+| [回测加固后续小修](2026-11-14-followup-small-fixes.md) | BH 遗留：FX-1 review-degradation 红项修复 + 本地 fetch 时限（D-FX-1）、FX-2 E5 边界方案 B 覆盖全部宿主切模型途径（D-FX-2）、FX-3 memory 25K 核实、FX-4 SC 默认开启效果评估（含 Air 只读取数，D-FX-3）、FX-5 review/ 模块深度审查；三路并行（W-R/W-E/W-M） | **已实施完成（2026-11-14）**：FX-1…5 全部落地，main `c58ec84` 三门 + 金丝雀全绿且 **test 零失败**（BH-10 关闭）；FX-3 结论 base 即绿无缺陷、FX-4 结论数据不足（SC-1 遗漏仍未裁决）；FX-5 深审 P0=0/P1×1 已修/P2×2+P3×9 记录（REPORT 见仓库根）；三路独立审查均 PASS-with-nits（nit 已修）；台账见 CHANGELOG Unreleased + DEVIATIONS FX-1…6 + PROGRESS 同日节 |
 
 ## 实际状态与续做范围
 
