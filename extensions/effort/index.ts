@@ -29,6 +29,12 @@ function modelName(model: EffortModel | null | undefined): string {
   return model?.id ?? "current model";
 }
 
+// FX-2: model identity for switch detection — the same provider+id pair the
+// host's modelsAreEqual compares.
+function modelKey(model: { provider?: string; id?: string } | null | undefined): string | undefined {
+  return model && typeof model.id === "string" ? `${model.provider ?? ""}\u0000${model.id}` : undefined;
+}
+
 function formatAvailableLevels(model: EffortModel | null | undefined): string {
   return getAvailableThinkingLevels(model).join(", ");
 }
@@ -116,6 +122,17 @@ export default function effortExtension(pi: ExtensionAPI): void {
   // Last seen context, so owner.changed() can refresh status slots even when
   // the change originated in the modes module (profile application, D5).
   let lastCtx: ExtensionContext | undefined;
+  // FX-2: model key remembered at session_start / model_select / agent_start
+  // / turn_start. A thinking_level_select whose live ctx.model differs from
+  // this baseline was emitted from inside a host model switch (the host
+  // assigns agent.state.model BEFORE setThinkingLevel emits), which the
+  // BH-E5 span cannot see for manual /model or ctrl+p switches.
+  let switchBaselineKey: string | undefined;
+
+  function rememberModel(model: { provider?: string; id?: string } | null | undefined): void {
+    const key = modelKey(model);
+    if (key !== undefined) switchBaselineKey = key;
+  }
 
   function refreshFastMode(): boolean {
     fastMode = getFastMode(settingsPath);
@@ -224,16 +241,28 @@ export default function effortExtension(pi: ExtensionAPI): void {
   // default, not user intent — record it without promoting it to an
   // explicit choice; the priority chain env > explicit > profile > model
   // default stays intact.
-  pi.on("thinking_level_select", (event) => {
+  // FX-2 (2026-11-14): the BH-E5 span only covers the profile-driven path.
+  // Manual switches (/model, ctrl+p) run unbracketed, but the host assigns
+  // agent.state.model BEFORE the emission, so the live ctx.model differs
+  // from the remembered baseline — same model-switch-caused classification,
+  // never an explicit write. Degradation: if an external extension registers
+  // its tls handler ahead of core's (a stalled dispatch lets model_select
+  // arrive first), the baseline is already updated when the late event lands
+  // and the reset is adopted as today — pinned by test FX-2⑥.
+  pi.on("thinking_level_select", (event, ctx) => {
     if (event.level === owner.lastApplied()) return;
-    if (owner.inModelSwitch()) {
+    const liveKey = modelKey(ctx?.model);
+    const hostSwitch =
+      owner.inModelSwitch() ||
+      (switchBaselineKey !== undefined && liveKey !== undefined && liveKey !== switchBaselineKey);
+    if (hostSwitch) {
       owner.noteModelSwitchLevel(event.level);
       coreBus().publish({ effort: { level: pi.getThinkingLevel(), source: owner.currentSource() } });
       return;
     }
     const outcome = owner.setExplicit(event.level, "shortcut");
     if (outcome === "pinned-by-env") return;
-    // No ctx here: bus sync only; the footer chip reads pi.getThinkingLevel().
+    // Bus sync only; the footer chip reads pi.getThinkingLevel().
     coreBus().publish({ effort: { level: pi.getThinkingLevel(), source: owner.currentSource() } });
   });
 
@@ -241,6 +270,8 @@ export default function effortExtension(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => {
     // Track model for tab completion
     currentModel = ctx.model ?? null;
+    // FX-2: seed the host-switch baseline with the session's model
+    rememberModel(ctx.model);
     lastCtx = ctx;
     // ① PI_CORE_EFFORT is read once at startup (P1-EF-05)
     owner.setFromEnv(process.env.PI_CORE_EFFORT ?? "");
@@ -295,9 +326,24 @@ export default function effortExtension(pi: ExtensionAPI): void {
     }
   });
 
-  // ─── model_select: sync visible effort UI ────────────────────────
+  // ─── model_select: host-switch recovery + sync visible effort UI ──
   pi.on("model_select", (event, ctx) => {
+    const previousKey = switchBaselineKey;
+    const nextKey = modelKey(event.model);
     currentModel = event.model;
+    // FX-2: a model_select OUTSIDE the BH-E5 span with a model change is a
+    // host-initiated switch (manual /model, ctrl+p). The reset already
+    // happened (tls fired from inside setThinkingLevel), so restore the
+    // chain: clear the stale profile slot and re-apply ① env / ② explicit.
+    // The baseline still names the previous model here on purpose — a
+    // clamped restore write re-entering thinking_level_select below must
+    // classify as switch-caused, not user intent. Inside the profile bracket
+    // the modes module re-asserts the profile effort itself right after, so
+    // restoring here would be a double application (BH-E5 semantics).
+    if (!owner.inModelSwitch() && previousKey !== undefined && nextKey !== undefined && nextKey !== previousKey) {
+      owner.afterHostModelSwitch();
+    }
+    if (nextKey !== undefined) switchBaselineKey = nextKey;
     const visibleEffort = ctx.isIdle() ? pi.getThinkingLevel() : activeRunEffort ?? pi.getThinkingLevel();
     syncEffortUi(ctx, visibleEffort);
   });
@@ -307,12 +353,16 @@ export default function effortExtension(pi: ExtensionAPI): void {
   // mid-stream change is not misrepresented as affecting in-flight requests.
   pi.on("agent_start", (_event, ctx) => {
     currentModel = ctx.model ?? currentModel;
+    // FX-2: keep the host-switch baseline truthful across runs
+    rememberModel(ctx.model);
     activeRunEffort = pi.getThinkingLevel();
     syncEffortUi(ctx, activeRunEffort);
   });
 
   pi.on("turn_start", (_event, ctx) => {
     currentModel = ctx.model ?? currentModel;
+    // FX-2: keep the host-switch baseline truthful across turns
+    rememberModel(ctx.model);
     activeRunEffort ??= pi.getThinkingLevel();
     syncEffortUi(ctx, activeRunEffort);
   });

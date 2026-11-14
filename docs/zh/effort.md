@@ -61,10 +61,23 @@
   括起 `setModel`):此类事件用 `noteModelSwitchLevel` 记录(回声簿记 + 清理
   过期 profile 槽),绝不提升为显式选择——此前该重置会变成 `source: "session"`,
   从此永远压过 profile 槽。span 之外的外部变更照旧采纳(EFF-01 不变)。
+- **FX-2(2026-11-14):边界覆盖所有宿主切模型途径(手动 `/model`、ctrl+p),
+  不只 profile 括弧。** 宿主在 `setThinkingLevel` 发事件**之前**先改写
+  `agent.state.model`,故 tls listener(签名改为 `(event, ctx)`)在实时
+  `ctx.model` 与基线模型键(provider+id)不一致时,同样判定为切换所致;基线
+  在 `session_start` / `model_select` / `agent_start` / `turn_start` 维护。
+  确认切换的 `model_select`(不在括弧内且前后模型不同)随后调用所有者的
+  `afterHostModelSwitch()`:清过期 profile 槽(BH-E5 语义),再对新模型重新
+  应用 ① env / ② 显式选择——`setThinkingLevel` 写入仍只属于所有者
+  (P1-EF-07 不变),新模型不支持的档位由宿主钳制。退化:外部扩展若抢先注册
+  tls 且卡住分发,`model_select` 会先于重置事件到达;此时基线已更新,重置
+  仍被采纳为显式——与修复前行为一致,由 `model-switch-adopt.test.ts` 的
+  FX-2⑥ 钉住,视为可接受。
 
 ## 测试
 
 `extensions/effort/tests/` —— node:test 经 tsx(沿用来源框架):
 `effort.test.ts`、`effort-picker.test.ts`、`integration.test.ts`、
-`owner-adopt.test.ts`、`model-switch-adopt.test.ts`、`ui.test.ts`。
+`owner-adopt.test.ts`、`model-switch-adopt.test.ts`、
+`host-model-switch.test.ts`、`ui.test.ts`。
 所有者逻辑另在 `test/lib/` 的 `effort-owner.test.ts` 覆盖。

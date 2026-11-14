@@ -13,6 +13,15 @@
  * Priority ① > ② > ③ > ④. The effective value is pushed down through
  * `pi.setThinkingLevel` — this module is the ONLY place in core allowed to
  * call it (P1-EF-07 source scan enforces that for extensions/).
+ *
+ * Host model switches (BH-E5 + FX-2, 2026-11-14): AgentSession.setModel
+ * resets the level to the model's switch default from INSIDE the switch and
+ * emits model_select only afterwards. Profile-driven switches are bracketed
+ * by the modes module (beginModelSwitch/endModelSwitch); manual switches
+ * (/model, ctrl+p) are identified by a model-key baseline in the effort
+ * module and recovered through afterHostModelSwitch() once the confirming
+ * model_select arrives. Either way the reset is bookkeeping — it never
+ * becomes an explicit choice.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -60,6 +69,20 @@ export interface EffortOwner {
 	 * model switch — that is the priority-chain guarantee this fix restores.
 	 */
 	noteModelSwitchLevel(v: OwnerEffortLevel): void;
+	/**
+	 * FX-2 (spec 2026-11-14-followup-small-fixes): recover the chain after a
+	 * host-initiated model switch that bypassed the profile bracket (manual
+	 * /model or ctrl+p — the host emits model_select only AFTER its reset,
+	 * so the effort listener calls this once the new model is confirmed).
+	 * Clears the profile slot (BH-E5 semantics: the previous profile
+	 * `:effort` belonged to the previous model application; the next mode
+	 * switch re-asserts it), then re-applies the ① env pin or ② explicit
+	 * choice on the new model through apply() — still the only
+	 * setThinkingLevel write in core (P1-EF-07); the host clamps values the
+	 * new model does not support. Pure owner state operation: no slot is
+	 * written on behalf of the switch itself.
+	 */
+	afterHostModelSwitch(): void;
 	/**
 	 * The level this owner last wrote through pi.setThinkingLevel (null before
 	 * the first apply). The thinking_level_select listener uses it to tell its
@@ -160,6 +183,11 @@ function createEffortOwner(pi: ExtensionAPI): EffortOwner {
 			// echo bookkeeping + stale-profile cleanup only — never a slot write
 			applied = v;
 			profile = null;
+		},
+		afterHostModelSwitch() {
+			// FX-2: stale profile slot out, ①/② back in — never a ② write
+			profile = null;
+			apply();
 		},
 		lastApplied: () => applied,
 		effective(): OwnerEffortLevel {

@@ -70,10 +70,26 @@ chain is the only place in core allowed to call it** (P1-EF-07 source scan).
   and NEVER promoted to an explicit choice — previously the reset became
   `source: "session"`, silently beating the profile slot forever. External
   changes outside the span still adopt (EFF-01 unchanged).
+- **FX-2 (2026-11-14): the boundary covers EVERY host model-switch path
+  (manual `/model`, ctrl+p), not just the profile bracket.** The host assigns
+  `agent.state.model` BEFORE `setThinkingLevel` emits, so the tls listener
+  (now `(event, ctx)`) also classifies the reset as switch-caused when the
+  live `ctx.model` differs from a baseline model key (provider+id)
+  remembered at `session_start` / `model_select` / `agent_start` /
+  `turn_start`. The `model_select` that confirms a non-bracketed switch then
+  calls the owner's `afterHostModelSwitch()`: clear the stale profile slot
+  (BH-E5 semantics) and re-apply ① env / ② explicit on the new model —
+  still the only owner-owned `setThinkingLevel` write (P1-EF-07), the host
+  clamps unsupported levels. Degradation: if an external extension registers
+  its tls handler ahead of core's and stalls the dispatch, `model_select`
+  arrives before the reset event; the baseline is already updated, so the
+  reset is adopted as before the fix — pinned by `model-switch-adopt.test.ts`
+  FX-2⑥ and considered acceptable (same behavior as pre-FX-2).
 
 ## Tests
 
 `extensions/effort/tests/` — node:test via tsx (framework kept from origin):
 `effort.test.ts`, `effort-picker.test.ts`, `integration.test.ts`,
-`owner-adopt.test.ts`, `model-switch-adopt.test.ts`, `ui.test.ts`. Owner
+`owner-adopt.test.ts`, `model-switch-adopt.test.ts`,
+`host-model-switch.test.ts`, `ui.test.ts`. Owner
 logic additionally covered in `test/lib/` via `effort-owner.test.ts` context.
