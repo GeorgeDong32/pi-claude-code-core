@@ -1,8 +1,15 @@
 /**
  * Load / persist permission rules from global + project scopes.
+ *
+ * E8a (spec 2026-11-15-cleanup-hardening): the no-op
+ * ensureLocalPermissionsGitignored was deleted (it read .gitignore but
+ * never wrote); the gitignored-tip detection now asks `git check-ignore`
+ * (full pattern grammar) and falls back to the old exact-line comparison
+ * when git is unavailable or errors.
  */
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs"
+import { spawnSync } from "node:child_process"
 import { readJson, readJsonCached, writeJsonAtomic } from "../../lib/settings.ts"
 import path from "node:path"
 import {
@@ -180,23 +187,37 @@ export function addPermissionRule(opts: {
 		opts.destination === "local",
 	)
 
-	if (opts.destination === "local") {
-		ensureLocalPermissionsGitignored(opts.cwd)
-	}
-
+	// E8a: the former ensureLocalPermissionsGitignored(opts.cwd) call for
+	// destination === "local" lived here — it read .gitignore and wrote
+	// nothing (dead code, deleted).
 	return writePermissionsToFile(filePath, opts.behavior, [norm], false)
 }
 
-function ensureLocalPermissionsGitignored(cwd: string): void {
-	const localPath = getProjectPermissionsPath(cwd, true)
+/**
+ * E8a (spec 2026-11-15-cleanup-hardening): is the local permissions file
+ * covered by the repo's ignore rules? Primary detector is
+ * `git check-ignore -q <entry>` run in cwd — it honors the full pattern
+ * grammar, so a `.pi/` directory pattern covers the file (the old
+ * exact-line comparison false-positived on it). git missing or erroring
+ * (e.g. exit 128 outside a repo) falls back to the old exact-line
+ * .gitignore comparison.
+ */
+function isLocalPermissionsGitignored(cwd: string, entry: string): boolean {
+	const check = spawnSync("git", ["check-ignore", "-q", entry], {
+		cwd,
+		stdio: "ignore",
+	})
+	if (!check.error && (check.status === 0 || check.status === 1)) {
+		return check.status === 0
+	}
 	const gitignorePath = path.join(cwd, ".gitignore")
-	const entry = path.relative(cwd, localPath)
-	if (!existsSync(gitignorePath)) return
+	if (!existsSync(gitignorePath)) return false
 	try {
-		const content = readFileSync(gitignorePath, "utf-8")
-		if (content.split("\n").some((line) => line.trim() === entry)) return
+		return readFileSync(gitignorePath, "utf-8")
+			.split("\n")
+			.some((line) => line.trim() === entry)
 	} catch {
-		return
+		return false
 	}
 }
 
@@ -206,23 +227,11 @@ export function warnIfLocalPermissionsNotGitignored(
 ): void {
 	const localPath = getProjectPermissionsPath(cwd, true)
 	if (!existsSync(localPath)) return
-	const gitignorePath = path.join(cwd, ".gitignore")
 	const entry = path.relative(cwd, localPath)
-	if (!existsSync(gitignorePath)) {
+	if (!isLocalPermissionsGitignored(cwd, entry)) {
 		notify?.(
 			`Tip: add ${entry} to .gitignore to keep personal permission rules private`,
 		)
-		return
-	}
-	try {
-		const content = readFileSync(gitignorePath, "utf-8")
-		if (!content.split("\n").some((line) => line.trim() === entry)) {
-			notify?.(
-				`Tip: add ${entry} to .gitignore to keep personal permission rules private`,
-			)
-		}
-	} catch {
-		/* ignore */
 	}
 }
 
