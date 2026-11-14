@@ -23,6 +23,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { getSharedEffortOwner, type OwnerEffortLevel } from "../../lib/effort-owner.ts";
+import { modelIdentityKey } from "../../lib/model-id.ts";
 import { clampToSupported, type EffortLevel } from "../effort/effort.ts";
 import { notify as uiNotify } from "../ui/notify.ts";
 import type { PermissionMode } from "./mode-prompt.ts";
@@ -128,11 +129,15 @@ export function createProfileController(pi: ExtensionAPI, wiring: ProfileWiring)
 		// round-trip when the profile resolves to the model that is already
 		// active — every mode switch re-applies the profile, and a redundant
 		// setModel also makes the host reset the thinking level (BH-E5).
+		// S6: the identity comparison goes through the shared
+		// modelIdentityKey — the key is built from the profile's parsed
+		// provider/model fields (the profile stores a "provider/model" id,
+		// not a model object).
 		const currentModel = ctx.model as { provider?: string; id?: string } | undefined;
 		const sameModel =
 			!!currentModel &&
-			currentModel.provider === parsed.provider &&
-			currentModel.id === parsed.model;
+			modelIdentityKey(currentModel) ===
+				modelIdentityKey({ provider: parsed.provider, id: parsed.model });
 
 		if (!sameModel) {
 			// BH-E5: the host resets the thinking level INSIDE setModel
