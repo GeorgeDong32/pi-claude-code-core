@@ -97,7 +97,7 @@ import {
 import { interpretDecision } from "./interpret.ts";
 import { OutsideWriteSnapshot, listTrackedOutsideWrites, popTrackedOutsideWrite, restoreOutsideWrite, trackOutsideWrite } from "./outside-writes.ts";
 import { commandReferencesSensitivePath, findProjectRoot, isCcSafetyPath, isOutsideCwd, isSensitivePath } from "./path-safety.ts";
-import { checkBashDenyHit, checkBashProtectedWrite, checkBashWriteTargets, resolveBashPathChecks, type BashProtectedWrite } from "./bash-path-check.ts";
+import { checkBashDenyHit, checkBashFlagEscalation, checkBashProtectedWrite, checkBashWriteTargets, resolveBashPathChecks, type BashProtectedWrite } from "./bash-path-check.ts";
 import { pathToolMatchesRuleContent } from "./path-permission-match.ts";
 import { TodoItem, ensurePlanFile, extractPlanSection, extractTodoItems, filterSubstantivePlanItems, getPlanFilePath, hashPlan, isPlanFilePath, markCompletedSteps, readPlanFile, resolveWorkspacePath, shouldSyncAssistantPlanToFile, writePlanFile } from "./plan.ts";
 import {
@@ -1230,10 +1230,17 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     // whole-command deny, every mode; reason text carries rule + path + the
     // switch name so the model does not blind-retry.
     let bashDenyRule: string | null = null;
+    let bashFlagAsk: string | null = null;
     if (denyOn) {
       const hit = firstHit((c) => checkBashDenyHit(c, ctx.cwd, mergedPermissionRules));
       if (hit) {
         bashDenyRule = `Denied by permission rule [${hit.source}]: ${hit.rule} — bash references denied path "${hit.path}". Adjust the rule, or scope/disable via bashPathChecks / PI_CORE_BASH_PATH_CHECKS.`;
+      }
+      // BH-R3: an unrecognized mv/cp flag escalates to ask (never deny) —
+      // the write targets cannot be path-validated.
+      const esc = firstHit((c) => checkBashFlagEscalation(c, ctx.cwd));
+      if (esc) {
+        bashFlagAsk = `bash write targets unverifiable: unrecognized mv/cp flag "${esc.path}" — approve, or rewrite with explicit paths`;
       }
     }
     return {
@@ -1267,6 +1274,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       bashPathCheck,
       bashProtectedWrite,
       bashDenyRule,
+      bashFlagAsk,
       command,
       commandSafe: isSafeCommand(command),
       embeddedAuto: embedded.map((c) => {

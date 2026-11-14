@@ -117,14 +117,18 @@ describe("review fixes 2026-11-08 (P1#1/P2#3): glued redirects + bare Bash rule"
 	});
 });
 
-describe("review fixes 2026-11-08 (P1#2): mv/cp flag forms hit", () => {
-	it("mv -t / --target-directory cannot hide the destination (W3)", () => {
-		expect(checkBashWriteTargets3("mv -t ~/.pi/agent/rules ./evil.md")).toMatchObject({ kind: "argument" });
-		expect(checkBashWriteTargets3("cp --target-directory=~/.ssh id_ed25519.pub")).toMatchObject({ kind: "argument" });
-		// mv/cp with flags on an otherwise clean path also prompts (validator parity)
-		expect(checkBashWriteTargets3("mv -v a.ts b.ts")).toMatchObject({ path: "-v" });
+describe("review fixes 2026-11-08 (P1#2) + BH-R3 rework: mv/cp flag forms", () => {
+	it("-t / --target-directory destinations are validated (W3)", () => {
+		// BH-R3: the -t destination is checked against the W3 set instead of
+		// blanket-hitting the flag text; ~/.ssh is CC-sensitive → hit
+		expect(checkBashWriteTargets3("mv -t ~/.ssh ./evil.md")).toMatchObject({ path: "~/.ssh", kind: "argument" });
+		expect(checkBashWriteTargets3("cp --target-directory=~/.ssh id_ed25519.pub")).toMatchObject({ path: "~/.ssh", kind: "argument" });
+		// recognized harmless flags are stripped — clean bare form no longer prompts
+		expect(checkBashWriteTargets3("mv -v a.ts b.ts")).toBeNull();
 		// no flags → unchanged semantics
 		expect(checkBashWriteTargets3("mv a.ts b.ts")).toBeNull();
+		// unrecognized flag → still prompts (cannot path-validate), flag text as label
+		expect(checkBashWriteTargets3("mv -z a.ts b.ts")).toMatchObject({ path: "-z", kind: "mv-cp-flag-form" });
 	});
 	it("install -m 644 stays destination-only (legitimate common form)", () => {
 		expect(checkBashWriteTargets3("install -m 644 x .git/hooks/h")).toMatchObject({ path: ".git/hooks/h" });

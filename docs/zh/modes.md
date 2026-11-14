@@ -28,7 +28,7 @@
 | 1b | bash 路径目标 deny 扩展(W4) | 拦截 —— Read/Edit deny 规则覆盖 bash 路径类命令(读类参数对 `Read(...)` 规则、写/建类参数与重定向目标对 `Edit(...)` 规则),所有模式、bypass 不豁免;pattern/变量/ssh 参数 fail-open 不触发 |
 | 2a | bypass + 显式 ask 规则 | 弹窗 —— bypass 不豁免(CC 1f)。W1:family 合成的默认 ask(MCP 首见工具、web-gov 非预批域名)不是显式 ask 规则,自动放行;有管辖的显式 ask 规则时仍弹 |
 | 2b | bypass + 敏感路径(edit/write 目标) | 弹窗 —— bypass 不豁免(CC 1g —— 仅 edit 类工具)。W2:路径集合扩为 CC `DANGEROUS_FILES/DIRECTORIES` 全集(大小写不敏感、`.claude/worktrees` 结构例外、symlink 双检)∪ pi 额外(`.env*`、密钥文件、`.ssh/`、`.gnupg/`) |
-| 2b′ | bypass + bash 写目标(W3) | 弹窗 —— 重定向目标与写命令参数位(tee/cp/mv/rm/install/touch/mkdir/rmdir/sed -i)命中敏感路径;分词+结构化判定(非正则),引号字面量脱引号参与(P0-2/3),变量/通配不透明,fail-open;复合命令仅在其余段全部只读时触发(CC 近似);mv/cp 全位置参数(P1-2);sed 按 CC 完整提取器(`-i后缀`/`--in-place[=s]`/组合短 flag,文件=脚本之后全部,`-f` 脚本文件校验、`-e` 跳过)(P1-3) |
+| 2b′ | bypass + bash 写目标(W3) | 弹窗 —— 重定向目标与写命令参数位(tee/cp/mv/rm/install/touch/mkdir/rmdir/sed -i)命中敏感路径;分词+结构化判定(非正则),引号字面量脱引号参与(P0-2/3),变量/通配不透明,fail-open;复合命令仅在其余段全部只读时触发(CC 近似);mv/cp 全位置参数(P1-2;BH-R3 flag 感知:无害 flag 剥离、`-t` 目录本身受检、未识别 flag 升级弹窗);sed 按 CC 完整提取器(`-i后缀`/`--in-place[=s]`/组合短 flag,文件=脚本之后全部,`-f` 脚本文件校验、`-e` 跳过)(P1-3) |
 | 2b″ | bypass + 保护路径写入(P1-4) | 弹窗 —— bash 写入 [C4] 保护集(permission-modes.json / rules 目录 / settings.json);非 bypass 模式镜像在第 3.5 步;弹窗而非硬拦(启发式检测留人工出口) |
 | 2c | bypass 其余一切 | 静默放行(+ cwd 外写跟踪) |
 
@@ -39,6 +39,10 @@
 **复核修复(2026-11-08)** —— 同开关下的新增门:P0-1——allow 规则不再匹配带命令替换(`$()`、反引号、`${}`、进程替换等)的命令(除 CC 安全 heredoc 形态——`git commit -m "$(cat <<'EOF'…EOF)"` 仍放行),也不再匹配重定向目标命中敏感路径的命令——这些命令落回各模式默认询问逻辑(双机 11251 条历史 bash 回放实测:新增询问 0)。P1-1——融合(`then_run`)命令与主 bash 命令同套 W3/W4/P1-4 检查。P2——deny/ask 匹配剥离 CC 五安全包装器(timeout/time/nice/stdbuf/nohup 含裸 `nice` 与 `-N` 形态)并展开 `$()`/反引号子命令(单层;`(...)`/`{ ...; }` 为已知差距)。
 
 **路径规则 glob 语义(BH-S1,2026-11-14)** —— `Read/Edit/Write(路径)` 规则中,单个 `*` 是段内通配(`./.env.*` 匹配 `./.env.local`,不匹配 `./a/.env.local`);`**` 保持跨段语义;其余正则元字符一律按字面匹配。此修复让此前永远无法命中的单星规则(如常见的 `Read(./.env.*)` deny)在 deny、ask、allow 三类规则及 W4 bash 复用路径上全部生效。
+
+**回放加固(BH-R3,2026-11-14)** —— 回放测试发现的鲁棒性修复:
+
+- **BH-R3 —— mv/cp 参数位感知 flag。** 此前 `cp -R src dst` / `mv -f a ~/.ssh/x` 会把 FLAG 当路径读。无害短 flag(`r/R/f/i/n/v/a/p/u/b/T/l/H/L/P/d/Z/x`)与长形态一律剥离;带值 flag(`-S`/`--suffix`)消费其值;`-t DIR` / `--target-directory[=DIR]` 使目录本身成为受检目标;未识别的 flag 在所有模式升级为 "mv/cp flag 形态" 弹窗(`bash write targets unverifiable: unrecognized mv/cp flag "X" — approve, or rewrite with explicit paths`)——deny 规则仍然优先,保护路径命中又优先于 flag 弹窗。无害 flag 调用(`mv -v a.ts b.ts`)不再弹窗——修正此前 flag 盲视的 P1-2 行为。另外,喂给远端 shell 的 heredoc 体(`ssh host <<'EOF' … EOF`)在 W3/W4 扫描前被掩蔽——其体不是本地路径上下文(分隔符从原始行解析,`<<'EOF'` 支持;`<<<` 不受影响;未闭合 heredoc 保守保留)。
 
 ### Claude Code 批准清单导入(2026-11-02)
 

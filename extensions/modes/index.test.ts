@@ -3657,3 +3657,58 @@ describe("review fixes P1-1/P1-4 (2026-11-08 handoff)", () => {
 		expect(await callTool("bash", { command: "echo x > ~/.pi/agent/permission-modes.json" })).toBeUndefined()
 	})
 })
+
+// ---- BH batch (spec 2026-11-14-backtest-hardening) -----------------------
+
+describe("BH-R3: flagged mv/cp is not denied by unrelated deny rules (end-to-end)", () => {
+	let pi: FakePi
+	let projDir: string
+	let configTmp: string
+
+	beforeEach(async () => {
+		resetCoreBusForTests()
+		pi = createFakePi()
+		projDir = mkdtempSync(join(tmpdir(), "pm-bh-r3-"))
+		configTmp = mkdtempSync(join(tmpdir(), "pm-bh-r3-cfg-"))
+		setConfigPath(join(configTmp, "permission-modes.json"))
+		writeFileSync(
+			join(configTmp, "permission-modes.json"),
+			JSON.stringify({
+				classifier: { enabled: false },
+				// an UNRELATED deny rule — none of its paths appear in the commands
+				permissions: { deny: ["Read(./.env)"] },
+			}),
+		)
+		permissionModesExtension(makeFakePiForExtension(pi))
+		pi.flags["permission-mode"] = "bypass"
+		await pi.simulateSessionStart(projDir)
+	})
+
+	afterEach(() => {
+		rmSync(projDir, { recursive: true, force: true })
+		rmSync(configTmp, { recursive: true, force: true })
+	})
+
+	async function callBash(command: string) {
+		const ctx = makeCtx(pi, { cwd: projDir })
+		return pi.simulateToolCall("bash", { command }, ctx)
+	}
+
+	it("cp -R with a harmless flag is not denied by an unrelated deny rule", async () => {
+		expect(await callBash("cp -R src dst")).toBeUndefined()
+	})
+
+	it("a rule-matching destination still denies (Edit(~/.ssh/**) via config)", async () => {
+		writeFileSync(
+			join(configTmp, "permission-modes.json"),
+			JSON.stringify({
+				classifier: { enabled: false },
+				permissions: { deny: ["Read(./.env)", "Edit(~/.ssh/**)"] },
+			}),
+		)
+		const r = await callBash("mv -f a ~/.ssh/x")
+		expect(r).toMatchObject({ block: true })
+		expect(String((r as { reason?: string }).reason)).toContain("~/.ssh/x")
+	})
+})
+

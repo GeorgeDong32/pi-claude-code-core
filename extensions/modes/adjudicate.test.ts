@@ -33,6 +33,7 @@ function facts(patch: Partial<AdjudicationFacts>): AdjudicationFacts {
 		bashPathCheck: null,
 		bashProtectedWrite: null,
 		bashDenyRule: null,
+		bashFlagAsk: null,
 		command: "",
 		commandSafe: false,
 		embeddedAuto: [],
@@ -289,5 +290,36 @@ describe("decide: P1-4 protected pi-path write (2026-11-08)", () => {
 			input: { command: "rm ~/.pi/agent/settings.json" },
 			bashProtectedWrite: { target: "~/.pi/agent/settings.json", kind: "host-settings-file" },
 		}))).toMatchObject({ kind: "prompt", category: "protected-path" });
+	});
+});
+
+describe("decide: BH-R3 unrecognized mv/cp flag escalation (ask, never deny)", () => {
+	const label = 'bash write targets unverifiable: unrecognized mv/cp flag "-z" — approve, or rewrite with explicit paths';
+	it("prompts in every non-bypass mode, after plan hard limits and 3.5", () => {
+		expect(decide(facts({ mode: "ask", tool: "bash", input: { command: "mv -z a b" }, bashFlagAsk: label })))
+			.toEqual({ kind: "prompt", flavor: "permission-options", label, category: "sensitive-path" });
+		expect(decide(facts({ mode: "auto", tool: "bash", input: { command: "mv -z a b" }, bashFlagAsk: label })))
+			.toEqual({ kind: "prompt", flavor: "permission-options", label, category: "sensitive-path" });
+		// plan hard block still wins; a protected-path prompt (3.5) beats 3.6
+		expect(decide(facts({
+			mode: "plan",
+			tool: "bash",
+			input: { command: "x" },
+			planHardBlock: { block: true, reason: "plan hard limit" },
+			bashFlagAsk: label,
+		}))).toEqual({ kind: "deny", reason: "plan hard limit" });
+		expect(decide(facts({
+			mode: "ask",
+			tool: "bash",
+			input: { command: "x" },
+			bashProtectedWrite: { target: "x", kind: "host-settings-file" },
+			bashFlagAsk: label,
+		}))).toMatchObject({ category: "protected-path" });
+	});
+	it("bypass branch mirrors the prompt; a deny hit outranks it", () => {
+		expect(decide(facts({ mode: "bypass", tool: "bash", input: { command: "mv -z a b" }, bashFlagAsk: label })))
+			.toEqual({ kind: "prompt", flavor: "permission-options", label, category: "sensitive-path" });
+		expect(decide(facts({ mode: "bypass", tool: "bash", input: { command: "x" }, bashDenyRule: "Denied by permission rule", bashFlagAsk: label })))
+			.toEqual({ kind: "deny", reason: "Denied by permission rule" });
 	});
 });

@@ -7,6 +7,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	checkBashDenyHit,
+	checkBashFlagEscalation,
 	checkBashProtectedWrite,
 	checkBashWriteTargets,
 	resolveBashPathChecks,
@@ -133,6 +134,56 @@ describe("checkBashDenyHit (W4, all modes)", () => {
 		// globstar form keeps matching across directories
 		const globstar = [denyRule("Read(./**/.env.*)")];
 		expect(checkBashDenyHit("cat ./a/.env.local", CWD, globstar)).toMatchObject({ path: "./a/.env.local" });
+	});
+});
+
+// BH-R3 (spec 2026-11-14-backtest-hardening): only -t/--target-directory
+// alters the mv/cp destination; recognized harmless flags are stripped and
+// the bare positional form is analyzed; an UNRECOGNIZED flag escalates to
+// ask (checkBashFlagEscalation) instead of the old outright deny; heredoc
+// bodies piped to ssh execute remotely and skip local path checks.
+describe("BH-R3: mv/cp flag analysis + remote heredoc bodies", () => {
+	const unrelated = [denyRule("Edit(./other)")];
+	const sshRule = [denyRule("Edit(~/.ssh/**)")];
+
+	it("recognized harmless flags are stripped — bare form decides", () => {
+		expect(checkBashDenyHit("cp -R src dst", CWD, unrelated)).toBeNull();
+		expect(checkBashDenyHit("mv -R -p -f src dst", CWD, unrelated)).toBeNull();
+		expect(checkBashDenyHit("cp -Rv --preserve src dst", CWD, unrelated)).toBeNull();
+	});
+	it("a rule-matching destination still denies through the bare form", () => {
+		expect(checkBashDenyHit("mv -f a ~/.ssh/x", CWD, sshRule)).toMatchObject({ path: "~/.ssh/x", rule: "Edit(~/.ssh/**)" });
+		expect(checkBashDenyHit("cp -R a ~/.ssh/x", CWD, sshRule)).toMatchObject({ path: "~/.ssh/x" });
+	});
+	it("-t / --target-directory destinations are checked", () => {
+		// the destination DIRECTORY itself is the checked path — a dir-exact
+		// rule hits it (globstar `**` semantics need the trailing slash, so a
+		// bare dir never matches `~/.ssh/**`)
+		const dirRule = [denyRule("Edit(~/.ssh)")];
+		expect(checkBashDenyHit("cp -t ~/.ssh src", CWD, dirRule)).toMatchObject({ path: "~/.ssh" });
+		expect(checkBashDenyHit("mv --target-directory=~/.ssh src", CWD, dirRule)).toMatchObject({ path: "~/.ssh" });
+		expect(checkBashDenyHit("mv --target-directory ~/.ssh src", CWD, dirRule)).toMatchObject({ path: "~/.ssh" });
+		expect(checkBashDenyHit("mv -t~/.ssh src", CWD, dirRule)).toMatchObject({ path: "~/.ssh" });
+		// sources still checked alongside the target dir
+		expect(checkBashDenyHit("cp -t /tmp/d ~/.ssh/id_rsa", CWD, sshRule)).toMatchObject({ path: "~/.ssh/id_rsa" });
+	});
+	it("an unrecognized flag escalates to ask, never deny", () => {
+		expect(checkBashDenyHit("mv -z a b", CWD, unrelated)).toBeNull();
+		expect(checkBashFlagEscalation("mv -z a b", CWD)).toMatchObject({ path: "-z" });
+		expect(checkBashFlagEscalation("cp -R src dst", CWD)).toBeNull();
+		expect(checkBashFlagEscalation("cp -t ~/.ssh src", CWD)).toBeNull();
+	});
+	it("heredoc bodies piped to ssh skip local path checks", () => {
+		expect(checkBashDenyHit("ssh host bash -s <<EOF\nrm ~/.ssh/x\nEOF", CWD, sshRule)).toBeNull();
+		expect(checkBashDenyHit("ssh -tt host <<'EOF'\nrm ~/.ssh/x\nEOF", CWD, sshRule)).toBeNull();
+	});
+	it("local bash -s / sh -s heredoc bodies keep being analyzed", () => {
+		expect(checkBashDenyHit("bash -s <<EOF\nrm ~/.ssh/x\nEOF", CWD, sshRule)).toMatchObject({ path: "~/.ssh/x" });
+		expect(checkBashDenyHit("sh -s <<EOF\nrm ~/.ssh/x\nEOF", CWD, sshRule)).toMatchObject({ path: "~/.ssh/x" });
+		// unfindable closer → nothing stripped (conservative: body analyzed)
+		expect(checkBashDenyHit("ssh host bash -s <<EOF\nrm ~/.ssh/x\nNEVER", CWD, sshRule)).toMatchObject({ path: "~/.ssh/x" });
+		// here-strings are not heredocs — untouched
+		expect(checkBashDenyHit("cat <<<EOF", CWD, sshRule)).toBeNull();
 	});
 });
 

@@ -95,8 +95,10 @@ export interface AdjudicationFacts {
 	 * the bypass edit/write gate (1g) uses this wider CC-parity set. */
 	pathCcSafety: boolean;
 	/** W3 (2026-11-07): bash write-target check result (bypass gate) — null
-	 * when the PI_CORE_BASH_PATH_CHECKS switch is off or no target matched. */
-	bashPathCheck: { path: string; kind: "redirect" | "argument" } | null;
+	 * when the PI_CORE_BASH_PATH_CHECKS switch is off or no target matched.
+	 * BH-R3: kind may be "mv-cp-flag-form" (unrecognized mv/cp flag — the
+	 * path slot cannot be validated). */
+	bashPathCheck: { path: string; kind: "redirect" | "argument" | "mv-cp-flag-form" } | null;
 	/** P1-4 (2026-11-08): bash write onto a pi-own protected path
 	 * ([C4] set via memory/protected-paths) — prompts in EVERY mode, decide
 	 * step 3.5 (after plan hard limits, before verdict allow) plus the
@@ -105,6 +107,11 @@ export interface AdjudicationFacts {
 	/** W4 (2026-11-07): full deny reason when a Read/Edit deny rule matches a
 	 * bash path target (all modes); null otherwise. Switch-gated like W3. */
 	bashDenyRule: string | null;
+	/** BH-R3 (2026-11-14): unrecognized mv/cp flag — the write targets cannot
+	 * be path-validated, so the command prompts (ask) in every mode instead
+	 * of the former outright deny. Null when the W4 switch is off or every
+	 * flag was recognized. */
+	bashFlagAsk: string | null;
 	/** String(input.command ?? "") */
 	command: string;
 	/** isSafeCommand(command) — ask bash semantics. */
@@ -241,6 +248,16 @@ export function decide(f: AdjudicationFacts): Decision {
 				category: "protected-path",
 			};
 		}
+		// BH-R3: unrecognized mv/cp flag — targets unverifiable, ask (bypass
+		// mirror of the step 3.6 all-modes prompt).
+		if (f.bashFlagAsk) {
+			return {
+				kind: "prompt",
+				flavor: "permission-options",
+				label: f.bashFlagAsk,
+				category: "sensitive-path",
+			};
+		}
 		const effects: AllowEffects = {};
 		if (f.tool === "edit" || f.tool === "write") effects.trackOutsideWrite = true;
 		return { kind: "allow", effects };
@@ -265,6 +282,18 @@ export function decide(f: AdjudicationFacts): Decision {
 			flavor: "permission-options",
 			label: `bash writes protected pi path "${f.bashProtectedWrite.target}" (${f.bashProtectedWrite.kind})`,
 			category: "protected-path",
+		};
+	}
+
+	// 3.6 unrecognized mv/cp flag (BH-R3, 2026-11-14): the write targets
+	// cannot be path-validated — ask, not the former outright deny; a prompt
+	// keeps the user exit for a heuristic detection.
+	if (f.bashFlagAsk) {
+		return {
+			kind: "prompt",
+			flavor: "permission-options",
+			label: f.bashFlagAsk,
+			category: "sensitive-path",
 		};
 	}
 
