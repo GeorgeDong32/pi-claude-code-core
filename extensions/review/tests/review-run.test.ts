@@ -23,6 +23,8 @@ type FakeCmd = (cmd: string, args: string[], opts: FakeCmdOpts) => Promise<{
 	stdout: string;
 	stderr: string;
 	exitCode: number;
+	/** T4/S5: fakes simulating a run-cmd timeout set this field. */
+	timedOut?: boolean;
 }>;
 
 let sandbox: string;
@@ -236,7 +238,9 @@ describe("prepareRun — local base fetch ceiling (D-FX-1)", () => {
 		const cwd = setup();
 		const fetchOpts: FakeCmdOpts[] = [];
 		setRunCmd(ghThenGit(
-			cleanTreeWithFailingFetch({ stdout: "", stderr: FETCH_TIMEOUT_NOTE, exitCode: 1 }, fetchOpts),
+			// T4/S5: the fake simulating a timeout sets the structured field
+			// (the stderr note stays for humans; it is no longer the signal).
+			cleanTreeWithFailingFetch({ stdout: "", stderr: FETCH_TIMEOUT_NOTE, exitCode: 1, timedOut: true }, fetchOpts),
 			async () => ({ stdout: "", stderr: "", exitCode: 0 }),
 		));
 
@@ -329,7 +333,8 @@ describe("prepareRun — PR command ceilings (FX-5)", () => {
 					};
 				}
 				if (args[0] === "pr" && args[1] === "diff") {
-					return { stdout: "", stderr: "gh pr diff timed out after 60000ms", exitCode: 1 };
+					// T4/S5: the fake sets the structured timeout field.
+					return { stdout: "", stderr: "gh pr diff timed out after 60000ms", exitCode: 1, timedOut: true };
 				}
 				return { stdout: "", stderr: "no", exitCode: 1 };
 			},

@@ -20,6 +20,20 @@
  * GIT_TERMINAL_PROMPT=0). Both are optional: existing callers and injected
  * fakes are unchanged when they are absent. `defaultRunCmd` is exported so
  * test spies can wrap the REAL spawn loop while recording calls.
+ *
+ * SPEC CH (2026-11-15) timeout hardening:
+ *   - T1: expiry escalates — SIGTERM first, SIGKILL after
+ *     RUN_CMD_KILL_GRACE_MS (2s). When the child has exited but `close`
+ *     has not fired (an orphaned grandchild holds the stdio pipes), a
+ *     brief drain (RUN_CMD_PIPE_DRAIN_MS) is followed by a stdio destroy
+ *     so `close` fires and the promise resolves bounded.
+ *   - T2: if the timer fires after the child ALREADY exited, the promise
+ *     resolves with the child's real exit code (not a timeout) and stops
+ *     waiting on the pipes.
+ *   - T3: `timeoutMs <= 0` or non-finite means NO timeout (Node
+ *     convention) — the timer is simply not armed.
+ *   - T4/S5: timed-out results carry `timedOut: true` on CmdResult so
+ *     callers branch on data, not stderr text.
  */
 import { spawn } from "node:child_process";
 
@@ -27,18 +41,30 @@ export interface CmdResult {
 	stdout: string;
 	stderr: string;
 	exitCode: number;
+	/** T4/S5: true when the call was resolved by the timeout machinery
+	 *  (SIGTERM/SIGKILL escalation). Absent = not timed out. */
+	timedOut?: boolean;
 }
 
 export interface RunCmdOpts {
 	cwd: string;
 	/** Kill the child after this many ms and resolve non-zero with a
-	 * "timed out" note on stderr. Absent = wait indefinitely (legacy). */
+	 *  "timed out" note on stderr (escalating SIGTERM → SIGKILL after
+	 *  RUN_CMD_KILL_GRACE_MS). Absent, <= 0, or non-finite = wait
+	 *  indefinitely (no timeout; Node convention, T3). */
 	timeoutMs?: number;
 	/** Extra environment merged over process.env for this one call. */
 	env?: Record<string, string>;
 }
 
 export type RunCmd = (cmd: string, args: string[], opts: RunCmdOpts) => Promise<CmdResult>;
+
+/** T1: grace between the SIGTERM and the SIGKILL on timeout expiry. */
+export const RUN_CMD_KILL_GRACE_MS = 2_000;
+/** T1: how long a dead child's still-open stdio pipes are drained before
+ *  they are destroyed (an orphaned grandchild holding them would otherwise
+ *  stall `close` indefinitely). */
+export const RUN_CMD_PIPE_DRAIN_MS = 250;
 
 let injected: RunCmd | undefined;
 
@@ -69,11 +95,53 @@ export async function defaultRunCmd(cmd: string, args: string[], opts: RunCmdOpt
 			let stdout = "";
 			let stderr = "";
 			let timedOut = false;
+			let settled = false;
+			let exited = false;
+			let childExitCode: number | null = null;
 			let timer: ReturnType<typeof setTimeout> | undefined;
-			if (opts.timeoutMs !== undefined) {
+			let killTimer: ReturnType<typeof setTimeout> | undefined;
+			let drainTimer: ReturnType<typeof setTimeout> | undefined;
+			// T3: <= 0 or non-finite means NO timeout (Node convention).
+			const hasTimeout = opts.timeoutMs !== undefined
+				&& Number.isFinite(opts.timeoutMs)
+				&& opts.timeoutMs > 0;
+			const destroyStdio = () => {
+				try {
+					child.stdout?.destroy();
+					child.stderr?.destroy();
+				} catch {
+					/* already gone */
+				}
+			};
+			const finalize = (r: CmdResult) => {
+				if (settled) return;
+				settled = true;
+				if (timer) clearTimeout(timer);
+				if (killTimer) clearTimeout(killTimer);
+				if (drainTimer) clearTimeout(drainTimer);
+				resolve(r);
+			};
+			if (hasTimeout) {
 				timer = setTimeout(() => {
+					if (settled) return;
+					if (exited) {
+						// T2: the child is already dead — this is not a timeout.
+						// Resolve with the real exit code and stop waiting on
+						// the pipes (a grandchild may still hold them).
+						destroyStdio();
+						finalize({ stdout, stderr, exitCode: childExitCode ?? 1 });
+						return;
+					}
+					// T1: escalate — SIGTERM first, SIGKILL after the grace.
 					timedOut = true;
-					child.kill();
+					child.kill("SIGTERM");
+					killTimer = setTimeout(() => {
+						try {
+							child.kill("SIGKILL");
+						} catch {
+							/* already gone */
+						}
+					}, RUN_CMD_KILL_GRACE_MS);
 				}, opts.timeoutMs);
 			}
 			child.stdout?.setEncoding("utf-8");
@@ -81,17 +149,27 @@ export async function defaultRunCmd(cmd: string, args: string[], opts: RunCmdOpt
 			child.stdout?.on("data", (d: string) => (stdout += d));
 			child.stderr?.on("data", (d: string) => (stderr += d));
 			child.on("error", () => {
-				if (timer) clearTimeout(timer);
-				resolve({ stdout, stderr, exitCode: 1 });
+				finalize({ stdout, stderr, exitCode: 1 });
+			});
+			child.on("exit", (code) => {
+				exited = true;
+				childExitCode = code ?? 1;
+				// T1: the child is dead but `close` has not fired — a
+				// grandchild is holding the stdio pipes. Drain briefly, then
+				// destroy them so `close` fires and the promise resolves
+				// bounded. Only under an armed timeout: without one, the
+				// legacy behavior (wait for close) is preserved.
+				if (hasTimeout && !settled) {
+					drainTimer = setTimeout(destroyStdio, RUN_CMD_PIPE_DRAIN_MS);
+				}
 			});
 			child.on("close", (code) => {
-				if (timer) clearTimeout(timer);
 				if (timedOut) {
 					const note = `${cmd} timed out after ${opts.timeoutMs}ms`;
-					resolve({ stdout, stderr: stderr ? `${stderr}\n${note}` : note, exitCode: 1 });
+					finalize({ stdout, stderr: stderr ? `${stderr}\n${note}` : note, exitCode: 1, timedOut: true });
 					return;
 				}
-				resolve({ stdout, stderr, exitCode: code ?? 1 });
+				finalize({ stdout, stderr, exitCode: code ?? 1 });
 			});
 		} catch (err) {
 			resolve({ stdout: "", stderr: err instanceof Error ? err.message : "spawn failed", exitCode: 1 });

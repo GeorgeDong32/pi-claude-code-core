@@ -401,10 +401,12 @@ async function acquireLocalDiff(cwd: string, runDir: string): Promise<DiffAcquis
 	// twin of the PR stale-ref incident; kept non-fatal because offline
 	// local review is a legitimate mode and the manifest records whichever
 	// base was used). D-FX-1: a timed-out fetch takes the same non-fatal
-	// path with distinct "timed out" text.
+	// path with distinct "timed out" text. T4/S5: the branch reads the
+	// structured `timedOut` field on CmdResult — the stderr note stays for
+	// humans, it is no longer the machine signal.
 	let diffWarning: string | undefined;
 	if (baseFetch.exitCode !== 0) {
-		const timedOut = baseFetch.stderr.includes("timed out");
+		const timedOut = baseFetch.timedOut === true;
 		const hasRemoteRef = (await runCmd("git", ["rev-parse", "--verify", `refs/remotes/origin/${base}`], { cwd })).exitCode === 0;
 		if (hasRemoteRef) {
 			diffWarning = timedOut

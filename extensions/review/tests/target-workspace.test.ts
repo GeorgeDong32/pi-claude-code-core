@@ -13,7 +13,7 @@ import { afterEach, describe, test } from "node:test";
 import { prepareWorkspace } from "../src/target-workspace.js";
 import { resetRunCmd, setRunCmd } from "../src/run-cmd.js";
 
-type CmdResult = { stdout: string; stderr: string; exitCode: number };
+type CmdResult = { stdout: string; stderr: string; exitCode: number; timedOut?: boolean };
 type Cmd = (cmd: string, args: string[], opts: { cwd: string }) => Promise<CmdResult>;
 
 let sandbox: string;
@@ -252,7 +252,8 @@ describe("prepareWorkspace — PR command ceilings (FX-5)", () => {
 	test("timed-out PR head fetch aborts through the existing hard-error path", async () => {
 		const cwd = setup();
 		const { cmd } = scripted({
-			fetch: [{ stdout: "", stderr: "git fetch timed out after 60000ms", exitCode: 1 }],
+			// T4/S5: the fake sets the structured timeout field.
+			fetch: [{ stdout: "", stderr: "git fetch timed out after 60000ms", exitCode: 1, timedOut: true }],
 		});
 		setRunCmd(cmd);
 		await assert.rejects(
