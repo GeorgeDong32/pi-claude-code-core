@@ -190,8 +190,6 @@ interface Fx2FakePi {
 	getThinkingLevel(): FakeLevel;
 	/** REAL host primitive: state first, then emit to tls handlers. */
 	setThinkingLevel(level: FakeLevel): void;
-	/** REAL inside-setModel sequence: agent.state.model first, then the reset. */
-	applyModelSwitch(model: Fx2Model, switchLevel: FakeLevel): void;
 	/** Deliver a model_select to the registered handlers. */
 	emitModelSelect(model: Fx2Model): void;
 	/** Deliver a tls event whose dispatch was stalled behind another handler. */
@@ -214,10 +212,6 @@ function makeFx2FakePi(initial: FakeLevel = "off"): Fx2FakePi {
 			if (previous !== level) {
 				for (const listener of tlsListeners) listener({ level, previousLevel: previous });
 			}
-		},
-		applyModelSwitch(model: Fx2Model, switchLevel: FakeLevel) {
-			pi.model = model; // host assigns agent.state.model BEFORE the reset
-			pi.setThinkingLevel(switchLevel);
 		},
 		emitModelSelect(model: Fx2Model) {
 			for (const listener of modelSelectListeners) listener({ model });
