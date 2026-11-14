@@ -23,6 +23,7 @@ import {
 	LEAN_GATE_AGENT,
 	leanAgentName,
 	resolveLeanBudgets,
+	toolBudgetForReviewer,
 	withThinkingSuffix,
 	type LeanBudgetSpec,
 } from "./lean-agents.js";
@@ -312,8 +313,10 @@ export function buildWorkflowScript(input: {
 	// runtime (silently surfaced as a null workflow return).
 	lines.push("const reviewers = await runs.all([");
 	for (const r of reviewers) {
-		const tb = LEAN_BUDGETS.defaultToolBudget; // resolved below per-id
-		const tbForId = r.id === "history-context" ? LEAN_BUDGETS.historyToolBudget : tb;
+		// R10: lean-agents is the single source of per-reviewer tool budgets —
+		// the inline history-context special case is gone. Output is
+		// byte-identical (toolBudgetForReviewer maps the same way).
+		const tbForId = toolBudgetForReviewer(r.id);
 		const taskParts = [
 			READ_ONLY_PREFIX,
 			`Read ${JSON.stringify(diffPath)} as the change — the diff is the authoritative change record; workspace files are context only. When a workspace file disagrees with the diff, trust the diff and note the discrepancy in coverage.limitations.`,
