@@ -33,7 +33,7 @@
 | 文件 | 说明 |
 |---|---|
 | `goal-lifecycle.ts` | pool/focus/drafting 状态所有者（P2-2 + 2026-10-09 封装收口，DEVIATIONS #120）：转移动词——`create`/`focus`/`unfocus`/`pause`/`pauseByAgent`/`resume`/`activate`/`setUserNote`/`complete`/`terminate(kind, by)`/`retireForReplacement`/`reconcileFromDisk`/`restore`，加路径动词 `applyUsage`（记账归入）/`recordAuditAttempt`/`applyTweak`（目标权威写）/`persistRecord`/`syncObjectiveFromDisk`/`refreshDisplayFromDisk`——各携完整副作用集经注入 ports（clock/continuation/entries/ledger/storage/UI）执行；drafting intents、每轮 flags 与 get_goal nudge 计数为模块私有，仅可经封闭事件入口 `handle(event)` 写入（turn-start/turn-stopped/tool-call/usage-accounted/draft-start·cancel·applied/nudge-reset/agent-settled/dispose）。旧静默原语（`adopt`/`replacePool`/`setFocusedSilently`/`removeFromPool`）与裸 `setGoal` 写口为模块内部；一切出境值（`focused()`/`pool`/`confirmationIntent`/`TransitionReport.record`）为防御性副本，一切入池记录（动词入参、storage port 返回值）入池即克隆——调用方与 port 均不再持有内部活引用。`TransitionReport` 是只读描述（含归档后终态记录）——不是待执行清单 |
-| `goal.ts` | 主装配:工具、命令、widget、stop-hook 续跑循环。回合内停止锁只由四个真停止工具的成功 execute 设置(`pause_goal` / `abort_goal` / `update_goal=complete` / `apply_goal_tweak`,D3=A,spec 2026-10-07 P0-2);其余工具调用一律进度中性——放行、不计进度、不锁回合(进度例外读取宿主真实的 `event.input` 字段)。用量记帐对全部四个 token 通道求和(`input`/`output`/`cacheRead`/`cacheWrite`——cache-inclusive,DEVIATIONS #69),并累计 provider 报告的美元费用(`usage.cost.total`);带执行用量的 `tool_result` 事件(subagent 运行、codemode 的 `models.classify`/`generateImages`)同样入帐——goal 台帐因此包含委派出去的模型开销,而不只 parent 主线程 |
+| `goal.ts` | 主装配:工具、命令、widget、stop-hook 续跑循环。回合内停止锁只由四个真停止工具的成功 execute 设置(`pause_goal` / `abort_goal` / `update_goal=complete` / `apply_goal_tweak`,D3=A,spec 2026-10-07 P0-2);其余工具调用一律进度中性——放行、不计进度、不锁回合(进度例外读取宿主真实的 `event.input` 字段)。用量记帐对全部四个 token 通道求和(`input`/`output`/`cacheRead`/`cacheWrite`——cache-inclusive,DEVIATIONS #69),并累计 provider 报告的美元费用(`usage.cost.total`);带执行用量的 `tool_result` 事件(subagent 运行、codemode 的 `models.classify`/`generateImages`)同样入帐——goal 台帐因此包含委派出去的模型开销,而不只 parent 主线程。**BH-R1(spec 2026-11-14-backtest-hardening)**:`agent_end` 续跑决策点检查本次 run 最后一条 assistant 消息的 `stopReason`——非 error 终止清零该 goal 的连续错误计数;连续两次 `stopReason:"error"` 终止则经 lifecycle pause 动词暂停 goal(`pauseReason` = `provider error: <errorMessage 前 120 字>`,建议动作为 `/goal resume`,并通知用户),不再无限续跑(回测:单会话 2,241 次错误 / 13 小时 / 1.11 亿 token)。aborted 分支保持原有用户暂停行为;显式 `/goal-resume` 重新从零计数 |
 | `goal-core.ts` | 渲染/状态助手(footer 状态、时长/token 格式化、单行摘要) |
 | `renderers.ts` | 消息渲染器(result / event / audit-event)——自 wiring 拆出(arch review C6),不经工厂即可测 |
 | `goal-record.ts`、`goal-pool.ts`、`goal-ledger.ts` | 状态模型:active/paused 记录、开放目标池、用量台账 |
@@ -52,6 +52,7 @@
 ## 不变量与坑
 
 - 子代理会话(`PI_SUBAGENT_CHILD`)不收养磁盘 goal、不武装续跑(goal-hijack 修复,GH-02/03)。
+- provider 错误不让 sisyphus 续跑空转(BH-R1):连续两次 `stopReason:"error"` 终止即经 lifecycle pause 动词暂停 goal,并提示用户检查 provider/额度后执行 `/goal resume`。
 - 完成度审计是权威的:只有其报告批准才归档完成;不得在 `update_goal` 上
   绕过它。
 - 阻塞时走结构化的 pause;abort 只用于用户要求放弃/目标过时/不可能完成。

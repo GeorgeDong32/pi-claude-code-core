@@ -35,6 +35,10 @@
  *  pause(ctx,{note})          user pause (/goal-pause, Esc, aborted turns):
  *                             merge → stamp paused/user + user note →
  *                             setGoal → ledger goal_paused · nudge reset
+ *                             (BH-R1: the same verb with {systemReason,
+ *                             suggestedAction} is the provider-error
+ *                             continuation guard's pause — raw pauseReason,
+ *                             ledger reason "provider-error")
  *  pauseByAgent(ctx,{…})      the pause_goal TOOL path (never emitted the
  *                             pause ledger): merge → buildPausedByAgentGoal →
  *                             setGoal → nudge reset → turn-stopped
@@ -237,7 +241,7 @@ export interface GoalLifecycle {
 	/** Named form of focus(null): drop the focus pointer with full effects. */
 	unfocus(ctx: LifecycleCtx, reason: GoalFocusReason): TransitionReport;
 	/** USER pause (/goal-pause, Esc, aborted turns): stamp paused/user + note → setGoal → ledger goal_paused → nudge reset. */
-	pause(ctx: LifecycleCtx, opts?: { note?: string }): TransitionReport;
+	pause(ctx: LifecycleCtx, opts?: { note?: string; systemReason?: string; suggestedAction?: string }): TransitionReport;
 	/** AGENT pause (the pause_goal tool): merge → buildPausedByAgentGoal → setGoal → nudge reset → turn-stopped. No ledger (historical parity). */
 	pauseByAgent(ctx: LifecycleCtx, opts: { reason: string; suggestedAction?: string }): TransitionReport;
 	/** /goal-resume core: merge → stamp active → setGoal → clock → nudge → ledger goal_resumed. */
@@ -629,18 +633,24 @@ export function createGoalLifecycle(ports: GoalLifecyclePorts): GoalLifecycle {
 			// stamp paused + the user-labeled note, setGoal, pause ledger,
 			// then the nudge reset (the old adapter did the reset after the
 			// verb call — same order, now owned here).
+			// BH-R1 (spec 2026-11-14-backtest-hardening): the provider-error
+			// continuation guard pauses through this SAME verb with
+			// `systemReason` — pauseReason is the raw system reason (no
+			// "user:" prefix) and the ledger records reason "provider-error".
 			const current = focusedRecord();
 			if (!current || current.status !== "active") {
 				return { kind: "pause", previousGoalId: focusedGoalId, nextGoalId: focusedGoalId, effects: [] };
 			}
 			const note = opts.note?.trim() || undefined;
+			const systemReason = opts.systemReason?.trim() || undefined;
+			const suggestedAction = opts.suggestedAction?.trim() || undefined;
 			const merged = ports.mergeGoalPromptFromDisk(ctx, cloneOut(current));
 			const next: GoalRecord = {
 				...merged,
 				status: "paused",
 				autoContinue: false,
-				pauseReason: note ? `user: ${note}` : undefined,
-				pauseSuggestedAction: undefined,
+				pauseReason: systemReason ?? (note ? `user: ${note}` : undefined),
+				pauseSuggestedAction: suggestedAction,
 			};
 			const stamped = { ...next, stopReason: "user" as StopReason, updatedAt: ports.nowIso() };
 			const effects: string[] = [];
@@ -649,7 +659,7 @@ export function createGoalLifecycle(ports: GoalLifecyclePorts): GoalLifecycle {
 				ports.appendLedger(ctx, {
 					type: "goal_paused",
 					goalId: next.id,
-					reason: "user",
+					reason: systemReason ? "provider-error" : "user",
 					suggestedAction: next.pauseSuggestedAction,
 					status: next.status,
 					at: stamped.updatedAt,

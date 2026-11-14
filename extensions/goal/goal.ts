@@ -136,6 +136,17 @@ const GOAL_AUDIT_ENTRY = "pi-goal-audit-event";
 const COMPLETE_STATUS = "complete";
 const CONTINUATION_IDLE_RETRY_MS = 50;
 /**
+ * BH-R1 (spec 2026-11-14-backtest-hardening): provider-error continuation
+ * guard. A run whose last assistant message ended stopReason "error" used to
+ * re-queue the sisyphus loop unconditionally (backtest: 2,241 errors / 13h /
+ * 111M tokens on one session). The per-goal in-memory counter below pauses the
+ * goal through the lifecycle pause verb after this many CONSECUTIVE error
+ * terminations; any non-error termination resets it.
+ */
+const CONTINUATION_ERROR_PAUSE_THRESHOLD = 2;
+const PROVIDER_ERROR_PAUSE_PREFIX = "provider error: ";
+const PROVIDER_ERROR_PAUSE_ACTION = "Check the model provider or quota (rate limit / credits), then run /goal resume to continue.";
+/**
  * Tools that count as "real work" toward the active goal. If a non-tool-use
  * turn ends without any of these having been called, we DO NOT queue the next
  * autoContinue — the agent was just chatting. This stops infinite chat loops.
@@ -240,6 +251,20 @@ function isToolUseAssistantMessage(message: unknown): boolean {
 
 function hasAbortedAssistantMessage(messages: unknown[]): boolean {
 	return messages.some(isAbortedAssistantMessage);
+}
+
+/** BH-R1: the last assistant message of a run — its stopReason decides whether
+ * the continuation decision point saw a provider error. */
+function lastAssistantStopReason(messages: unknown[]): { stopReason?: string; errorMessage?: string } {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const raw = asRecord(messages[i]);
+		if (raw?.role !== "assistant") continue;
+		return {
+			stopReason: typeof raw.stopReason === "string" ? raw.stopReason : undefined,
+			errorMessage: typeof raw.errorMessage === "string" ? raw.errorMessage : undefined,
+		};
+	}
+	return {};
 }
 
 function usageChannelTokens(value: unknown): number {
@@ -732,6 +757,41 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		uiNotify(ctx, userNote ? "Goal paused (note attached)." : "Goal paused.", "info");
 	}
 
+	// BH-R1: per-goal in-memory consecutive-error counter for the continuation
+	// decision point (agent_end). Never persisted — it counts a live failure
+	// streak; a session restart or a resume intentionally starts fresh.
+	const consecutiveContinuationErrors = new Map<string, number>();
+
+	/**
+	 * BH-R1 continuation-decision guard: read the run's last assistant
+	 * stopReason. A non-error termination resets the goal's counter; an error
+	 * increments it, and at CONTINUATION_ERROR_PAUSE_THRESHOLD the goal is
+	 * paused THROUGH the lifecycle pause verb (systemReason variant — #120
+	 * encapsulation, no direct state mutation) with the provider error text as
+	 * the pause reason and a /goal-resume suggested action. The aborted branch
+	 * keeps its existing user-pause behavior (checked before this guard).
+	 * Returns true when the goal was paused (the caller must not re-queue).
+	 */
+	function maybePauseOnProviderError(ctx: ExtensionContext, messages: unknown[]): boolean {
+		const goal = lifecycle.focused();
+		if (!goal) return false;
+		const { stopReason, errorMessage } = lastAssistantStopReason(messages);
+		if (stopReason !== "error") {
+			consecutiveContinuationErrors.delete(goal.id);
+			return false;
+		}
+		const count = (consecutiveContinuationErrors.get(goal.id) ?? 0) + 1;
+		if (count < CONTINUATION_ERROR_PAUSE_THRESHOLD) {
+			consecutiveContinuationErrors.set(goal.id, count);
+			return false;
+		}
+		consecutiveContinuationErrors.delete(goal.id);
+		const reason = `${PROVIDER_ERROR_PAUSE_PREFIX}${(errorMessage?.trim() || "unknown provider error").slice(0, 120)}`;
+		lifecycle.pause(ctx, { systemReason: reason, suggestedAction: PROVIDER_ERROR_PAUSE_ACTION });
+		uiNotify(ctx, `Goal paused after ${CONTINUATION_ERROR_PAUSE_THRESHOLD} consecutive provider errors: ${truncateText(reason, 160)}`, "warning");
+		return true;
+	}
+
 	function queueContinuation(ctx: ExtensionContext, force = false): void {
 		continuationLoop.queue(ctx, force);
 	}
@@ -984,6 +1044,9 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		}
 		const resumeTarget = lifecycle.focused();
 		if (!resumeTarget) throw new Error("Goal disappeared during resume validation.");
+		// BH-R1: a deliberate resume starts a fresh failure streak — the
+		// pre-pause error count must not pause the very next erroring run.
+		consecutiveContinuationErrors.delete(resumeTarget.id);
 		// C5 follow-up: stamp active + setGoal + clock + nudge + ledger is the
 		// resume verb (reads the owned record internally); the resume note and
 		// continuation queue stay here.
@@ -2145,6 +2208,12 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 				pauseExtras.push("");
 				pauseExtras.push(`Pause reason (you set this in a prior turn via pause_goal): ${current.pauseReason ?? "(unknown)"}`);
 				if (current.pauseSuggestedAction) pauseExtras.push(`You suggested: ${current.pauseSuggestedAction}`);
+			} else if (current.pauseReason?.startsWith(PROVIDER_ERROR_PAUSE_PREFIX)) {
+				// BH-R1: automatic provider-error pause — neither the user nor
+				// the agent set this; say so instead of the /goal-pause wording.
+				pauseExtras.push("");
+				pauseExtras.push(`Pause reason (automatic): the goal was paused after consecutive provider errors: ${current.pauseReason.slice(PROVIDER_ERROR_PAUSE_PREFIX.length)}`);
+				if (current.pauseSuggestedAction) pauseExtras.push(`Suggested: ${current.pauseSuggestedAction}`);
 			} else if (current.pauseReason) {
 				const { label, text } = pauseReasonLabel(current.pauseReason);
 				pauseExtras.push("");
@@ -2222,6 +2291,9 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			pauseActiveGoal(ctx);
 			return;
 		}
+		// BH-R1: provider-error guard at the continuation decision point — two
+		// consecutive error terminations pause the goal instead of re-queueing.
+		if (maybePauseOnProviderError(ctx, event.messages)) return;
 		persist(ctx);
 		updateUI(ctx);
 		queueContinuation(ctx);
@@ -2230,6 +2302,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 	pi.on("session_shutdown", async (_event, ctx) => {
 		accountProgress(ctx);
 		clearContinuationTimer();
+		consecutiveContinuationErrors.clear();
 		goalUi.dispose();
 		if (lifecycle.focused()) persist(ctx);
 		lifecycle.handle({ tag: "dispose" });
