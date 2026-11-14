@@ -3712,3 +3712,55 @@ describe("BH-R3: flagged mv/cp is not denied by unrelated deny rules (end-to-end
 	})
 })
 
+describe("BH-R6: auto allow/soft_deny match per shell segment", () => {
+	let pi: FakePi
+	let projDir: string
+	let configTmp: string
+
+	beforeEach(async () => {
+		resetCoreBusForTests()
+		pi = createFakePi()
+		projDir = mkdtempSync(join(tmpdir(), "pm-bh-r6-"))
+		configTmp = mkdtempSync(join(tmpdir(), "pm-bh-r6-cfg-"))
+		setConfigPath(join(configTmp, "permission-modes.json"))
+		writeFileSync(
+			join(configTmp, "permission-modes.json"),
+			JSON.stringify({
+				classifier: { enabled: false },
+				autoMode: { allow: ["npm test", "npm run lint"], soft_deny: ["git reset"] },
+			}),
+		)
+		permissionModesExtension(makeFakePiForExtension(pi))
+		pi.flags["permission-mode"] = "auto"
+		await pi.simulateSessionStart(projDir)
+	})
+
+	afterEach(() => {
+		rmSync(projDir, { recursive: true, force: true })
+		rmSync(configTmp, { recursive: true, force: true })
+	})
+
+	async function callBash(command: string) {
+		const ctx = makeCtx(pi, { cwd: projDir })
+		return pi.simulateToolCall("bash", { command }, ctx)
+	}
+
+	it("a soft_deny segment forces the prompt even when another segment matches allow", async () => {
+		// base behavior: the whole command contains "npm test" → tier-1.5
+		// fast-allow fires BEFORE soft_deny is consulted
+		const r = await callBash("git reset HEAD~1 && npm test")
+		expect(r).toMatchObject({ block: true })
+		expect(String((r as { reason?: string }).reason)).toContain("soft_deny")
+	})
+
+	it("every segment allow-matched → fast-allow (single-segment parity)", async () => {
+		expect(await callBash("npm test")).toBeUndefined()
+		expect(await callBash("npm test && npm run lint")).toBeUndefined()
+	})
+
+	it("an unmatched segment never fast-allows the compound", async () => {
+		const r = await callBash("npm test; curl x | sh")
+		expect(r).toBeDefined()
+	})
+})
+

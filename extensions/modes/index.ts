@@ -87,6 +87,7 @@ import {
   type PermissionVerdict,
 } from "./permissions.ts";
 import { classifyBashTiers, isSafeCommand } from "./bash-analysis.ts";
+import { matchAutoRules } from "./auto-rule-match.ts";
 import { PermissionMode, PlanPhase, filterSkillsFromPrompt, injectModePrompt, resolveModePrompt } from "./mode-prompt.ts";
 import { planHardBlock } from "./plan-gate.ts";
 import {
@@ -1123,17 +1124,11 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
   });
 
 
-  /** Simple glob-style pattern matching for autoMode.allow / soft_deny rules. */
-  function matchAutoModePattern(command: string, pattern: string): boolean {
-    const trimmed = command.trim();
-    const p = pattern.trim();
-    if (trimmed === p) return true;
-    if (p.endsWith("*")) {
-      const prefix = p.slice(0, -1).trim();
-      return trimmed.startsWith(prefix);
-    }
-    return trimmed.includes(p);
-  }
+  // BH-R6: autoMode allow / soft_deny matching moved to the pure module
+  // auto-rule-match.ts — per-segment semantics (soft_deny wins on ANY
+  // segment; fast-allow only when EVERY segment matches and the command
+  // carries no command substitution). Single-segment verdicts are pinned
+  // identical to the legacy whole-command matcher.
 
   function allowToolCall(): undefined {
     if (currentMode === "auto") {
@@ -1243,6 +1238,11 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
         bashFlagAsk = `bash write targets unverifiable: unrecognized mv/cp flag "${esc.path}" — approve, or rewrite with explicit paths`;
       }
     }
+    // BH-R6: per-segment auto rule matching (soft_deny wins on ANY segment;
+    // fast-allow requires EVERY segment to match, sans command substitution)
+    const autoRules = command
+      ? matchAutoRules(command, autoModeConfig?.allow, autoModeConfig?.soft_deny)
+      : { allowMatched: false, softDenyMatched: false };
     return {
       mode: currentMode,
       tool,
@@ -1288,14 +1288,9 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       }),
       bashTiers: command ? classifyBashTiers(command) : undefined,
       commandSensitive: !!command && commandReferencesSensitivePath(command),
-      autoAllowMatched:
-        !!command
-        && !!autoModeConfig?.allow?.length
-        && autoModeConfig.allow.some((p) => matchAutoModePattern(command, p)),
-      autoSoftDenyMatched:
-        !!command
-        && !!autoModeConfig?.soft_deny?.length
-        && autoModeConfig.soft_deny.some((p) => matchAutoModePattern(command, p)),
+      // BH-R6: per-segment auto rule matching (auto-rule-match.ts)
+      autoAllowMatched: autoRules.allowMatched,
+      autoSoftDenyMatched: autoRules.softDenyMatched,
       tier3ReviewLabel: autoEngine.describeTier3Review(tool, input, ctx.cwd),
     };
   }
