@@ -125,7 +125,9 @@ describe("FX-3 — MEMORY.md hand-edit bypass (>25K, writer skipped)", () => {
 		expect(content).toContain(`index ${bypassBytes}/${MEMORY_INDEX_MAX} bytes`);
 		expect(content).toContain(dir);
 		expect(content).toContain("memory_consolidate");
-		// in-flight: a second turn_end does not re-send
+		// no immediate re-send: the 10-turn consolidation throttle (not the
+		// in-flight guard — the trigger turn is still in flight here, so the
+		// throttle is what blocks the second tick)
 		await host.fire("turn_end", { turnIndex: 1, message: { role: "assistant" }, toolResults: [] }, ctx);
 		expect(host.sentMessages.length).toBe(1);
 	});
