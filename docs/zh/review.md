@@ -57,8 +57,14 @@
 - runs 在 `.pi/pi-review/runs/<runId>/` 下只追加——绝不改动历史 run 的
   产物。
 - 评审子代理只读;不要在 workflow script 里给它们写工具。
+- 本地 base fetch(`acquireLocalDiff` 里的 `git fetch origin <base>`)是
+  尽力而为:硬上限 15s(`LOCAL_BASE_FETCH_TIMEOUT_MS`,D-FX-1)且
+  `GIT_TERMINAL_PROMPT=0`——超时或失败都回落本地 `origin/<base>` 引用并记
+  非致命 `diffWarning`("timed out" / "failed" 两种文案)。不可配置;PR 路径
+  命令(`gh pr view/diff`、clone、PR head fetch)不动。
 
 ## 测试
 
-`extensions/review/tests/` —— node:test 经 tsx(11 个套件,含钉住
-workflow script 形状的 `workflow-contract.test.ts`)。
+`extensions/review/tests/` —— node:test 经 tsx(12 个套件,含钉住
+workflow script 形状的 `workflow-contract.test.ts`,以及钉住 D-FX-1
+timeout/env 适配器参数的 `run-cmd.test.ts`)。

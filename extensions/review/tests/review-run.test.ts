@@ -18,7 +18,8 @@ import {
 import { setConfigPath, writeConfig, DEFAULT_CONFIG } from "../src/config.js";
 import { resetRunCmd, setRunCmd } from "../src/run-cmd.js";
 
-type FakeCmd = (cmd: string, args: string[], opts: { cwd: string }) => Promise<{
+type FakeCmdOpts = { cwd: string; timeoutMs?: number; env?: Record<string, string> };
+type FakeCmd = (cmd: string, args: string[], opts: FakeCmdOpts) => Promise<{
 	stdout: string;
 	stderr: string;
 	exitCode: number;
@@ -46,13 +47,13 @@ function setup() {
 
 /** Fake gh/git where `gh pr diff` returns a small diff. */
 function fakeCmd(
-	plan: Record<string, (args: string[]) => { stdout: string; stderr: string; exitCode: number }>,
+	plan: Record<string, (args: string[], opts: FakeCmdOpts) => { stdout: string; stderr: string; exitCode: number }>,
 ): FakeCmd {
-	return async (cmd, args) => {
+	return async (cmd, args, opts) => {
 		const key = `${cmd} ${args[0] ?? ""}`;
 		const maybe = plan[key] ?? plan[cmd];
 		if (maybe) {
-			const r = maybe(args);
+			const r = maybe(args, opts);
 			return r;
 		}
 		return { stdout: "", stderr: "", exitCode: 1 };
@@ -203,6 +204,77 @@ describe("prepareRun — PR cross-repo workspace", () => {
 		assert.equal(existsSync(permsFile), false);
 		// The .pi/pi-review/runs dir is the ONLY thing created.
 		assert.equal(existsSync(join(cwd, ".pi", "pi-review", "runs")), false);
+	});
+});
+
+describe("prepareRun — local base fetch ceiling (D-FX-1)", () => {
+	const DIFF = "diff --git a/y b/y\n--- a/y\n+++ b/y\n@@ -1 +1 @@\n-old\n+new2\n";
+	const FETCH_TIMEOUT_NOTE = "git fetch timed out after 15000ms";
+
+	/** Clean-tree git plan whose base fetch fails with the given result.
+	 *  Captures the fetch call's opts so the ceiling/env wiring is pinned. */
+	function cleanTreeWithFailingFetch(
+		fetchResult: { stdout: string; stderr: string; exitCode: number },
+		fetchOptsCapture: FakeCmdOpts[],
+	): FakeCmd {
+		return fakeCmd({
+			"git status": () => ({ stdout: "", stderr: "", exitCode: 0 }),
+			"git symbolic-ref": (args) => (args[2] === "refs/remotes/origin/HEAD"
+				? { stdout: "origin/main\n", stderr: "", exitCode: 0 }
+				: { stdout: "main\n", stderr: "", exitCode: 0 }),
+			"git fetch": (_args, opts) => {
+				fetchOptsCapture.push(opts);
+				return fetchResult;
+			},
+			"git rev-parse": () => ({ stdout: "abc\n", stderr: "", exitCode: 0 }),
+			"git diff": () => ({ stdout: DIFF, stderr: "", exitCode: 0 }),
+			"git merge-base": () => ({ stdout: "m1\n", stderr: "", exitCode: 0 }),
+		});
+	}
+
+	test("timed-out fetch: non-fatal warning says 'timed out', call carries the 15s ceiling + GIT_TERMINAL_PROMPT=0", async () => {
+		const cwd = setup();
+		const fetchOpts: FakeCmdOpts[] = [];
+		setRunCmd(ghThenGit(
+			cleanTreeWithFailingFetch({ stdout: "", stderr: FETCH_TIMEOUT_NOTE, exitCode: 1 }, fetchOpts),
+			async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+		));
+
+		const prepared = await prepareRun({ cwd, input: "" });
+		assert.ok(prepared, "a timed-out base fetch must not abort the run");
+		const m = prepared!.manifest;
+		assert.equal(m.mode, "local-vs-default");
+		assert.ok(m.diffWarning, "manifest records the fetch warning");
+		assert.match(m.diffWarning!, /timed out after 15000ms/);
+		assert.match(m.diffWarning!, /possibly-stale origin\/main/);
+		assert.ok(!m.diffWarning!.includes(" failed "));
+		// The fetch opts wiring: hard ceiling + no credential prompts.
+		assert.equal(fetchOpts.length, 1);
+		assert.equal(fetchOpts[0].timeoutMs, 15_000);
+		assert.equal(fetchOpts[0].env?.GIT_TERMINAL_PROMPT, "0");
+	});
+
+	test("ordinary fetch failure keeps the 'failed' warning text (no 'timed out')", async () => {
+		const cwd = setup();
+		const fetchOpts: FakeCmdOpts[] = [];
+		setRunCmd(ghThenGit(
+			cleanTreeWithFailingFetch(
+				{ stdout: "", stderr: "fatal: could not read from remote repository", exitCode: 128 },
+				fetchOpts,
+			),
+			async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+		));
+
+		const prepared = await prepareRun({ cwd, input: "" });
+		assert.ok(prepared);
+		const m = prepared!.manifest;
+		assert.ok(m.diffWarning);
+		assert.match(m.diffWarning!, /failed — diffing against possibly-stale origin\/main/);
+		assert.ok(!m.diffWarning!.includes("timed out"));
+		// The failure path passes the same ceiling/env opts.
+		assert.equal(fetchOpts.length, 1);
+		assert.equal(fetchOpts[0].timeoutMs, 15_000);
+		assert.equal(fetchOpts[0].env?.GIT_TERMINAL_PROMPT, "0");
 	});
 });
 

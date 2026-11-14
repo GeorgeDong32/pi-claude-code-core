@@ -10,6 +10,12 @@
  *
  * This replaces the old "main agent obtains the diff itself" pattern that
  * silently failed on cross-repo PRs.
+ *
+ * D-FX-1 (2026-11-14): the local base fetch (`git fetch origin <base>` in
+ * acquireLocalDiff) carries a hard 15s ceiling + GIT_TERMINAL_PROMPT=0 and
+ * fails non-fatally into the existing stale-base warning, with distinct
+ * "timed out" / "failed" text. PR-path commands (gh pr view/diff, clone,
+ * PR-head fetch) keep their existing no-timeout behavior.
  */
 import { existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -294,6 +300,12 @@ async function acquirePrDiff(
 	};
 }
 
+// D-FX-1: the base fetch is best-effort — a hung network or a git
+// credential prompt must never stall /review indefinitely. Hard ceiling,
+// deliberately not configurable (no new env/settings key, INV-10); the
+// PR-path commands are untouched.
+const LOCAL_BASE_FETCH_TIMEOUT_MS = 15_000;
+
 async function acquireLocalDiff(cwd: string, runDir: string): Promise<DiffAcquisitionResult> {
 	const status = await runCmd("git", ["status", "--porcelain"], { cwd });
 	if (status.stdout.trim().length > 0) {
@@ -334,16 +346,27 @@ async function acquireLocalDiff(cwd: string, runDir: string): Promise<DiffAcquis
 		const path = writeDiff(runDir, placeholder);
 		return { path, diff: placeholder, mode: "local-vs-default" };
 	}
-	const baseFetch = await runCmd("git", ["fetch", "origin", base, "--quiet"], { cwd });
-	// A failed fetch with an existing remote-tracking ref silently diffs
-	// against a stale base — surface it instead (the local twin of the PR
-	// stale-ref incident; kept non-fatal because offline local review is a
-	// legitimate mode and the manifest records whichever base was used).
+	const baseFetch = await runCmd("git", ["fetch", "origin", base, "--quiet"], {
+		cwd,
+		timeoutMs: LOCAL_BASE_FETCH_TIMEOUT_MS,
+		// Never let git sit on a credential prompt — fail fast into the
+		// non-fatal fallback below instead.
+		env: { GIT_TERMINAL_PROMPT: "0" },
+	});
+	// A failed (or timed-out) fetch with an existing remote-tracking ref
+	// silently diffs against a stale base — surface it instead (the local
+	// twin of the PR stale-ref incident; kept non-fatal because offline
+	// local review is a legitimate mode and the manifest records whichever
+	// base was used). D-FX-1: a timed-out fetch takes the same non-fatal
+	// path with distinct "timed out" text.
 	let diffWarning: string | undefined;
 	if (baseFetch.exitCode !== 0) {
+		const timedOut = baseFetch.stderr.includes("timed out");
 		const hasRemoteRef = (await runCmd("git", ["rev-parse", "--verify", `refs/remotes/origin/${base}`], { cwd })).exitCode === 0;
 		if (hasRemoteRef) {
-			diffWarning = `git fetch origin ${base} failed — diffing against possibly-stale origin/${base}`;
+			diffWarning = timedOut
+				? `git fetch origin ${base} timed out after ${LOCAL_BASE_FETCH_TIMEOUT_MS}ms — diffing against possibly-stale origin/${base}`
+				: `git fetch origin ${base} failed — diffing against possibly-stale origin/${base}`;
 		}
 	}
 	const compare = (await runCmd("git", ["rev-parse", "--verify", `origin/${base}`], { cwd })).exitCode === 0

@@ -61,8 +61,15 @@ few read-only git commands.
   past run's artifacts.
 - Reviewer children are read-only; do not grant them write tools in the
   workflow script.
+- The local base fetch (`git fetch origin <base>` in `acquireLocalDiff`) is
+  best-effort with a hard 15s ceiling (`LOCAL_BASE_FETCH_TIMEOUT_MS`,
+  D-FX-1) and `GIT_TERMINAL_PROMPT=0` — a timed-out or failed fetch falls
+  back to the local `origin/<base>` ref and records a non-fatal
+  `diffWarning` ("timed out" vs "failed" text). Not configurable; PR-path
+  commands (`gh pr view/diff`, clone, PR-head fetch) are untouched.
 
 ## Tests
 
-`extensions/review/tests/` — node:test via tsx (11 suites incl.
-`workflow-contract.test.ts` pinning the workflow-script shape).
+`extensions/review/tests/` — node:test via tsx (12 suites incl.
+`workflow-contract.test.ts` pinning the workflow-script shape and
+`run-cmd.test.ts` pinning the D-FX-1 timeout/env adapter opts).
