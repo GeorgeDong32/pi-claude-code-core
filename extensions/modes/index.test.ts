@@ -3765,6 +3765,55 @@ describe("BH-R6: auto allow/soft_deny match per shell segment", () => {
 	})
 })
 
+describe("BH-R6 tier order: soft_deny wins over the allow tier (REVIEW-2026-11-14 Spec axis)", () => {
+	let pi: FakePi
+	let projDir: string
+	let configTmp: string
+
+	beforeEach(async () => {
+		resetCoreBusForTests()
+		pi = createFakePi()
+		projDir = mkdtempSync(join(tmpdir(), "pm-bh-r6-order-"))
+		configTmp = mkdtempSync(join(tmpdir(), "pm-bh-r6-order-cfg-"))
+		setConfigPath(join(configTmp, "permission-modes.json"))
+		writeFileSync(
+			join(configTmp, "permission-modes.json"),
+			JSON.stringify({
+				classifier: { enabled: false },
+				// every segment of the collision command allow-matches AND one
+				// segment soft_deny-matches, and BOTH segments are tier-2
+				// approvable (verified: npm test is, npm install / npm publish
+				// are not — they never reach the allow tier) — the pre-fix
+				// tier order (allow first) fast-allowed this through
+				autoMode: { allow: ["git", "npm"], soft_deny: ["npm test"] },
+			}),
+		)
+		permissionModesExtension(makeFakePiForExtension(pi))
+		pi.flags["permission-mode"] = "auto"
+		await pi.simulateSessionStart(projDir)
+	})
+
+	afterEach(() => {
+		rmSync(projDir, { recursive: true, force: true })
+		rmSync(configTmp, { recursive: true, force: true })
+	})
+
+	async function callBash(command: string) {
+		const ctx = makeCtx(pi, { cwd: projDir })
+		return pi.simulateToolCall("bash", { command }, ctx)
+	}
+
+	it("allowMatched AND softDenyMatched both true → prompt, never fast-allow", async () => {
+		const r = await callBash("git add -A && npm test")
+		expect(r).toMatchObject({ block: true })
+		expect(String((r as { reason?: string }).reason)).toContain("soft_deny")
+	})
+
+	it("allow-only commands still fast-allow (control)", async () => {
+		expect(await callBash("git add -A && npm run lint")).toBeUndefined()
+	})
+})
+
 describe("BH-R7: hostile config arrays + check/setMode/bus hardening", () => {
 	let pi: FakePi
 	let projDir: string

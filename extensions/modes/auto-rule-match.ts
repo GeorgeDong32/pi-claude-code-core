@@ -37,9 +37,9 @@ export function matchAutoModePattern(command: string, pattern: string): boolean 
 const NESTED_SHELL_PATTERNS: RegExp[] = [/`/, /\$\(/, /\$\{/, /<\(/, />\(/]
 
 export interface AutoRuleMatch {
-	/** Tier-1.5 gate: every segment matched an allow rule (and no hazards). */
+	/** Tier-1.5b gate: every segment matched an allow rule (and no hazards). */
 	allowMatched: boolean
-	/** Tier-1.5b gate: any segment matched a soft_deny rule. */
+	/** Tier-1.5 gate: any segment matched a soft_deny rule (soft_deny wins). */
 	softDenyMatched: boolean
 }
 

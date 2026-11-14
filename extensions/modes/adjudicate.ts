@@ -389,14 +389,11 @@ export function decide(f: AdjudicationFacts): Decision {
 			if (f.bashTiers?.safe) {
 				return { kind: "allow", effects: { resetAutoDenialState: true } };
 			}
-			// Tier 1.5: autoMode.allow user rules short-circuit before the
-			// classifier — compound commands must still be fully auto-
-			// approvable ("npm install && rm -rf /" must not slip through a
-			// bare "npm" pattern).
-			if (f.command && f.autoAllowMatched && f.bashTiers?.autoApprovable) {
-				return { kind: "allow", effects: { resetAutoDenialState: true } };
-			}
-			// Tier 1.5b: autoMode.soft_deny forces a prompt.
+			// Tier 1.5: autoMode.soft_deny forces a prompt. soft_deny WINS
+			// over the allow tier below (auto-rule-match.ts semantics): a
+			// command whose every segment matches an allow rule but where
+			// any single segment also matches a soft_deny rule must still
+			// prompt, never fast-allow.
 			if (f.command && f.autoSoftDenyMatched) {
 				return {
 					kind: "prompt",
@@ -404,6 +401,13 @@ export function decide(f: AdjudicationFacts): Decision {
 					label: "matched autoMode.soft_deny",
 					category: "auto-deny",
 				};
+			}
+			// Tier 1.5b: autoMode.allow user rules short-circuit before the
+			// classifier — compound commands must still be fully auto-
+			// approvable ("npm install && rm -rf /" must not slip through a
+			// bare "npm" pattern). Guarded by the soft_deny tier above.
+			if (f.command && f.autoAllowMatched && f.bashTiers?.autoApprovable) {
+				return { kind: "allow", effects: { resetAutoDenialState: true } };
 			}
 			// Tier 2: common dev workflow commands auto-approve.
 			if (f.bashTiers?.autoApprovable) {

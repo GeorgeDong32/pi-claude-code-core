@@ -232,17 +232,21 @@ describe("decide: auto ladder (Step 2)", () => {
 		expect(decide(facts({ mode: "auto", tool: "read", path: "/w/.ssh/config", pathSensitive: true })))
 			.toEqual({ kind: "prompt", flavor: "permission-options", label: 'sensitive path "/w/.ssh/config"', category: "sensitive-path" });
 	});
-	it("bash tier1 / 1.5 allow / 1.5b soft_deny / tier2 ordering", () => {
+	it("bash tier1 / 1.5 soft_deny / 1.5b allow / tier2 ordering", () => {
 		const reset = { resetAutoDenialState: true };
 		expect(decide(facts({ mode: "auto", tool: "bash", command: "ls", bashTiers: { safe: true, autoApprovable: true } })))
 			.toEqual({ kind: "allow", effects: reset });
-		// pattern matched but compound dangerous -> NOT allowed by 1.5, falls to tier2/classify
+		// pattern matched but compound dangerous -> NOT allowed by 1.5b, falls to tier2/classify
 		expect(decide(facts({ mode: "auto", tool: "bash", command: "npm i && rm -rf /", autoAllowMatched: true, bashTiers: { safe: false, autoApprovable: false } })))
 			.toEqual({ kind: "classify", tier3: { command: "npm i && rm -rf /", path: undefined } });
 		expect(decide(facts({ mode: "auto", tool: "bash", command: "npm run build", autoSoftDenyMatched: true, bashTiers: { safe: false, autoApprovable: true } })))
 			.toEqual({ kind: "prompt", flavor: "permission-options", label: "matched autoMode.soft_deny", category: "auto-deny" });
 		expect(decide(facts({ mode: "auto", tool: "bash", command: "npm run build", bashTiers: { safe: false, autoApprovable: true } })))
 			.toEqual({ kind: "allow", effects: reset });
+		// REVIEW-2026-11-14 Spec axis: both rule flags set (every segment
+		// allow-matches AND one segment soft_deny-matches) — soft_deny wins
+		expect(decide(facts({ mode: "auto", tool: "bash", command: "git add -A && npm publish", autoAllowMatched: true, autoSoftDenyMatched: true, bashTiers: { safe: false, autoApprovable: true } })))
+			.toEqual({ kind: "prompt", flavor: "permission-options", label: "matched autoMode.soft_deny", category: "auto-deny" });
 	});
 	it("everything else defers to the classifier seam with the risk context", () => {
 		expect(decide(facts({ mode: "auto", tool: "bash", command: "rm -rf /tmp/x" })))
