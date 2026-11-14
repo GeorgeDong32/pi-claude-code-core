@@ -14,6 +14,10 @@
 // abort signal stops reaching the process, and no more output flows to the call.
 // Every running call is in `foregroundRuns()` with a `promote` handle: that is
 // the one promotion path, for the timer here and for any other trigger.
+// CH E2 (2026-11-15): the `"…" never appeared` note is a promotion-path-only
+// message (promotedText). The normal-exit and error paths no longer append it:
+// models that pass placeholder waitFor values ("NOT_USED") drowned the agent
+// in it on every plain command.
 import { rmSync } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 
@@ -336,17 +340,16 @@ export async function runForeground(
 	const { waitFor, ...piParams } = params;
 	if (waitFor === "") throw new Error("waitFor must not be empty.");
 	const run: Run = { task: undefined, elapsedMs: 0, waitFor, matched: false };
-	const neverAppeared = `"${waitFor}" never appeared in the output.`;
 	const delegate = createBashToolDefinition(ctx.cwd, { operations: operations(ctx, run) });
 	let result: Awaited<ReturnType<typeof delegate.execute>>;
 	try {
 		result = await delegate.execute(toolCallId, piParams, signal, onUpdate, ctx);
 	} catch (error) {
 		// Pi's bash throws its output with the status (aborted, timed out, no exit code).
-		if (error instanceof Error) {
-			error.message = sanitize(error.message);
-			if (waitFor !== undefined && !run.matched) error.message += `\n\n${neverAppeared}`;
-		}
+		// CH E2: no "never appeared" note here — models that pass placeholder
+		// waitFor values drown in it on every failed call; only the promotion
+		// path (promotedText) still carries it.
+		if (error instanceof Error) error.message = sanitize(error.message);
 		throw error;
 	}
 	// Pi's bash hands the agent the output as the command wrote it; strip it as Pi does
@@ -359,21 +362,9 @@ export async function runForeground(
 	const structured = (result as { structuredContent?: { output?: unknown } }).structuredContent;
 	if (typeof structured?.output === "string")
 		result = { ...result, structuredContent: { ...structured, output: sanitize(structured.output) } } as typeof result;
-	if (run.task === undefined) {
-		if (waitFor === undefined || run.matched) return result;
-		// findLastIndex needs lib es2023 (kept lower here) — walk backwards instead.
-		let last = -1;
-		for (let i = result.content.length - 1; i >= 0; i--) {
-			if (result.content[i]!.type === "text") {
-				last = i;
-				break;
-			}
-		}
-		const content = result.content.map((part, i) =>
-			i === last && part.type === "text" ? { ...part, text: `${part.text}\n\n${neverAppeared}` } : part,
-		);
-		return { ...result, content };
-	}
+	// CH E2: a normal exit no longer appends the "never appeared" note either —
+	// only the promotion path keeps it.
+	if (run.task === undefined) return result;
 	let output = result.content[0]?.type === "text" ? result.content[0].text : "";
 	const piFile = result.details?.fullOutputPath;
 	if (piFile !== undefined) {

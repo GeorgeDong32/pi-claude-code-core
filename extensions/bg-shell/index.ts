@@ -14,18 +14,20 @@
 // agent gets one completion message, which starts a turn if the agent is idle.
 // The footer shows `bg: N` while N tasks run. A call without `background` is
 // Pi's own `bash` over the same wrapper (`foreground.ts`), and moves to the
-// background if it outlasts 120 s.
+// background if it outlasts 120 s. Task ids continue across processes within
+// one session: session_start seeds the counter past the ids the session's
+// status entries already recorded (CH E6).
 import { createBashToolDefinition, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import { tasksCommand } from "./bg.ts";
-import { rotateDebugLog } from "./debug.ts";
+import { debugError, rotateDebugLog } from "./debug.ts";
 import { foregroundRuns, PROMOTE_MS, runForeground } from "./foreground.ts";
 import { GRACE_MS } from "./kill.ts";
 import { cleanupOldLogs } from "./logs.ts";
 import { stateText, taskLine } from "./notify.ts";
 import { readOutput } from "./output.ts";
-import { attach, endSession, getRegistry, killTask, setContext, startTask } from "./registry.ts";
+import { attach, endSession, getRegistry, killTask, seedNextIdFromBranch, setContext, startTask } from "./registry.ts";
 
 const BACKGROUND_DESCRIPTION =
 	"Set `background: true` for a command you expect to outlast a minute or two, such as a long build, a deploy or a server, " +
@@ -67,7 +69,7 @@ export default function (pi: ExtensionAPI): void {
 			waitFor: Type.Optional(
 				Type.String({
 					description:
-						'Text to wait for in the output, such as "listening on" for a server. When it appears the call returns the output so far and the command keeps running as a background task. A `timeout` then limits the task, not the call.',
+						'Text to wait for in the output, such as "listening on" for a server. When it appears the call returns the output so far and the command keeps running as a background task. A `timeout` then limits the task, not the call. Omit it when you are not waiting for anything — never a placeholder value.',
 				}),
 			),
 			background: Type.Optional(
@@ -169,6 +171,15 @@ export default function (pi: ExtensionAPI): void {
 	});
 	pi.on("session_start", (_event, ctx) => {
 		setContext(ctx);
+		// CH E6: continue the session's task-id numbering instead of restarting
+		// at bg-1 — the ids the transcript's status entries recorded are the
+		// floor. Fail-open: a seeding problem must never break session start.
+		try {
+			const branch = (ctx.sessionManager as { getBranch?: () => unknown }).getBranch?.();
+			if (Array.isArray(branch)) seedNextIdFromBranch(branch);
+		} catch (error) {
+			debugError("id-seed", error);
+		}
 		rotateDebugLog();
 		cleanupOldLogs(getRegistry().tasks.values());
 	});

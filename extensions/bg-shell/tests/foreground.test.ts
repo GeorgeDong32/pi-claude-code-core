@@ -613,6 +613,11 @@ describe("the bash description", () => {
 			/^Seconds \(not ms\)\. Still running after 120 s → background; timeout becomes its deadline\.$/,
 			"BH-R4: the timeout description states the deadline semantics",
 		);
+		assert.match(
+			(tool.parameters as { properties: { waitFor: { description: string } } }).properties.waitFor.description,
+			/Omit it when you are not waiting/,
+			"CH E2: models must be told to omit waitFor when they are not waiting for anything",
+		);
 	});
 });
 
@@ -680,13 +685,26 @@ describe("a foreground bash call with waitFor", () => {
 		assert.match(text(await clock.settle(call, 5000)), /^"up" appeared/);
 	});
 
-	it("says the text never appeared when the command exits first", async () => {
+	it("does not say the text never appeared when the command exits first (CH E2)", async () => {
 		const s = session();
 		const call = s.toolCall("bash", { command: "serve", waitFor: "listening on" });
 		const proc = await launched();
 		proc.write("done\n");
 		proc.exit(0);
-		assert.equal(text(await clock.settle(call)), 'done\n\n\n"listening on" never appeared in the output.');
+		assert.equal(text(await clock.settle(call)), "done\n");
+	});
+
+	it("does not say the text never appeared when the call is aborted (CH E2)", async () => {
+		const s = session();
+		const turn = new AbortController();
+		const call = s.toolCall("bash", { command: "serve", waitFor: "listening on" }, turn.signal);
+		const proc = await launched();
+		proc.write("half\n");
+		turn.abort();
+		const error = await clock.settle(call, 10_000).catch((e: Error) => e);
+		assert.ok(error instanceof Error);
+		assert.doesNotMatch(error.message, /never appeared/);
+		assert.match(error.message, /aborted/);
 	});
 
 	it("says the text never appeared when the 120 s promotion fires first", async () => {

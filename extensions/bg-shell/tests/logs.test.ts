@@ -76,6 +76,37 @@ async function finished(s: Session, output: string | Buffer, code = 0): Promise<
 	return id;
 }
 
+describe("id continuity across processes (CH E6)", () => {
+	it("seeds nextId past the ids in the session's status entries, even with pruned logs", async () => {
+		// A resumed session whose earlier run used bg-5 and whose logs were
+		// pruned (or gzipped names unknown): a fresh process must not hand out
+		// bg-1 again, it must continue past the highest recorded id.
+		const s = session({
+			branch: [
+				{
+					type: "custom",
+					customType: "cc-core-bg-shell-task",
+					data: { id: "bg-5", command: "job", state: "exited", exitCode: 0, runtimeMs: 12 },
+				},
+				{
+					type: "custom",
+					customType: "cc-core-bg-shell-task",
+					data: { id: "bg-3", command: "job", state: "exited", exitCode: 1, runtimeMs: 4 },
+				},
+			],
+		});
+		await s.sessionStart();
+		const id = await start(s, "job");
+		assert.equal(id, "bg-6", "the next id continues after the highest recorded one");
+	});
+
+	it("never lowers nextId when the branch holds no status entries", async () => {
+		const s = session();
+		await s.sessionStart();
+		assert.equal(await start(s, "job"), "bg-1");
+	});
+});
+
 describe("gzip after the completion message", () => {
 	it("gzipps the log, deletes the plain file, and points the registry at the gz", async () => {
 		const s = session();

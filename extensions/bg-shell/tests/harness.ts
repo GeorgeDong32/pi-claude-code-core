@@ -58,7 +58,7 @@ export const keys = { up: "\x1b[A", down: "\x1b[B", enter: "\r", escape: "\x1b",
 let counter = 0;
 
 /** One fake Pi session running the extension. */
-export function session(options: { id?: string; hasUI?: boolean } = {}) {
+export function session(options: { id?: string; hasUI?: boolean; branch?: unknown[] } = {}) {
 	const id = options.id ?? `session-${process.pid}-${++counter}`;
 	let uiEnabled = options.hasUI ?? true;
 	const tools: Record<string, Tool> = {};
@@ -172,7 +172,13 @@ export function session(options: { id?: string; hasUI?: boolean } = {}) {
 		},
 		model: { provider: "test-provider", id: "test-model" } as { provider: string; id: string } | undefined,
 		thinkingLevel: "high" as string | undefined,
-		sessionManager: { getSessionId: () => id, getSessionFile: () => join(root, "sessions", `${id}.jsonl`) },
+		sessionManager: {
+			getSessionId: () => id,
+			getSessionFile: () => join(root, "sessions", `${id}.jsonl`),
+			// CH E6: the session_start id-seeding scan reads the branch; a test
+			// seeds it with pre-recorded entries via `session({ branch: [...] })`.
+			getBranch: () => options.branch ?? [],
+		},
 		get ui() {
 			if (faults.staleUI) throw new Error("This extension ctx is stale");
 			return ui;

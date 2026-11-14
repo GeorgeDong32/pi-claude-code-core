@@ -26,7 +26,10 @@ idle, so the model never sleeps-and-polls. The notification is agent-side only (
 `task_notification` parity): the TUI renders no `[cc-core-bg-shell]` block.
 The user-visible face is the status row (BG-ENTRY-03): every completion
 and every user kill appends a display-only session entry (`pi.appendEntry`
-— not sent to the LLM). Rendering belongs to pi-claude-code-tui
+— not sent to the LLM). CH E5: stopping a task that had already ended
+appends its REAL end state and exitCode at most once — never a `killed`
+row unless a kill actually ended it, and nothing at all when the row was
+already appended. Rendering belongs to pi-claude-code-tui
 (`lib/bg-task-row.ts`): a `⏺ Background Task(bg-N)` pseudo tool row with a
 state-colored dot plus a `⎿` detail gutter, visually paired with the
 `TaskOutput` rows the agent emits next (CC `task_status` parity; replayed
@@ -65,7 +68,13 @@ the threshold still hard-caps the foreground run.
 - 100 MiB log cap → kill + `__CC_BG_LIMIT__` marker; gzip only after the
   completion message is out
 - `session_shutdown(reason === "reload")` keeps tasks, every other end kills them
-- resume: ids skip any `bg-<n>` whose log/`.log.gz` already exists
+- resume: ids skip any `bg-<n>` whose log/`.log.gz` already exists, and
+  `session_start` seeds the counter past the ids the session's status
+  entries recorded (CH E6) — pruned logs no longer reset numbering to `bg-1`
+- CH E2: the `"…" never appeared` note is a promotion-path-only message;
+  the normal-exit and error paths no longer append it (models passing
+  placeholder `waitFor` values drowned the agent in it), and the `waitFor`
+  schema description tells the model to omit the parameter when not waiting
 
 ## Environment (test seams, not user config)
 

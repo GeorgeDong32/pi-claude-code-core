@@ -2,6 +2,10 @@
 // user-visible task status row (BG-ENTRY-03). Every background-task
 // completion and every user kill appends a display-only session entry via
 // `pi.appendEntry` — the API contract keeps it OUT of the LLM context.
+// CH E5 (2026-11-15): stopping a task that had already ended appends its
+// real end state and exitCode at most once — never a `killed` row unless a
+// kill actually ended it, and nothing at all when the row was already
+// appended (`notified`).
 //
 // The RENDERING half lives in pi-claude-code-tui (`lib/bg-task-row.ts`):
 // a `⏺ Background Task(bg-N)` pseudo tool row with a `⎿` detail gutter,

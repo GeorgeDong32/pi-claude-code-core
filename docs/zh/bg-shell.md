@@ -24,7 +24,10 @@
 模型因此永远不需要 sleep 轮询。通知仅模型侧可见（对齐 CC
 `task_notification`）：TUI 不渲染 `[cc-core-bg-shell]` 块。用户侧可见面是
 状态行（BG-ENTRY-03）：每次完成与每次用户 kill 都追加一条 display-only
-的 session entry（`pi.appendEntry`——不进 LLM）。渲染归
+的 session entry（`pi.appendEntry`——不进 LLM）。CH E5：对已结束的任务
+执行 TaskStop 时，最多追加一行、写真实结束状态与 exitCode——除非确有
+kill 终止了它，否则不写 `killed`；状态行已追加过（`notified`）则不再
+追加。渲染归
 pi-claude-code-tui（`lib/bg-task-row.ts`）：`⏺ Background Task(bg-N)`
 伪工具行 + `⎿` 明细 gutter，状态色圆点，与 agent 随后的 TaskOutput 行
 视觉成对（对齐 CC `task_status`，resume 时重放）。core 刻意不注册
@@ -57,7 +60,12 @@ RPC 降级 `ui.select`；无 UI 打印列表）。`ctrl+shift+b` 把前台运行
 - 100 MiB log 上限 → kill + `__CC_BG_LIMIT__` marker；gzip 只在完成消息
   发出之后
 - `session_shutdown(reason === "reload")` 保留任务，其余结束方式全杀
-- resume：id 跳过已有 log/`.log.gz` 的 `bg-<n>`
+- resume：id 跳过已有 log/`.log.gz` 的 `bg-<n>`；且 `session_start` 用
+  session 状态行里已记录的 id 抬高计数（CH E6）——日志被 7 天清理后
+  编号不再重置回 `bg-1`
+- CH E2：`"…" never appeared` 提示只保留在转后台那条路径；正常退出与
+  报错两条路径不再追加（模型传占位 waitFor 值时该提示泛滥），且
+  `waitFor` 参数说明明确告知不等待时应省略该参数
 
 ## 环境变量（测试缝，非用户配置）
 

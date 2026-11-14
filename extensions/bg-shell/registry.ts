@@ -13,7 +13,7 @@ import { debug, debugError, exitFields, taskFields } from "./debug.ts";
 import type { ForegroundRun } from "./foreground.ts";
 import { killGroup, killGroupNow } from "./kill.ts";
 import { type LaunchOptions, sessionLogDir } from "./launch.ts";
-import { appendStatusEntry } from "./status-entry.ts";
+import { appendStatusEntry, STATUS_ENTRY_TYPE } from "./status-entry.ts";
 import { appendLimitMarker, gzipLog, overLogLimit } from "./logs.ts";
 import { locateMarker, type Marker } from "./logview.ts";
 import { sendCompletion } from "./notify.ts";
@@ -193,7 +193,7 @@ function updateFooter(registry: Registry): void {
 /** A log, id and nonce reserved for a command about to launch. */
 export type Reservation = { id: string; logPath: string; nonce: string };
 
-/** Reserve the next free task id and its log under `sessionId`. Ids restart per process but logs belong to the session: skip any id an earlier run of it used. */
+/** Reserve the next free task id and its log under `sessionId`. Ids are seeded past the session's recorded ones at session_start (CH E6) and skip any id an earlier run's log still holds. */
 export function reserve(sessionId: string): Reservation {
 	const registry = getRegistry();
 	const dir = sessionLogDir(sessionId);
@@ -207,6 +207,26 @@ export function reserve(sessionId: string): Reservation {
 export function release(reservation: Reservation): void {
 	const registry = getRegistry();
 	if (reservation.id === `bg-${registry.nextId - 1}`) registry.nextId--;
+}
+
+/**
+ * CH E6: seed `nextId` past the task ids this session already used, read from
+ * its `cc-core-bg-shell-task` status entries. Ids restart at 1 per process and
+ * logs are pruned after 7 days, so a resumed session used to hand out bg-1
+ * again — colliding with ids the transcript already refers to. Only ever
+ * raises the counter; a branch without status entries changes nothing.
+ */
+export function seedNextIdFromBranch(entries: readonly unknown[]): void {
+	const registry = getRegistry();
+	for (const entry of entries) {
+		const e = entry as { type?: string; customType?: string; data?: { id?: unknown } };
+		if (e.type !== "custom" || e.customType !== STATUS_ENTRY_TYPE) continue;
+		const id = typeof e.data?.id === "string" ? e.data.id : "";
+		const match = /^bg-(\d+)$/.exec(id);
+		if (match === null) continue;
+		const n = Number(match[1]);
+		if (Number.isSafeInteger(n) && n >= registry.nextId) registry.nextId = n + 1;
+	}
 }
 
 /** A running task for a launched process; `startedAt` is when it really began. Not registered yet: see `adopt`. */
@@ -387,10 +407,14 @@ export async function killTask(
 		refresh(registry, task);
 		if (task.state !== "running") {
 			if (!options.notify) {
-				task.notified = true;
 				// No completion message follows a user stop, but the status row (a
-				// `stopped` entry) still shows in the stream (BG-ENTRY-03).
-				if (registry.pi !== undefined) appendStatusEntry(registry.pi, task, { state: "killed" });
+				// `stopped` entry) still shows in the stream (BG-ENTRY-03). CH E5:
+				// a task that already ended keeps its real end state and exitCode —
+				// never a `killed` row unless a kill actually ended it — and an
+				// already-reported task (`notified`) appends nothing, so a repeated
+				// TaskStop cannot duplicate the row.
+				if (!task.notified && registry.pi !== undefined) appendStatusEntry(registry.pi, task);
+				task.notified = true;
 			}
 			// An ended task's command may have left processes in its group.
 			task.clearing ??= stopLeftovers(task).finally(() => {
@@ -408,6 +432,10 @@ export async function killTask(
 		stopping.then(clear, clear);
 	}
 	if (!options.notify) {
+		// Joining a kill already in flight (CH E5 note): the group kill under way
+		// really is ending the task, so the `killed` row is truthful here — and
+		// `notified = true` suppresses the in-flight kill's own notify path, so
+		// this stays the one row.
 		task.notified = true;
 		if (registry.pi !== undefined) appendStatusEntry(registry.pi, task, { state: "killed" });
 	}
