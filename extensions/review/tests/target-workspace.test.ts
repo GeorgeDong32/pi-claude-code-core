@@ -145,6 +145,27 @@ describe("prepareWorkspace — PR path", () => {
 		);
 	});
 
+	test("FETCH_HEAD mismatch + retry fetch itself fails → throws (R2, no silent pass)", async () => {
+		// R2: when the retry fetch FAILS, the old guard silently passed
+		// (retryHead === "" did not throw) and the review proceeded on an
+		// unverified checkout. It must clean the root and throw instead.
+		const cwd = setup();
+		const { cmd, roots } = scripted({
+			// first fetch ok (head AAA mismatches), retry fetch fails
+			fetch: [
+				{ stdout: "", stderr: "", exitCode: 0 },
+				{ stdout: "", stderr: "network down", exitCode: 1 },
+			],
+			fetchHeads: ["AAA"],
+		});
+		setRunCmd(cmd);
+		await assert.rejects(
+			() => prepareWorkspace({ cwd, target: { kind: "pr", prRef: PR, expectedHeadSha: "H1" } }),
+			/retry fetch of PR 9 head failed/,
+		);
+		assert.equal(roots.length, 1, "no second clone allocated before the throw");
+	});
+
 	test("FETCH_HEAD mismatch + refetch still wrong → throws (PR moving)", async () => {
 		const cwd = setup();
 		const { cmd } = scripted({ fetchHeads: ["AAA", "BBB"] });

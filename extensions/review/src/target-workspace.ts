@@ -18,6 +18,11 @@
  * cwd): a fresh GitHub diff plus a stale local checkout is the #1 false
  * positive source observed in the field (diff@new, files@old).
  *
+ * R2 (2026-11-15): the inner HEAD-mismatch guard no longer silently passes
+ * when the one retry fetch itself fails — `retry.exitCode !== 0` throws
+ * ("retry fetch failed", distinct copy), as does a retry that still lands
+ * on a different head ("head moved"). Both clean up the scratch root first.
+ *
  * FX-5 (2026-11-14): PR-path clone/fetch commands carry hard ceilings
  * (PR_CLONE_TIMEOUT_MS / PR_HEAD_FETCH_TIMEOUT_MS) and
  * GIT_TERMINAL_PROMPT=0 so a stalled network or a credential prompt can
@@ -170,19 +175,26 @@ export async function prepareWorkspace(input: {
 		fetchHead &&
 		fetchHead !== target.expectedHeadSha
 	) {
-		// One refetch — a force-push may have raced the clone.
+		// One refetch — a force-push may have raced the clone. R2: a FAILED
+		// retry is a hard error too — the old guard treated an empty
+		// retryHead as "no mismatch" and silently reviewed an unverified
+		// checkout, exactly the diff@new / files@old false-positive class.
 		const retry = await runCmd(
 			"git",
 			["fetch", "origin", `pull/${parsed.number}/head`, "--quiet"],
 			{ cwd: cloneDir, timeoutMs: PR_HEAD_FETCH_TIMEOUT_MS, env: NO_CREDENTIAL_PROMPTS },
 		);
-		const retryHead = retry.exitCode === 0
-			? (await runCmd("git", ["rev-parse", "FETCH_HEAD"], { cwd: cloneDir })).stdout.trim()
-			: "";
-		if (retryHead && retryHead !== target.expectedHeadSha) {
+		if (retry.exitCode !== 0) {
 			removeWorkspaceRoot(root);
 			throw new Error(
-				`pi-review: PR ${parsed.number} head moved to ${retryHead.slice(0, 12)} while the diff was captured at ${target.expectedHeadSha.slice(0, 12)} — re-run /review to get a consistent pair.`,
+				`pi-review: retry fetch of PR ${parsed.number} head failed (${retry.stderr.trim().slice(0, 200)}) — the first fetch mismatched the diff's head SHA, so the checkout cannot be verified; aborting instead of reviewing a mismatched pair.`,
+			);
+		}
+		const retryHead = (await runCmd("git", ["rev-parse", "FETCH_HEAD"], { cwd: cloneDir })).stdout.trim();
+		if (retryHead !== target.expectedHeadSha) {
+			removeWorkspaceRoot(root);
+			throw new Error(
+				`pi-review: PR ${parsed.number} head moved to ${retryHead.slice(0, 12) || "(undeterminable)"} while the diff was captured at ${target.expectedHeadSha.slice(0, 12)} — re-run /review to get a consistent pair.`,
 			);
 		}
 	}
