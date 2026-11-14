@@ -13,10 +13,6 @@ export const DENIAL_WORKAROUND_GUIDANCE =
 export const AUTO_MODE_REJECTION_PREFIX =
 	"Permission for this action has been denied. Reason: "
 
-export function isClassifierDenial(content: string): boolean {
-	return content.startsWith(AUTO_MODE_REJECTION_PREFIX)
-}
-
 export function buildYoloRejectionMessage(reason: string): string {
 	const ruleHint =
 		`To allow this type of action in the future, the user can add a permission rule like ` +

@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest"
 import {
 	buildClassifierUnavailableMessage,
 	buildYoloRejectionMessage,
-	isClassifierDenial,
 } from "./classifier-messages.ts"
 import {
 	createDenialTrackingState,
@@ -20,7 +19,7 @@ import { parseClassifierModelRef, parseModelRef, parseXmlClassifierVerdict } fro
 describe("classifier-messages", () => {
 	it("builds deny-and-continue style rejection", () => {
 		const msg = buildYoloRejectionMessage("network fetch")
-		expect(isClassifierDenial(msg)).toBe(true)
+		expect(msg.startsWith("Permission for this action has been denied.")).toBe(true)
 		expect(msg).toContain("continue working on those")
 	})
 

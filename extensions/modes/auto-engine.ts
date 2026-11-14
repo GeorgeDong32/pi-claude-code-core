@@ -13,7 +13,10 @@
  * notify / outside-write entries the engine calls back into.
  *
  * Behavior is unchanged from the pre-extraction factory closures (C4: pure
- * relocation — MAX_CLASSIFIER_FAILURES moved with the engine).
+ * relocation — MAX_CLASSIFIER_FAILURES moved with the engine). One later
+ * divergence: E3 (spec 2026-11-15-cleanup-hardening) — the classifier-
+ * unavailable fail-closed block returns buildClassifierUnavailableMessage
+ * verbatim instead of the YOLO rejection framing.
  */
 
 import { readFileSync } from "node:fs";
@@ -210,10 +213,14 @@ export function createAutoEngine(deps: AutoEngineDeps) {
       }
       logClassifierUnavailable(outcome.error, outcome.attempts);
       if (deps.getClassifierConfig().failClosed !== false) {
-        return classifierDenyBlock(
-          tool,
-          buildClassifierUnavailableMessage(tool, deps.getClassifierConfig().model),
-        );
+        // E3 (spec 2026-11-15-cleanup-hardening): the unavailable message
+        // goes out VERBATIM — the former buildYoloRejectionMessage wrapper
+        // added a "Permission … denied" framing and an "add a permission
+        // rule" hint that make no sense when the classifier itself is down.
+        return {
+          block: true,
+          reason: buildClassifierUnavailableMessage(tool, deps.getClassifierConfig().model),
+        };
       }
       // fail-open: fall through to the local tier-3 fallback below
     }
