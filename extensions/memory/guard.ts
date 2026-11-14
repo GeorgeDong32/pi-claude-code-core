@@ -8,6 +8,12 @@
  * facts misfiled into the USER layer (G1-C3), child-session writes
  * (G1-C6). The guard never edits content.
  *
+ * BH-R2 (spec 2026-11-14-backtest-hardening): the secret probe is scoped
+ * to the memory layers again (the 1618f89 G1 rewrite probed every
+ * write/edit path) and scans only the INCOMING text — write's content,
+ * edit's edits[].newText — never the whole resulting file (a pre-existing
+ * secret-looking line must not block a clean edit).
+ *
  * guardMemoryToolCall is the top-level entry (both layers + cross-layer
  * context in one call); guardMemoryWrites below is the original per-layer
  * secret probe kept for its existing tests.
@@ -107,13 +113,18 @@ export function guardMemoryToolCall(
 		if (misfile !== undefined) return misfile;
 	}
 
-	// P3-ME-05 secret probe — now over the RESULTING content, which also
-	// covers edit's edits[] (the old per-layer probe read edit fields that
-	// pi's edit tool never sends).
-	for (const text of collectTexts(toolName, input, resulting)) {
-		const secret = findSecret(text);
-		if (secret) {
-			return { block: true, reason: `memory write blocked: looks like a ${secret}` };
+	// P3-ME-05 secret probe (BH-R2): ONLY for memory-layer targets — the
+	// 1618f89 G1 rewrite had dropped that limit, probing every write/edit
+	// anywhere (12 backtest false blocks; models bypassed via bash). Edits
+	// scan ONLY the incoming edits[].newText: a memory file whose EXISTING
+	// content carries a secret-looking line must not block a clean edit of
+	// it (the whole resulting file stays C1/C3's business).
+	if (inMemory) {
+		for (const text of probeTexts(toolName, input)) {
+			const secret = findSecret(text);
+			if (secret) {
+				return { block: true, reason: `memory write blocked: looks like a ${secret}` };
+			}
 		}
 	}
 	return { block: false };
@@ -140,11 +151,16 @@ function resultingContent(toolName: string, input: Record<string, unknown>, path
 	return result;
 }
 
-/** All text the secret probe should see: the resulting content plus the raw edit payloads. */
-function collectTexts(toolName: string, input: Record<string, unknown>, resulting: string | undefined): string[] {
+/** All text the secret probe sees (BH-R2): write → content; edit → each
+ * edits[].newText. The whole-file resulting content is deliberately NOT
+ * probed — pre-existing secret-looking text in a memory file must not
+ * block a clean edit of it. */
+function probeTexts(toolName: string, input: Record<string, unknown>): string[] {
+	if (toolName === "write") {
+		return typeof input.content === "string" ? [input.content] : [];
+	}
 	const texts: string[] = [];
-	if (resulting !== undefined) texts.push(resulting);
-	if (toolName === "edit" && Array.isArray(input.edits)) {
+	if (Array.isArray(input.edits)) {
 		for (const edit of input.edits) {
 			if (typeof edit?.newText === "string") texts.push(edit.newText);
 		}

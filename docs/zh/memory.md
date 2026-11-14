@@ -23,7 +23,7 @@ spec 2026-10-02-memory-recall-v2)、守卫记忆写入路径、自动整合
 | `turn_end` | P3 automation 计数 + correction 门(≤1/3 turn;review 提取已挪 `agent_end`,2026-10-03;spec v1.2:召回投递不再按 turn 门控 —— 见 `message_end`) |
 | `agent_end` | spec v1.2:仅清 prompt 标记 —— 在途选择仍可完成后投递(下一轮可见);最新者胜的取代发生在下一条用户消息 + 后台 review 提取(2026-10-03 自 turn_end 挪入:完整 run 快照,≥10 turn / ≥15 tool call 门槛,suffix-60 窗口上限,空窗口守卫 —— 不再 run 中途提取,单 run 至多一次 LLM) |
 | `session_shutdown` | **AR1005-RC-04**:任意 shutdown 原因都 dispose 召回机 —— 同步执行、永不等待模型。晚到的选择器完成(adapter 忽略 AbortSignal)被 generation 失效丢弃:零 history 读取、零投递、零 unhandled rejection(契约 AR1005-RC-HOST 对真实 `ExtensionRunner` + `invalidate()` 钉住;基线缺陷正是该崩溃) |
-| `tool_call` | `guardMemoryToolCall`(G1 判定 + 对 edits[] 的密钥探测);已读抑制改为从历史推导(RV-07) |
+| `tool_call` | `guardMemoryToolCall`(G1 判定;BH-R2:密钥探测只作用于记忆层路径 —— write 扫 `content`、edit 扫 `edits[].newText`);已读抑制改为从历史推导(RV-07) |
 | `tool_result` | `memory_consolidate` settle + 陈旧读 staleness 标注 |
 | `agent_settled` | 清除整合进行中标记 |
 | `registerTool` | `session_recall`、`memory_consolidate` |
@@ -57,7 +57,7 @@ child 的 dispatch prompt 触发一次选择器调用(token 费 + ≤waitMs 首 
 | `recall.ts` | **RV 深模块**(入口:`onUserMessage` / `abort` / `dispose`;AR1005-RC-01)。所有会话态每次调用都从投影历史推导(D9):自最近 `compactionSummary` 起的硬判重(RV-06)、read toolCall 按 cwd 解析的已读抑制(RV-07)、按历史 `details.bytes` 累计的字节预算(RV-08)、自最近用户消息起成功且从未失败的 recentTools(RV-13)。skill 包裹剥离 + 长度卫生(RV-02);最新者胜的取代(RV-05);字节安全截断 + 路径注记渲染;`RecallDetailsV1`(冻结,契约已钉)。**AR1005-RC**:每个请求持有 generation + AbortController + 等待 timer + cancelled resolver —— 新消息、`abort`、`dispose` 或机器替换立即失效(在途 await 不会挂在忽略 abort 的 selector 上;晚到完成零 history 读取、零投递、零状态污染)。`onUserMessage` 为 total promise(RC-02:入口/延迟段抛错收敛为 null + 每失败请求至多一条诊断 —— steer 路径的 `void` 调用不可能产生 unhandled rejection);延迟投递仅在 `deliver()` 同步成功后提交 run 判重/计数(RC-03) |
 | `selector.ts` | `llmSelector`(共享 llm.ts 通道):清单行 = `[layer][type] key (age): description` 新→旧、上限 200;精度优先提示词(空列表是合法答案);recentTools 反噪音规则;`resolveRecallModel` = 精确 provider/id → 唯一裸 id → 关闭(绝不回退会话模型,D3) |
 | `policy.ts` | policy 注入块(`POLICY_COMPACT`) |
-| `guard.ts` | 记忆写路径的秘密拦截器(secret regex,含无引号值 / base64 padding) |
+| `guard.ts` | 写守卫:G1 判定 + 密钥探测。BH-R2:探测只对记忆层路径生效,且只扫传入文本 —— write 的 `content`、edit 的 `edits[].newText`,不扫整个结果文件(文件中原有的疑似密钥内容不得阻断一次干净编辑) |
 | `yield.ts` | `InjectionGate` —— 静态 + 动态 yield 探测(fail-open:注入失败绝不阻塞 turn,P3-ME-09) |
 | `consolidate.ts` | 整合触发/工具/命令;写入走 `memory_consolidate`(批次必须减少字节或文件数) |
 | `automation.ts` | P3 automation 状态 + 设置(经 `lib/settings` readJson 读取,不变量 10);`session_start` 每会话态重置(A1);queue drain 并行(`Promise.allSettled`,≤5 —— 最坏 5×20s 串行 → max(20s);诊断单点聚合写入) |

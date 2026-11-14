@@ -26,9 +26,12 @@
  *                       invalidation. session_start also defensively
  *                       disposes (reload/resume drivers) — neither replaces
  *                       the other.
- *   tool_call           guardMemoryToolCall (G1 verdicts + secret probe over
- *                       edits[]; the legacy guardMemoryWrites stays a guard.ts
- *                       module export under test, not production wiring)
+ *   tool_call           guardMemoryToolCall (G1 verdicts; BH-R2: the secret
+ *                       probe is memory-layer-scoped and scans only the
+ *                       incoming text — write's content, edit's
+ *                       edits[].newText; the legacy guardMemoryWrites stays
+ *                       a guard.ts module export under test, not production
+ *                       wiring)
  *   tool_result         memory_consolidate settle + stale-read staleness note
  *   agent_settled       consolidation in-flight clear
  *   registerTool        session_recall, memory_consolidate (V2-C)
