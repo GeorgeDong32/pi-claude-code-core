@@ -474,3 +474,9 @@ FX-5. **review/ 模块深度审查（REPORT：REVIEW-2026-11-14-review-module.md
 FX-6. **流程注记**
    - W-R 与 W-M 首派 worker 死于 model_provider_unavailable（与 BH 批 W-C 同款），续派（resume）后各自接手半成品完成；W-R 半成品经逐行复核后沿用，缺失的红基线证据由续派 worker 补齐（净树 spy 两次实测）。
    - 台账更正一处 orchestrator 错误：FX-4 节所记「34/2 条」基线为正文污染（见 FX-4），以严格形状复核为准。
+
+FX-7. **发版前双轴审查（code-review skill，519cd86...5db2cc7）与 BH-R6 修订修复**
+   - 双轴结论：Standards 零硬违规（6 条判断题坏味道：bash-path-check 三处重复表达式 + 空数组参数 hack 双扫描、BashDenyHit 名不副实、adjudicate bashFlagAsk prompt 块镜像重复、review-run stderr.includes("timed out") 弱契约、effort modelKey 与 profile-apply 字段比较双编码）；Spec 零缺失、2 条已登记轻微越界、1 条低危实现问题（见下）。
+   - **修复：BH-R6 tier 顺序**——spec 要求「任一段命中 soft_deny 即判 soft_deny」，但 adjudicate.ts 的 allow tier（1.5）先于 soft_deny tier（1.5b）返回：某段同时命中两个清单（每段都 allow-match 且任一段 soft_deny-match、且两段均 tier-2 approvable，如 `git add -A && npm test` 配 allow ["git","npm"] + soft_deny ["npm test"]）时被快速放行，与 auto-rule-match.ts 头注释 "soft_deny wins" 相悖。该顺序承自 base（非 BH 批引入）。修复 = 1.5/1.5b 互换（soft_deny 先判，allow 层注释同步），红基线坐实（前置红 → 后置绿，decide 级 + 接线级双钉）。接线级碰撞用例的构造依赖 tier-2 白名单事实（npm test approvable，npm install/publish 不可 approvable 到达不了 allow tier）——已写进用例注释。
+   - tier-1（bashTiers.safe）与 soft_deny 的先后未动：safe 是 core 内建只读判定而非用户规则层，「soft_deny wins」语义只约束用户规则两 tier；如需收紧另议。
+   - 其余发现（Standards 6 条 + review/ 深审 P2×2+P3×9 + run-cmd N3–N6）记下一轮，不阻发版。

@@ -1,4 +1,4 @@
-## Unreleased
+## 0.5.1 (2026-11-14) — 回测加固批（BH）+ 小修批（FX）
 
 ### Security
 
@@ -58,6 +58,11 @@
 - **modes setMode 竞态收敛（BH-E4）**：快速连按 Shift+Tab 时只有最新请求
   执行副作用；模型未变化时跳过 setModel（也避免连带的重置 thinking）；
   路经 plan 的切换不再留下 plan.md。
+- **auto 模式 soft_deny 规则赢过 allow 规则（BH-R6 修订）**：某段命令同时
+  命中 autoMode.allow 与 autoMode.soft_deny 两个清单时，此前仍被快速放行
+  （allow tier 先于 soft_deny 判定，与 auto-rule-match.ts 头注释
+  "soft_deny wins" 相悖，发版前双轴审查发现、承自更早版本）；现 soft_deny
+  强制询问，allow-only 命令的快速放行不变。
 - **effort 手动切模型不再覆盖档位选择（FX-2）**：经 `/model` 或 ctrl+p 手动
   切换模型时，宿主在切换内部重置 thinking 级别，此前被 effort 监听器采纳为
   显式选择——覆盖 `/effort` 选择、使 profile `:effort` 失效、偏离

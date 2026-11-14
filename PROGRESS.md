@@ -14,6 +14,7 @@
 - **FX-5（review/ 深审）**：REPORT `REVIEW-2026-11-14-review-module.md`——P0=0；P1×1 已修（PR 路径全子进程加时限：clone 120s/fetch 60s/gh 60s + 禁凭据提示）；P2×2 + P3×9 记录下一轮；25 处 runCmd call site 审计经独立枚举复核属实。
 - **门禁（main c58ec84）**：`bun run check` exit 0；`bun run test` **零失败**——vitest 85 文件 1210/1210 + node:test 九目录全绿（effort 114 / goal 262 / review 188 / action-fusion 21 / observation-pack 33 / bg-shell 278 / compaction 136 / memory 38（含新 bypass 套件）/ web-gov 19）；`bun run contracts` 108+4todo；金丝雀 5/5。BH-10 关闭。
 - **台账**：CHANGELOG Unreleased Fixed +2（FX-2、FX-1/FX-5）；DEVIATIONS「小修批（SPEC FX）」FX-1…6（含 SC-1 未关闭项更新）；docs/{en,zh} 四模块同步（review/effort/compaction）+ REVIEW 报告。
+- **发版前双轴审查（519cd86...5db2cc7）**：Standards 零硬违规 + 6 条判断题坏味道；Spec 零缺失、2 条已登记轻微越界、1 条低危 BH-R6 tier 顺序问题——已修复（`3fbc4cb`，soft_deny 先于 allow 判定，红基线 + decide/接线双钉，DEVIATIONS FX-7），修订后全量门禁复跑全绿（vitest 1212/1212）。**0.5.1 定版 `3fbc4cb`，本地 tag，不 push 不安装（用户拍板）**。
 - **遗留（下一轮）**：review/ 深审 P2×2+P3×9；run-cmd SIGKILL 升级等超时实现边缘（FX-1 审查 N3–N6）；memory in-flight 守卫隔离钉（与既有用例同款缺口）；FX-2 残余（上游 model_select 缺失）待提上游；发版与双机安装仍待用户授权（D-BH-4）。
 
 ## 2026-11-14 回测加固批（SPEC BH，13 项，4 路并行派工 + 独立审查合入）
