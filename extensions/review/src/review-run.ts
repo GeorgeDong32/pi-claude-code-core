@@ -18,6 +18,10 @@
  * FX-5 (2026-11-14): the PR-path gh calls (`gh pr view` metadata, `gh pr
  * diff` authority) carry the same hang protection — PR_GH_TIMEOUT_MS = 60s
  * ceiling; the diff timeout surfaces through the existing hard-error throw.
+ * R3 (2026-11-15): untracked files are stat'd first; anything over
+ * UNTRACKED_FILE_MAX_BYTES (1 MB) gets a size-only placeholder hunk (no
+ * content read) and a counted note in diffWarning — the binary probe only
+ * ever reads within-cap files.
  */
 import { existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -320,6 +324,12 @@ const LOCAL_BASE_FETCH_TIMEOUT_MS = 15_000;
 // for auth non-interactively, so the env is belt-and-braces.
 const PR_GH_TIMEOUT_MS = 60_000;
 
+// R3 (2026-11-15): untracked files are read whole; a stray dump/bundle over
+// this cap would flood the diff (and the reviewers' context). Over-cap files
+// get a placeholder hunk stating the size (no content) and are counted in
+// diffWarning. Deliberately not configurable (no new env/settings key, INV-10).
+const UNTRACKED_FILE_MAX_BYTES = 1_000_000;
+
 async function acquireLocalDiff(cwd: string, runDir: string): Promise<DiffAcquisitionResult> {
 	const status = await runCmd("git", ["status", "--porcelain"], { cwd });
 	if (status.stdout.trim().length > 0) {
@@ -330,8 +340,19 @@ async function acquireLocalDiff(cwd: string, runDir: string): Promise<DiffAcquis
 		const tracked = (await runCmd("git", ["diff", "HEAD"], { cwd })).stdout;
 		const untracked = (await runCmd("git", ["ls-files", "--others", "--exclude-standard"], { cwd })).stdout;
 		const untrackedParts: string[] = [];
+		// R3: statSync FIRST — only files within the cap are ever read; the
+		// rest get a size-only placeholder hunk and a diffWarning count.
+		let skippedOversize = 0;
 		for (const f of untracked.trim() ? untracked.trim().split("\n") : []) {
 			try {
+				const size = statSync(join(cwd, f)).size;
+				if (size > UNTRACKED_FILE_MAX_BYTES) {
+					skippedOversize++;
+					untrackedParts.push(
+						`diff --git a/${f} b/${f}\nnew file mode 100644\n--- /dev/null\n+++ b/${f}\n@@ -0,0 +1 @@\n+Untracked file omitted from review: ${size} bytes exceeds the ${UNTRACKED_FILE_MAX_BYTES}-byte cap (content not read)\n`,
+					);
+					continue;
+				}
 				const buf = readFileSync(join(cwd, f));
 				// NUL in the leading bytes marks a binary file — utf-8 coercion
 				// would turn it into megabytes of U+FFFD noise.
@@ -350,7 +371,15 @@ async function acquireLocalDiff(cwd: string, runDir: string): Promise<DiffAcquis
 		const text = [tracked.trim(), ...untrackedParts].filter(Boolean).join("\n");
 		if (text) {
 			const path = writeDiff(runDir, text);
-			return { path, diff: text, mode: "local-uncommitted", headSha: await safeRev(cwd, "HEAD") };
+			return {
+				path,
+				diff: text,
+				mode: "local-uncommitted",
+				headSha: await safeRev(cwd, "HEAD"),
+				warning: skippedOversize > 0
+					? `${skippedOversize} untracked file${skippedOversize === 1 ? "" : "s"} over ${UNTRACKED_FILE_MAX_BYTES} bytes omitted from the diff (size noted, content not read)`
+					: undefined,
+			};
 		}
 	}
 

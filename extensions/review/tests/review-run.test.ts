@@ -533,6 +533,65 @@ describe("prepareRun — config wiring (round-2 adversarial findings)", () => {
 		rmSync(dirname(prepared!.manifest.workspacePath), { recursive: true, force: true });
 	});
 
+	test("oversize untracked files get a placeholder hunk + warning, no content (R3)", async () => {
+		const cwd = setup();
+		writeFileSync(join(cwd, "tracked.ts"), "a\n");
+		// 1.1 MB — over the 1_000_000-byte untracked cap.
+		const big = "x".repeat(1_100_000);
+		writeFileSync(join(cwd, "huge-data.txt"), big);
+		setRunCmd(
+			ghThenGit(
+				fakeCmd({
+					"git status": () => ({ stdout: " M tracked.ts\n?? huge-data.txt\n", stderr: "", exitCode: 0 }),
+					"git diff": () => ({
+						stdout: "diff --git a/tracked.ts b/tracked.ts\n--- a/tracked.ts\n+++ b/tracked.ts\n@@ -1 +1 @@\n-a\n+b\n",
+						stderr: "",
+						exitCode: 0,
+					}),
+					"git ls-files": () => ({ stdout: "huge-data.txt\n", stderr: "", exitCode: 0 }),
+					"git rev-parse": () => ({ stdout: "abc\n", stderr: "", exitCode: 0 }),
+				}),
+				async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+			),
+		);
+		const prepared = await prepareRun({ cwd, input: "" });
+		assert.ok(prepared);
+		const m = prepared!.manifest;
+		const diffText = readFileSync(m.diffPath, "utf-8");
+		assert.ok(!diffText.includes(big.slice(0, 4096)), "oversize untracked content must not enter the diff");
+		assert.ok(diffText.includes("huge-data.txt"), "the file stays listed");
+		assert.ok(diffText.includes("1100000"), "the placeholder states the file size");
+		assert.ok(m.diffWarning, "diffWarning records the skipped count");
+		assert.match(m.diffWarning!, /1 untracked file/);
+		assert.ok(m.changedFiles.includes("huge-data.txt"), "file remains in changedFiles");
+	});
+
+	test("within-cap untracked files keep their full content (R3 negative)", async () => {
+		const cwd = setup();
+		writeFileSync(join(cwd, "tracked.ts"), "a\n");
+		writeFileSync(join(cwd, "small-new.txt"), "small content\n");
+		setRunCmd(
+			ghThenGit(
+				fakeCmd({
+					"git status": () => ({ stdout: " M tracked.ts\n?? small-new.txt\n", stderr: "", exitCode: 0 }),
+					"git diff": () => ({
+						stdout: "diff --git a/tracked.ts b/tracked.ts\n--- a/tracked.ts\n+++ b/tracked.ts\n@@ -1 +1 @@\n-a\n+b\n",
+						stderr: "",
+						exitCode: 0,
+					}),
+					"git ls-files": () => ({ stdout: "small-new.txt\n", stderr: "", exitCode: 0 }),
+					"git rev-parse": () => ({ stdout: "abc\n", stderr: "", exitCode: 0 }),
+				}),
+				async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+			),
+		);
+		const prepared = await prepareRun({ cwd, input: "" });
+		assert.ok(prepared);
+		const diffText = readFileSync(prepared!.manifest.diffPath, "utf-8");
+		assert.match(diffText, /small content/);
+		assert.ok(!prepared!.manifest.diffWarning, "no warning when nothing was skipped");
+	});
+
 	test("mixed dirty tree: modified + untracked files all land in the diff", async () => {
 		const cwd = setup();
 		writeFileSync(join(cwd, "tracked.ts"), "a\n");
