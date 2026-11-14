@@ -18,6 +18,11 @@
  * via the extension's own `pi.exec`; reviewer children only need read/grep
  * and a few read-only git commands, all already permitted in the agent
  * frontmatter.
+ *
+ * R11 (D-CH-2, 2026-11-15): the review bus channel reconciles at three
+ * points (agent_end for a report-less live run, session_start for stale
+ * running, a new /review entry for residual running) so `review.status` can
+ * no longer get stuck at "running". See the liveRun closure below.
  */
 import { notify as sharedNotify } from "../ui/notify.ts";
 import { existsSync, readFileSync } from "node:fs";
@@ -66,13 +71,56 @@ export default function (pi: ExtensionAPI) {
 	function checkSubagentAvailability(): boolean {
 		return subagentToolAvailable();
 	}
+
+	// R11 (D-CH-2): reconcile the bus review channel so `review.status` can
+	// no longer get stuck at "running" when a run fails, aborts, or never
+	// lands a report. THREE reconcile points, only the three existing
+	// statuses, no new bus fields:
+	//   1. agent_end — a live run whose agent turn ended WITHOUT a report
+	//      resets to idle. The live run is armed only after the running
+	//      publish AND an agent_start, so a queued directive is never
+	//      clobbered by the PREVIOUS run's agent_end.
+	//   2. session_start — a running status carried across sessions is stale.
+	//   3. a new /review invocation with no live run tracked resets residual
+	//      running before preparing.
+	let liveRun: { runId: string } | null = null;
+	let liveRunArmed = false;
+	function busReviewStatus(): string {
+		try {
+			return coreBus().snapshot().review.status;
+		} catch {
+			return "idle";
+		}
+	}
+	function reconcileIdle(): void {
+		try {
+			coreBus().publish({ review: { status: "idle", lastRunAt: null } });
+		} catch {
+			/* bus publish is best-effort */
+		}
+	}
 	pi.on("session_start", () => {
+		// R11 ②: stale running from a previous session/process must not leak in.
+		if (busReviewStatus() === "running") reconcileIdle();
 		// one-time probe so a headless/console user learns about the missing
 		// peer early; degradedNoticeShown is reserved for the first
 		// user-visible notice on the command path
 		if (!subagentToolAvailable() && !degradedNoticeShown) {
 			console.log(`pi-review: ${degradationNotice()}`);
 		}
+	});
+	pi.on("agent_start", () => {
+		// R11: arm the live run — the directive turn has actually begun.
+		if (liveRun) liveRunArmed = true;
+	});
+	pi.on("agent_end", () => {
+		// R11 ①: an armed live run whose turn ended without the report tool
+		// landing (status still "running") failed/aborted/never-reported —
+		// reset to idle. A landed report ("done") is left untouched.
+		if (!liveRun || !liveRunArmed) return;
+		liveRun = null;
+		liveRunArmed = false;
+		if (busReviewStatus() === "running") reconcileIdle();
 	});
 	pi.registerCommand("review", {
 		description: "Foreground code review (lean pi-review.* agents). --lite = single-agent.",
@@ -115,6 +163,11 @@ export default function (pi: ExtensionAPI) {
 				const { config, legacyWarnings } = loadConfig();
 				for (const w of legacyWarnings) notify(`pi-review: ${w}`, "warning");
 
+				// R11 ③: stale residual — the bus says running but this module
+				// tracks no live run (e.g. a previous run never reconciled).
+				// Reset before preparing; a live run is never touched here.
+				if (!liveRun && busReviewStatus() === "running") reconcileIdle();
+
 				// Visible echo of the command — sent IMMEDIATELY, before the
 				// (potentially minutes-long) diff/clone preparation, so the
 				// user sees the command registered instead of a long silent
@@ -139,8 +192,12 @@ export default function (pi: ExtensionAPI) {
 				}
 
 				// P2-BUS-01: review run is live — publish running (done comes
-				// from the pi_review_report tool landing the report).
+				// from the pi_review_report tool landing the report). R11:
+				// track the live run for the agent_end reconciliation; it is
+				// armed by the directive turn's agent_start.
 				coreBus().publish({ review: { status: "running", lastRunAt: null } });
+				liveRun = { runId: prepared.runId };
+				liveRunArmed = false;
 
 				// Hidden directive → main agent executes as a turn.
 				pi.sendMessage(
