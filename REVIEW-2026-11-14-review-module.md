@@ -25,11 +25,11 @@ FX-1 移交裁决的「PR 路径命令是否也需要时限」:**确凿风险成
 **发现**(FX-1 明确移交本项裁决):D-FX-1 只给本地 base fetch(`git fetch origin <base>`)加了
 15s 上限;PR 路径的 5 个子进程调用仍无时限:
 
-- `extensions/review/src/target-workspace.ts` — `gh repo clone`(修复前 :77-81)、
-  https `git clone --depth 50` 兜底(:82-83)、`git fetch origin pull/<n>/head`(首次 :96-100、
-  TOCTOU 重试 :174-178)。
-- `extensions/review/src/review-run.ts` — `gh pr view <ref> --json …`(修复前 :264-267)、
-  `gh pr diff <ref>`(:289,单一 diff 权威)。
+- `extensions/review/src/target-workspace.ts` — `gh repo clone`(修复前 :115-121)、
+  https `git clone --depth 50` 兜底(:122)、`git fetch origin pull/<n>/head`(首次 :132-136、
+  TOCTOU 重试 :150-154)。
+- `extensions/review/src/review-run.ts` — `gh pr view <ref> --json …`(修复前 :260-264)、
+  `gh pr diff <ref>`(:287,单一 diff 权威)。
 
 **证据/场景**:(a) 私有仓库 + gh 不可用/未认证时,https 兜底 clone 会弹出
 username/password 终端提示 —— 调用点未传 `GIT_TERMINAL_PROMPT=0`,git 无限等待凭据输入,
@@ -153,7 +153,7 @@ index.ts:268):PR 目标仍执行 gh/git clone 并落 run 目录 + clone 工作�
 
 - `bun run check`:main OK;contracts OK
 - `bun run test`:vitest 84 文件 1209/1209;node:test 九目录
-  108+262+183(review,含新增 run-cmd 6 + D-FX-1 2 + FX-5 4)+21+33+278+136+37+19,
+  108+262+188(review,含新增 run-cmd 6 + D-FX-1 2 + FX-5 5)+21+33+278+136+37+19,
   零失败(BH-10 关闭)
 - `bun run contracts`:108 passed / 4 todo(18 文件)
 - 金丝雀:5/5
