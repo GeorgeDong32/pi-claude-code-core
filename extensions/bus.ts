@@ -24,6 +24,12 @@
  * the swap by comparing `instance` — on a change, re-subscribe via the new
  * snapshot's onChange. Old cores without the field: fall back to comparing
  * the onChange function identity. Patches can never overwrite `instance`.
+ *
+ * BH-R7 (2026-11-14): a listener throwing inside publish must not abort the
+ * remaining listeners (the core's own state updates run BEFORE listeners
+ * fire, so they are already committed) — each listener is dispatched inside
+ * its own try/catch with a console.warn. Publish stays synchronous: the
+ * dispatch loop and legacy-key derivation contain no await.
  */
 // Type-only import of the published declarations: erased at transform, so
 // bundlers never resolve the .d.mts at runtime.
@@ -176,7 +182,16 @@ export function createCoreBus(): CoreBus {
 			g.__piClaudeCodeCore = current;
 			g.__piClaudeCodeCoreCmd = (cmd: CoreCommand) => bus.handleCommand(cmd);
 			deriveLegacy(current);
-			for (const listener of listeners) listener();
+			// BH-R7 (2026-11-14): isolate listeners — one broken consumer must
+			// not stop the others (or the publisher) from seeing the snapshot.
+			// Publishing stays fully synchronous (bus invariant 3).
+			for (const listener of listeners) {
+				try {
+					listener();
+				} catch (error) {
+					console.warn("[core-bus] listener failed:", error);
+				}
+			}
 			return current;
 		},
 		snapshot: () => current,

@@ -559,7 +559,17 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
 
   function cycleMode(ctx: ExtensionContext): void {
     const idx = MODE_CYCLE.indexOf(currentMode);
-    void setMode(MODE_CYCLE[(idx + 1) % MODE_CYCLE.length], ctx);
+    // BH-R7: a rejected setMode used to surface as an UNHANDLED rejection
+    // (TUI crash risk) — catch it and tell the user instead.
+    void setMode(MODE_CYCLE[(idx + 1) % MODE_CYCLE.length], ctx).catch(
+      (err: unknown) => {
+        uiNotify(
+          ctx,
+          `Mode switch failed: ${err instanceof Error ? err.message : String(err)}`,
+          "error",
+        );
+      },
+    );
     if (ctx.hasUI) uiNotify(ctx, `Mode: ${MODE_META[currentMode].label}`);
   }
 
@@ -1385,11 +1395,22 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     } catch (err) {
       console.warn("[permission-modes] loop-guard check failed open:", err);
     }
-    return adjudicator.check({
-      ctx,
-      tool: event.toolName,
-      input: (event.input ?? {}) as Record<string, unknown>,
-    });
+    // BH-R7: the adjudication must never throw through the tool_call event —
+    // a throw fails the whole call at the host. Stay fail-closed with a
+    // readable reason instead.
+    try {
+      return await adjudicator.check({
+        ctx,
+        tool: event.toolName,
+        input: (event.input ?? {}) as Record<string, unknown>,
+      });
+    } catch (err) {
+      console.warn("[permission-modes] permission check failed:", err);
+      return {
+        block: true,
+        reason: `permission check failed: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
   });
 
   // ---- context injection (system prompt anchor) --------------------------

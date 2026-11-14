@@ -1,6 +1,14 @@
 /**
  * Permission-modes extension config (`~/.pi/agent/permission-modes.json`).
  * Pure fs helpers — no pi dependency.
+ *
+ * BH-R7 (2026-11-14): hand-edited config must never crash the extension —
+ * `sanitizePermissionModesConfig` normalizes every rule list (string-only
+ * filters for autoMode.allow/soft_deny/environment and
+ * permissions.allow/deny/ask; non-array entries dropped with a one-shot
+ * warning) and deletes non-object `autoMode`/`permissions` blocks. The
+ * sanitizer caches by object identity (WeakMap) so repeated reads of the
+ * same parsed config are free.
  */
 
 import { readJsonCached } from "../../lib/settings.ts"
@@ -116,12 +124,84 @@ export function loadPermissionModesConfig(): PermissionModesConfig {
 	try {
 		// shared settings-JSON primitive (P0-LB-01): {} fallback; malformed
 		// files keep the historical console.warn diagnostic
-		return readJsonCached<PermissionModesConfig>(getConfigPath(), {}, (reason) => {
-			if (reason === "malformed" || reason === "non-object") {
-				console.warn(`[permission-modes] Failed to load ${getConfigPath()}: invalid JSON`)
-			}
-		})
+		return sanitizePermissionModesConfig(
+			readJsonCached<PermissionModesConfig>(getConfigPath(), {}, (reason) => {
+				if (reason === "malformed" || reason === "non-object") {
+					console.warn(`[permission-modes] Failed to load ${getConfigPath()}: invalid JSON`)
+				}
+			}),
+		)
 	} catch {
 		return {}
 	}
+}
+
+// BH-R7 (spec 2026-11-14-backtest-hardening): a non-string element inside
+// any rule array used to throw TypeError downstream (pattern.trim /
+// ruleString.trim on a number), failing CLOSED every bash call in every
+// mode. Filter at load and warn once; the sanitized view is identity-stable
+// per underlying cached object (WeakMap) so callers can keep comparing.
+const sanitizedConfigCache = new WeakMap<object, PermissionModesConfig>()
+let warnedNonStringRule = false
+
+function warnNonStringRuleOnce(message: string): void {
+	if (warnedNonStringRule) return
+	warnedNonStringRule = true
+	console.warn(message)
+}
+
+function stringList(value: unknown, field: string): string[] | undefined {
+	if (value === undefined) return undefined
+	if (!Array.isArray(value)) {
+		warnNonStringRuleOnce(`[permission-modes] ${field} is not an array; ignored`)
+		return undefined
+	}
+	const filtered = value.filter((v): v is string => typeof v === "string")
+	if (filtered.length !== value.length) {
+		warnNonStringRuleOnce(
+			`[permission-modes] ${field} contains non-string entries; they were ignored`,
+		)
+	}
+	return filtered
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+	return typeof v === "object" && v !== null && !Array.isArray(v)
+}
+
+export function sanitizePermissionModesConfig(
+	config: PermissionModesConfig,
+): PermissionModesConfig {
+	const cached = sanitizedConfigCache.get(config)
+	if (cached) return cached
+	const next: PermissionModesConfig = { ...config }
+	if (config.autoMode !== undefined) {
+		if (isPlainObject(config.autoMode)) {
+			const raw = config.autoMode as Record<string, unknown>
+			next.autoMode = {
+				...raw,
+				allow: stringList(raw.allow, "autoMode.allow"),
+				soft_deny: stringList(raw.soft_deny, "autoMode.soft_deny"),
+				environment: stringList(raw.environment, "autoMode.environment"),
+			} as PermissionModesConfig["autoMode"]
+		} else {
+			warnNonStringRuleOnce("[permission-modes] autoMode is not an object; ignored")
+			delete next.autoMode
+		}
+	}
+	if (config.permissions !== undefined) {
+		if (isPlainObject(config.permissions)) {
+			const raw = config.permissions as Record<string, unknown>
+			next.permissions = {
+				allow: stringList(raw.allow, "permissions.allow"),
+				deny: stringList(raw.deny, "permissions.deny"),
+				ask: stringList(raw.ask, "permissions.ask"),
+			}
+		} else {
+			warnNonStringRuleOnce("[permission-modes] permissions is not an object; ignored")
+			delete next.permissions
+		}
+	}
+	sanitizedConfigCache.set(config, next)
+	return next
 }

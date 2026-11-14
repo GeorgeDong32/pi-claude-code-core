@@ -3764,3 +3764,80 @@ describe("BH-R6: auto allow/soft_deny match per shell segment", () => {
 	})
 })
 
+describe("BH-R7: hostile config arrays + check/setMode/bus hardening", () => {
+	let pi: FakePi
+	let projDir: string
+	let configTmp: string
+
+	beforeEach(async () => {
+		resetCoreBusForTests()
+		pi = createFakePi()
+		projDir = mkdtempSync(join(tmpdir(), "pm-bh-r7-"))
+		configTmp = mkdtempSync(join(tmpdir(), "pm-bh-r7-cfg-"))
+		setConfigPath(join(configTmp, "permission-modes.json"))
+		writeFileSync(
+			join(configTmp, "permission-modes.json"),
+			JSON.stringify({
+				classifier: { enabled: false },
+				autoMode: { allow: [1, null, "npm test"], soft_deny: ["git reset"] },
+			}),
+		)
+		permissionModesExtension(makeFakePiForExtension(pi))
+		pi.flags["permission-mode"] = "auto"
+		await pi.simulateSessionStart(projDir)
+	})
+
+	afterEach(() => {
+		rmSync(projDir, { recursive: true, force: true })
+		rmSync(configTmp, { recursive: true, force: true })
+	})
+
+	async function callBash(command: string) {
+		const ctx = makeCtx(pi, { cwd: projDir })
+		return pi.simulateToolCall("bash", { command }, ctx)
+	}
+
+	it("non-string config elements do not break bash adjudication", async () => {
+		expect(await callBash("npm test")).toBeUndefined()
+	})
+
+	it("string rules still apply after filtering", async () => {
+		const r = await callBash("git reset --hard")
+		expect(r).toMatchObject({ block: true })
+		expect(String((r as { reason?: string }).reason)).toContain("soft_deny")
+	})
+
+	it("a throwing permission check denies with a readable reason", async () => {
+		const evil = { toString() { throw new Error("boom") } }
+		const ctx = makeCtx(pi, { cwd: projDir })
+		const r = await pi.simulateToolCall("read", { path: evil }, ctx)
+		expect(r).toMatchObject({ block: true })
+		const reason = String((r as { reason?: string }).reason)
+		expect(reason).toContain("permission check failed")
+		expect(reason).toContain("boom")
+	})
+
+	it("a rejected setMode is caught and notified, not unhandled", async () => {
+		// profile maps bypass → a model; the registry lookup throws →
+		// applyForMode rejects inside setMode (cycleMode fire-and-forgets)
+		setupProfileBH({ default: { bypass: { model: "prov/boom" } } })
+		const throwing = makeCtx(pi, { cwd: projDir })
+		;(throwing as unknown as { modelRegistry: { find: () => never } }).modelRegistry = {
+			find: () => {
+				throw new Error("registry exploded")
+			},
+		}
+		// cycle ask → plan → auto → bypass (bypass has the throwing mapping)
+		for (let i = 0; i < 3; i++) await pi.simulateShortcut("shift+tab", throwing)
+		const notices = (coreBus().snapshot().notifications ?? []).map((n) => n.msg)
+		expect(notices.some((n) => n.includes("Mode switch failed") && n.includes("registry exploded"))).toBe(true)
+	})
+})
+
+/** Local profile fixture (same shape as the profiles describe's setupProfile). */
+function setupProfileBH(cfg: unknown) {
+	const tmp = join(tmpdir(), `pm-bh-mp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`)
+	setModelsPath(tmp)
+	writeFileSync(tmp, JSON.stringify(cfg))
+}
+
