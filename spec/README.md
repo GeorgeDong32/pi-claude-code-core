@@ -10,6 +10,12 @@
 |---|---|---|
 | [Smart Compaction — 接管式压缩控制器](2026-11-08-smart-compaction-takeover.md) | 第 14 个模块 `extensions/compaction/`：后台预压 + 语义切点 + 确定性台账（含 rex-flow orchestrator 档）+ boundary draft **提议并经对账确认提交**，原生仅兜底（供稿腿同样受硬容量闸）；含 W0–W9 派工拆分、阻断性宿主用例 BLK-1…5 与验收矩阵 | W0–W9 全部落地（2026-11-09）：BLK-1…5 保护断言 7/7 绿（真实 AgentSession）、三门全绿；默认 mode 临时 shadow（M1=0.52<0.90，DEVIATIONS SC-1）；真机已验加载/运行/遥测/off 无痕，TUI 与 rex-flow 真机项列待证据（DEVIATIONS SC-3）；旧草案 [候选 A](2026-11-08-smart-compaction.md) 已被取代 |
 
+## 新增：PiSession 回测加固（2026-11-14，BH）
+
+| spec | 内容 | 状态 |
+|---|---|---|
+| [PiSession 回测加固（P0–P2）](2026-11-14-backtest-hardening.md) | Devin 会话审查补完 + 本机/Air 回测驱动：S1/S2 安全、R1–R7 真实损失、E1–E4 资源与 IO、E5/E6 先复现再修；4 路按模块并行派工（W-A modes / W-B goal / W-C economy / W-D memory+web），独立只读审查后合入 | 进行中 |
+
 ## 实际状态与续做范围
 
 | 优先级 | spec | 清单项 | 当前状态 |
