@@ -328,16 +328,20 @@ test("OB-T05: a failed ledger keeps the original bytes, commits nothing, retries
 	assert.ok(state.savedTokens > 0);
 });
 
-test("OB-T07: ledger event order and sentinel/first-savings semantics match the baseline with the memo active", async () => {
+test("OB-T07: ledger event order and sentinel/first-savings semantics (BH-E3b: one placeholder row per object id)", async () => {
 	const messages = [bigResult(BIG)];
 	const state = createProjectionState();
 	const ports = fakePorts();
 	await runRequests(FULL_SENDS + 2, messages, state, ports.ports);
 	assert.deepEqual(
 		ports.ledger.map((e) => e.event),
-		["full", "full", "placeholder", "placeholder"],
+		["full", "full", "placeholder"],
 	);
-	assert.equal(ports.ledger.filter((e) => e.event === "placeholder").length, 2, "one audit row per replacement request — the memo never skips the ledger");
+	assert.equal(
+		ports.ledger.filter((e) => e.event === "placeholder").length,
+		1,
+		"BH-E3b: one audit row for the object's first replacement — later hot requests skip the row (was: one per request)",
+	);
 	assert.equal(state.placeholderCount, 1);
 	assert.ok(state.savedTokens > 0);
 });
@@ -409,4 +413,76 @@ test("OBS-09-SITES: later requests keep counters null — no sites payload", asy
 		const later = await projectContext({ messages: [message], root: "/t", state, ports });
 		assert.equal(later.counters, null, "only the first replacement publishes counters/sites");
 	}
+});
+
+// BH-E3a: obs_recall results ARE recall excerpts (bounded at 16 KiB — above
+// THRESHOLD_BYTES) — packing them again nests a pack inside a pack (Air
+// backtest: 53 nested objects). They must be exempt from projection entirely.
+test("BH-E3a: obs_recall results are exempt from projection — never analyzed, stored, ledgered, or packed", async () => {
+	const state = createProjectionState();
+	const { ports, ledger, stored } = fakePorts();
+	const recall = bigResult(`${"r".repeat(THRESHOLD_BYTES + 100)}\n[obs_recall id=obs_4b1d7b39d6c8a2f1e0a3b5c7 offset=0]`, "obs_recall", "tc-recall");
+	const regular = bigResult(BIG, "bash", "tc-1");
+	const messages = [recall, regular];
+	for (let i = 0; i < FULL_SENDS; i += 1) {
+		const outcome = await projectContext({ messages, root: "/t", state, ports });
+		assert.equal(outcome.messages[0], recall, "obs_recall results pass through by reference");
+	}
+	const outcome = await projectContext({ messages, root: "/t", state, ports });
+	assert.equal(outcome.messages[0], recall, "obs_recall results are never replaced, at any request age");
+	assert.equal(
+		(outcome.messages[1] as { content: Array<{ type: string; text: string }> }).content[0].text.includes("obs_"),
+		true,
+		"the regular result beside it still projects",
+	);
+	assert.equal(stored.length, 1, "only the regular result is stored");
+	assert.equal(
+		ledger.filter((entry) => entry.event === "full").length,
+		FULL_SENDS,
+		"no full-send ledger rows for the recall result",
+	);
+	assert.ok(ledger.every((entry) => entry.tool === "bash"), "no ledger row ever references obs_recall");
+	assert.equal(state.identity.size, 1, "the recall result is not even memoized as a candidate");
+});
+
+// BH-E3b: per-request placeholder rows grew session ledgers to 43 MB / 194K
+// rows (Air backtest). The row must be written once per object id per process;
+// the line format itself is unchanged.
+test("BH-E3b: the placeholder ledger row is written once per object id per process, not per request", async () => {
+	const state = createProjectionState();
+	const { ports, ledger } = fakePorts();
+	const message = bigResult(BIG);
+	let lastReplaced = -1;
+	for (let i = 0; i < FULL_SENDS + 3; i += 1) {
+		const outcome = await projectContext({ messages: [message], root: "/t", state, ports });
+		lastReplaced = outcome.replacedThisRequest;
+	}
+	const placeholderRows = ledger.filter((entry) => entry.event === "placeholder");
+	assert.equal(placeholderRows.length, 1, "BH-E3b: exactly one audit row for the first replacement");
+	assert.equal(placeholderRows[0].sendNumber, FULL_SENDS + 1, "the row still records the first-replacement send number");
+	assert.ok(String(placeholderRows[0].id).startsWith("obs_"));
+	// Deduping is LEDGER-only: the projection keeps replacing every request and
+	// send counts keep advancing.
+	assert.equal(state.sentCounts.get(`/t\0${placeholderRows[0].id}`), FULL_SENDS + 3);
+	assert.equal(lastReplaced, 1);
+});
+
+// BH-E3c (projection level): the candidate check ran OUTSIDE the per-message
+// try — a malformed message killed the whole request instead of failing open.
+test("BH-E3c: a message that throws in the candidate check fails open for itself; other messages still project", async () => {
+	const state = createProjectionState();
+	const { ports } = fakePorts();
+	// No content array: isPureTextResult throws reading .content.length.
+	const malformed = { role: "toolResult", toolCallId: "tc-bad", toolName: "bash", isError: false } as unknown as ToolResultMessage;
+	const good = bigResult(BIG, "bash", "tc-good");
+	// The healthy result must march through its full-send window DESPITE the
+	// malformed neighbour failing open on every request, then be replaced.
+	let outcome: Awaited<ReturnType<typeof projectContext>> | undefined;
+	for (let i = 0; i < FULL_SENDS + 1; i += 1) {
+		outcome = await projectContext({ messages: [malformed, good], root: "/t", state, ports });
+	}
+	assert.equal(outcome!.failOpenReasons.length, 1, "the malformed message fails open for itself, every request");
+	assert.equal(outcome!.replacedThisRequest, 1, "the healthy message still projected");
+	assert.equal(outcome!.messages[0], malformed, "the malformed message keeps its place, unprojected");
+	assert.notEqual(outcome!.messages[1], good, "the healthy one was replaced");
 });

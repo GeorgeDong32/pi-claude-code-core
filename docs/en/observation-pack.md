@@ -29,6 +29,13 @@ respects the renderer; force mode exempts it (`FORCE_RESULT_EXEMPT`).
 session resume are all unaffected. Per-message fail-open; a request-level
 sentinel warns when the projection stops taking effect (CMP-04).
 
+Two BH-E3 refinements (2026-11-14): the whole `context` handler body is
+fail-open too — any throw in the adapter (session-root resolution, ledger
+wiring, the bus publish) is caught, logged once, and the provider request
+returns unmodified (invariant 8). And `obs_recall` results never re-enter
+the projection: they ARE recall excerpts, so packing them would nest packs
+inside packs.
+
 ## Switches, storage, bus
 
 - `~/.pi/agent/core-economy.json` → `observationPack: bool` (default true;
@@ -45,7 +52,7 @@ sentinel warns when the projection stops taking effect (CMP-04).
 | `index.ts` | Assembly: context projection, obs_recall tool, sentinel |
 | `observation.ts` | `createObservation`, `ensureStored`, `placeholderFor`, `isPureTextResult`, thresholds (`THRESHOLD_BYTES`, `FULL_SENDS`), UTF-8 boundary withholding (4-byte emoji safe) |
 | `ledger.ts` | Cumulative `ObservationPatch` ledger for the bus |
-| `projection.ts` | The pure projection step (candidate loop, send-count recovery, FULL_SENDS decision, sentinel). **AR1005-OB (2026-10-05)**: `ProjectionState` also owns the STABLE placeholder memo — keyed by the same `${root}\0${toolName}\0${toolCallId}` identity, value = the placeholder string + token estimate only. The head/tail complete-line construction (a full-text scan, ~26 ms at 8 MiB) ran on EVERY hot request; it now runs once per identity per process (measured: 1 construction across 51 requests at 16 KiB/2 MiB/8 MiB, hot requests ~0.001 ms). The memo is populated at the FIRST replacement need (never during full-send), reused verbatim, kept across a failed ledger append (the counts/savings stay uncommitted and retry), and never crosses roots/tools; a process restart regenerates. `placeholderConstructions` on the state is the honest observable (no monkeypatching, no production export config). Ledger rows are still appended per replacement request — the memo never skips the audit |
+| `projection.ts` | The pure projection step (candidate loop, send-count recovery, FULL_SENDS decision, sentinel). **AR1005-OB (2026-10-05)**: `ProjectionState` also owns the STABLE placeholder memo — keyed by the same `${root}\0${toolName}\0${toolCallId}` identity, value = the placeholder string + token estimate only. The head/tail complete-line construction (a full-text scan, ~26 ms at 8 MiB) ran on EVERY hot request; it now runs once per identity per process (measured: 1 construction across 51 requests at 16 KiB/2 MiB/8 MiB, hot requests ~0.001 ms). The memo is populated at the FIRST replacement need (never during full-send), reused verbatim, kept across a failed ledger append (the counts/savings stay uncommitted and retry), and never crosses roots/tools; a process restart regenerates. `placeholderConstructions` on the state is the honest observable (no monkeypatching, no production export config). **BH-E3 (2026-11-14)**: obs_recall results are exempt from projection entirely (a recall excerpt packed again nests packs — Air saw 53 nested objects); the placeholder ledger row is written ONCE per object id per process (`placeholderLedgered` seen-set — per-request rows ballooned Air session ledgers to 43 MB / 194K rows; a failed append stays unmarked and retries, OBS-08; line format unchanged); and the candidate check sits inside the per-message fail-open try, so even a malformed message fails open instead of killing the request |
 
 ## Invariants & gotchas
 

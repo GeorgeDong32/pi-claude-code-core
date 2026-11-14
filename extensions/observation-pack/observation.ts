@@ -17,6 +17,8 @@ export const THRESHOLD_BYTES = 10 * 1024;
 export const FULL_SENDS = 2;
 /** Placeholder excerpt budget, split evenly between head and tail, whole lines only. */
 export const PLACEHOLDER_EXCERPT_BYTES = 1024;
+/** The recall tool's name (BH-E3a): its results are themselves recall excerpts and are exempt from projection. */
+export const RECALL_TOOL_NAME = "obs_recall";
 
 const CHARS_PER_TOKEN = 4;
 const OBSERVATION_ID_PATTERN = /^obs_[a-f0-9]{24}$/u;

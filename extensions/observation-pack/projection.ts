@@ -13,6 +13,13 @@
  * index.ts owns those side effects (CON-03/04 keep pinning the wiring
  * end-to-end; node:test drives this step directly).
  *
+ * BH-E3 (2026-11-14, spec 2026-11-14-backtest-hardening): obs_recall results
+ * are exempt from projection entirely (they are themselves bounded recall
+ * excerpts — packing them again nests packs inside packs); the placeholder
+ * ledger row is written once per object id per process (per-request rows
+ * ballooned session ledgers to 43 MB); and the candidate check sits inside
+ * the per-message fail-open try, so even a malformed message fails open.
+ *
  * Port discipline (three side-effect channels, nothing else):
  *   - store(observation)       → observation storage (ensureStored in prod)
  *   - appendLedger(entry)      → the append-only audit trail
@@ -32,6 +39,7 @@ import {
 	FULL_SENDS,
 	isPureTextResult,
 	placeholderFor,
+	RECALL_TOOL_NAME,
 	type Observation,
 } from "./observation.ts";
 
@@ -84,6 +92,12 @@ export interface ProjectionState {
 	/** OB test/diagnostic observable: how many times the (line-scanning)
 	 * placeholder construction actually ran — one per identity per process. */
 	placeholderConstructions: number;
+	/** BH-E3b: object ids (`${root}\0${id}`) whose placeholder ledger row has
+	 * ALREADY been written this process. Per-request rows grew session ledgers
+	 * to 43 MB / 194K placeholder rows (Air backtest); the FIRST replacement
+	 * still audits, later hot requests skip the row. A FAILED append stays
+	 * unmarked, so the OBS-08 retry semantics are unchanged. */
+	readonly placeholderLedgered: Set<string>;
 	sentinelWarned: boolean;
 	sentinelStreak: number;
 	placeholderCount: number;
@@ -97,6 +111,7 @@ export function createProjectionState(): ProjectionState {
 		stored: new Set<string>(),
 		placeholder: new Map<string, { text: string; tokens: number }>(),
 		placeholderConstructions: 0,
+		placeholderLedgered: new Set<string>(),
 		sentinelWarned: false,
 		sentinelStreak: 0,
 		placeholderCount: 0,
@@ -153,9 +168,14 @@ export async function projectContext(args: {
 
 	for (let index = 0; index < args.messages.length; index += 1) {
 		const message = args.messages[index];
-		if (!message || !isPureTextResult(message)) continue;
-
 		try {
+			// BH-E3c: the candidate check lives INSIDE the per-message try — a
+			// malformed message (e.g. no content array) must fail open for itself,
+			// never kill the whole request.
+			// BH-E3a: obs_recall results ARE recall excerpts (bounded at 16 KiB,
+			// above THRESHOLD_BYTES) — packing them again would nest a pack inside
+			// a pack (Air backtest: 53 nested objects); exempt them entirely.
+			if (!message || !isPureTextResult(message) || message.toolName === RECALL_TOOL_NAME) continue;
 			// C1: analyze each candidate ONCE per process — the transcript is
 			// append-only, so the same (root, toolName, toolCallId) re-appears
 			// with identical bytes on every later request.
@@ -205,16 +225,24 @@ export async function projectContext(args: {
 			const placeholder = memo.text;
 			const placeholderTokens = memo.tokens;
 			const removedTokens = Math.max(0, observation.tokens - placeholderTokens);
-			await args.ports.appendLedger({
-				event: "placeholder",
-				id: observation.id,
-				sendNumber: previousSends + 1,
-				tool: observation.toolName,
-				originalBytes: observation.bytes,
-				originalTokens: observation.tokens,
-				placeholderTokens,
-				removedTokens,
-			});
+			// BH-E3b: the placeholder ledger row is written ONCE per object id per
+			// process — per-request rows grew session ledgers to 43 MB / 194K
+			// placeholder rows (Air backtest). Line format unchanged; the FIRST
+			// replacement still audits, and the seen-mark lands only AFTER a
+			// successful append, so a failed ledger keeps retrying (OBS-08).
+			if (!args.state.placeholderLedgered.has(sendCountKey)) {
+				await args.ports.appendLedger({
+					event: "placeholder",
+					id: observation.id,
+					sendNumber: previousSends + 1,
+					tool: observation.toolName,
+					originalBytes: observation.bytes,
+					originalTokens: observation.tokens,
+					placeholderTokens,
+					removedTokens,
+				});
+				args.state.placeholderLedgered.add(sendCountKey);
+			}
 			// invariant 9: replace ONLY the content array; the spread copy keeps
 			// every other field of the original message intact.
 			projected[index] = { ...message, content: [{ type: "text", text: placeholder }] };

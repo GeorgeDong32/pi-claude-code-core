@@ -25,6 +25,11 @@ obs_4b1d7b39 · +15.5KB`)+ 分页结果视图(大小 · 行数 · 范围,内容�
 渲染、原生压缩与会话恢复均不受影响。逐消息 fail-open;请求级哨兵在投影
 失效时告警(CMP-04)。
 
+BH-E3 的两点补强(2026-11-14):整个 `context` handler 主体同样
+fail-open——适配器任何一处抛错(会话根解析、ledger 接线、总线 publish)
+都被捕获、记录一次,provider 请求原样返回(不变量 8)。且 `obs_recall`
+结果绝不再次进入投影:它们本身就是召回摘录,再打包会嵌套包中包。
+
 ## 开关、存储、总线
 
 - `~/.pi/agent/core-economy.json` → `observationPack: bool`(缺省 true;
@@ -41,7 +46,7 @@ obs_4b1d7b39 · +15.5KB`)+ 分页结果视图(大小 · 行数 · 范围,内容�
 | `index.ts` | 装配:context 投影、obs_recall 工具、哨兵 |
 | `observation.ts` | `createObservation`、`ensureStored`、`placeholderFor`、`isPureTextResult`、阈值(`THRESHOLD_BYTES`、`FULL_SENDS`)、UTF-8 边界 withhold(4 字节 emoji 安全) |
 | `ledger.ts` | 面向总线的累计 `ObservationPatch` 台账 |
-| `projection.ts` | 纯投影步骤(候选循环、send 计数恢复、FULL_SENDS 判定、哨兵)。**AR1005-OB(2026-10-05)**:`ProjectionState` 另持有**稳定 placeholder memo** —— 以同一 `${root}\0${toolName}\0${toolCallId}` identity 为键,值仅为 placeholder 字符串 + token 估算。头/尾完整行摘录构造(全文扫描,8 MiB 约 26 ms)原先每个热请求都跑一遍;现在每 identity 每进程恰一次(实测 16 KiB/2 MiB/8 MiB × 51 请求 1 次构造,热请求 ~0.001 ms)。memo 在首次 replacement 需要时生成(full-send 阶段绝不构造)、逐字复用、ledger 失败后保留(计数/节省不提交、下次重试)、不跨 root/tool;进程重启重新生成。state 上的 `placeholderConstructions` 为诚实可观察量(无 monkeypatch、无生产导出配置)。每次 replacement 请求仍追加 ledger 行 —— memo 绝不跳过审计 |
+| `projection.ts` | 纯投影步骤(候选循环、send 计数恢复、FULL_SENDS 判定、哨兵)。**AR1005-OB(2026-10-05)**:`ProjectionState` 另持有**稳定 placeholder memo** —— 以同一 `${root}\0${toolName}\0${toolCallId}` identity 为键,值仅为 placeholder 字符串 + token 估算。头/尾完整行摘录构造(全文扫描,8 MiB 约 26 ms)原先每个热请求都跑一遍;现在每 identity 每进程恰一次(实测 16 KiB/2 MiB/8 MiB × 51 请求 1 次构造,热请求 ~0.001 ms)。memo 在首次 replacement 需要时生成(full-send 阶段绝不构造)、逐字复用、ledger 失败后保留(计数/节省不提交、下次重试)、不跨 root/tool;进程重启重新生成。state 上的 `placeholderConstructions` 为诚实可观察量(无 monkeypatch、无生产导出配置)。**BH-E3(2026-11-14)**:obs_recall 结果完全豁免投影(召回摘录再打包会嵌套包——Air 实测 53 个嵌套对象);placeholder ledger 行每个对象 id 每进程只写一条(`placeholderLedgered` seen-set——逐请求追加曾把 Air 会话 ledger 撑到 43 MB / 19.4 万行;追加失败不标记、下次重试,OBS-08;行格式不变);候选检查移入逐消息 fail-open try,畸形消息也不再杀死整个请求 |
 
 ## 不变量与坑
 

@@ -15,6 +15,13 @@
  * storage root derived via sessionManager public API; the SoL-Pi TUI banner
  * replaced by a capability-bus patch; a request-level sentinel that warns
  * when the projection stops taking effect (CMP-04).
+ *
+ * BH-E3 (2026-11-14, spec 2026-11-14-backtest-hardening): obs_recall results
+ * are exempt from projection entirely (packing a recall excerpt would nest
+ * packs); the placeholder ledger row is written once per object id per
+ * process (per-request rows ballooned Air session ledgers to 43 MB); and the
+ * whole `context` handler body is fail-open — any throw returns the
+ * unmodified context (invariant 8).
  */
 import { join } from "node:path";
 import { VERSION } from "@earendil-works/pi-coding-agent";
@@ -35,6 +42,7 @@ import {
 	observationPath,
 	placeholderFor,
 	readRecallChunk,
+	RECALL_TOOL_NAME,
 	THRESHOLD_BYTES,
 } from "./observation.ts";
 import { createProjectionState, projectContext } from "./projection.ts";
@@ -98,7 +106,7 @@ export function createObservationPackExtension(hostExports: {
 		};
 
 		pi.registerTool({
-			name: "obs_recall",
+			name: RECALL_TOOL_NAME,
 			label: "Recall Observation",
 			description: "Read a stored large tool result by observation id and byte offset.",
 			promptSnippet: "Recall a paged excerpt from a previously replaced large tool result",
@@ -149,41 +157,54 @@ export function createObservationPackExtension(hostExports: {
 			// session root, wires the ports, and emits the outcome's side
 			// effects (console / bus). CON-03 pins the fail-open contract,
 			// CON-04 pins the final-slot registration order.
-			const { root } = observationRootsFor(ctx);
-			if (!root) {
-				if (!noSessionWarned) {
-					noSessionWarned = true;
-					console.warn("[observation-pack] no persistent session directory; projection disabled for this session");
+			// BH-E3c / invariant 8: the WHOLE body sits in a fail-open try — a
+			// throw anywhere here (session-root resolution, ledger wiring, the
+			// bus publish) must leave the provider request unmodified, never
+			// block the turn.
+			try {
+				const { root } = observationRootsFor(ctx);
+				if (!root) {
+					if (!noSessionWarned) {
+						noSessionWarned = true;
+						console.warn("[observation-pack] no persistent session directory; projection disabled for this session");
+					}
+					return undefined;
+				}
+
+				const outcome = await projectContext({
+					messages: event.messages,
+					root,
+					state: projectionState,
+					ports: {
+						store: ensureStored,
+						appendLedger: ledgerFor(root),
+					},
+				});
+				for (const reason of outcome.failOpenReasons) {
+					console.error(`[observation-pack] fail-open for tool result: ${reason}`);
+				}
+				if (outcome.sentinelWarning !== null) console.warn(outcome.sentinelWarning);
+				if (outcome.counters !== null) {
+					// OBS-09: cumulative avoided tokens on the capability bus.
+					// OBS-09-SITES: per-site display-only savings for the
+					// first-replacement requests (never in the projection itself).
+					coreBus().publish({
+						observation: {
+							tokensAvoided: outcome.counters.tokensAvoided,
+							placeholders: outcome.counters.placeholders,
+							sites: outcome.counters.sites,
+						},
+					});
+				}
+				return { messages: [...outcome.messages] };
+			} catch (error) {
+				try {
+					console.error(`[observation-pack] context projection failed open: ${error instanceof Error ? error.message : String(error)}`);
+				} catch {
+					// even the console failed; the context still stays unmodified
 				}
 				return undefined;
 			}
-
-			const outcome = await projectContext({
-				messages: event.messages,
-				root,
-				state: projectionState,
-				ports: {
-					store: ensureStored,
-					appendLedger: ledgerFor(root),
-				},
-			});
-			for (const reason of outcome.failOpenReasons) {
-				console.error(`[observation-pack] fail-open for tool result: ${reason}`);
-			}
-			if (outcome.sentinelWarning !== null) console.warn(outcome.sentinelWarning);
-			if (outcome.counters !== null) {
-				// OBS-09: cumulative avoided tokens on the capability bus.
-				// OBS-09-SITES: per-site display-only savings for the
-				// first-replacement requests (never in the projection itself).
-				coreBus().publish({
-					observation: {
-						tokensAvoided: outcome.counters.tokensAvoided,
-						placeholders: outcome.counters.placeholders,
-						sites: outcome.counters.sites,
-					},
-				});
-			}
-			return { messages: [...outcome.messages] };
 		});
 	};
 }
