@@ -9,9 +9,15 @@
  *
  * Missing directories are skipped so the entry works at every phase.
  * Exit code is non-zero if any suite fails.
+ *
+ * CH E9 (2026-11-15): the node:test suites are no longer run through a shell
+ * (`shell: "/bin/zsh"` existed only so `dir/*.test.ts` would expand). The
+ * `*.test.ts` files are enumerated with readdirSync and handed to execFileSync
+ * of the LOCAL tsx/vitest binaries — same pattern as check.mjs's tsc — so the
+ * gate no longer depends on a shell or on PATH.
  */
-import { execSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -26,7 +32,24 @@ for (const key of ["PI_SUBAGENT_CHILD", "PI_SUBAGENT_PARENT_SESSION", "PERMISSIO
 	delete process.env[key];
 }
 
+const bin = (name) => join(root, "node_modules", ".bin", name);
+/** Top-level `*.test.ts` files of one suite directory, in stable name order. */
+const testFiles = (dir) => readdirSync(dir).filter((f) => f.endsWith(".test.ts")).sort().map((f) => join(dir, f));
+
+let failed = false;
+
 const vitestTargets = [join(root, "test", "lib"), join(root, "extensions", "modes")].filter(existsSync);
+if (vitestTargets.length > 0) {
+	console.log(`[run-tests] vitest → ${vitestTargets.join(", ")}`);
+	try {
+		execFileSync(bin("vitest"), ["run", ...vitestTargets], { stdio: "inherit", cwd: root });
+	} catch {
+		failed = true;
+	}
+} else {
+	console.log("[run-tests] no vitest targets yet");
+}
+
 const nodeTestDirs = [
 	join(root, "extensions", "effort", "tests"),
 	join(root, "extensions", "goal", "tests"),
@@ -41,22 +64,10 @@ const nodeTestDirs = [
 	join(root, "extensions", "web-gov", "tests"),
 ].filter(existsSync);
 
-let failed = false;
-
-if (vitestTargets.length > 0) {
-	try {
-		execSync(`vitest run ${vitestTargets.map((t) => `"${t}"`).join(" ")}`, { stdio: "inherit", cwd: root });
-	} catch {
-		failed = true;
-	}
-} else {
-	console.log("[run-tests] no vitest targets yet");
-}
-
 for (const dir of nodeTestDirs) {
 	console.log(`\n[run-tests] node:test → ${dir}`);
 	try {
-		execSync(`tsx --test "${dir}"/*.test.ts`, { stdio: "inherit", cwd: root, shell: "/bin/zsh" });
+		execFileSync(bin("tsx"), ["--test", ...testFiles(dir)], { stdio: "inherit", cwd: root });
 	} catch {
 		failed = true;
 	}

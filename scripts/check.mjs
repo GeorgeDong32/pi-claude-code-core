@@ -7,27 +7,21 @@
  *   2. contract suite (tsconfig.contracts.json — test/contracts, which
  *      imports the four READ-ONLY source packages)
  *
- * Pass 2 carries an AUTO-EXPIRING allowlist: goal 0.6.0 (authored against
- * pi 0.74 types) has exactly two type drifts against 0.85.1 inside
- * goal-auditor.ts. When the P2 fork fixes them, the allowlisted lines stop
- * matching and this script FAILS with a "remove the allowlist" hint —
- * same semantics as @ts-expect-error, which cannot suppress errors that
- * live inside another file. Any NEW contract error fails immediately.
+ * CH E8b (2026-11-15): the formerly auto-expiring goal-drift allowlist
+ * (GOAL_DRIFTS) was removed — it had been an empty array since the drift was
+ * fixed in-tree (P2-GO), so its matching branch was unreachable noise. Any
+ * contract error now fails the gate directly.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// The contract suite imports the four READ-ONLY sibling source packages;
-// a fresh clone without them fails with confusing resolver errors.
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 // Sibling-source-packages gate removed 2026-09-30: the retired packages moved
 // to Pi-Extension/archive/repos and the contract suite has imported the core
 // modules exclusively since P1 (targets.ts) — no external checkout is needed.
-
-// goal fork drift allowlist removed 2026-09-21: fixed in-tree (P2-GO).
-const GOAL_DRIFTS = [];
+// goal fork drift allowlist removed 2026-09-21 (fixed in-tree, P2-GO); the
+// dead empty-array machinery itself deleted 2026-11-15 (CH E8b).
 
 function runTsc(args) {
 	try {
@@ -52,26 +46,6 @@ if (contracts.ok) {
 	console.log("check: main OK; contracts OK");
 	process.exit(0);
 }
-
-const lines = contracts.output.split("\n").filter((l) => l.trim().length > 0);
-const unexpected = [];
-const matched = new Set();
-for (const line of lines) {
-	const hit = GOAL_DRIFTS.find((d, i) => line.includes(d) && !matched.has(i));
-	if (hit !== undefined) matched.add(GOAL_DRIFTS.indexOf(hit));
-	else unexpected.push(line);
-}
-if (unexpected.length > 0) {
-	process.stdout.write(unexpected.join("\n") + "\n");
-	console.error("check: CONTRACT project has unexpected type errors");
-	process.exit(1);
-}
-if (matched.size < GOAL_DRIFTS.length) {
-	console.error(
-		"check: some goal-drift lines no longer occur (fixed?). " +
-			"Update GOAL_DRIFTS in scripts/check.mjs — allowlist must stay exact.",
-	);
-	process.exit(1);
-}
-console.log("check: main OK; contracts OK");
-process.exit(0);
+process.stdout.write(contracts.output);
+console.error("check: CONTRACT project has type errors");
+process.exit(1);
