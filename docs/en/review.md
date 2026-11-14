@@ -66,6 +66,35 @@ few read-only git commands.
   back to the local `origin/<base>` ref and records a non-fatal
   `diffWarning` ("timed out" vs "failed" text). Not configurable; PR-path
   commands (`gh pr view/diff`, clone, PR-head fetch) are untouched.
+- **PR dry run (`/review --no-spawn <PR>`, R12/D-CH-3)**: metadata only —
+  `gh pr view` + `gh pr diff` run; `prepareWorkspace` never does (no clone,
+  no fetch). The summary prints `workspace: not cloned (dry run)` and marks
+  rules/history `not computed (dry run)`. A dry run still writes its run
+  dir (manifest + diff); the 24h pruner reclaims it. Local targets are
+  unchanged.
+- **Bus reconciliation (R11/D-CH-2)**: `review.status` reconciles at three
+  points — `agent_end` (a live run whose turn ended without a report resets
+  to idle; armed only after the running publish + an `agent_start`, so a
+  queued directive is never clobbered), `session_start` (stale running from
+  a previous session), and a new `/review` invocation (residual running
+  with no live run tracked). Only the three existing statuses.
+- **Timeouts (`run-cmd.ts`, T1–T3)**: expiry escalates SIGTERM → SIGKILL
+  after `RUN_CMD_KILL_GRACE_MS` (2s); a dead child whose pipes are held by
+  a grandchild gets a brief drain (`RUN_CMD_PIPE_DRAIN_MS`) then a stdio
+  destroy so the call resolves bounded; a timer firing after the child
+  already exited resolves with the REAL exit code (not a timeout);
+  `timeoutMs <= 0` or non-finite means NO timeout (Node convention).
+  Timed-out results carry the structured `timedOut: true` on `CmdResult`
+  (T4/S5) — the stderr note stays for humans.
+- Untracked files over `UNTRACKED_FILE_MAX_BYTES` (1 MB, R3) get a
+  size-only placeholder hunk (content never read) and a counted note in
+  `diffWarning`; the failed-retry-fetch branch of the PR HEAD guard is a
+  hard error (R2), not a silent pass.
+- The generated workflow script emits reviewer prompt lines shared across
+  reviewers ONCE (E12: `baseTask` / `diffOnlyExtra` / `userTask` consts);
+  each reviewer's runtime prompt is byte-identical to the pre-dedup form
+  (pinned by `tests/workflow-task-golden.json`), and the whole directive is
+  capped by `REVIEW_DIRECTIVE_MAX_CHARS`.
 
 ## Tests
 

@@ -61,6 +61,29 @@
   `GIT_TERMINAL_PROMPT=0`——超时或失败都回落本地 `origin/<base>` 引用并记
   非致命 `diffWarning`("timed out" / "failed" 两种文案)。不可配置;PR 路径
   命令(`gh pr view/diff`、clone、PR head fetch)不动。
+- **PR 干跑(`/review --no-spawn <PR>`,R12/D-CH-3)**:只取元数据——只跑
+  `gh pr view` + `gh pr diff`;绝不调用 `prepareWorkspace`(不 clone、不
+  fetch)。摘要输出 `workspace: not cloned (dry run)`,rules/history 标为
+  `not computed (dry run)`。干跑仍会写 run 目录(manifest + diff),由 24h
+  清理回收。本地目标行为不变。
+- **总线对账(R11/D-CH-2)**:`review.status` 在三处对账——`agent_end`
+  (live run 的 agent 轮次结束却没落地报告 → 复位 idle;仅在 running 发布
+  且经历过一次 `agent_start` 后才武装,排队中的指令不会被前一轮的
+  agent_end 误复位)、`session_start`(跨 session 残留的 running)、新
+  `/review` 入口(无 live run 跟踪时复位残留 running)。只用现有三个状态。
+- **超时(`run-cmd.ts`,T1–T3)**:超时先 SIGTERM,2s
+  (`RUN_CMD_KILL_GRACE_MS`)后 SIGKILL;子进程已死但管道被孙进程占住时,
+  短暂排水(`RUN_CMD_PIPE_DRAIN_MS`)后 destroy stdio,调用有界返回;
+  计时器触发时子进程已退出的,按真实退出码返回(不算超时);
+  `timeoutMs ≤ 0` 或非有限值 = 不设上限(Node 惯例)。超时结果带结构化
+  `timedOut: true` 字段(T4/S5)——stderr 里的说明文字保留给人看。
+- 超过 `UNTRACKED_FILE_MAX_BYTES`(1 MB,R3)的 untracked 文件得到只写
+  大小的占位 hunk(不读内容),并在 `diffWarning` 里计数;PR HEAD 守卫的
+  重取失败分支是硬错误(R2),不再静默放行。
+- 生成的 workflow script 中,各评审者共用的提示行只生成一次(E12:
+  `baseTask` / `diffOnlyExtra` / `userTask` 常量);每个评审者的最终
+  prompt 与去重前逐字节一致(由 `tests/workflow-task-golden.json` 钉住),
+  整个 directive 受 `REVIEW_DIRECTIVE_MAX_CHARS` 上限约束。
 
 ## 测试
 
