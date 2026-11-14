@@ -2,6 +2,16 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## 2026-11-14 回测加固批（SPEC BH，13 项，4 路并行派工 + 独立审查合入）
+
+- **来源**：Devin 会话 `dour-arithmetic` 审查未完成即额度耗尽；本会话补完静态审查 A + 本机/Air 双机回测后定稿 spec BH（`spec/2026-11-14-backtest-hardening.md`）。范围：S1/S2 安全、R1–R7 真实损失、E1–E4 资源与 IO、E5/E6 先复现再修——**13 项全部落地**（E5、E6 均复现成立并修复）。
+- **派工**：4 worker 各自 worktree（w/bh-a modes / w/bh-b goal / w/bh-c economy / w/bh-d memory+web），逐条目「基线红证据 → 实现 → 转绿 → 独立提交」；逐分支独立只读审查（W-D/W-B PASS-with-nits 已修；W-C、W-A 由 orchestrator 亲自审查——前因 W-C 审查 subagent 两次模型供应商中断、W-A 原 worker 交付报告前任务被误标取消）；按 W-D→W-B→W-C→W-A 变基 ff 合入，线性历史。
+- **提交**：S1 `6a7c91a`、R3 `693060d`、R6 `ad39871`、R7 `9472876`、E4 `54357f7`、E5 `dd35b18`、R1 `f8e5a72`+`634f86d`（审查 P3 修复）、E1 `5d3ad53`、E6 `252e6ed`、R4 `2ba6b18`、R5 `36383d5`、E3 `7ba4ea5`、S2 `f88ea02`+`18b29ec`（审查 P3 文档）、R2 `e8a8348`、E2 `27a34ba`、run-tests 接线 `8d09d72`。
+- **测试增量**：modes vitest 639→约 700+（新增 auto-rule-match/bus-listeners/path-permission-match 扩充 + index.test 403 行）；goal node:test 251→262；bg-shell 276→278；action-fusion 17→21；observation-pack 29→33；memory +14（两新套件）；web-gov +19；effort 104→108。红基线证据全部在 base 25e6484 独立 worktree 复核（W-D 审查：33 新例基线红；W-B 审查：R1 2 红/E1 3 红/E6 红；W-C orchestrator：10 红；W-A orchestrator：modes 21 红 + effort 4 红）。
+- **门禁（main dd35b18）**：`bun run check` exit 0；`bun run contracts` 108+4todo 全绿（P0-CT-08/09 冻结面零触碰）；金丝雀 5/5；`bun run test` 1208/1209 vitest + node:test 全绿（effort 108 / goal 262 / review / action-fusion 21 / observation-pack 33 / bg-shell 278 / compaction 136 / memory 37 / web-gov 19）——唯一红 `review-degradation P2-REV-03` 为既有环境敏感项（干净树 git fetch 5.7s > 5s 超时，脏树 3/3；DEVIATIONS BH-10）。
+- **台账**：CHANGELOG Unreleased（Security×2 + Changed×3 + Fixed×9）、DEVIATIONS「回测加固批」BH-1…10、docs/{en,zh} 六模块双语同步（modes/effort/goal/bg-shell/action-fusion/observation-pack/memory/web-gov）。
+- **遗留**：无新增 OPEN 项（E5/E6 已修）；P3 体验项与 review/ 深审留下一轮；发版与双机安装另行安排（用户 D-BH-4：只本地提交）。
+
 ## 2026-10-23 通知 CC 化：全部 10 个 display:true customType 注册 CC 风格消息渲染器（用户拍板,2026-10-20 演示页）
 
 - **背景**：core 的 10 个 `display: true` customType 无自带 renderer,落回 pi 原生 `[customType]` 盒子（#2C323E 底 + 青色标签 + 白字 Markdown）。用户在演示页（prototype-ccify-notifications.html,已按 prototype 纪律从工作区移除,决策固化进 goal/CHANGELOG）逐卡拍板 CC 化形态。

@@ -14,7 +14,7 @@
 
 | spec | 内容 | 状态 |
 |---|---|---|
-| [PiSession 回测加固（P0–P2）](2026-11-14-backtest-hardening.md) | Devin 会话审查补完 + 本机/Air 回测驱动：S1/S2 安全、R1–R7 真实损失、E1–E4 资源与 IO、E5/E6 先复现再修；4 路按模块并行派工（W-A modes / W-B goal / W-C economy / W-D memory+web），独立只读审查后合入 | 进行中 |
+| [PiSession 回测加固（P0–P2）](2026-11-14-backtest-hardening.md) | Devin 会话审查补完 + 本机/Air 回测驱动：S1/S2 安全、R1–R7 真实损失、E1–E4 资源与 IO、E5/E6 先复现再修；4 路按模块并行派工（W-A modes / W-B goal / W-C economy / W-D memory+web），独立只读审查后合入 | **已实施完成（2026-11-14）**：13 项全部落地（E5/E6 复现成立并修复），main `dd35b18` 三门 + 金丝雀全绿（唯一红为既有环境敏感项 review-degradation，见 DEVIATIONS BH-10）；台账见 CHANGELOG Unreleased + DEVIATIONS BH-1…10 + PROGRESS 同日节 |
 
 ## 实际状态与续做范围
 

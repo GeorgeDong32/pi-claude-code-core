@@ -1,11 +1,63 @@
 ## Unreleased
 
+### Security
+
+- **modes 路径规则通配符修复（BH-S1）**：路径规则（deny/ask/allow，含 bash W4 deny 复用）中的单个 `*` 此前因正则转义缺失而**永远匹配不上**，只有 `**` 生效。修复后单个 `*` 按「单层通配」匹配（`./.env.*` 能匹配 `./.env.local`，不越过目录层级）。**注意**：若你配置过含单 `*` 的路径规则（例如 `Read(./.env.*)`），它们现在会开始真正生效——这是有意的收紧。
+- **web-gov 主机名解析修复（BH-S2）**：webfetch 域名治理改用 `new URL()` 解析主机名。携带 userinfo 的 URL（如 `https://github.com@evil.example/`）一律不享受预批准列表（显式 `domain:` 规则仍按真实主机匹配，否则询问）；无法解析为绝对 URL 的输入一律询问（fail-closed）；IP 字面量按主机处理（`domain:` 规则照常匹配，预批准列表永不匹配 IP）。
+
 ### Changed
 
 - `/compaction` 命令更名 `/smart-compact`（避开与原生 `/compact` 的相邻
   误敲；`status`/`mode off|shadow|on` 子命令不变，补齐 description 与参数
   补全）。pi 的 `RegisteredCommand` 无 hidden/alias 字段，旧名不做兼容
   别名，一次到位。
+- **goal 用量记账降频（BH-E1）**：usage 事件改为内存累积，落盘收敛至三个
+  时机（agent_end 有变化 / session 关闭 / 真实状态转移）——单次 run 的
+  `pi-goal-state` 条目从 N 条降为 ≤1 条（50 回合实测 50→1），usage 事件
+  不再逐条重写 `.pi/goals/<id>.md`、不再重扫磁盘。崩溃最多丢当前 run 的
+  用量增量；落盘条目格式不变。
+- **effort 优先级链修复（BH-E5）**：profile 切换模型时宿主会重置 thinking
+  级别，此前被 effort 记为用户显式选择并永久压制 profile 的 effort 设置；
+  现在模型切换引起的级别重置只做记账，不再覆盖 env pin / 显式选择 /
+  profile 的优先级链。
+
+### Fixed
+
+- **goal 不再在 provider 持续报错时无限续跑（BH-R1）**：连续 2 次错误终止
+  即自动暂停 goal（暂停原因携带错误摘要，建议检查 provider/额度后
+  `/goal resume`）。回测曾出现 13 小时 2,241 次错误、1.11 亿 token 的失控
+  续跑。
+- **goal 审计超时不再泄漏 auditor 会话（BH-E6）**：audit 超时后即使
+  auditor 的 prompt 永不返回，会话也会被恰好一次地释放。
+- **memory 密钥探测恢复正确作用域（BH-R2）**：探测只对记忆层路径生效
+  （此前对一切 write/edit 生效，双机回测误拦 12 次）；edit 只扫描传入的
+  新文本——记忆文件中原有的疑似密钥内容不再阻断一次干净编辑。
+- **memory 队列跨项目记录可过期（BH-E2）**：过期判定（尝试上限 + 记录
+  年龄）提前到项目路由跳过之前——跨项目记录不再被永久跳过、每次启动都被
+  改名成新 pending 文件（回测：6 个文件、最老 37 天）。
+- **bg-shell 显式 timeout 不再关闭 120 s 自动转后台（BH-R4）**：超 120 s
+  仍转后台，显式 timeout 变为该后台任务的截止时间；小于阈值的 timeout 仍
+  按前台超时终止；`sleep` 豁免与 waitFor 行为不变。timeout 参数描述改为
+  "Seconds (not ms)"（不猜单位）。
+- **then_run 新增 600 s 默认超时（BH-R5）**：挂住的命令不再同时卡死整个
+  turn 与该文件的融合队列；超时错误提示改用后台 bash；工具描述不再建议
+  start/restart。
+- **observation-pack 三项（BH-E3）**：`obs_recall` 结果不再被重复打包成
+  嵌套包；占位 ledger 行每对象每进程只写一条（此前逐请求追加，单会话
+  ledger 曾达 43MB）；context 投影任何一处抛错都 fail-open，不再阻塞回合。
+- **modes mv/cp 不再因无关 deny 规则被一律拒绝（BH-R3）**：只有
+  `-t/--target-directory` 视为改变目标；其余旗标剥离后按裸位分析；未识别
+  旗标改为询问而非拒绝；`ssh … <<EOF` 的远端 heredoc 正文不再被当成本地
+  命令解析。
+- **auto 模式组合命令不再绕过 soft_deny（BH-R6）**：allow / soft_deny 规则
+  改为逐 shell 段匹配——`git reset … && npm test` 不再因 `npm test` 在
+  allow 里就整条放行；命令替换存在时不快速放行。
+- **modes 对敌意配置与故障鲁棒（BH-R7）**：配置数组中的非字符串元素不再
+  让所有 bash 调用 fail-closed；裁决器抛错转为可读拒绝原因；模式切换失败
+  有通知不再静默崩溃；bus 单个监听器抛错不再影响其他监听器（发布仍同步）。
+- **modes setMode 竞态收敛（BH-E4）**：快速连按 Shift+Tab 时只有最新请求
+  执行副作用；模型未变化时跳过 setModel（也避免连带的重置 thinking）；
+  路经 plan 的切换不再留下 plan.md。
 
 ## 0.5.0 (2026-11-11) — Smart Compaction(SC,spec 2026-11-08-smart-compaction-takeover.md)
 

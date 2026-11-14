@@ -397,3 +397,46 @@ SC-7. **边界时钟口径澄清（2026-11-10 follow-up）**
 
 SC-4. **旧草案 `2026-11-08-smart-compaction.md` 正式取代**
    - 本 spec 落地后旧草案仅为取证参考（其 §2 pi 源码取证仍有效），不再有实施义务。
+
+## 回测加固批（SPEC BH 2026-11-14-backtest-hardening.md，2026-11-14）
+
+来源：Devin 会话 `dour-arithmetic` 审查补完（静态 A/B + 本机/Air 双机回测）驱动的 13 项修复，4 路按模块并行派工（W-A modes / W-B goal / W-C economy / W-D memory+web），逐分支独立只读审查后合入。条目 ID = spec BH 的 BH-*。
+
+BH-1. **R4：vendored 偏离 gvanderclay/pi-bg-bash（D-BH-2 用户拍板）**
+   - 显式 `timeout` 不再关闭 120 s 自动转后台；晋升后 timeout 成为任务截止时间（与 waitFor 既有语义一致）。刻意**不猜测单位**（模型频繁把毫秒当秒传，回测 1,136 次 timeout>3600 s）；schema 描述改为 "Seconds (not ms)…"。
+   - 上游 0.5.0+（最新 0.6.0）方向相反——完全移除定时器自动晋升。core 刻意不移植上游 0.5.0+ 行为，保留并扩展自动晋升；已在 vendored 头注释与 docs/{en,zh}/bg-shell.md 的偏离节同步记录。
+
+BH-2. **R5：then_run 默认 600 s 超时（偏离 pi bash 无默认值）**
+   - pi 原生 bash 无默认超时且不转后台；then_run 挂住会同时卡死整个 turn 与该文件融合队列。默认值为命名常量 `THEN_RUN_DEFAULT_TIMEOUT_SECONDS=600`，刻意不可配置、无新 env/设置键；超时错误附 background-bash 提示；描述移除 start/restart 引导。
+
+BH-3. **R3：修正 82d35c2 引入的 mv/cp 过度拒绝**
+   - 只有 `-t DIR` / `--target-directory[=DIR]` 改变目标槽位；其余已识别旗标剥离后按裸位形式分析（操作数仍全部受检，无隐藏路径）；未识别旗标由「一律 deny」改为 ask（与注释宣称的 prompt 行为对齐）。`ssh … <<EOF` 正文属远端执行，W3/W4 扫描前掩蔽；本地 `bash -s`/`sh -s` heredoc 正文保持分析。
+
+BH-4. **E1：goal 用量持久化频率偏离（spec 授权）+ 两条连带记录**
+   - usage 事件改内存累积，落盘收敛至三时机（agent_end 有变化 / session_shutdown / 真实状态转移）；条目格式不变（P0-CT-08 绿），50 回合 run 实测 50→1 条。
+   - 旧用例按 spec §3 逐例更新 6 处（GO-T01/GO-T07 wiring、GO-T09、goal-cost-accounting ×3）——断言数值零改动，唯 GO-T09 磁盘解析计数 3→0 属刻意 IO 指标变化，在此逐例如实记录。
+   - 同项目双进程并发写同一 goal 的收敛语义由「逐事件 max 合并」变为三个落盘点的 last-writer-wins；单会话行为不变，最坏丢失一个 run 的用量增量（spec §8 已接受的残余等级）。
+   - spec 验收项「预算超限同事件触发」不适用：goal 模块不存在用量预算检查机制（全模块 grep 证实）；内存值仍随事件同步更新，未来接入预算判定读到的总是新值。
+
+BH-5. **E3：observation-pack 豁免与 ledger 去重（偏离上游 SoL-Pi 逐请求 ledger 语义）**
+   - obs_recall 结果整体豁免投影（避免嵌套包）；占位 ledger 行每对象 id 每进程一条（行格式不变；首替换仍审计；追加失败不标记、下次重试，OBS-08 保留；OBS-09-SITES 依赖的 `sendNumber=FULL_SENDS+1` 首替换行存活，契约 108 全绿）。AR1005-OB 中「每次 replacement 请求仍追加 ledger 行」的表述由本条取代。
+   - `context` handler 主体 fail-open（不变量 8 补齐）；`isPureTextResult` 移入逐消息 try。
+
+BH-6. **R1：provider-error 暂停的两处受控偏离**
+   - `GoalRecord.stopReason` 联合被 P0-CT-08 冻结，自动暂停 stamp `stopReason:"user"`，以 pauseReason 前缀 `provider error: ` 识别（用户暂停恒为 `user: ` 前缀、agent 暂停由 prompt 渲染首分支拦截，无歧义）；ledger `goal_paused.reason` 记 `"provider-error"`（自由字符串字段，读取方不校验取值）。pause 走 lifecycle 动词（#120 封装保持）。
+
+BH-7. **E6：修复位置偏离任务书字面（flow 层 → auditor 层）**
+   - flow 层不持有 session 引用（AU-02：auditor try/finally 是唯一 dispose 点）；修复改为 goal-auditor.ts 将 prompt await 与 abort signal 竞速（败者同步挂 `.catch`，无 unhandled rejection 窗口），使既有恰好一次 dispose 的 finally 在 prompt 永不 settle 时必然执行。复现证据：超时后调用序列 subscribe→prompt→abort、dispose 0 次（修复前红）。
+
+BH-8. **W-D 审查裁决的两条附带行为（超出条目字面、同类缺陷一并处置）**
+   - E2 附带：过期**黑名单**记录同样被处置（黑名单 skip 与 projectsDir skip 同源同病——skip 先于过期检查导致永不过期）；非过期黑名单记录保持 skip 语义，测试双侧钉住。
+   - S2 附带：无 scheme / 空字符串 / 非层次 schema 的 `url` 字段一律按解析失败 → ask（fail-closed）；后果是显式 domain deny 对这类输入降级为 ask（无法解析出可信主机做 deny 匹配），仅同原始字符串的精确授权可放行。已记 docs/{en,zh}/web-gov.md。
+
+BH-9. **E5：复现成立，修复为 model-switch 窗口（spec 授权的唯一 lib/ 例外）**
+   - 宿主源码证实：pi 1.5.2 `AgentSession.setModel` 在调用内部同步 `setThinkingLevel(模型切换默认)` 并 emit `thinking_level_select`，effort 监听器把该重置记为显式选择（source session），永久压制 profile 槽位（profile :effort 在首次 profile 驱动模型切换后失效）。
+   - 修复：`lib/effort-owner.ts` 新增 beginModelSwitch/endModelSwitch 窗口 + noteModelSwitchLevel（仅 echo 记账 + 清陈旧 profile 槽位；显式槽 ② 与 env pin ① 永不被模型切换触碰）；modes/profile-apply.ts 在 `pi.setModel` 前后布窗（仅模型实际变化时）；effort 监听器窗内事件走 noteModelSwitchLevel。优先级链 env pin > 显式 > profile > 模型默认恢复。lib 未新增任何 extensions 导入（不变量 1/2 保持）。
+
+BH-10. **流程注记**
+   - `bun run test` 唯一红项 `test/lib/review-degradation.test.ts > P2-REV-03` 为既有环境敏感项（#131 同款）：干净树触发 `git fetch origin main`，本机实测 fetch 耗时 5.7 s > vitest 5 s 超时（有网也超）；脏树路径 3/3 通过。四路 worker 与两轮独立审查在 base 25e6484 复现同款，非本批回归。
+   - 审查 P2-1：`scripts/run-tests.mjs` 补接 extensions/{memory,web-gov}/tests（memory 既有 3 套件此前从未入 gate；web-gov 为 BH-S2 新增）——memory 既有缺口属 pre-existing，非 W-D 引入。
+   - W-A worker 因任务被误标取消未能交付台账稿，其 6 项（S1/R3/R6/R7/E4/E5）由 orchestrator 亲自审查（红基线 21+4 例在 base 复核属实）后代拟本节；W-A 重派 worker 零改动退出避免了同 worktree 对拍污染。
