@@ -10,9 +10,10 @@
  *
  * Removed flags (--threshold / --reviewer / --score-per-issue / --diff) are
  * accepted-but-ignored for graceful degradation of old invocations: a valued
- * legacy flag also consumes its next token so its value does not leak into
- * `input`. Those capabilities now live in config.json (`/review-config`).
- * `--gate-model <id>` remains an active per-run override.
+ * legacy flag consumes its next token UNLESS that token is itself a flag
+ * (`--…`) — `--diff --lite` must not eat `--lite` (R8). Those capabilities
+ * now live in config.json (`/review-config`). `--gate-model <id>` remains an
+ * active per-run override.
  */
 
 export interface ParsedReviewArgs {
@@ -26,7 +27,9 @@ export interface ParsedReviewArgs {
 	gateModel?: string;
 }
 
-/** Removed valued flags — silently skip flag + value to keep input clean. */
+/** Removed valued flags — silently skip flag + value to keep input clean.
+ *  R8: the value is consumed only when it is NOT itself a flag token, so a
+ *  legacy flag directly followed by another `--flag` never swallows it. */
 const LEGACY_VALUED_FLAGS = new Set([
 	"--threshold",
 	"--reviewer",
@@ -42,7 +45,8 @@ export function parseReviewArgs(raw: string): ParsedReviewArgs {
 	for (let i = 0; i < tokens.length; i++) {
 		const t = tokens[i];
 		if (LEGACY_VALUED_FLAGS.has(t)) {
-			i++; // consume the value too
+			const next = tokens[i + 1];
+			if (next !== undefined && !next.startsWith("--")) i++; // consume the value too
 			continue;
 		}
 		if (t === "--no-spawn") {

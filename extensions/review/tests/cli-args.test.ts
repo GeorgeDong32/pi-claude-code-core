@@ -51,6 +51,19 @@ describe("parseReviewArgs", () => {
 		assert.equal(p.input, undefined);
 	});
 
+	test("legacy valued flag does not swallow a following --flag (R8)", () => {
+		// A legacy valued flag followed by ANOTHER flag must not eat the
+		// flag token as its value: `/review --diff --lite` must set lite.
+		const p = parseReviewArgs("--diff --lite");
+		assert.equal(p.lite, true, "--lite after a legacy valued flag must be honored");
+		assert.equal(p.input, undefined);
+	});
+
+	test("legacy valued flag still consumes a non-flag value token", () => {
+		const p = parseReviewArgs("--diff changes.patch focus on auth");
+		assert.equal(p.input, "focus on auth");
+	});
+
 	test("parses --gate-model override (no longer a legacy flag)", () => {
 		const p = parseReviewArgs("--gate-model anthropic/claude-sonnet-4-6");
 		assert.equal(p.gateModel, "anthropic/claude-sonnet-4-6");
