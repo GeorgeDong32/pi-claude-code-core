@@ -9,7 +9,7 @@
  * expectations below already encode its behaviour.
  */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readJson, writeJsonAtomic } from "../../lib/settings.ts";
@@ -71,6 +71,21 @@ describe("P0-LB-01 writeJsonAtomic", () => {
 		expect(readJson<{ "pi-effort"?: { fastMode?: boolean } }>(p, {})).toEqual({
 			"pi-effort": { fastMode: true },
 		});
+	});
+
+	it("CH E10: keeps an existing file's permission bits when no explicit mode is given", () => {
+		const p = join(dir, "secret.json");
+		writeFileSync(p, "{}\n", { mode: 0o600 });
+		expect((statSync(p).mode & 0o777) === 0o600).toBe(true);
+		writeJsonAtomic(p, { rewritten: true });
+		expect((statSync(p).mode & 0o777) === 0o600).toBe(true);
+	});
+
+	it("CH E10: an explicit mode still wins over the target's existing bits", () => {
+		const p = join(dir, "explicit.json");
+		writeFileSync(p, "{}\n", { mode: 0o600 });
+		writeJsonAtomic(p, { rewritten: true }, { mode: 0o644 });
+		expect((statSync(p).mode & 0o777) === 0o644).toBe(true);
 	});
 
 	it("creates missing parent directories", () => {

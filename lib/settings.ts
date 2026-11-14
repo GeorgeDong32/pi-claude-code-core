@@ -15,6 +15,7 @@
  */
 
 import {
+	chmodSync,
 	mkdirSync,
 	readFileSync,
 	renameSync,
@@ -74,7 +75,13 @@ export function readJson<T extends object>(
  * rename). On any failure the temp file is best-effort removed and the
  * original file is left untouched. `opts.mode` (e.g. pm's 0o600 for
  * model-profiles.json) is applied to the temp file so it survives the
- * rename — default keeps the process umask, like a plain writeFileSync.
+ * rename — default keeps the process umask for a NEW file, like a plain
+ * writeFileSync. CH E10 (2026-11-15): with no explicit `mode` and an
+ * existing target, the target's `mode & 0o777` is copied onto the temp
+ * file before the rename, so a hand-tightened 0600 survives rewrites
+ * (rename would otherwise replace the inode and reset the bits to umask).
+ * If the target cannot be stat'd (vanished mid-write) the umask behavior
+ * applies, and a chmod failure never fails the write.
  */
 export function writeJsonAtomic(
 	path: string,
@@ -90,6 +97,14 @@ export function writeJsonAtomic(
 			encoding: "utf-8",
 			...(opts?.mode !== undefined ? { mode: opts.mode } : {}),
 		});
+		if (opts?.mode === undefined) {
+			// CH E10: preserve the existing file's permission bits across the rename.
+			try {
+				chmodSync(tmpPath, statSync(path).mode & 0o777);
+			} catch {
+				// target unreadable/vanished → keep umask behavior; never fail the write
+			}
+		}
 		renameSync(tmpPath, path);
 	} catch (error) {
 		try {
