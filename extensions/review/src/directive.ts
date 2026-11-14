@@ -14,6 +14,17 @@
  *     Markdown code fences.
  *   - Step 3 hands off to the `pi_review_report` tool, which is the only
  *     authoritative report renderer (deterministic code-side verdict).
+ *
+ * SPEC CH (2026-11-15):
+ *   - R6: the duplicate second `new Function` parse guard, the unused `cwd`
+ *     destructure and the `_LEGACY_PARITY` export are gone.
+ *   - R10: per-reviewer tool budgets come from `toolBudgetForReviewer` —
+ *     lean-agents is the single source (byte-identical output).
+ *   - E12: prompt lines shared across reviewers are emitted ONCE as
+ *     script-level consts (`baseTask`, `diffOnlyExtra`, `userTask`); each
+ *     reviewer's runtime prompt is byte-identical (pinned by
+ *     tests/workflow-task-golden.json). `REVIEW_DIRECTIVE_MAX_CHARS` caps
+ *     the generated directive; a test pins the default roster under it.
  */
 import { writeFileSync } from "node:fs";
 
@@ -28,6 +39,17 @@ import {
 	type LeanBudgetSpec,
 } from "./lean-agents.js";
 import type { ReviewerSpec, ReviewTarget } from "./types.js";
+
+/**
+ * E12 (2026-11-15): hard ceiling on the generated all-reviewer directive,
+ * measured POST-dedup (11363 chars with the default roster + fixed sample
+ * paths) plus ~10% headroom for longer real-world paths. The main agent
+ * copies the entire directive into its context — the workflowScript is the
+ * bulk of it, and shared reviewer prompt lines are emitted once (see
+ * buildWorkflowScript). Pinned by a test; raise the constant consciously
+ * when the prompt grows.
+ */
+export const REVIEW_DIRECTIVE_MAX_CHARS = 12_500;
 
 export interface ReviewDirectiveInput {
 	target: ReviewTarget;
@@ -306,6 +328,33 @@ export function buildWorkflowScript(input: {
 	// gate ends with a fenced JSON verdict block that the report tool
 	// extracts. See agents/*.md "Output format" sections.
 	lines.push("");
+
+	// E12 (2026-11-15): the prompt lines every reviewer shares are emitted
+	// ONCE as script-level consts; each reviewer's `task` array references
+	// them. The runtime join is byte-identical to the old inline repetition
+	// (pinned by tests/workflow-task-golden.json) — this shrinks the
+	// directive the main agent must copy, not the prompts reviewers see.
+	const baseTaskParts = [
+		READ_ONLY_PREFIX,
+		`Read ${JSON.stringify(diffPath)} as the change — the diff is the authoritative change record; workspace files are context only. When a workspace file disagrees with the diff, trust the diff and note the discrepancy in coverage.limitations.`,
+		`Also read ${JSON.stringify(manifestPath)} for change-profile (docsOnly, file list, rule file paths). Do not re-fetch via gh/git.`,
+		`Your cwd is the target workspace (${JSON.stringify(workspacePath)}). Run all read/grep/git from there.`,
+		"Stay within budgets; finish with your Markdown report (Summary / Findings / Coverage) as your final message and stop.",
+		"Do not read plan.md, progress.md, anything under .pi-subagents/ (artifacts and transcripts included), or node_modules.",
+		"Prefer Read/Grep. If you use bash, only simple allowlisted commands (no &&/||/; compounds).",
+	];
+	lines.push("const baseTask = [");
+	for (const part of baseTaskParts) {
+		lines.push(`  ${JSON.stringify(part)},`);
+	}
+	lines.push(`].join(" ");`);
+	lines.push(
+		`const diffOnlyExtra = ${JSON.stringify(`If change-profile.docsOnly is true, return status: skipped with empty issues. Otherwise prefer diff-only; at most 3 extra file reads.`)};`,
+	);
+	if (userContext?.trim()) {
+		lines.push(`const userTask = ${JSON.stringify(`User request: ${userContext.trim()}`)};`);
+	}
+	lines.push("");
 	// Bind the reviewer array to a local FIRST: the gate IIFE and
 	// `reviewersShaped` below both reference `reviewers`, and a bare object
 	// property (`return { reviewers: ... }`) does NOT create a variable
@@ -317,15 +366,7 @@ export function buildWorkflowScript(input: {
 		// the inline history-context special case is gone. Output is
 		// byte-identical (toolBudgetForReviewer maps the same way).
 		const tbForId = toolBudgetForReviewer(r.id);
-		const taskParts = [
-			READ_ONLY_PREFIX,
-			`Read ${JSON.stringify(diffPath)} as the change — the diff is the authoritative change record; workspace files are context only. When a workspace file disagrees with the diff, trust the diff and note the discrepancy in coverage.limitations.`,
-			`Also read ${JSON.stringify(manifestPath)} for change-profile (docsOnly, file list, rule file paths). Do not re-fetch via gh/git.`,
-			`Your cwd is the target workspace (${JSON.stringify(workspacePath)}). Run all read/grep/git from there.`,
-			"Stay within budgets; finish with your Markdown report (Summary / Findings / Coverage) as your final message and stop.",
-			"Do not read plan.md, progress.md, anything under .pi-subagents/ (artifacts and transcripts included), or node_modules.",
-			"Prefer Read/Grep. If you use bash, only simple allowlisted commands (no &&/||/; compounds).",
-		];
+		const taskParts: string[] = ["baseTask"];
 		if (r.id === "rulesheriff") {
 			taskParts.push(
 				`If change-profile.rulePaths is empty, return status: skipped with empty issues — do not invent rule violations.`,
@@ -342,12 +383,10 @@ export function buildWorkflowScript(input: {
 			);
 		}
 		if (r.id === "bugbot" || r.id === "security-review") {
-			taskParts.push(
-				`If change-profile.docsOnly is true, return status: skipped with empty issues. Otherwise prefer diff-only; at most 3 extra file reads.`,
-			);
+			taskParts.push("diffOnlyExtra");
 		}
 		if (userContext?.trim()) {
-			taskParts.push(`User request: ${userContext.trim()}`);
+			taskParts.push("userTask");
 		}
 
 		const modelClause =
@@ -357,12 +396,16 @@ export function buildWorkflowScript(input: {
 		lines.push("    {");
 		lines.push(`      key: ${JSON.stringify(r.id)},`);
 		lines.push(`      agent: ${JSON.stringify(leanAgentName(r.id))},`);
-		// Task as an array joined at runtime — one short quoted line per
-		// instruction. A single JSON.stringify of the whole task produced
+		// Task as an array joined at runtime — shared consts first, then the
+		// per-lane lines. A single JSON.stringify of the whole task produced
 		// 900+ char lines, the other fragile copy point.
 		lines.push(`      task: [`);
 		for (const part of taskParts) {
-			lines.push(`        ${JSON.stringify(part)},`);
+			// Shared consts are referenced by name; lane-specific lines stay
+			// JSON-quoted literals.
+			lines.push(part === "baseTask" || part === "diffOnlyExtra" || part === "userTask"
+				? `        ${part},`
+				: `        ${JSON.stringify(part)},`);
 		}
 		lines.push(`      ].join(" "),`);
 		lines.push(`      cwd: ${JSON.stringify(workspacePath)},`);

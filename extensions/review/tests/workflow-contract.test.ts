@@ -17,9 +17,10 @@ import { strict as assert } from "node:assert";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, test } from "node:test";
 
-import { buildReviewDirective } from "../src/directive.js";
+import { buildReviewDirective, REVIEW_DIRECTIVE_MAX_CHARS } from "../src/directive.js";
 import { FALSE_POSITIVE_GUIDANCE, LEAN_BUDGETS, leanAgentName } from "../src/lean-agents.js";
 import type { ReviewerSpec, ReviewTarget } from "../src/types.js";
 
@@ -154,7 +155,9 @@ describe("buildReviewDirective — pi-subagents API contract", () => {
 		assert.match(d, /timeoutMs: \d+/);
 		// v0.7.2: the script is presented as an unescaped template literal
 		// (the double-escaped JSON string form broke the main agent's copy).
-		assert.match(d, /workflowScript: `\n\n?const reviewers = await runs\.all\(\[/);
+		// E12: shared task consts (baseTask…) are hoisted above the fan-out.
+		assert.match(d, /workflowScript: `\n\n?const baseTask = \[/);
+		assert.match(d, /const reviewers = await runs\.all\(\[/);
 	});
 
 	test("P0: the generated workflowScript parses as valid JS (unquoted-path regression)", () => {
@@ -376,23 +379,34 @@ describe("pi-subagents ≥0.55 read-only task classification", () => {
 		return false;
 	}
 
-	/** Extract every task text from the script (v0.7.3 array-join form). */
-	function taskLiteralsOf(script: string): string[] {
+	/**
+	 * Extract every task text from the script by EXECUTING it with a
+	 * capturing stub `runs` (E12: shared task lines are hoisted into
+	 * script-level consts, so the old regex over `task: [` literals no
+	 * longer sees the full prompt — the runtime join is the truth).
+	 */
+	async function taskLiteralsOf(script: string): Promise<string[]> {
 		const out: string[] = [];
-		const re = /(?:task: |const gateTask = )\[\n((?:\s*"(?:\\.|[^"\\])*",?\n)+)\s*\]\.join\(" "\)/g;
-		let m: RegExpExecArray | null;
-		while ((m = re.exec(script)) !== null) {
-			const parts = [...m[1]!.matchAll(/"((?:\\.|[^"\\])*)",?\n/g)].map((p) => JSON.parse(`"${p[1]}"`));
-			out.push(parts.join(" "));
-		}
+		const runs = {
+			all: async (items: Array<{ key: string; task: string }>) => {
+				for (const i of items) out.push(i.task);
+				return items.map((i) => ({ key: i.key, ok: true, error: undefined, output: "" }));
+			},
+			run: async (_key: string, params: { task: string }) => {
+				out.push(params.task);
+				return { ok: true, error: undefined, output: "" };
+			},
+		};
+		const fn = new Function("runs", `return (async () => {\n${script}\n})();`); // eslint-disable-line no-new-func
+		await fn(runs);
 		return out;
 	}
 
-	test("gate + reviewer tasks are blanket read-only (gate never rejected at launch)", () => {
+	test("gate + reviewer tasks are blanket read-only (gate never rejected at launch)", async () => {
 		const d = buildReviewDirective(baseInput());
 		const script = scriptOf(d);
-		const tasks = taskLiteralsOf(script);
-		// One static reviewer task per reviewer + one gate task prefix.
+		const tasks = await taskLiteralsOf(script);
+		// One runtime task per reviewer + one gate task.
 		assert.ok(tasks.length >= defaultReviewers().length + 1, `expected >= ${defaultReviewers().length + 1} task literals, got ${tasks.length}`);
 		for (const t of tasks) {
 			assert.ok(isBlankReadOnly(t), `task must carry a blanket read-only declaration: ${t.slice(0, 90)}…`);
@@ -464,5 +478,52 @@ describe("buildReviewDirective — directive copy", () => {
 		assert.equal((script.match(/runs\.all\(\[/g) ?? []).length, 1);
 		assert.doesNotMatch(script, /runs\.run\('gate'\)/);
 		assert.match(script, /gate: null/);
+	});
+});
+
+describe("E12 — shared task-line dedup + directive length ceiling", () => {
+	/** Execute the script with a capturing stub `runs`; return key → task. */
+	async function capturedTasks(script: string): Promise<Array<{ key: string; task: string }>> {
+		const out: Array<{ key: string; task: string }> = [];
+		const runs = {
+			all: async (items: Array<{ key: string; task: string }>) => {
+				for (const i of items) out.push({ key: i.key, task: i.task });
+				return items.map((i) => ({ key: i.key, ok: true, error: undefined, output: "" }));
+			},
+			run: async (_key: string, _params: { task: string }) => ({ ok: true, error: undefined, output: "" }),
+		};
+		const fn = new Function("runs", `return (async () => {\n${script}\n})();`); // eslint-disable-line no-new-func
+		await fn(runs);
+		return out;
+	}
+
+	const GOLDEN_PATH = join(fileURLToPath(import.meta.url), "..", "workflow-task-golden.json");
+
+	test("each reviewer's final prompt is byte-identical to the pre-dedup generator (golden)", async () => {
+		const golden = JSON.parse(readFileSync(GOLDEN_PATH, "utf-8")) as Array<{ key: string; task: string }>;
+		const d = buildReviewDirective(baseInput());
+		const script = scriptOf(d);
+		const actual = await capturedTasks(script);
+		assert.equal(actual.length, golden.length, "one task per reviewer");
+		for (let i = 0; i < golden.length; i++) {
+			assert.equal(actual[i].key, golden[i].key);
+			assert.equal(actual[i].task, golden[i].task, `reviewer ${golden[i].key} prompt must be byte-identical`);
+		}
+	});
+
+	test("shared lines are emitted ONCE in the script (no per-reviewer repetition)", () => {
+		const d = buildReviewDirective(baseInput());
+		const script = scriptOf(d);
+		const shared = "Prefer Read/Grep. If you use bash, only simple allowlisted commands";
+		const occurrences = script.split(shared).length - 1;
+		assert.equal(occurrences, 1, `shared line must appear once, found ${occurrences}`);
+	});
+
+	test("the default all-reviewer directive stays under REVIEW_DIRECTIVE_MAX_CHARS", () => {
+		const d = buildReviewDirective(baseInput());
+		assert.ok(
+			d.length <= REVIEW_DIRECTIVE_MAX_CHARS,
+			`directive grew to ${d.length} chars (ceiling ${REVIEW_DIRECTIVE_MAX_CHARS}) — dedupe or trim before raising the constant`,
+		);
 	});
 });
