@@ -181,3 +181,58 @@ Air 推导阈值约 251.6K–643.6K，语料差异不能解释成 Air 的硬件�
 可行子集不作为替代分母，H-SC 真机验收与端点合规仍待补。
 复现各源基线：`pnpm exec tsx scripts/compaction-replay.mjs <会话目录> --json`；
 合并需使用上述去重后的输入，不能直接平均两机百分比。
+
+## 默认开启后实测（2026-11-14）
+
+用户批准的默认开启（2026-11-11 落地）后的首次只读采集。方法：检索两台机器
+`~/.pi/agent/sessions/` 下含 `cc-core-compaction` / `cc-core-compaction-metrics`
+条目的会话 JSONL，复制到仓库外的 /tmp 私有临时目录分析，评估后删除；
+只输出计数与时长，不输出会话正文；Air 经只读 ssh 取数。
+
+库存（按条目形状严格匹配，非正文提及）：
+
+| 机器 | 含条目的会话 | ST-01 条目 | metrics 条目 |
+|---|---|---|---|
+| 本机 | 0 | 0 | 0 |
+| Air | 3 | 3 | 12 |
+
+对中期口径的更正：此前汇报的本机「ST-01 遥测 34 条（4 文件）、metrics 2 条
+（1 文件）」是正文污染——助手消息反引号提及与 observation-pack 文本对象，
+真实遥测条目为零。Air 缺少 `rg` 导致首轮探测误报 "NONE"；已用 grep 复核出
+上表。Air 安装为 git clone（`426f8e9`，含 2026-11-11 默认开启返工）且无
+`core-compaction.json`，即默认 `mode: "on"` 生效。
+
+12 条 metrics 与 3 条 ST-01 的时间戳全部为 2026-11-12（三个会话本身起于
+2026-11-02…11-04、后续续跑）。每个会话恰含一个完整 precompute 周期：
+
+| 会话（Air） | 提交时压力 | T_n | estPostTokens | summaryChars | computeMs | 结果 |
+|---|---|---|---|---|---|---|
+| online_platform 01a19f76 | 378,002 | 500,000 | 129,525 | 17,570 | 66,708 | applied |
+| SFC_AMASGO 01a19a55 | 392,749 | 500,000 | 171,814 | 26,633 | 62,455 | applied |
+| SFC_AMASGO 01a1a5c0 | 375,267 | 500,000 | 219,552 | 32,121 | 82,721 | applied |
+
+聚合（`scripts/compaction-metrics.mjs`，坏行 0）：
+
+- SC-6 实测提前接管率：**3/3 = 1.0** —— 阈值前确认 draft 提交 3 /
+  （确认 draft 提交 3 + threshold 兜底尝试 0）；manual 0、overflow 0，
+  按 SC-6 单列。
+- 无任何不良事件：0 discarded、0 refused、0 次 threshold/overflow/manual
+  兜底、0 次兜底失败、0 次自动降级 shadow（每行 `degraded:false`，每条
+  ST-01 `conflictEdit:0`）；三个周期均为 `origin:"precompute"`、
+  `validated:true`。
+- computeMs p50 66,708 / p90 82,721；apply 耗时 12–26 ms（draft 提交不在
+  关键路径）。提交时压力低于 T_n 107K–125K；compute-start 提前量
+  p50 129,816 / p90 199,705 tokens。
+- 压缩效果：estPostTokens 为提交前压力的 34.3% / 43.7% / 58.5%
+  （估算值，非压缩后实测上下文）。
+
+**评估结论：数据不足。** 三个长跑会话中的三个周期，远不足以支撑 O2 的
+长对话稳定性/可靠性、压缩效果与时间节约评估。「3 个周期零不良事件」与
+设计意图相容，但不构成发布质量证据——不作外推；实测数据上 M1 仍不可得
+（`counterfactualM1Available: false`）。SC-1 的 3 次回放未归因遗漏
+**未被本样本裁决**：裁决需要 discard/refuse 原因码，而本样本零
+discarded/refused 事件——该项保持未关闭。一条观察（非缺陷）：两个会话的
+确认提交晚于 compute-ready 数小时（≈4.7 h / ≈8.5 h，过夜或长空闲会话）
+——draft 保持 ready、在下一个宿主边界提交，属设计内行为。
+
+复现：`pnpm exec tsx scripts/compaction-metrics.mjs <jsonl-or-dir>`。

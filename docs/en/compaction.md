@@ -224,3 +224,66 @@ feasible subset as the denominator. H-SC interactive acceptance and endpoint
 compliance remain pending. Reproduce each source with
 `pnpm exec tsx scripts/compaction-replay.mjs <session-directory> --json`;
 pool only the deduplicated inputs, never average the two percentages.
+
+## Default-On Field Data (2026-11-14)
+
+First read-only collection after the user-authorized default-on landing
+(2026-11-11). Method: both machines' `~/.pi/agent/sessions/` JSONLs were
+searched for `cc-core-compaction` / `cc-core-compaction-metrics` entries;
+matches were copied to a private `/tmp` directory outside the repository,
+analyzed, and deleted afterwards. Only counts and durations are reported —
+no session content. Air was read over read-only ssh.
+
+Inventory (strict entry-shape match, not prose mentions):
+
+| Machine | Sessions With Entries | ST-01 Entries | Metrics Entries |
+|---|---|---|---|
+| Local | 0 | 0 | 0 |
+| Air | 3 | 3 | 12 |
+
+Correction to the interim count: the previously reported "34 ST-01 entries in
+4 files, 2 metrics entries in 1 file" for this machine was prose contamination
+— backtick mentions in assistant messages and observation-pack text objects,
+zero real telemetry entries. Air's `rg` absence additionally produced a false
+"NONE" on the first probe; grep confirmed the inventory above. Air runs the
+git-clone install at commit `426f8e9` (includes the 2026-11-11 default-on
+rework) with no `core-compaction.json`, so the default `mode: "on"` applied.
+
+All 12 metrics rows and all 3 ST-01 entries are timestamped 2026-11-12 (the
+three sessions themselves started 2026-11-02…11-04 and were resumed later).
+Each session contains exactly one complete precompute cycle:
+
+| Session (Air) | Commit Pressure | T_n | estPostTokens | summaryChars | computeMs | Outcome |
+|---|---|---|---|---|---|---|
+| online_platform 01a19f76 | 378,002 | 500,000 | 129,525 | 17,570 | 66,708 | applied |
+| SFC_AMASGO 01a19a55 | 392,749 | 500,000 | 171,814 | 26,633 | 62,455 | applied |
+| SFC_AMASGO 01a1a5c0 | 375,267 | 500,000 | 219,552 | 32,121 | 82,721 | applied |
+
+Aggregates (`scripts/compaction-metrics.mjs`, 0 malformed lines):
+
+- SC-6 observed early-takeover rate: **3/3 = 1.0** — 3 early confirmed draft
+  commits / (3 confirmed draft commits + 0 threshold fallback attempts);
+  manual 0, overflow 0 (reported separately per SC-6).
+- No adverse events at all: 0 discarded, 0 refused, 0 threshold/overflow/manual
+  fallbacks, 0 fallback failures, 0 shadow degradations (`degraded:false` on
+  every row, `conflictEdit:0` on every ST-01 entry); every cycle is
+  `origin:"precompute"`, `validated:true`.
+- computeMs p50 66,708 / p90 82,721; apply elapsedMs 12–26 (draft commit is
+  off the critical path). Commit pressure landed 107K–125K below T_n;
+  compute-start lead p50 129,816 / p90 199,705 tokens.
+- Compression: estPostTokens is 34.3% / 43.7% / 58.5% of the pre-commit
+  pressure (estimates, not measured post-compaction context).
+
+**Assessment: insufficient data.** Three cycles in three long-running sessions
+is far below any stability/reliability, compression-effect, or time-saving
+evaluation standard (O2). "Zero adverse events in 3 cycles" is consistent with
+the design intent but is not evidence of release quality — no extrapolation is
+made, and M1 remains unavailable on field data (`counterfactualM1Available:
+false`). SC-1's three unattributed replay misses are **not adjudicated** by
+this sample: they require discard/refusal reason codes, and this sample
+contains zero discarded/refused events — the item stays open. One observation
+(not a defect): in two sessions the confirmed commit landed hours after
+compute-ready (≈4.7 h / ≈8.5 h, overnight or long-idle sessions) — the draft
+is held ready and commits at the next host boundary, per design.
+
+Reproduce: `pnpm exec tsx scripts/compaction-metrics.mjs <jsonl-or-dir>`.
