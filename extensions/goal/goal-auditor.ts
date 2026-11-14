@@ -25,6 +25,14 @@ import type { GoalRecord } from "./goal-record.ts";
  * real createAgentSession — one host boundary, not a mock-everything
  * layer). A late completion after the flow's timeout/abort can only clean
  * up: it returns an aborted error outcome, never an approval.
+ *
+ * BH-E6 (spec 2026-11-14-backtest-hardening, reproduced 2026-11-14): the
+ * prompt await is raced against the abort signal — pi only CONTRACTS that
+ * prompt() settles after abort(); a stream ignoring the signal used to hang
+ * the await past the flow's timeout return and skip the dispose finally
+ * (session leak). On abort the await settles, the finally disposes exactly
+ * once (still the only disposal site), and the raced-off prompt loser is
+ * detached from unhandled-rejection reporting.
  */
 
 /** Structural session shape the auditor drives (AR1005-AU-02 test seam:
@@ -318,12 +326,30 @@ export async function runGoalCompletionAuditor(args: {
 			// into AgentSession.abort(). Verified against the pi 1.0.1 implementation:
 			// after abort(), prompt() settles (resolves) via the run-loop's
 			// _agentRunAbortRequested checks, so this await always returns.
+			//
+			// BH-E6 (spec 2026-11-14-backtest-hardening, reproduced): that
+			// settling is only a CONTRACT — a stream that ignores the abort
+			// signal hangs prompt() forever (abort() itself awaits
+			// waitForIdle, so it hangs too), the finally below never runs, and
+			// the session leaks for the rest of the process. Race the prompt
+			// against the abort signal: on abort the await settles
+			// immediately, the existing AU-02 finally unsubscribes and
+			// disposes EXACTLY ONCE (this stays the only disposal site), and
+			// the raced-off prompt loser is detached so it can never surface
+			// as an unhandled rejection.
+			let resolveOnAbort: (() => void) | null = null;
+			const abortSettled = new Promise<void>((resolve) => {
+				resolveOnAbort = resolve;
+			});
 			const onAbort = () => {
+				resolveOnAbort?.();
 				void session.abort().catch(() => {});
 			};
 			args.signal?.addEventListener("abort", onAbort, { once: true });
 			try {
-				await session.prompt(buildGoalAuditorPrompt(args));
+				const promptPromise = session.prompt(buildGoalAuditorPrompt(args));
+				promptPromise.catch(() => {});
+				await Promise.race([promptPromise, abortSettled]);
 			} finally {
 				args.signal?.removeEventListener("abort", onAbort);
 			}
