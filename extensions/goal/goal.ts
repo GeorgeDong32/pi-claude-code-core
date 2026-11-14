@@ -840,9 +840,12 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			return false;
 		}
 		consecutiveContinuationErrors.delete(goal.id);
-		const reason = `${PROVIDER_ERROR_PAUSE_PREFIX}${(errorMessage?.trim() || "unknown provider error").slice(0, 120)}`;
+		const errorText = (errorMessage?.trim() || "unknown provider error").slice(0, 120);
+		const reason = `${PROVIDER_ERROR_PAUSE_PREFIX}${errorText}`;
 		lifecycle.pause(ctx, { systemReason: reason, suggestedAction: PROVIDER_ERROR_PAUSE_ACTION });
-		uiNotify(ctx, `Goal paused after ${CONTINUATION_ERROR_PAUSE_THRESHOLD} consecutive provider errors: ${truncateText(reason, 160)}`, "warning");
+		// toast embeds the RAW error text — the "provider error: " prefix is
+		// already in the sentence (pauseReason itself keeps the prefix)
+		uiNotify(ctx, `Goal paused after ${CONTINUATION_ERROR_PAUSE_THRESHOLD} consecutive provider errors: ${truncateText(errorText, 160)}`, "warning");
 		return true;
 	}
 

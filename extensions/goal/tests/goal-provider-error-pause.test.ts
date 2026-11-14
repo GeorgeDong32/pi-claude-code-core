@@ -142,6 +142,45 @@ test("BH-R1: error → success → error does NOT pause (counter resets on non-e
 	}
 });
 
+test("BH-R1: a provider-error pause is resumable via /goal resume; the error counter starts fresh", async () => {
+	const f = setup();
+	try {
+		diskGoal(f.cwd, "=== Goal ===\nObjective: ship the decoder");
+		await f.host.fire("session_start", { reason: "new" }, f.ctx);
+		await settle();
+
+		// auto-pause on two consecutive errors
+		await f.host.fire("agent_end", runEnd("error", PROVIDER_ERROR), f.ctx);
+		await settle();
+		await f.host.fire("agent_end", runEnd("error", PROVIDER_ERROR), f.ctx);
+		await settle();
+		assert.equal(f.diskGoal()?.status, "paused");
+
+		// /goal resume: the resume verb clears the pause fields and re-activates
+		const resume = f.host.commands.get("goal-resume");
+		assert.ok(resume, "/goal resume command registered");
+		await resume("", f.ctx as never);
+		const resumed = f.diskGoal();
+		assert.equal(resumed?.status, "active", "the goal resumes");
+		assert.equal(resumed?.autoContinue, true);
+		assert.equal(resumed?.pauseReason, undefined, "resume clears the provider-error pauseReason");
+		assert.equal(resumed?.pauseSuggestedAction, undefined, "resume clears the suggested action");
+		assert.equal(resumed?.stopReason, undefined, "resume clears stopReason");
+
+		// fresh counter: ONE further error must NOT immediately re-pause
+		await f.host.fire("agent_end", runEnd("error", PROVIDER_ERROR), f.ctx);
+		await settle();
+		assert.equal(f.diskGoal()?.status, "active", "one error after resume must not re-pause (counter is fresh)");
+		// and the guard still works after the resume: the next consecutive error does
+		await f.host.fire("agent_end", runEnd("error", PROVIDER_ERROR), f.ctx);
+		await settle();
+		assert.equal(f.diskGoal()?.status, "paused", "the second consecutive error after resume pauses again");
+		assert.match(f.diskGoal()?.pauseReason ?? "", /^provider error: /);
+	} finally {
+		f.cleanup();
+	}
+});
+
 test("BH-R1: the frozen pi-goal-state entry shape is untouched (version 3, same fields)", async () => {
 	const f = setup();
 	try {

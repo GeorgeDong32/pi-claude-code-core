@@ -72,3 +72,10 @@ test("pauseReasonLabel: user-prefixed vs agent reasons", () => {
 	assert.deepEqual(pauseReasonLabel("user: 太慢了，先停下"), { label: "User pause note", text: "太慢了，先停下" });
 	assert.deepEqual(pauseReasonLabel("missing credentials"), { label: "Agent pause reason", text: "missing credentials" });
 });
+
+test("pauseReasonLabel: BH-R1 provider-error reasons get their own label (prefix stripped)", () => {
+	assert.deepEqual(
+		pauseReasonLabel("provider error: 429 quota exceeded"),
+		{ label: "Provider error", text: "429 quota exceeded" },
+	);
+});

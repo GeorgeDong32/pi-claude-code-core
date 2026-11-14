@@ -104,11 +104,15 @@ export function footerStatus(goal: GoalDisplayRecordLike): string {
 }
 
 /** goal-notes: pause reasons are prefixed "user: " when set via /goal-pause
- * (agent pause_goal reasons are unprefixed). One labeling authority for the
+ * (agent pause_goal reasons are unprefixed; BH-R1 automatic provider-error
+ * pauses are prefixed "provider error: "). One labeling authority for the
  * summary line and the paused system prompt. */
 export function pauseReasonLabel(pauseReason: string): { label: string; text: string } {
 	if (pauseReason.startsWith("user: ")) {
 		return { label: "User pause note", text: pauseReason.slice("user: ".length) };
+	}
+	if (pauseReason.startsWith("provider error: ")) {
+		return { label: "Provider error", text: pauseReason.slice("provider error: ".length) };
 	}
 	return { label: "Agent pause reason", text: pauseReason };
 }
