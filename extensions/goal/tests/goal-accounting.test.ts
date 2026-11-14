@@ -142,7 +142,10 @@ function setupWiring() {
 	return { cwd, host, ctx, clk, cleanup: () => rmSync(cwd, { recursive: true, force: true }) };
 }
 
-test("GO-T01 (wiring): 8 × 250 ms tool_execution_end events persist 2 s; +1 s → 3 s", async () => {
+test("GO-T01 (wiring): 8 × 250 ms tool_execution_end events record 2 s (agent_end flush); +1 s → 3 s", async () => {
+	// BH-E1 (spec 2026-11-14-backtest-hardening): usage events are memory-only;
+	// the disk record is written by the per-run agent_end flush. The arithmetic
+	// assertions are unchanged — only the flush point moved.
 	const f = setupWiring();
 	try {
 		await f.host.fire("session_start", { reason: "new" }, f.ctx);
@@ -151,10 +154,12 @@ test("GO-T01 (wiring): 8 × 250 ms tool_execution_end events persist 2 s; +1 s �
 			f.clk.advance(250);
 			await f.host.fire("tool_execution_end", { type: "tool_execution_end", toolCallId: `t${i}` }, f.ctx);
 		}
+		await f.host.fire("agent_end", { messages: [] }, f.ctx);
 		let rec = readActiveGoalFiles({ cwd: f.cwd })[0]!;
 		assert.equal(rec.usage.activeSeconds, 2, "8 × 250 ms must record 2 s (baseline recorded 0)");
 		f.clk.advance(1000);
 		await f.host.fire("tool_execution_end", { type: "tool_execution_end", toolCallId: "t9" }, f.ctx);
+		await f.host.fire("agent_end", { messages: [] }, f.ctx);
 		rec = readActiveGoalFiles({ cwd: f.cwd })[0]!;
 		assert.equal(rec.usage.activeSeconds, 3, "one more second records 3 s (baseline recorded 1)");
 	} finally {
@@ -162,18 +167,22 @@ test("GO-T01 (wiring): 8 × 250 ms tool_execution_end events persist 2 s; +1 s �
 	}
 });
 
-test("GO-T07 (wiring): a paused goal's disk edits are observed by the next event (external-state check intact)", async () => {
+test("GO-T07 (wiring): a paused goal's disk edits are observed by the next run boundary (external-state check intact)", async () => {
+	// BH-E1: usage events no longer rescan the disk; external-state detection
+	// moved to the reconciling events (run boundaries, commands). The intent —
+	// an external delete is never skipped forever — is unchanged.
 	const f = setupWiring();
 	try {
 		await f.host.fire("session_start", { reason: "new" }, f.ctx);
 		await f.host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "work" }, f.ctx);
 		f.clk.advance(1200);
 		await f.host.fire("tool_execution_end", { type: "tool_execution_end", toolCallId: "t0" }, f.ctx);
+		await f.host.fire("agent_end", { messages: [] }, f.ctx);
 		let rec = readActiveGoalFiles({ cwd: f.cwd })[0]!;
 		assert.equal(rec.usage.activeSeconds, 1);
-		// externally delete the active goal file → the next event must observe it (reconcile path, not skipped)
+		// externally delete the active goal file → the next run boundary must observe it (reconcile path)
 		rmSync(path.join(f.cwd, rec.activePath ?? ".pi/goals/active-goal.json"));
-		await f.host.fire("tool_execution_end", { type: "tool_execution_end", toolCallId: "t1" }, f.ctx);
+		await f.host.fire("agent_end", { messages: [] }, f.ctx);
 		assert.equal(readActiveGoalFiles({ cwd: f.cwd }).length, 0);
 	} finally {
 		f.cleanup();
@@ -187,7 +196,7 @@ test("GO-T07 (wiring): a paused goal's disk edits are observed by the next event
 import * as fs from "node:fs";
 import { _parseGoalFileCountForTests, _resetParseGoalFileCountForTests } from "../storage/goal-files.ts";
 
-test("GO-T09: one accounting event parses the focused file once; the next event sees external edits", async () => {
+test("GO-T09 (BH-E1): a usage event parses ZERO files; the run-boundary flush parses the pool once and sees external edits", async () => {
 	resetCoreBusForTests();
 	const cwd = mkdtempSync(path.join(tmpdir(), "pi-goal-gob-"));
 	const clk = fixedClock(2_000_000);
@@ -203,21 +212,27 @@ test("GO-T09: one accounting event parses the focused file once; the next event 
 		const focusedAbs = path.join(cwd, focused.activePath ?? "");
 
 		void focusedAbs;
-		// op count: with 3 goals on disk, ONE accounting event parses the pool
-		// exactly once (3 parses) and does NOT re-parse the focused file for the
-		// persist merge (baseline: 3 + 1 = 4).
+		// op count (BH-E1): a usage event is memory-only — ZERO file parses
+		// (baseline GO-B: one pool parse = 3; the amplification fix removes
+		// the per-event disk read entirely).
 		_resetParseGoalFileCountForTests();
 		clk.advance(1500);
 		await host.fire("tool_execution_end", { type: "tool_execution_end", toolCallId: "g1" }, ctx);
-		assert.equal(_parseGoalFileCountForTests(), 3, `parse count in one event: ${_parseGoalFileCountForTests()}`);
+		assert.equal(_parseGoalFileCountForTests(), 0, `usage event parse count: ${_parseGoalFileCountForTests()}`);
+		// the run-boundary flush parses the pool exactly ONCE (3 goals) with no
+		// extra focused-file parse for the persist merge (readCtx reuse)
+		_resetParseGoalFileCountForTests();
+		await host.fire("agent_end", { messages: [] }, ctx);
+		assert.equal(_parseGoalFileCountForTests(), 3, `flush parse count: ${_parseGoalFileCountForTests()}`);
 		const byId = () => readActiveGoalFiles({ cwd }).find((r) => r.id === focused.id)!;
 		assert.equal(byId().usage.activeSeconds, 1);
 
-		// cross-event freshness: external objective edit is observed by the NEXT event
+		// cross-event freshness: external objective edit is observed by the next run boundary
 		const content = fs.readFileSync(focusedAbs, "utf8") as string;
 		fs.writeFileSync(focusedAbs, content.replaceAll("original objective", "externally edited objective")); // JSON field AND body line
 		clk.advance(1200);
 		await host.fire("tool_execution_end", { type: "tool_execution_end", toolCallId: "g2" }, ctx);
+		await host.fire("agent_end", { messages: [] }, ctx);
 		assert.match(byId().objective, /externally edited objective/);
 		assert.equal(byId().usage.activeSeconds, 2);
 	} finally {

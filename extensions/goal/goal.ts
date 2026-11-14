@@ -75,6 +75,7 @@ import {
 	type GoalResultKind,
 	type GoalStateEntry,
 	type GoalStatus,
+	type GoalUsage,
 	type StopReason,
 } from "./goal-record.ts";
 import { createGoalAccounting } from "./goal-accounting.ts";
@@ -358,7 +359,12 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		archiveGoal: (ctx, goal) => archiveGoalFile(ctx as ExtensionContext, goal),
 		writeActiveGoalFile: (ctx, goal) => writeActiveGoalFile(ctx as ExtensionContext, goal),
 		readActiveGoalPool: (ctx) => readActiveGoalPool(ctx as ExtensionContext),
-		appendStateEntry: (goal) => pi.appendEntry(STATE_ENTRY, goalDetails(goal)),
+		appendStateEntry: (goal) => {
+			pi.appendEntry(STATE_ENTRY, goalDetails(goal));
+			// BH-E1: every lifecycle persist funnels through this port — it is
+			// the single place the usage baseline can be refreshed.
+			notePersistedUsage(goal);
+		},
 		beginClock: () => beginAccounting(),
 	});
 
@@ -508,7 +514,11 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		// pool — the env guard stays adapter-side; the pool/focus repair
 		// itself is the lifecycle reconcileFromDisk verb (P2-2 Step 4).
 		if (isSubagentChildProcess()) return true;
-		return lifecycle.reconcileFromDisk(ctx, opts);
+		// BH-E1: usage persists at three points only, so between persists the
+		// IN-MEMORY usage is the live authority (it may hold an un-flushed run
+		// delta). Every disk re-adoption preserves it via the max-merge — a
+		// mid-run tool/command reconcile can no longer clobber the delta.
+		return lifecycle.reconcileFromDisk(ctx, { ...opts, preserveMemoryUsage: true });
 	}
 
 
@@ -556,19 +566,24 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 	 * Accepted residuals, verified 2026-10-03 by transcript forensics: a ~1%
 	 * event-timing gap between turn_end accounting and session-recorded usage
 	 * (74,482 of 6.55M on the pi-1.0 goal), and any consumption after the
-	 * goal archives (auditor runs, post-completion turns). Neither is fixed. */
+	 * goal archives (auditor runs, post-completion turns). Neither is fixed.
+	 *
+	 * BH-E1 (spec 2026-11-14-backtest-hardening): usage events are IN-MEMORY
+	 * ONLY — no pi-goal-state entry, no md rewrite, no disk rescan (the old
+	 * per-event reconcile+persist appended a full snapshot per event; 98.8%
+	 * of persisted entries differed only in usage/updatedAt). Usage reaches
+	 * disk at exactly three points: each agent_end flush (only when the
+	 * in-memory usage differs from the last persisted snapshot),
+	 * session_shutdown, and any real state transition (transitions persist
+	 * immediately and carry the latest usage because applyUsage already
+	 * updated memory). External disk edits are observed at the next
+	 * reconciling event (run boundaries, commands) instead of per usage
+	 * event. */
 	function accountProgress(ctx: ExtensionContext, opts: { completedTurnTokens?: number; completedTurnCost?: number } = {}): void {
 		if (lifecycle.isDrafting) {
 			clearActiveAccounting();
 			return;
 		}
-		// AR1005-GO-03/04: the accounting entry owns the event-read context —
-		// ONE disk snapshot per synchronous event segment, reused by reconcile
-		// AND persist. External edits between events are still observed
-		// (the next event re-reads); the zero-usage early return below comes
-		// AFTER the reconcile so external cancel/delete detection never skips.
-		const readCtx: { goal: GoalRecord | null } = { goal: null };
-		if (lifecycle.focused()?.activePath && !reconcileFocusedGoalFromDisk(ctx, { preserveMemoryUsage: true, captureDiskGoal: readCtx })) return;
 		const settleGoal = lifecycle.focused();
 		if (!settleGoal || settleGoal.status !== "active") {
 			beginAccounting();
@@ -588,10 +603,46 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		const cost = Math.max(0, opts.completedTurnCost ?? 0);
 		if (tokens === 0 && cost === 0 && elapsedSeconds === 0) return;
 
-		// C5 follow-up: the accounting result adoption (clone + delta +
-		// updatedAt stamp) and the persist leg are lifecycle verbs — the
-		// adapter no longer assembles the record or writes the pool.
+		// C5 follow-up: the accounting result adoption is the applyUsage verb
+		// (clone + delta + updatedAt stamp, in-memory only under BH-E1 — the
+		// persist legs are the three flush points).
 		lifecycle.applyUsage({ tokens, cost, seconds: elapsedSeconds });
+		updateUI(ctx);
+	}
+
+	// BH-E1: "usage changed since the last persist" baseline. EVERY lifecycle
+	// persist funnels through the appendStateEntry port, so updating the
+	// baseline there covers transition persists, the agent_end flush,
+	// shutdown, and the display-refresh append alike.
+	let lastPersistedUsageGoalId: string | null = null;
+	let lastPersistedUsage: GoalUsage | null = null;
+
+	function notePersistedUsage(goal: GoalRecord | null): void {
+		if (!goal) {
+			lastPersistedUsageGoalId = null;
+			lastPersistedUsage = null;
+			return;
+		}
+		lastPersistedUsageGoalId = goal.id;
+		lastPersistedUsage = { ...goal.usage };
+	}
+
+	function usageUnpersisted(): boolean {
+		const goal = lifecycle.focused();
+		if (!goal) return false;
+		if (lastPersistedUsageGoalId !== goal.id || !lastPersistedUsage) return true;
+		return goal.usage.tokensUsed !== lastPersistedUsage.tokensUsed
+			|| goal.usage.activeSeconds !== lastPersistedUsage.activeSeconds
+			|| goal.usage.costUsed !== lastPersistedUsage.costUsed;
+	}
+
+	/** BH-E1 agent_end flush: persist only when the in-memory usage differs
+	 * from the last persisted snapshot (usage-only changes are otherwise
+	 * memory-only). The readCtx (when provided) is the ALREADY-PARSED focused
+	 * disk goal from the same segment's reconcile — GO-B: the persist merge
+	 * must not re-parse the focused file. */
+	function persistUsageIfChanged(ctx: ExtensionContext, readCtx?: { goal: GoalRecord | null }): void {
+		if (!usageUnpersisted()) return;
 		persist(ctx, readCtx);
 	}
 
@@ -741,6 +792,9 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			legacyGoal = sanitizeGoalPaths(ctx, mergeGoalPromptFromDisk(ctx, legacyGoal));
 		}
 		lifecycle.restore(ctx, { childSession, focusEntry, legacyGoal });
+		// BH-E1: after a restore the disk record IS the persisted truth — seed
+		// the usage baseline so the first agent_end only flushes real deltas.
+		notePersistedUsage(lifecycle.focused());
 		runningGoalId = null;
 	}
 
@@ -2283,10 +2337,19 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		}
 
 		continuationLoop.clearQueued();
+		// BH-E1: ONE run-boundary disk sync serves the usage flush AND the
+		// continuation gates (replaces the per-usage-event rescan). External
+		// edits and deletions are observed here instead of per event; the
+		// parsed focused disk goal feeds the flush's prompt merge (GO-B).
+		const readCtx: { goal: GoalRecord | null } = { goal: null };
+		const reconciled = reconcileFocusedGoalFromDisk(ctx, { captureDiskGoal: readCtx });
+		// BH-E1: per-run usage flush — at most ONE usage-related entry per run,
+		// and only when the in-memory usage differs from the last persist.
+		persistUsageIfChanged(ctx, readCtx);
 		const endGoal = lifecycle.focused();
 		if (!endGoal || endGoal.status !== "active" || !endGoal.autoContinue) return;
 		if (endedGoalId && endGoal.id !== endedGoalId) return;
-		if (!reconcileFocusedGoalFromDisk(ctx)) return;
+		if (!reconciled) return;
 		if (hasAbortedAssistantMessage(event.messages) || ctx.signal?.aborted) {
 			pauseActiveGoal(ctx);
 			return;
@@ -2294,7 +2357,9 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		// BH-R1: provider-error guard at the continuation decision point — two
 		// consecutive error terminations pause the goal instead of re-queueing.
 		if (maybePauseOnProviderError(ctx, event.messages)) return;
-		persist(ctx);
+		// BH-E1: the trailing per-run persist is gone — the flush above already
+		// carried the run's usage; persisting again here appended a second
+		// entry with identical usage on every run.
 		updateUI(ctx);
 		queueContinuation(ctx);
 	});

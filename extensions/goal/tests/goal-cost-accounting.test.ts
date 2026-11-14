@@ -55,6 +55,8 @@ test("turn_end: assistant usage.cost.total accumulates into costUsed", async () 
 			},
 			f.ctx,
 		);
+		// BH-E1: usage is memory-only per event; the agent_end flush writes it.
+		await f.host.fire("agent_end", { messages: [] }, f.ctx);
 		const updated = await activeGoal(f);
 		assert.equal(updated?.usage.tokensUsed, goal ? goal.usage.tokensUsed + 6100 : 6100);
 		assert.ok(updated && updated.usage.costUsed >= 0.123 - 1e-9 && updated.usage.costUsed <= 0.123 + 1e-9, `costUsed ${updated?.usage.costUsed} ≈ 0.123`);
@@ -80,6 +82,8 @@ test("tool_result: execution usage (subagent-shaped) adds both tokens and cost",
 			},
 			f.ctx,
 		);
+		// BH-E1: usage is memory-only per event; the agent_end flush writes it.
+		await f.host.fire("agent_end", { messages: [] }, f.ctx);
 		const updated = await activeGoal(f);
 		assert.equal(updated?.usage.tokensUsed, 575000);
 		assert.ok(updated && Math.abs(updated.usage.costUsed - 0.023) < 1e-9);
@@ -173,6 +177,8 @@ test("persisted record and bus widget snapshot carry costUsed", async () => {
 			},
 			f.ctx,
 		);
+		// BH-E1: usage is memory-only per event; the agent_end flush writes it.
+		await f.host.fire("agent_end", { messages: [] }, f.ctx);
 		// persisted record (what archives consume)
 		const updated = await activeGoal(f);
 		assert.ok(updated && Math.abs(updated.usage.costUsed - 2.5) < 1e-9);
