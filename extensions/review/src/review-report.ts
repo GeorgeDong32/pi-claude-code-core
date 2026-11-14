@@ -6,10 +6,10 @@
  * share the prepared workspace as their cwd; git history, file lookups, and
  * `gh pr diff` all work without the LLM re-fetching anything.
  */
-import { spawn } from "node:child_process";
-import { runCmd, type RunCmd } from "./run-cmd.js";
-export { setRunCmd, resetRunCmd } from "./run-cmd.js";
 import { createHash } from "node:crypto";
+// R7: the unused `spawn` / `runCmd` / `RunCmd` imports are gone — this file
+// no longer runs commands itself; it keeps the injector re-export only.
+export { setRunCmd, resetRunCmd } from "./run-cmd.js";
 import {
 	existsSync,
 	mkdirSync,
@@ -128,18 +128,11 @@ function safeStat(p: string): { mtimeMs: number } | null {
 		return null;
 	}
 }
-void safeStat;
 
 /** Stable, URL-safe run id (timestamp + 6 random hex chars). */
 export function generateRunId(now = Date.now()): string {
 	const rand = Math.random().toString(16).slice(2, 8).padEnd(6, "0");
 	return `${now.toString(36)}-${rand}`;
-}
-
-export interface GhExec {
-	stdout: string;
-	stderr: string;
-	exitCode: number;
 }
 
 
@@ -216,8 +209,6 @@ export function parsePrRepo(prRef: string): { owner: string; repo: string; numbe
 	return { owner: m[1]!, repo: m[2]!, number: m[3]! };
 }
 
-void PR_REF_REGEX;
-
 /** Read a manifest from disk (paranoia: corrupted files throw). */
 export function readManifest(runDir: string): RunManifest {
 	const path = join(runDir, "manifest.json");
@@ -242,7 +233,3 @@ export function localScratchDir(prefix: string): string {
 	mkdirSync(dir, { recursive: true });
 	return dir;
 }
-
-export const _INTERNAL = {
-	WORKSPACE_TTL_MS,
-};

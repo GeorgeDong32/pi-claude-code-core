@@ -216,7 +216,7 @@ describe("prepareRun — local base fetch ceiling (D-FX-1)", () => {
 	/** Clean-tree git plan whose base fetch fails with the given result.
 	 *  Captures the fetch call's opts so the ceiling/env wiring is pinned. */
 	function cleanTreeWithFailingFetch(
-		fetchResult: { stdout: string; stderr: string; exitCode: number },
+		fetchResult: { stdout: string; stderr: string; exitCode: number; timedOut?: boolean },
 		fetchOptsCapture: FakeCmdOpts[],
 	): FakeCmd {
 		return fakeCmd({

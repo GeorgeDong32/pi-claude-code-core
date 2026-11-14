@@ -62,7 +62,7 @@ export interface ReviewDirectiveInput {
 }
 
 export function buildReviewDirective(input: ReviewDirectiveInput): string {
-	const { target, reviewers, gateModel, gateThinking, threshold, lite, cwd, workspacePath, manifestPath, diffPath, workflowPath } = input;
+	const { target, reviewers, gateModel, gateThinking, threshold, lite, workspacePath, manifestPath, diffPath, workflowPath } = input;
 	const policy = input.verdictPolicy ?? "strict";
 	const gateOn = !lite && input.gateEnabled !== false;
 	const budgets = input.budgets ?? resolveLeanBudgets();
@@ -236,16 +236,9 @@ export function buildReviewDirective(input: ReviewDirectiveInput): string {
 	);
 	blocks.push("");
 
-	// Parse guard (P0 regression): make sure the generated script is valid JS
-	// BEFORE it reaches the main agent. If the template ever regresses (e.g. an
-	// unquoted path), fail here with a clear error instead of at subagent() time.
-	try {
-		new Function(`return (async () => {\n${script}\n})`);
-	} catch (err) {
-		throw new Error(
-			`pi-review: generated workflowScript is not valid JavaScript — refusing to hand it to the main agent. This is a plugin bug; please report it. Underlying error: ${err instanceof Error ? err.message : String(err)}`,
-		);
-	}
+	// R6: the second, duplicate `new Function` parse guard that used to sit
+	// here was deleted — it ran on the SAME already-validated `script` and
+	// could never fail (the first guard above owns the parse check).
 
 	return blocks.join("\n");
 }
@@ -482,7 +475,3 @@ export function buildWorkflowScript(input: {
 export function buildWorkflowReturnShape() {
 	return "{ reviewers, reviewersShaped, gate }";
 }
-
-// `gateModel` reserved for config validation parity with previous surface.
-export const _LEGACY_PARITY = { gateModel: "" };
-void _LEGACY_PARITY;

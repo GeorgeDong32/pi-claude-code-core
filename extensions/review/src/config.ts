@@ -2,7 +2,10 @@
  * Configuration loading, validation, and atomic persistence (v0.7).
  *
  * The user-editable config lives at:
- *   ~/.pi/agent/extensions/pi-review/config.json
+ *   ~/.pi/agent/pi-review.json
+ *
+ * (R5: the path is contract-pinned by P0-CT-09; the header previously
+ * claimed an extensions/ location that never existed.)
  *
  * Pattern mirrors pi-subagents/src/extension/config.ts. We never touch the
  * top-level settings.json — that file is managed by pi itself.
