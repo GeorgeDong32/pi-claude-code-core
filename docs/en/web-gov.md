@@ -22,8 +22,16 @@ The second rule family, and the proof that the family seam is real
   `lib/rule-text.ts` for rule text and reuses `mcp-gov/family.ts`
   (`canonicalizeMcpTool`, `directKnownServersFromEnv`) instead of
   reimplementing MCP-shape detection.
-- Host extraction is strict: URLs without a usable host (query-only or
-  malformed) claim nothing (p4 red→green fix).
+- Host extraction parses URL fields with `new URL()` (BH-S2): the hostname
+  is lowercased with trailing dots stripped. A URL carrying userinfo
+  (`user@host`) is NEVER treated as preapproved — explicit `domain:` rules
+  still match the real host, otherwise it asks. A URL field that is not a
+  parsable absolute URL fails closed to ask (the old prefix regex stopped
+  at `@` and accepted schemeless hosts, so `https://github.com@evil.example/`
+  rode the preapproved github.com entry). A free-text `query` still claims
+  nothing (a search term is not a fetch target). IP literals are hosts:
+  `domain:` rules match them normally, but the preapproved list never
+  matches an IP.
 - Assembled BEFORE mcp-gov in `extensions/index.ts` so domain rules take
   precedence over `mcp_*` prefix rules for URL-carrying calls (P4-WB-01).
 
@@ -39,3 +47,7 @@ The second rule family, and the proof that the family seam is real
 
 `test/lib/p4-families.test.ts` (vitest) — claim mapping, host extraction,
 deny/ask/allow evaluation, preapproved rendering.
+`extensions/web-gov/tests/bh-s2-host.test.ts` (node:test via tsx) — the
+BH-S2 host-parsing contract: userinfo, IP literals, trailing-dot
+normalization, fail-closed unparsable fields, and the marked-id rule
+grammar.
