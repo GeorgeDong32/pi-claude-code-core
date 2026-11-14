@@ -38,6 +38,8 @@ Steps 3+ (verdict allow/ask, the auto ladder, ask dispatch) are unchanged — fo
 
 **Review fixes (2026-11-08)** — additional gates in the same switch: P0-1 an allow rule never matches a command carrying command substitution (`$()`, backticks, `${}`, process substitution …) outside CC's safe-heredoc form (`git commit -m "$(cat <<'EOF'…EOF)"` stays allowable), nor one whose redirection target lands on a sensitive path — such commands fall back to each mode's default ask logic (replay of 11,251 historical bash calls on two machines: 0 new prompts). P1-1 fusion (`then_run`) commands run the same W3/W4/P1-4 checks as the main bash command. P2 deny/ask matching strips CC's five safe wrappers (timeout/time/nice/stdbuf/nohup incl. bare and `-N` forms) and expands `$()`/backtick subcommands (single-level; `(...)`/`{ ...; }` are a known gap).
 
+**Path-rule glob semantics (BH-S1, 2026-11-14)** — in `Read/Edit/Write(path)` rules a single `*` is a within-segment glob (`./.env.*` matches `./.env.local`, not `./a/.env.local`); `**` keeps its cross-segment semantics; all other regex metacharacters are matched literally. The fix activates previously dead single-star rules (e.g. the common `Read(./.env.*)` deny) across deny, ask and allow — and through the W4 bash deny reuse.
+
 ### Claude Code approved-list import (2026-11-02)
 
 `/permissions import-cc [--dry-run]` reads Claude Code's approved lists and writes them into core's three permission scopes through the idempotent loader path:

@@ -38,6 +38,8 @@
 
 **复核修复(2026-11-08)** —— 同开关下的新增门:P0-1——allow 规则不再匹配带命令替换(`$()`、反引号、`${}`、进程替换等)的命令(除 CC 安全 heredoc 形态——`git commit -m "$(cat <<'EOF'…EOF)"` 仍放行),也不再匹配重定向目标命中敏感路径的命令——这些命令落回各模式默认询问逻辑(双机 11251 条历史 bash 回放实测:新增询问 0)。P1-1——融合(`then_run`)命令与主 bash 命令同套 W3/W4/P1-4 检查。P2——deny/ask 匹配剥离 CC 五安全包装器(timeout/time/nice/stdbuf/nohup 含裸 `nice` 与 `-N` 形态)并展开 `$()`/反引号子命令(单层;`(...)`/`{ ...; }` 为已知差距)。
 
+**路径规则 glob 语义(BH-S1,2026-11-14)** —— `Read/Edit/Write(路径)` 规则中,单个 `*` 是段内通配(`./.env.*` 匹配 `./.env.local`,不匹配 `./a/.env.local`);`**` 保持跨段语义;其余正则元字符一律按字面匹配。此修复让此前永远无法命中的单星规则(如常见的 `Read(./.env.*)` deny)在 deny、ask、allow 三类规则及 W4 bash 复用路径上全部生效。
+
 ### Claude Code 批准清单导入(2026-11-02)
 
 `/permissions import-cc [--dry-run]` 读取 Claude Code 的批准清单,经幂等 loader 路径写入 core 的三层权限 scope:

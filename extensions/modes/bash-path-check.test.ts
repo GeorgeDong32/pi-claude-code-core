@@ -123,6 +123,17 @@ describe("checkBashDenyHit (W4, all modes)", () => {
 	it("no deny rules → null", () => {
 		expect(checkBashDenyHit("cat .env", CWD, [])).toBeNull();
 	});
+	it("BH-S1: single-* deny rules match through the bash W4 reuse", () => {
+		// `Read(./.env.*)` resolves via the shared glob matcher — the same
+		// matcher read/edit/write rules use (BH-S1 fix; previously dead).
+		const star = [denyRule("Read(./.env.*)")];
+		expect(checkBashDenyHit("cat ./.env.local", CWD, star)).toMatchObject({ path: "./.env.local" });
+		// single-* stays within its segment — a nested .env.local does NOT hit
+		expect(checkBashDenyHit("cat ./a/.env.local", CWD, star)).toBeNull();
+		// globstar form keeps matching across directories
+		const globstar = [denyRule("Read(./**/.env.*)")];
+		expect(checkBashDenyHit("cat ./a/.env.local", CWD, globstar)).toMatchObject({ path: "./a/.env.local" });
+	});
 });
 
 describe("resolveBashPathChecks (W5 switch)", () => {

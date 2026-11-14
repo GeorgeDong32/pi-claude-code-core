@@ -1,5 +1,13 @@
 /**
  * Read / Edit / Write path permission matching (CC filesystem rules subset).
+ *
+ * Glob semantics (BH-S1, spec 2026-11-14-backtest-hardening): a single `*`
+ * is a WITHIN-segment glob (`[^/]*` — `./.env.*` matches `./.env.local` but
+ * not `./a/.env.local`), `**` keeps its cross-segment `.*` semantics, and
+ * every other regex metacharacter in the literal pattern stays escaped.
+ * deny / ask / allow rules share this matcher (permissions.ts
+ * ruleMatchesToolCall), as does the W4 bash deny reuse (bash-path-check.ts
+ * matchRules) — one conversion, four consumers.
  */
 
 import path from "node:path"
@@ -31,8 +39,11 @@ export function resolveRulePath(pattern: string, cwd: string): string {
 	return path.resolve(cwd, p)
 }
 
+// BH-S1 (spec 2026-11-14-backtest-hardening): `*` must be escaped here too —
+// globToRegex relies on the `\\\*` → `[^/]*` replacement below, which never
+// fired while `*` stayed literal (single-star rules silently never matched).
 function escapeRegex(s: string): string {
-	return s.replace(/[.+?^${}()|[\]\\]/g, "\\$&")
+	return s.replace(/[.+*?^${}()|[\]\\]/g, "\\$&")
 }
 
 /** Convert CC-style path glob to regex (supports * and **). */
@@ -41,6 +52,8 @@ function globToRegex(globPattern: string): RegExp {
 	g = g.replace(/\*\*/g, "\x00GLOBSTAR\x00")
 	g = escapeRegex(g)
 	g = g.replace(/\x00GLOBSTAR\x00/g, ".*")
+	// single `*` → within-segment glob; `**` already replaced above (cross-
+	// segment `.*` semantics unchanged)
 	g = g.replace(/\\\*/g, "[^/]*")
 	return new RegExp(`^${g}$`)
 }
