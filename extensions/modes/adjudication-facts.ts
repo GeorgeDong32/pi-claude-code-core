@@ -112,8 +112,10 @@ export function createAdjudicationFacts(deps: AdjudicationFactsDeps) {
 	// Step 1: bypass / rules / plan / ask adjudicate in the pure module
 	// (adjudicate.ts) and execute through interpret.ts ports; auto still runs
 	// the legacy ladder (embedded scan + tiers + classifier) behind the
-	// legacyAuto decision until Step 2/3. Parity pinned by
-	// test/lib/adjudication-parity.test.ts (golden from the pre-refactor gate).
+	// legacyAuto decision until Step 2/3. Full-gate parity is pinned by
+	// test/lib/adjudication-parity.test.ts (golden from the pre-refactor
+	// gate); the raw fact-collection layer itself is pinned literally by
+	// extensions/modes/adjudication-facts.test.ts (SR-4c).
 	function collectAdjudicationFacts(call: ToolCallRequest): AdjudicationFacts {
 		const ctx = call.ctx as ExtensionContext;
 		const tool = call.tool;

@@ -147,8 +147,9 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
 
   // ---- adjudication facts (SPEC SR W-M) -----------------------------------
   // Step-1 fact collection + the fusion tool-schema scan live in
-  // adjudication-facts.ts; parity with the pre-refactor gate is pinned by
-  // test/lib/adjudication-parity.test.ts.
+  // adjudication-facts.ts; full-gate parity with the pre-refactor gate is
+  // pinned by test/lib/adjudication-parity.test.ts, the raw facts themselves
+  // by extensions/modes/adjudication-facts.test.ts (SR-4c).
   const facts = createAdjudicationFacts({
     getAllTools: () => pi.getAllTools?.() ?? [],
     getMode: () => currentMode,
