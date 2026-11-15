@@ -74,16 +74,22 @@ few read-only git commands.
   unchanged.
 - **Bus reconciliation (R11/D-CH-2)**: `review.status` reconciles at three
   points — `agent_end` (a live run whose turn ended without a report resets
-  to idle; armed only after the running publish + an `agent_start`, so a
-  queued directive is never clobbered), `session_start` (stale running from
-  a previous session), and a new `/review` invocation (residual running
-  with no live run tracked). Only the three existing statuses.
-- **Timeouts (`run-cmd.ts`, T1–T3)**: expiry escalates SIGTERM → SIGKILL
-  after `RUN_CMD_KILL_GRACE_MS` (2s); a dead child whose pipes are held by
-  a grandchild gets a brief drain (`RUN_CMD_PIPE_DRAIN_MS`) then a stdio
-  destroy so the call resolves bounded; a timer firing after the child
-  already exited resolves with the REAL exit code (not a timeout);
-  `timeoutMs <= 0` or non-finite means NO timeout (Node convention).
+  to idle; armed only by the directive message itself — `message_start`
+  with customType `pi-review-directive`, CH-8b — so an unrelated agent run
+  or a queued directive is never clobbered), `session_start` (stale running
+  from a previous session), and a new `/review` invocation (residual
+  running with no live run tracked). Only the three existing statuses.
+- **Timeouts (`run-cmd.ts`, T1–T3, T5/CH-8a)**: expiry escalates
+  SIGTERM → SIGKILL after `RUN_CMD_KILL_GRACE_MS` (2s); a dead child whose
+  pipes are held by a grandchild gets a brief drain
+  (`RUN_CMD_PIPE_DRAIN_MS`) then a stdio destroy so the call resolves
+  bounded; a timer firing after the child already exited resolves with the
+  REAL exit code (not a timeout) — the decision is deferred one check-phase
+  hop (setImmediate) so a child dead before a due timer is classified by
+  its delivered exit, not by a stale `exited` flag (a child exiting after
+  that poll phase but before the check phase is inherently simultaneous
+  with the deadline); `timeoutMs <= 0` or non-finite means NO timeout
+  (Node convention).
   Timed-out results carry the structured `timedOut: true` on `CmdResult`
   (T4/S5) — the stderr note stays for humans.
 - Untracked files over `UNTRACKED_FILE_MAX_BYTES` (1 MB, R3) get a

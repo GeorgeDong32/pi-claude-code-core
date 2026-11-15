@@ -67,16 +67,20 @@
   `not computed (dry run)`。干跑仍会写 run 目录(manifest + diff),由 24h
   清理回收。本地目标行为不变。
 - **总线对账(R11/D-CH-2)**:`review.status` 在三处对账——`agent_end`
-  (live run 的 agent 轮次结束却没落地报告 → 复位 idle;仅在 running 发布
-  且经历过一次 `agent_start` 后才武装,排队中的指令不会被前一轮的
-  agent_end 误复位)、`session_start`(跨 session 残留的 running)、新
-  `/review` 入口(无 live run 跟踪时复位残留 running)。只用现有三个状态。
-- **超时(`run-cmd.ts`,T1–T3)**:超时先 SIGTERM,2s
+  (live run 的 agent 轮次结束却没落地报告 → 复位 idle;仅由指令消息本身
+  武装——`message_start` 且 customType 为 `pi-review-directive`,CH-8b——
+  无关的 agent 轮次或排队中的指令都不会误复位)、`session_start`(跨
+  session 残留的 running)、新 `/review` 入口(无 live run 跟踪时复位残留
+  running)。只用现有三个状态。
+- **超时(`run-cmd.ts`,T1–T3,T5/CH-8a)**:超时先 SIGTERM,2s
   (`RUN_CMD_KILL_GRACE_MS`)后 SIGKILL;子进程已死但管道被孙进程占住时,
   短暂排水(`RUN_CMD_PIPE_DRAIN_MS`)后 destroy stdio,调用有界返回;
-  计时器触发时子进程已退出的,按真实退出码返回(不算超时);
-  `timeoutMs ≤ 0` 或非有限值 = 不设上限(Node 惯例)。超时结果带结构化
-  `timedOut: true` 字段(T4/S5)——stderr 里的说明文字保留给人看。
+  计时器触发时子进程已退出的,按真实退出码返回(不算超时)——判定推迟一
+  个 check-phase 跳(setImmediate),计时器到期前已死的子进程按已送达的
+  退出码分类,而非过期的 `exited` 标志(在该 poll 之后、check 之前才退出
+  的子进程与 deadline 本质上同时,属固有边界);`timeoutMs ≤ 0` 或非有限
+  值 = 不设上限(Node 惯例)。超时结果带结构化 `timedOut: true` 字段
+  (T4/S5)——stderr 里的说明文字保留给人看。
 - 超过 `UNTRACKED_FILE_MAX_BYTES`(1 MB,R3)的 untracked 文件得到只写
   大小的占位 hunk(不读内容),并在 `diffWarning` 里计数;PR HEAD 守卫的
   重取失败分支是硬错误(R2),不再静默放行。

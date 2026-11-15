@@ -22,7 +22,9 @@
  * R11 (D-CH-2, 2026-11-15): the review bus channel reconciles at three
  * points (agent_end for a report-less live run, session_start for stale
  * running, a new /review entry for residual running) so `review.status` can
- * no longer get stuck at "running". See the liveRun closure below.
+ * no longer get stuck at "running". Since CH-8b the live run is armed by
+ * the directive message itself (message_start, customType
+ * "pi-review-directive"), not by any agent_start. See the liveRun closure.
  */
 import { notify as sharedNotify } from "../ui/notify.ts";
 import { existsSync, readFileSync } from "node:fs";
@@ -78,8 +80,10 @@ export default function (pi: ExtensionAPI) {
 	// statuses, no new bus fields:
 	//   1. agent_end — a live run whose agent turn ended WITHOUT a report
 	//      resets to idle. The live run is armed only after the running
-	//      publish AND an agent_start, so a queued directive is never
-	//      clobbered by the PREVIOUS run's agent_end.
+	//      publish AND the directive message itself (message_start with
+	//      customType "pi-review-directive", CH-8b), so neither a queued
+	//      directive nor an unrelated agent run (user prompt, goal
+	//      continuation, retry) clobbers the fresh running status.
 	//   2. session_start — a running status carried across sessions is stale.
 	//   3. a new /review invocation with no live run tracked resets residual
 	//      running before preparing.
@@ -109,9 +113,15 @@ export default function (pi: ExtensionAPI) {
 			console.log(`pi-review: ${degradationNotice()}`);
 		}
 	});
-	pi.on("agent_start", () => {
-		// R11: arm the live run — the directive turn has actually begun.
-		if (liveRun) liveRunArmed = true;
+	pi.on("message_start", (event) => {
+		// CH-8b: arm on the directive message itself — NOT on agent_start.
+		// Any agent run starting after the running publish (user prompt,
+		// goal continuation, retry) used to arm the flag and its agent_end
+		// reset running → idle before the directive was even delivered.
+		// Only the review directive message (role "custom", customType
+		// "pi-review-directive" — the literal sent below) arms the run.
+		const m = event?.message as { role?: string; customType?: string } | undefined;
+		if (liveRun && m?.role === "custom" && m.customType === "pi-review-directive") liveRunArmed = true;
 	});
 	pi.on("agent_end", () => {
 		// R11 ①: an armed live run whose turn ended without the report tool
@@ -194,7 +204,7 @@ export default function (pi: ExtensionAPI) {
 				// P2-BUS-01: review run is live — publish running (done comes
 				// from the pi_review_report tool landing the report). R11:
 				// track the live run for the agent_end reconciliation; it is
-				// armed by the directive turn's agent_start.
+				// armed by the directive message's message_start (CH-8b).
 				coreBus().publish({ review: { status: "running", lastRunAt: null } });
 				liveRun = { runId: prepared.runId };
 				liveRunArmed = false;

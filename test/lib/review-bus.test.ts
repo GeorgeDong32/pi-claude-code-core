@@ -5,9 +5,10 @@
  * aborted, or never landed a report (only `pi_review_report` ever wrote
  * "done"). Three reconcile points, per the spec's state diagram:
  *   1. agent_end — a live run whose agent turn ended WITHOUT a report
- *      resets to idle. Armed only after the running publish AND an
- *      agent_start, so a queued directive is never clobbered by the
- *      PREVIOUS run's agent_end.
+ *      resets to idle. Armed only after the running publish AND the
+ *      directive message itself (message_start, customType
+ *      "pi-review-directive", CH-8b), so neither a queued directive nor an
+ *      unrelated agent run clobbers the running status.
  *   2. session_start — a running status carried across sessions is stale.
  *   3. a new /review invocation with no live run tracked resets residual
  *      running before preparing.
@@ -96,10 +97,36 @@ describe("R11 — review bus reconciliation", () => {
 		await host.fire("session_start", {}, ctx);
 		await startLiveRun(host, ctx);
 
-		// The directive turn starts, then ends without the report tool ever
-		// landing (run failed / aborted / never reported).
+		// The directive message is delivered (message_start), the turn
+		// starts, then ends without the report tool ever landing (run
+		// failed / aborted / never reported).
+		await host.fire("message_start", {
+			message: { role: "custom", customType: "pi-review-directive", content: "x", display: false },
+		}, ctx);
 		await host.fire("agent_start", {}, ctx);
 		await host.fire("agent_end", {}, ctx);
+		expect(reviewStatus()).toBe("idle");
+	});
+
+	it("arming is keyed to the directive message, not any agent_start (CH-8b)", async () => {
+		const host = makeHost();
+		const ctx = host.makeCtx({ cwd: testCwd, ui: true });
+		await host.fire("session_start", {}, ctx);
+		await startLiveRun(host, ctx);
+
+		// An unrelated agent run (user prompt, goal continuation, retry)
+		// starts and ends after the running publish but before the review
+		// directive was even delivered — it must NOT arm the reconciliation.
+		await host.fire("agent_start", {}, ctx);
+		await host.fire("agent_end", { messages: [] }, ctx);
+		expect(reviewStatus()).toBe("running");
+
+		// The directive message itself arms the live run; a report-less
+		// agent_end after it resets to idle.
+		await host.fire("message_start", {
+			message: { role: "custom", customType: "pi-review-directive", content: "x", display: false },
+		}, ctx);
+		await host.fire("agent_end", { messages: [] }, ctx);
 		expect(reviewStatus()).toBe("idle");
 	});
 
@@ -143,8 +170,12 @@ describe("R11 — review bus reconciliation", () => {
 		const ctx = host.makeCtx({ cwd: testCwd, ui: true });
 		await host.fire("session_start", {}, ctx);
 
-		// Run A: live, turn starts and ends without a report → idle.
+		// Run A: live, directive message delivered, turn starts and ends
+		// without a report → idle.
 		await startLiveRun(host, ctx);
+		await host.fire("message_start", {
+			message: { role: "custom", customType: "pi-review-directive", content: "x", display: false },
+		}, ctx);
 		await host.fire("agent_start", {}, ctx);
 		await host.fire("agent_end", {}, ctx);
 		expect(reviewStatus()).toBe("idle");
@@ -156,7 +187,11 @@ describe("R11 — review bus reconciliation", () => {
 		// NOT reset run B's fresh running status (arming discipline).
 		await host.fire("agent_end", {}, ctx);
 		expect(reviewStatus()).toBe("running");
-		// Once run B's turn actually starts, a report-less agent_end resets.
+		// Once run B's directive message is actually delivered, a
+		// report-less agent_end resets.
+		await host.fire("message_start", {
+			message: { role: "custom", customType: "pi-review-directive", content: "x", display: false },
+		}, ctx);
 		await host.fire("agent_start", {}, ctx);
 		await host.fire("agent_end", {}, ctx);
 		expect(reviewStatus()).toBe("idle");
