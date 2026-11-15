@@ -287,3 +287,36 @@ compute-ready (≈4.7 h / ≈8.5 h, overnight or long-idle sessions) — the dra
 is held ready and commits at the next host boundary, per design.
 
 Reproduce: `pnpm exec tsx scripts/compaction-metrics.mjs <jsonl-or-dir>`.
+
+## Real-Machine Acceptance (2026-11-15, SR batch)
+
+Interactive H-SC acceptance executed on a real TUI (pi 1.5.2 driven through
+rex PTY panes, model `CPA/glm/glm-5.3-flash` via the localhost:8317 proxy,
+isolated sandbox HOME + `PI_CODING_AGENT_DIR`, controller snapshot from
+`git archive`). Scenario settings per spec §7.3: `modelOverrides` put T_n at
+120K on the 1M window (reserveTokens 880000, keepRecentTokens 8000); a
+corpus of ~99 KB seeded-random files (~23K tokens each) drove context past
+thresholds; observation-pack was disabled per scenario (it projects large
+reads and keeps context below threshold — acceptance and projection are
+mutually exclusive, an environment note, not a defect).
+
+| Scenario | Outcome | Key evidence |
+|---|---|---|
+| H-SC-1 precompute takeover | PASS | proposal @91,369 (0.75 line), metrics four beats, ST-01 `applied/validated`, zero native spinner events, 91k→45k same-run continuation |
+| H-SC-2 resume after compaction | PASS | `--continue` replays "Session compacted 1 time", answers from summary without re-reading |
+| H-SC-3 ratio-group 0.98/0.99 + fallback leg | PASS | single-turn double read → 120,421; `origin:"native-backfill"`, fallback 18.8 s ≪ 150 s deadline; probe saw `session_before_compact`+`session_compact` |
+| H-SC-4 manual /compact | PASS | native spinner captured; entry `fromHook:false`, no ccCore origin; controller FB-08 audit-only |
+| H-SC-5 `PI_CORE_COMPACTION=off` / `enabled=false` | PASS (both legs) | off: zero trace (earlier batch); disabled-in-config: `mode: shadow (configured on)`, zero telemetry |
+| H-SC-6 summary-model failure chain | PASS with caveat | dead model → `refused/reason:"error"`, cooldown shown, native takeover at 120,707, session survives. Caveat: the CPA proxy routes unknown model ids to a default backend, so a persistently-dead model is not constructible via CPA; direct-endpoint injection stays pending |
+| H-SC-7 rex-flow ledger | Mechanism PASS | trusted-path board association; summary ledger lists run/open tasks/closed tasks (one line each)/gate/sentinels; decoy board absent. A real orchestrator-driven run remains pending evidence |
+| S3 GLM endpoint compliance | PASS (observable criteria) | thinking-off summaries are real body text, not truncated (3,674 and 5,861 chars; 8192-token cap injected for the second). MiniMax / OpenAI-compatible endpoints pending (single provider on this machine) |
+
+Host-side findings recorded by the same batch: AR1005-RU-HOST PASS; AR1005-ST-HOST
+⑪ adjudicated with the premise INVERTED on pi 1.5.2 (message_end fires after
+the SessionManager append — the modes cache marks dirty on multiple events by
+design and never relied on the ordering); XPKG-09-HOST async face (timer-
+registered mid-turn widget lands at map tail under both load orders). Full
+field-level ledger: `~/.cache/pi-core-acceptance/2026-11-15/LEDGER.md` (raw
+jsonl/screens stay outside the repository). Outstanding: H-SC-7's real
+orchestrator run, S3's remaining endpoints, H-SC-6 direct-endpoint fault
+injection; SC-1's three unattributed misses still have no reason codes.

@@ -236,3 +236,32 @@ discarded/refused 事件——该项保持未关闭。一条观察（非缺陷�
 ——draft 保持 ready、在下一个宿主边界提交，属设计内行为。
 
 复现：`pnpm exec tsx scripts/compaction-metrics.mjs <jsonl-or-dir>`。
+
+## 真机交互验收（2026-11-15，SR 批）
+
+H-SC 交互验收在真实 TUI 上执行（pi 1.5.2，经 rex PTY 面板驱动，模型
+`CPA/glm/glm-5.3-flash` 走本机 8317 代理，隔离沙盒 HOME +
+`PI_CODING_AGENT_DIR`，控制器以 `git archive` 快照装载）。场景配置按 spec
+§7.3：`modelOverrides` 把 T_n 设为 1M 窗口上的 120K（reserveTokens 880000、
+keepRecentTokens 8000）；~99 KB 种子随机文件（各约 23K token）做语料推上下文；
+逐场景关闭 observation-pack（大读取会被投影、上下文到不了阈值——验收与投影
+互斥，属环境注记非缺陷）。
+
+| 场景 | 结果 | 关键证据 |
+|---|---|---|
+| H-SC-1 预压接管 | PASS | proposal @91,369（0.75 线）、metrics 四拍、ST-01 `applied/validated`、零原生 spinner 事件、91k→45k 同 run 续聊 |
+| H-SC-2 压缩后 resume | PASS | `--continue` 重放「Session compacted 1 time」，凭摘要续答不重读 |
+| H-SC-3 比例组 0.98/0.99 + 兜底腿 | PASS | 单轮双读推到 120,421；`origin:"native-backfill"`、兜底 18.8 s ≪ 150 s deadline；probe 见 `session_before_compact`+`session_compact` |
+| H-SC-4 手动 /compact | PASS | 原生 spinner 抓屏在案；条目 `fromHook:false`、无 ccCore 来源；控制器仅 FB-08 审计 |
+| H-SC-5 `PI_CORE_COMPACTION=off` / `enabled=false` | PASS（双腿） | off：零痕迹（早前批）；配置关：`mode: shadow (configured on)`、零遥测 |
+| H-SC-6 摘要模型故障链 | PASS 带注记 | 死模型 → `refused/reason:"error"`、冷却展示、120,707 原生接手、会话存活。注记：CPA 代理把未知模型兜底路由到默认后端，持续死模型在 CPA 下不可构造；直连注入待证据 |
+| H-SC-7 rex-flow 台账 | 机制 PASS | 可信路径 board 关联；摘要台账列出 run/开放任务/闭环任务（各一行）/门槛/哨兵；诱饵 board 零出现。真实 orchestrator run 待证据 |
+| S3 GLM 端点合规 | PASS（可观测判据） | thinking-off 摘要为真实正文、未截断（3,674 / 5,861 字符；第二次注入 8192 token 上限）。MiniMax / OpenAI 兼容端点待证据（本机仅一个 provider） |
+
+同批宿主侧发现：AR1005-RU-HOST PASS；AR1005-ST-HOST ⑪ 已裁决且前提在
+pi 1.5.2 上反转（message_end 在 SessionManager append 之后触发——modes 缓存
+按设计在多事件上双标 dirty，从不依赖该先后）；XPKG-09-HOST 异步面（timer 于
+回合中段注册的 widget 双加载序均落 map 尾部）。字段级台账：
+`~/.cache/pi-core-acceptance/2026-11-15/LEDGER.md`（原始 jsonl/截屏不入库）。
+未了项：H-SC-7 真实 orchestrator run、S3 其余端点、H-SC-6 直连故障注入；
+SC-1 的三次未归因遗漏仍无原因码。
