@@ -75,7 +75,6 @@ import { createForwardingResponder } from "./forwarding-responder.ts";
 import { registerOutsideWritesCommands } from "./outside-writes-commands.ts";
 import { TodoItem, ensurePlanFile } from "./plan.ts";
 import { createPlanSession, registerPlanSurfaces } from "./plan-session.ts";
-import { defaultAgentDir, isSubagentChildProcess } from "./permission-forwarding.ts";
 import {
   applyInheritedModeForChild,
   publishInheritedPermissionMode,
