@@ -3,6 +3,14 @@
 // `moduleCache: false`: module state does not survive `/reload`, this does.
 // It holds the 2 s poller, the 250 ms log-limit check, and the current `pi` and
 // context, which each load refreshes.
+//
+// E4 (SPEC SR, 2026-11-15): TaskOutput gained an optional blocking wait.
+// `awaitTaskEnd` polls `refresh` every 250 ms until the task is no longer
+// running; while a waiter holds the task's runtime `waiting` counter above
+// zero, `notifyOnce` withholds the completion message (covering every kill
+// path), and the waiter reports the end itself via `claimCompletion` —
+// everything `notifyOnce` does except the message. A wait aborted before it
+// claims leaves `notified` false, so the next poll tick reports normally.
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -70,6 +78,13 @@ export type Task = {
 	notified: boolean;
 	/** Consecutive polls that failed to read the log for a reason other than it being missing. */
 	readFailures: number;
+	/**
+	 * Blocking TaskOutput waits in flight (E4). While it is above zero,
+	 * `notifyOnce` withholds the completion message — the waiter claims it via
+	 * `claimCompletion`. Treated as 0 when absent: tasks made by an older loaded
+	 * copy of the extension lack the field.
+	 */
+	waiting?: number;
 };
 
 type Registry = {
@@ -553,6 +568,14 @@ function poll(registry: Registry): void {
 
 /** Report the task's end once: the flag is set before the send, and reset when the send throws so a later tick retries. The log is gzipped only after the message really went out (Q21); a gzip failure leaves the plain log and must not resend the message. */
 function notifyOnce(registry: Registry, task: Task): void {
+	// A blocking TaskOutput wait owns the completion while it waits (E4): the
+	// waiter claims via `claimCompletion` when it returns. Withhold the message —
+	// and the claim — so a wait that ends without claiming (aborted, or the task
+	// still running) leaves the report to the next poll tick, which finds
+	// `notified` still false and `hasPending` still true. The guard sits here,
+	// ahead of every caller (the poller, both kill paths), so no kill path can
+	// send a message under a waiter.
+	if ((task.waiting ?? 0) > 0) return;
 	if (task.notified || registry.pi === undefined) return;
 	task.notified = true;
 	try {
@@ -567,6 +590,72 @@ function notifyOnce(registry: Registry, task: Task): void {
 	// Gzip only after the message is out (Q21). A group that is still alive (a
 	// `stuck` group, or a child the command left) may still write to the log, so
 	// leave it plain; the 7-day cleanup handles it.
+	if (!processPort().groupAlive(task.pid))
+		void gzipLog(task).catch((error) => debugError("gzip", error, taskFields(task)));
+}
+
+/** How often a blocking TaskOutput wait checks its task: well under the poller's 2 s, fast enough to feel immediate. */
+const WAIT_POLL_MS = 250;
+
+/** A sleep that rejects the moment `signal` aborts, so a wait never lingers on its timer. */
+function waitSleep(ms: number, signal: AbortSignal): Promise<void> {
+	return new Promise((resolve, reject) => {
+		const onAbort = () => {
+			clearTimeout(timer);
+			reject(new Error("aborted"));
+		};
+		const timer = setTimeout(() => {
+			signal.removeEventListener("abort", onAbort);
+			resolve();
+		}, ms);
+		signal.addEventListener("abort", onAbort, { once: true });
+	});
+}
+
+/**
+ * Block until `task` is no longer running (E4): resolve `true` when it ended —
+ * or the session forgot it (`endSession` cleared the registry entry, so there
+ * is nothing left to report) — `false` when `ms` ran out first, and reject with
+ * `Error("aborted")` when `signal` aborts. Calls `refresh` itself, so a wait
+ * works between poller ticks and settles the marker it finds; it never reports
+ * the task. While the caller holds `task.waiting` above zero, `notifyOnce`
+ * withholds the message, and the caller claims via `claimCompletion`.
+ */
+export async function awaitTaskEnd(task: Task, ms: number, signal: AbortSignal): Promise<boolean> {
+	const registry = getRegistry();
+	const deadline = Date.now() + ms;
+	for (;;) {
+		// A kill in flight settles the state itself (SIGTERM first, the state set
+		// once the group is gone): a refresh here would read the dead pid before
+		// the reason is recorded and call the end `exit-unknown`.
+		if (task.killing === undefined) refresh(registry, task);
+		if (getRegistry().tasks.get(task.id) !== task) return true;
+		if (task.state !== "running") return true;
+		if (signal.aborted) throw new Error("aborted");
+		const left = deadline - Date.now();
+		if (left <= 0) return false;
+		await waitSleep(Math.min(WAIT_POLL_MS, left), signal);
+	}
+}
+
+/**
+ * Report the task's end without the completion message (E4): the agent is
+ * reading the output itself — a `TaskOutput` read of a finished task, blocking
+ * or not. Everything `notifyOnce` does except `sendCompletion`: the `notified`
+ * flag, the status row (BG-ENTRY-03) and the gzip once the process group is
+ * gone. A no-op while the task still runs or was already reported.
+ */
+export function claimCompletion(task: Task): void {
+	if (task.notified) return;
+	const registry = getRegistry();
+	// The read may have caught the marker before a poll tick settled the state:
+	// settle it first, so the row carries the real end state, never "running".
+	// As in `awaitTaskEnd`, a kill in flight records its own reason — leave it.
+	if (task.state === "running" && task.killing === undefined) refresh(registry, task);
+	if (task.state === "running" || registry.pi === undefined) return;
+	task.notified = true;
+	appendStatusEntry(registry.pi, task);
+	// As in `notifyOnce`: a group that is still alive may still write to the log.
 	if (!processPort().groupAlive(task.pid))
 		void gzipLog(task).catch((error) => debugError("gzip", error, taskFields(task)));
 }

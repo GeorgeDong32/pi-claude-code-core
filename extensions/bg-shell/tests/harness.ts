@@ -4,7 +4,8 @@
 // scripted process table behind the process port) and `fakeClock()` (mock
 // timers); the logs stay real files. Contract tests use the real port on real
 // time and never touch the clock. A test file uses one tier: fake time and real
-// processes never meet.
+// processes never meet. SR (2026-11-15): added `fire` so tests can emit events
+// (the `input` handler behind TaskOutput's blocking wait included).
 import { appendFileSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -197,6 +198,10 @@ export function session(options: { id?: string; hasUI?: boolean; branch?: unknow
 		/** Emit `session_start` and wait for the handlers, as Pi does. */
 		sessionStart: async () => {
 			for (const handler of handlers.session_start ?? []) await handler({ type: "session_start" }, ctx);
+		},
+		/** Fire a registered event's handlers the way Pi does (e.g. `input`), with this session's context. */
+		fire: async (name: string, event: unknown) => {
+			for (const handler of handlers[name] ?? []) await handler(event, ctx);
 		},
 		/** Run a slash command the way Pi does, with this session's context. */
 		command: async (name: string, args = "") => commands[name].handler(args, ctx),

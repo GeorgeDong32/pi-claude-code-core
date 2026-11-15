@@ -9,6 +9,16 @@
 // deadline. Upstream 0.5.0+ instead removed auto-promotion entirely (opposite
 // direction); do not port that.
 //
+// E4 (SPEC SR, 2026-11-15): TaskOutput gained optional `block`/`timeout`
+// parameters (seconds, default 30, cap 600 — over the cap throws, never
+// clamps). A blocking call waits via `awaitTaskEnd` and claims the completion
+// via `claimCompletion`, so no followUp message follows; a plain read of a
+// finished task also claims through `claimCompletion`, which — unlike the old
+// inline flag in `readOutput` — appends the status row and gzips the log
+// (BG-ENTRY-03). A user message typed while waiting (steer or follow-up) ends
+// the wait early with the output so far, no error (pi-subagents bg_wait
+// parity).
+//
 // A background call starts the command detached, logs it under the session's
 // log directory, and returns a task id at once. When the command exits the
 // agent gets one completion message, which starts a turn if the agent is idle.
@@ -27,7 +37,11 @@ import { GRACE_MS } from "./kill.ts";
 import { cleanupOldLogs } from "./logs.ts";
 import { stateText, taskLine } from "./notify.ts";
 import { readOutput } from "./output.ts";
-import { attach, endSession, getRegistry, killTask, seedNextIdFromBranch, setContext, startTask } from "./registry.ts";
+import { attach, awaitTaskEnd, claimCompletion, endSession, getRegistry, killTask, seedNextIdFromBranch, setContext, startTask } from "./registry.ts";
+
+/** TaskOutput's blocking wait: default budget and hard cap, in seconds (E4). */
+const BLOCK_DEFAULT_SECONDS = 30;
+const BLOCK_MAX_SECONDS = 600;
 
 const BACKGROUND_DESCRIPTION =
 	"Set `background: true` for a command you expect to outlast a minute or two, such as a long build, a deploy or a server, " +
@@ -41,6 +55,14 @@ const BACKGROUND_DESCRIPTION =
 
 export default function (pi: ExtensionAPI): void {
 	attach(pi);
+	// E4: a message typed while the agent waits (steer or follow-up) ends open
+	// TaskOutput waits so it reaches the model (pi-subagents bg_wait parity).
+	// Extension-sourced input is the agent's own doing and must not interrupt.
+	const userInputWaits = new Set<AbortController>();
+	pi.on("input", (event) => {
+		if (event.source === "extension" || !event.streamingBehavior) return;
+		for (const controller of userInputWaits) controller.abort();
+	});
 	// The user can move the running foreground command to the background at once.
 	pi.registerShortcut("ctrl+shift+b", {
 		description: "Move the running foreground command to the background",
@@ -109,16 +131,77 @@ export default function (pi: ExtensionAPI): void {
 			"Read the output of a background bash task from where you last stopped, capped like `bash`. " +
 			"Each call returns only output you have not read yet and says how much remains. " +
 			"`latest: true` skips to the newest unread output. `filter` is a regex that keeps only matching lines. " +
-			"The result also says whether the task is running or has exited.",
+			"The result also says whether the task is running or has exited. " +
+			"With `block: true` the call waits for the task to end before returning, up to `timeout` seconds " +
+			"(default 30, maximum 600); a user message ends the wait early and returns the output so far.",
 		parameters: Type.Object({
 			id: Type.String({ description: "The task id returned by a background bash call" }),
 			latest: Type.Optional(Type.Boolean({ description: "Skip to the end of the log and return the newest output" })),
 			filter: Type.Optional(Type.String({ description: "Regex; return only the matching lines of the output read" })),
+			block: Type.Optional(
+				Type.Boolean({
+					description:
+						"Wait for the task to end before returning (default false: return the unread output at once)",
+				}),
+			),
+			timeout: Type.Optional(
+				Type.Number({ description: "Seconds (not ms) to wait when `block: true`; default 30, maximum 600" }),
+			),
 		}),
-		async execute(_toolCallId, params) {
+		async execute(_toolCallId, params, signal) {
 			const task = getRegistry().tasks.get(params.id);
 			if (task === undefined) throw new Error(`Unknown task id: ${params.id}. TaskList lists this session's tasks.`);
-			return { content: [{ type: "text", text: readOutput(task, params) }], details: undefined };
+			if (params.timeout !== undefined && params.timeout > BLOCK_MAX_SECONDS)
+				throw new Error("timeout is in seconds (not ms); maximum is 600");
+			if (params.timeout !== undefined && !params.block) throw new Error("timeout applies only with block: true");
+			if (!params.block) {
+				// A plain read claims a finished task's completion itself (CC
+				// markTaskNotified parity): the result carries the output and the exit
+				// state, so no completion message follows — but the status row and the
+				// gzip still happen (BG-ENTRY-03; E4 moved the claim out of
+				// `readOutput` into `claimCompletion`). A no-op while still running.
+				const out = readOutput(task, params);
+				claimCompletion(task);
+				return { content: [{ type: "text", text: out }], details: undefined };
+			}
+			const seconds = params.timeout ?? BLOCK_DEFAULT_SECONDS;
+			// While this waiter holds the task, no kill path can send the completion
+			// message (the `waiting` guard in `notifyOnce`): the waiter claims it.
+			task.waiting = (task.waiting ?? 0) + 1;
+			// A user message ends the wait early (bg_wait parity): it aborts the
+			// wait, not the tool call — the read after it is a normal one.
+			const userInput = new AbortController();
+			userInputWaits.add(userInput);
+			const wait = new AbortController();
+			const abortWait = () => wait.abort();
+			// Pi always passes a tool signal; a caller that omits it simply never
+			// aborts the wait.
+			signal?.addEventListener("abort", abortWait);
+			userInput.signal.addEventListener("abort", abortWait);
+			let ended = false;
+			// The wait rejects on abort — the tool's own signal (the call is being
+			// cancelled: rethrow without reading) or the user's message (return the
+			// output so far). The `waiting` release and listener cleanup run either way.
+			let waitError: unknown;
+			try {
+				ended = await awaitTaskEnd(task, seconds * 1000, wait.signal);
+			} catch (error) {
+				waitError = error;
+			} finally {
+				task.waiting = Math.max(0, (task.waiting ?? 1) - 1);
+				userInputWaits.delete(userInput);
+				signal?.removeEventListener("abort", abortWait);
+				userInput.signal.removeEventListener("abort", abortWait);
+			}
+			if (signal?.aborted) throw waitError ?? new Error("aborted");
+			// Read first, claim second: both synchronous, so no poller tick can slip
+			// a message in between, and the gzip inside the claim cannot replace the
+			// plain log under a read still in flight.
+			const out = readOutput(task, params);
+			claimCompletion(task);
+			if (!ended && !userInput.signal.aborted)
+				return { content: [{ type: "text", text: `${out}\n[still running after ${seconds} s]` }], details: undefined };
+			return { content: [{ type: "text", text: out }], details: undefined };
 		},
 	});
 	pi.registerTool({

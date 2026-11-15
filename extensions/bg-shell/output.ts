@@ -4,6 +4,11 @@
 // which cuts it out wherever it sits), and moves the position only past what it
 // returned. A running task's half-written last line is withheld until
 // its newline arrives.
+//
+// E4 (SPEC SR, 2026-11-15): the reader no longer claims the completion itself
+// (`notified = true` on a terminal read). The claim — the status row and the
+// gzip included, per BG-ENTRY-03 — moved to `claimCompletion` in `registry.ts`,
+// called by TaskOutput's execute after the read; see that function.
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncateTail } from "@earendil-works/pi-coding-agent";
 
 import { openView, type View } from "./logview.ts";
@@ -51,9 +56,9 @@ export function readOutput(task: Task, options: OutputOptions): string {
 	// through TaskOutput and it is already over — the marker is in the log, or
 	// the registry has settled a non-running state — the tool result itself
 	// carries the output and the exit state, so the poller's completion message
-	// would be redundant (and, being a followUp, would queue behind the very
-	// turn that did the reading). Claim the notification before the poller can
-	// send it; a task the poller settled first stays notified as before.
+	// would be redundant. The reader only detects terminality for its paging;
+	// the claim itself (message suppression + status row + gzip) is the caller's
+	// job since E4, via `claimCompletion` in `registry.ts`.
 	const terminal = view.marker !== undefined || task.state !== "running";
 	try {
 		const end = view.size;
@@ -67,7 +72,6 @@ export function readOutput(task: Task, options: OutputOptions): string {
 	} finally {
 		view.close();
 	}
-	if (terminal) task.notified = true;
 	const filtered = applyFilter(body, filter);
 	const parts = [`Task ${task.id}: ${stateText(task, code)}.`];
 	parts.push(filtered.text === "" ? (filtered.note ? "(no lines matched)" : "(no new output)") : filtered.text);
