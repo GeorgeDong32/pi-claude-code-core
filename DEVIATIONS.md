@@ -382,8 +382,9 @@ SC-2. **lost(overridden) 后快照存活（以 BLK-2(a) 执行规范为准）**
 SC-3. **真机验收的已验/待证据拆分（H-SC 未全过即不称完成）**
    - 已验（真实 pi 1.5.0 --print 沙盒 + 本地扩展仓）：扩展整套加载无错、控制器真实运行（ST-01 遥测落盘真实 jsonl）、POL-09/切点/准备管道在真实投影上执行并正确 refused、`PI_CORE_COMPACTION=off` 零新增痕迹（H-SC-5 前半）。
    - **第二台机器语料已补（2026-11-10）**：用户授权 Air 只读取得 367 个 JSONL，391 052 581 bytes，12 个可推导阈值文件、29 次回放事件；已做单机及去重合并回放。1 个活跃文件仍增长，快照少于最终远端 3 141 bytes，未宣称原子一致；0 坏 JSONL 行。原文仅存本机私有临时目录，不入库。
-   - 待证据：H-SC-1（TUI 摘要行/无 spinner 与完整多轮交互提交）、H-SC-2（/resume）、H-SC-3（交互式触发原生阈值+供稿腿真机）、H-SC-4（/compact 手动）、H-SC-6（摘要模型故障链）、H-SC-7（真实 rex-flow run）、S3 端点合规（CPA/GLM/MiniMax/OpenAI 兼容端点各一次受控摘要）。
-   - 恢复条件：PTY（tmux/rex）驱动 TUI + §7.3 的 modelOverrides 配置（T_n≈120K、keep≈8K）即可逐项执行；H-SC-7 需一次真实 rex-flow run 的会话。
+   - **2026-11-15 SR 批真机验收（rex 驱动真实 TUI + `CPA/glm/glm-5.3-flash`，沙盒证据 `~/.cache/pi-core-acceptance/2026-11-15/LEDGER.md`，不入库）**：H-SC-1（接管全链路：proposal@91,369/applied、metrics 四拍、无原生 spinner、TUI 摘要行、91k→45k 同 run 继续）、H-SC-2（resume 重放+摘要支撑续聊）、H-SC-3（0.98/0.99 比例组原生阈值触发+兜底腿 `native-backfill` 18.8s ≪ 150s）、H-SC-4（手动 /compact 原生 spinner、条目无 ccCore）、H-SC-5 后半（enabled=false→shadow 被动零遥测）、H-SC-6（死模型→refused/reason:"error"+冷却+原生接手+会话不崩；注记见 SR-9）、S3-GLM（thinking-off 两次真实摘要均为正文且未截断，含 8192 cap 注入）→ **全部已验**。原始证据不入库（SC-3 先例）。
+   - 待证据（收窄后）：H-SC-7 的「真实 rex-flow orchestrator run」半边（机制半边已验：boardPath 关联、开放/闭环/门槛行、诱饵 board 零出现）；S3 的 MiniMax 与 OpenAI 兼容端点（本机仅 CPA 一个 provider）；H-SC-6 的直连端点持续故障注入（CPA 代理对未知模型兜底路由，见 SR-9）。
+   - 恢复条件：H-SC-7 需一次真实 rex-flow run 的会话；S3 其余端点需在 models.json 配置对应 provider；H-SC-6 直连注入需非 CPA 端点。
 
 SC-6. **M1 运行期插桩独立于冻结 ST-01（用户授权，2026-11-10）**
    - 内容：新增 display-only `cc-core-compaction-metrics` v1（SC-MET-01 已登记），仅 on 模式写时间/token/随机关联 id/阶段等元数据，不含正文；不扩展或重命名原有 ST-01 字段，不新增设置或环境变量。off/shadow 无插桩写入，原压缩参数不变。
@@ -509,3 +510,29 @@ CH-8. **W-R 备注（P3×6，不修记档）**：run-cmd 边界竞态微窗口�
 CH-9. **D2 上游提案**：`UPSTREAM-2026-11-15-pi-same-model-thinking-reset.md`（仓库根，英文）——FX-2 残余（重选当前模型时宿主重置 thinking 但 `modelsAreEqual` 早退不发 model_select）的证据对照安装版 pi 1.5.2 重新核实，提案两方案（同模型跳过重置 / 相等也发事件）。**仅入库，未对外提交**。
 
 CH-10. **AGENTS 磁盘表修正（R5 出模块项）**：`AGENTS.md`/`AGENTS.zh.md` 的 review 行原把 `pi-review.json` 列在 `<cwd>/.pi/pi-review/` 下；实际 config 在 `~/.pi/agent/pi-review.json`（P0-CT-09 冻结），runs 在 `<cwd>/.pi/pi-review/runs/<runId>/`。本次拆行更正。
+
+## 拆分与真机验收批（SPEC SR 2026-11-15-spec-sr.md，2026-11-15）
+
+来源：用户批准的 SPEC SR——E4+E13 代码批（W-B/W-G/W-M 三路 worktree）+ 真机验收批（rex 驱动 TUI）。代码批本地提交不合不发（D-SR-5）；0.6.0 安装为用户单独授权的一次性动作。
+
+SR-1. **E4 TaskOutput 参数扩展（W-B）**：`block`（默认 true 保持原语义）与 `timeout`（秒，默认 30，上限 600，>600 拒绝不截断；无 `block:true` 时传 `timeout` 拒绝）。等待被用户插话打断时返回当前可得的 `output/completed` 快照（与 bg-shell bg_wait 同款语义）；任务已完成的普通读取继续走 claim-on-read。schema 描述同步。审查 P3×2 记档不修：`refresh()` 在 awaitTaskEnd/claimCompletion 的 await 间隙未守卫（窄窗重取幂等）；`timeout ≤ 0/非有限` 未前置校验（落到 600 上限比较被拒，行为安全）。
+
+SR-2. **Goal.ts 拆分（W-M）**：2378 行 → 1022 行 + 6 个新文件（goal-entries/turn-usage/summary/settings/commands/tools）。特征测试先行（红于 base）后拆分，行为等价由 pin 测试背书。
+
+SR-3. **modes/index.ts 拆分 + PlanSession（W-G）**：1975 行 → 969 行 + 5 个新文件（plan-session.ts 511 / adjudication-facts 256 / approval-flow 385 / forwarding-responder 147 / outside-writes-commands 162）+ plan-flow.test.ts 558。**CORE-17（计划模式会话状态）随 PlanSession 落地关闭**。顺带删除 modes 内死代码（不可达 registerCommand 包装，行为中性）。实现口径：全仓 `registerCommand` 调用为 15 处（早前口误 16）；模式 split 的顺序/快照微差异经审查裁定不可观测。
+
+SR-4. **三路审查结论**：W-B PASS（P3×2 → SR-1 记档）；W-G PASS（2 处措辞 nit 已在分支上修复合入；实现偏差 a/b/c 接受）；W-M APPROVE（孤儿 import 已修；记档项：`PlanSession.startExecution` 接口成员暂无调用方（为后续执行流预留，如确认不用应删）、`isAssistant`/`getText` 与既有 helpers 重复、plan-flow pin 测试钉的是 gate 结果而非原始 facts）。
+
+SR-5. **0.6.0 安装（用户一次性授权）**：`scripts/sync-deploy-copies.sh 4ce33f8` 同步桌面机与 Air 的部署克隆；`pi --version` 双机 0.6.0 验证。此后任何 push/release 仍需用户授权。
+
+SR-6. **真机验收（H-SC 全景）**：rex 驱动真实 TUI + `CPA/glm/glm-5.3-flash`（本机 8317 代理）。沙盒 HOME + 独立 `PI_CODING_AGENT_DIR`，core 以 `git archive` 快照装载。结果：H-SC-1/2/3/4/5b/6 全 PASS（H-SC-6 带注记，见 SR-9）、H-SC-7 机制 PASS（真实 orchestrator run 半边待证据）、S3-GLM PASS（可观测判据：正文且未截断；MiniMax/OpenAI 直连待证据）。RU-HOST/XPKG-09-HOST PASS、ST-HOST ⑪ 已裁决（SR-7）。字段级结论与四拍 metrics 记录于 `~/.cache/pi-core-acceptance/2026-11-15/LEDGER.md`（含沙盒台账与抽查记录）；原始 jsonl/截屏 45MB 留存该目录，不入库（SC-3 先例）。DEVIATIONS SC-3 条目已同步收窄待证据清单。
+
+SR-7. **AR1005-ST-HOST ⑪ 裁决——前提在 pi 1.5.2 上反转**：11/11 个 message_end 时刻 `getLeafId()` 已含该消息且 `getBranch()` 已 +1——message_end 触发时 append 已发生（与契约注释"message_end 先于 append"的假设相反）。modes 的 dirty 缓存按设计在多事件上双标，不依赖该先后，无正确性影响；契约 README 与测试注释补证据注记（本批不改断言）。AR1005-RU-HOST PASS（同消息双 read 共享同一 turn_start，下一消息新生命周期）。
+
+SR-8. **XPKG-09-HOST 异步面证据（双加载序）**：core-first 与 tui-first 两序中，timer 于回合中段注册的 aboveEditor widget 均按注册序落 map 尾部（渲染在 session_start widget 之下）——todo 注释同步证据（todo 本体保留：场景无法自动化）。
+
+SR-9. **H-SC-6 前提注记（CPA 代理）**：CPA 代理把未知模型 id 兜底路由到默认后端，"持续死模型"在 CPA 下不可构造：cycle-1 预压 `refused/reason:"error"`（入 cooldown 13 turns）符合预期，但阈值处原生兜底反而产出真摘要（22.1s）。四项验收判据（refused+原因码、冷却、原生接手不崩、status 展示）全部命中；直连端点的持续故障注入记待证据。
+
+SR-10. **沙盒操作面观察（只记录，非缺陷）**：① `core-economy.json` 刻意走 `homedir()/.pi/agent` 不认 `PI_CODING_AGENT_DIR`——沙盒若只设环境变量会静默落回宿主配置（曾致两次重启排查）；② observation-pack 默认开启时大读取被投影，上下文无法自然达到压缩阈值——验收场景须关 observationPack（两模块设计目标不同，生产无碍）；③ 沙盒 startup 噪声：core 的 shift+tab 与宿主内置快捷键冲突警告、TUI claude-code 主题回退（均与本批 modes/compaction 改动无关）。
+
+SR-11. **纯接管路径的 probe 观察**：原生兜底路径 probe 见 `session_before_compact`+`session_compact`；纯 precompute 接管路径两者未出现。FB-04 seam 通道按设计只在非原生路径工作，goal 续跑疑点已由 SC-7 契约证伪——列观察不列缺陷，后续批次可查。

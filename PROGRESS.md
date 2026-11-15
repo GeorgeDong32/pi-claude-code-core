@@ -2,6 +2,16 @@
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 
+## 2026-11-15 拆分与真机验收批（SPEC SR，E4+E13 代码批 + H-SC 真机验收）
+
+- **来源**：用户圈定（候选清单 AskUser）——E4（TaskOutput 阻塞等待）+ E13（goal.ts / modes/index.ts 拆分，含 CORE-17 PlanSession）代码批 + 真机验收批（rex 驱动真实 TUI）+ 0.6.0 双机安装（用户一次性授权）。spec `~/.factory/specs/2026-11-15-spec-sr.md`（repo 副本 `spec/2026-11-15-split-real-machine.md`），决策 D-SR-1…5。
+- **代码批**：3 worker 各自 worktree @ spec commit `443fb33`——W-B（E4：`block`/`timeout` 秒参数、上限 600、插话打断返回快照、schema 同步）、W-G（modes/index 1975→969 + PlanSession 511 行关 CORE-17 + 死代码清理 + plan-flow 特征测试 558 行）、W-M（goal.ts 2378→1022 + 六文件拆分，特征测试先行红于 base）。逐分支独立只读审查：W-B PASS（P3×2 记档）、W-G PASS（措辞 nit 已修、偏差 a/b/c 接受）、W-M APPROVE（孤儿 import 已修、3 项记档）。按 W-B→W-G→W-M 变基 ff 合入（`e85c71b`…`be013d8`），线性历史。
+- **门禁（main be013d8）**：check exit 0；vitest 90 文件 1260/1260（+11 plan-flow）+ node:test 1130（goal 269+7 pin、bg-shell 298+15、其余不变）；contracts 108+4todo；金丝雀 5/5。只增不减。
+- **安装**：`scripts/sync-deploy-copies.sh 4ce33f8` 双机 0.6.0（用户授权一次性动作）。
+- **真机验收（H-SC 全景，rex + `CPA/glm/glm-5.3-flash` @8317，沙盒 HOME）**：H-SC-1 接管全链路（proposal@91,369/applied、metrics 四拍、无原生 spinner、91k→45k 续聊）✓；H-SC-2 resume 重放+摘要续聊 ✓；H-SC-3 比例组 0.98/0.99 原生触发+兜底腿 `native-backfill`（18.8s ≪ 150s）✓；H-SC-4 手动 /compact（原生 spinner 在案、条目无 ccCore）✓；H-SC-5b enabled=false→shadow 零遥测 ✓；H-SC-6 死模型链（refused/reason:"error"+冷却+原生接手不崩）✓ 带 CPA 兜底注记；H-SC-7 rex-flow 台账机制 ✓（boardPath、开放/闭环/门槛行、诱饵零出现；真实 orchestrator run 待证据）；S3-GLM ✓（两次真实摘要均正文未截断，含 8192 cap 注入；MiniMax/OpenAI 直连待证据）。RU-HOST ✓、ST-HOST ⑪ 已裁决（前提在 pi 1.5.2 反转：message_end 在 append 后触发，防御性设计不受影响）、XPKG-09-HOST 异步面 ✓（双加载序）。
+- **台账**：CHANGELOG Unreleased；DEVIATIONS「拆分与真机验收批（SPEC SR）」SR-1…11 + SC-3 条目收窄（已验/待证据拆分更新）；docs/{en,zh}/compaction.md 真机节；契约 README/测试注释补宿主证据（RU/ST/XPKG，todo 保留）。沙盒证据 `~/.cache/pi-core-acceptance/2026-11-15/LEDGER.md`（字段级数字+抽查记录），原始 45MB 不入库。
+- **遗留（下一轮候选）**：H-SC-7 真实 orchestrator run 半边、S3 MiniMax/OpenAI 直连端点、H-SC-6 直连持续故障注入、FX-2 上游提案对外提交（未授权）、SC-1 三次未归因遗漏（0.6.0 已装，长期遥测可查）；push/发版仍待用户授权（D-SR-5）。
+
 ## 2026-11-15 清理加固批（SPEC CH，22 项，3 路并行派工 + 独立审查合入）
 
 - **来源**：review/ 深审遗留 R2–R12 + 双轴审查 Standards 六异味 S1–S6 + run-cmd 超时边角 T1–T4（FX-1 审查 N3–N6）+ D1 memory inFlight 钉测 + D2 FX-2 上游提案草稿 + BH spec 非目标 P3 小项 E1–E12（E4 阻塞 task-wait、E13 大文件拆分不做；R9 只记录）。spec `spec/2026-11-15-cleanup-hardening.md`，用户决策 D-CH-1…5。

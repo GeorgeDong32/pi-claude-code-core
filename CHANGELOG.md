@@ -1,3 +1,14 @@
+## Unreleased — 拆分与真机验收批（SR）
+
+### Added
+
+- **bg-shell TaskOutput `block`/`timeout` 参数（E4）**：可阻塞等待运行中的后台任务最多 `timeout` 秒（默认 30，上限 600，超限拒绝；不带 `block:true` 传 `timeout` 拒绝），返回当前已积累的输出与完成状态；等待被用户插话打断时立即返回快照。不传参数时行为不变（已完成任务读取即认领）。
+- **modes 计划模式会话状态（E13，CORE-17）**：计划模式的「计划→批准→执行」跨回合会话状态落地为 `PlanSession`，裁决事实、批准流、转发应答与计划外写入指令分流拆出独立模块。
+
+### Changed
+
+- 内部拆分（行为不变）：`extensions/goal/goal.ts` 2378→1022 行（entries/turn-usage/summary/settings/commands/tools 六面），`extensions/modes/index.ts` 1975→969 行（plan-session/adjudication-facts/approval-flow/forwarding-responder/outside-writes-commands 五面 + plan-flow 特征测试）。真机验收（rex 驱动 TUI + GLM-5.3-flash，H-SC-1~7/S3）全部通过，细节见 DEVIATIONS.md SR 节与 `~/.cache/pi-core-acceptance/`（证据不入库）。
+
 ## 0.6.0 (2026-11-15) — 清理加固批（CH）
 
 ### Changed
