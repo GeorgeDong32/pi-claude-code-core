@@ -16,21 +16,14 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { MODE_META, modeMetaData } from "./ui/meta.ts";
 import { clearModesStatus, installModesFooter, shortenPath } from "./ui/footer.ts";
-import { confirmChoice } from "./ui/confirm.ts";
 import { notify as uiNotify } from "../ui/notify.ts";
 // B1 truncation notices ride the same shared entry (alias for clarity at the call site).
 const sharedNotify = uiNotify;
 import { createFallbackAdapter } from "../ui/fallback.ts";
 import { coreBus, type CoreSnapshot } from "../bus.ts"
-import { isMemoryWritePath } from "../memory/paths.ts"
-import { clearSessionGrants, clearSessionState, grantSession, hasSessionGrant, listSessionGrants, matchFamily, noteAdjudicated, familyRuleMentions, setBypassIndicator } from "./rule-families.ts"
+import { clearSessionGrants, clearSessionState, listSessionGrants, setBypassIndicator } from "./rule-families.ts"
 import { getSharedEffortOwner, type OwnerEffortLevel } from "../../lib/effort-owner.ts";
-// B1: shared MCP-shape core — the authority (mcp-gov/family.ts
-// #canonicalizeMcpTool) and this plan gate consume the same lib predicate,
-// so the gate can never again drift from the family on MCP shapes.
-import { isMcpShapedCall, knownServersSetFromEnv } from "../../lib/mcp-shape.ts";
 import { registerCompactionSubscriber } from "../../lib/compaction-seam.ts";
-import { readFileSync } from "node:fs"
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -62,54 +55,31 @@ import {
   readSessionId,
 } from "./session-branch.ts";
 import {
-  declaredCommandFields,
-  extractEmbeddedCommandInputs,
-} from "./fusion-tools.ts";
-import {
   accumulateBranchStats,
   emptyBranchStatsState,
 } from "./branch-stats.ts";
-import {
-  addPermissionRule,
-  loadMergedPermissionRules,
-  warnIfLocalPermissionsNotGitignored,
-} from "./permissions-loader.ts";
+import { loadMergedPermissionRules } from "./permissions-loader.ts";
 import { planCcImport, executeCcImport, formatCcImportReport } from "./cc-import.ts";
 import {
-  evaluateToolPermission,
   formatMergedRulesForDisplay,
-  suggestAllowRuleForToolCall,
   type PermissionRule,
   type PermissionVerdict,
 } from "./permissions.ts";
-import { classifyBashTiers, isSafeCommand } from "./bash-analysis.ts";
-import { matchAutoRules } from "./auto-rule-match.ts";
 import { PermissionMode, PlanPhase, filterSkillsFromPrompt, injectModePrompt, resolveModePrompt } from "./mode-prompt.ts";
-import { planHardBlock } from "./plan-gate.ts";
 import {
 	createPermissionAdjudicator,
-	type AdjudicationFacts,
 	type ToolCallRequest,
 } from "./adjudicate.ts";
 import { interpretDecision } from "./interpret.ts";
-import { OutsideWriteSnapshot, listTrackedOutsideWrites, popTrackedOutsideWrite, restoreOutsideWrite, trackOutsideWrite } from "./outside-writes.ts";
-import { commandReferencesSensitivePath, findProjectRoot, isCcSafetyPath, isOutsideCwd, isSensitivePath } from "./path-safety.ts";
-import { checkBashDenyScan, checkBashProtectedWrite, checkBashWriteTargets, resolveBashPathChecks, type BashProtectedWrite } from "./bash-path-check.ts";
+import { trackOutsideWrite } from "./outside-writes.ts";
+import { findProjectRoot } from "./path-safety.ts";
 import { pathToolMatchesRuleContent } from "./path-permission-match.ts";
-import { TodoItem, ensurePlanFile, isPlanFilePath, getPlanFilePath, resolveWorkspacePath } from "./plan.ts";
+import { createAdjudicationFacts } from "./adjudication-facts.ts";
+import { createApprovalFlow, type Block } from "./approval-flow.ts";
+import { createForwardingResponder } from "./forwarding-responder.ts";
+import { registerOutsideWritesCommands } from "./outside-writes-commands.ts";import { TodoItem, ensurePlanFile, resolveWorkspacePath } from "./plan.ts";
 import { createPlanSession, registerPlanSurfaces } from "./plan-session.ts";
-import {
-  createForwardingPoller,
-  defaultAgentDir,
-  isSubagentChildProcess,
-  pollForwardedResponse,
-  resolveParentSessionId,
-  writeForwardedRequest,
-  writeForwardedResponse,
-  type ForwardedDecision,
-  type ForwardedPermissionRequest,
-  type ForwardingPoller,
-} from "./permission-forwarding.ts";
+import { defaultAgentDir, isSubagentChildProcess } from "./permission-forwarding.ts";
 import {
   applyInheritedModeForChild,
   publishInheritedPermissionMode,
@@ -123,8 +93,6 @@ const MODE_CYCLE: Mode[] = ["ask", "plan", "auto", "bypass"];
 
 
 const PLAN_READ_TOOLS = new Set(["read", "grep", "find", "ls"]);
-
-type Block = { block: true; reason: string } | undefined;
 
 /**
  * Cross-extension capability object (plan B7): the single typed channel to
@@ -162,15 +130,48 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
   let basePermissionRules: PermissionRule[] = [];
   let strippedDangerousRules: PermissionRule[] = [];
   let mergedPermissionRules: PermissionRule[] = [];
-  let forwardingPoller: ForwardingPoller | undefined;
-  /** Survives poller restarts so the same inbox request is not double-prompted. */
-  const forwardingClaimedIds = new Set<string>();
   // D1/D1b (loop-guard): same-batch duplicate index (replaced per
   // message_end) + the per-parent identical-call breaker for codemode
   // nested calls. A DEFENSE, not a permission — checked before the
   // adjudicator so bypass does not exempt it.
   let batchDupIndex: BatchDupIndex | null = null;
   const parentLoopBreaker = createParentLoopBreaker();
+
+  // ---- approval flow (SPEC SR W-M) ----------------------------------------
+  // The approval side-effect layer (applyApprovalDecision executor, the
+  // 4-choice prompt with the forwarding child path, family first-seen, the
+  // edit/write 5-choice dialog) lives in approval-flow.ts. Live state stays
+  // here and reaches it through deps.
+  const approval = createApprovalFlow({
+    reloadRules: reloadMergedPermissionRules,
+    setMode,
+    getAutoEngine: () => autoEngine,
+    setCompliance: (inject, category) => {
+      pendingComplianceInject = inject;
+      complianceCategory = category;
+    },
+  });
+
+  // ---- adjudication facts (SPEC SR W-M) -----------------------------------
+  // Step-1 fact collection + the fusion tool-schema scan live in
+  // adjudication-facts.ts; parity with the pre-refactor gate is pinned by
+  // test/lib/adjudication-parity.test.ts.
+  const facts = createAdjudicationFacts({
+    getAllTools: () => pi.getAllTools?.() ?? [],
+    getMode: () => currentMode,
+    getMergedRules: () => mergedPermissionRules,
+    getAutoModeConfig: () => autoModeConfig,
+    describeTier3Review: (tool, input, cwd) =>
+      autoEngine.describeTier3Review(tool, input, cwd),
+    isMemoryDirWrite: approval.isMemoryDirWrite,
+  });
+
+  // ---- forwarding responder (SPEC SR W-M) ---------------------------------
+  // The parent-side approval-forwarding responder (poller + claimed ids +
+  // response writer) lives in forwarding-responder.ts.
+  const forwarding = createForwardingResponder({
+    applyApprovalDecision: approval.applyApprovalDecision,
+  });
 
   // ---- plan session (E13b + CORE-17) --------------------------------------
   // The plan lifecycle (executing flag, phase, todos, offer cooldown/suppress,
@@ -191,8 +192,12 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     getClassifierConfig: () => classifierConfig,
     getAutoModeConfig: () => autoModeConfig,
     getMode: () => currentMode,
-    getFusionSchemaHint: fusionSchemaHint,
-    promptWithPermissionOptions,
+    getFusionSchemaHint: (toolName) => facts.fusionSchemaHint(toolName),
+    // Lazy wrapper: promptWithPermissionOptions lives in approval-flow.ts,
+    // created above — but keep the indirection so construction order in the
+    // factory body is never load-bearing.
+    promptWithPermissionOptions: (...args) =>
+      approval.promptWithPermissionOptions(...args),
     uiNotify,
     trackOutsideWrite,
   });
@@ -265,211 +270,6 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     });
   }
 
-  type ApprovalDecision =
-    | "allow"
-    | "allow_always_local"
-    | "allow_always_global"
-    | "bypass"
-    | "block";
-
-  /**
-   * Single place that executes an approval decision's side effects:
-   * allow-always persistence + rule reload + gitignore warning + notify,
-   * outside-write tracking on EVERY allow path, compliance-inject on block.
-   * The three approval flows (interactive select, ask-mode inline select,
-   * forwarded-parent responder) used to duplicate this and had diverged —
-   * the ask flow dropped write tracking and notifications (plan B2).
-   * Options narrow execution for the forwarding paths:
-   * - ruleCwd: parent responder persists rules against the child's cwd
-   * - persistRules:false when the other side already persisted (child poll)
-   * - trackWrite:false on the parent responder (tracking is the child's job)
-   * - complianceOnBlock:false in ask mode (no classifier compliance there)
-   */
-  /**
-   * Single record point for family-tool allow outcomes (P4-MC-03): every
-   * gate allow path funnels through applyApprovalDecision or the step-2
-   * allow branch, both of which call this — the broker mirror's cache view
-   * can never miss a gate-approved call.
-   */
-  function noteFamilyAdjudication(
-    tool: string,
-    input: Record<string, unknown>,
-    outcome: "allow-once" | "rule-allow" | "session-grant",
-  ): void {
-    const match = matchFamily(tool, input);
-    if (match) noteAdjudicated(match.canonicalId, outcome);
-  }
-
-  async function applyApprovalDecision(
-    ctx: ExtensionContext,
-    tool: string,
-    input: Record<string, unknown>,
-    decision: ApprovalDecision,
-    opts: {
-      category?: string;
-      ruleCwd?: string;
-      persistRules?: boolean;
-      trackWrite?: boolean;
-      complianceOnBlock?: boolean;
-      blockReason?: string;
-    } = {},
-  ): Promise<Block | undefined> {
-    const ruleCwd = opts.ruleCwd ?? ctx.cwd;
-    const persistRules = opts.persistRules !== false;
-    const trackWrite = opts.trackWrite !== false;
-
-    const trackOutsideWrite = (): void => {
-      if (trackWrite && (tool === "edit" || tool === "write")) {
-        autoEngine.trackOutsideWriteIfNeeded(ctx, tool, String(input.path ?? ""));
-      }
-    };
-
-    if (decision === "allow") {
-      trackOutsideWrite();
-      // P4-MC-03: one-shot "Allow" on a family tool (incl. the explicit
-      // ask-rule path through promptWithPermissionOptions) must reach the
-      // broker mirror's cache — gate allow ⇒ mirror allow
-      noteFamilyAdjudication(tool, input, "allow-once");
-      return undefined;
-    }
-    if (
-      decision === "allow_always_local" ||
-      decision === "allow_always_global"
-    ) {
-      if (persistRules) {
-        const rule = suggestAllowRuleForToolCall(tool, input, ruleCwd);
-        if (
-          addPermissionRule({
-            rule,
-            behavior: "allow",
-            destination:
-              decision === "allow_always_local" ? "local" : "global",
-            cwd: ruleCwd,
-          })
-        ) {
-          reloadMergedPermissionRules(ctx.cwd);
-          noteFamilyAdjudication(tool, input, "rule-allow");
-          if (decision === "allow_always_local") {
-            warnIfLocalPermissionsNotGitignored(ruleCwd, (msg) =>
-              uiNotify(ctx, msg, "warning"),
-            );
-          }
-          uiNotify(ctx, 
-            decision === "allow_always_local"
-              ? `Added allow rule (project local): ${rule}`
-              : `Added allow rule (global): ${rule}`,
-          );
-        }
-      } else {
-        // Rules were persisted by the other side; just pick them up.
-        reloadMergedPermissionRules(ctx.cwd);
-      }
-      trackOutsideWrite();
-      return undefined;
-    }
-    if (decision === "bypass") {
-      await setMode("bypass", ctx);
-      trackOutsideWrite();
-      return undefined;
-    }
-    if (opts.complianceOnBlock !== false) {
-      pendingComplianceInject = true;
-      complianceCategory = opts.category ?? "user-prompt";
-    }
-    return {
-      block: true,
-      reason: opts.blockReason ?? `${tool} blocked by user`,
-    };
-  }
-
-  // P3-PM-01: memory-dir writes skip the approval dialog (plain-file
-  // memory workflow); the memory module's secret guard still runs after
-  // this gate returns undefined (interception is unaffected).
-  function isMemoryDirWrite(tool: string, ctx: { cwd?: string }, input: Record<string, unknown> | undefined): boolean {
-    if (tool !== "write" && tool !== "edit") return false;
-    const path = typeof input?.path === "string" ? input.path : "";
-    if (!path) return false;
-    return isMemoryWritePath(path, ctx.cwd ?? process.cwd());
-  }
-
-  async function promptWithPermissionOptions(
-    ctx: ExtensionContext,
-    tool: string,
-    input: Record<string, unknown>,
-    label: string,
-    category: string,
-  ): Promise<Block> {
-    if (isMemoryDirWrite(tool, ctx, input)) {
-      return undefined as unknown as Block; // P3-PM-01 carve-out: skip dialog
-    }
-    if (!ctx.hasUI) {
-      const isChild = isSubagentChildProcess();
-      const parent = resolveParentSessionId();
-      // Only forward to a parent session when we're clearly a subagent child.
-      // PI_SUBAGENT_PARENT_SESSION alone is not sufficient — it's often set in
-      // the parent process env and inherited by unrelated processes (tests,
-      // ad-hoc node calls), which would block forever waiting for a response
-      // that never comes. Fail closed otherwise.
-      if (!parent || !isChild) {
-        pendingComplianceInject = true;
-        complianceCategory = category;
-        return {
-          block: true,
-          reason: `${tool} needs approval: no UI available. ${label}`,
-        };
-      }
-      const agentDir = defaultAgentDir();
-      const requesterSessionId =
-        readSessionId(ctx.sessionManager) ?? "";
-      const { id, challenge } = await writeForwardedRequest({
-        agentDir,
-        targetSessionId: parent,
-        requesterSessionId,
-        tool,
-        label,
-        category,
-        cwd: ctx.cwd,
-        input,
-      });
-      const resp = await pollForwardedResponse(agentDir, parent, id, {
-        challenge,
-      });
-      if (!resp?.approved) {
-        pendingComplianceInject = true;
-        complianceCategory = category;
-        return {
-          block: true,
-          reason:
-            resp?.denialReason ??
-            `${tool} blocked: parent approval timed out or denied. ${label}`,
-        };
-      }
-      if (
-        resp.decision === "allow_always_local" ||
-        resp.decision === "allow_always_global"
-      ) {
-        return applyApprovalDecision(ctx, tool, input, resp.decision, {
-          persistRules: false,
-        });
-      }
-      return applyApprovalDecision(ctx, tool, input, "allow");
-    }
-    const choice = await confirmChoice(ctx, `Allow ${tool}? ${label}`, [
-      "Allow",
-      "Allow always (this project)",
-      "Allow always (global)",
-      "Block",
-    ]);
-    const decision: ApprovalDecision =
-      choice === "Allow always (this project)"
-        ? "allow_always_local"
-        : choice === "Allow always (global)"
-          ? "allow_always_global"
-          : choice === "Allow"
-            ? "allow"
-            : "block";
-    return applyApprovalDecision(ctx, tool, input, decision, { category });
-  }
 
   // C4 batch 2: the auto-mode tier-3 engine (local ladder + classifier
   // invocation + denial accounting + tier-3 review descriptions) lives in
@@ -599,70 +399,6 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
   // verdict effects now live in adjudicate.ts step 4/5 + interpret.ts ports
   // (deleted as dead code — zero callers after the migration; review P3-4).
 
-  // P4-FAM-02/05: the first-seen dialog for family-claimed tools.
-  async function firstSeenPrompt(
-    ctx: ExtensionContext,
-    canonicalId: string,
-    tool: string,
-    input: Record<string, unknown>,
-    suggestedRule: string,
-  ): Promise<Block> {
-    if (!ctx.hasUI) {
-      // headless/forwarded path: fail closed (unchanged from 2.8.0).
-      // D6=B (user 2026-10-08, spec 2026-10-07 P3-1 S3): keep the original
-      // reason prefix and append the family's own suggested allow rule so the
-      // user can pre-approve in a parent/interactive session. No grant is
-      // written, no dialog, and no parent-forwarding request is created —
-      // family first-seen never enters the forwarding protocol.
-      return {
-        block: true,
-        reason:
-          `${tool} (${canonicalId}) needs approval: no UI available. ` +
-          `Pre-approve it by adding the rule \`${suggestedRule}\` to your permission rules ` +
-          `in a parent/interactive session, then retry this call.`,
-      };
-    }
-    const choice = (await confirmChoice(ctx, `Allow ${canonicalId}?`, [
-      "Allow once",
-      "Allow for this session",
-      `Allow always (${suggestedRule})`,
-      "Block",
-    ])) ?? "Block";
-    if (choice === "Allow once") {
-      noteAdjudicated(canonicalId, "allow-once");
-      return undefined as unknown as Block; // this call passes; nothing recorded
-    }
-    if (choice === "Allow for this session") {
-      grantSession(canonicalId);
-      noteAdjudicated(canonicalId, "session-grant");
-      return undefined as unknown as Block;
-    }
-    if (choice.startsWith("Allow always")) {
-      const wrote = addPermissionRule({
-        rule: suggestedRule,
-        behavior: "allow",
-        destination: "global",
-        cwd: ctx.cwd,
-      });
-      if (!wrote) {
-        return { block: true, reason: `failed to persist rule ${suggestedRule}` };
-      }
-      noteAdjudicated(canonicalId, "rule-allow");
-      reloadMergedPermissionRules(ctx.cwd);
-      return undefined as unknown as Block;
-    }
-    return { block: true, reason: `${canonicalId} blocked by user` };
-  }
-
-  // ---- prompts -----------------------------------------------------------
-  async function promptApproval(
-    ctx: ExtensionContext,
-    tool: string,
-    label: string,
-    input: Record<string, unknown> = {},
-  ): Promise<Block> {
-    return promptWithPermissionOptions(ctx, tool, input, label, "user-prompt");
-  }
 
   // ---- commands / shortcut / flag ---------------------------------------
   for (const mode of ["ask", "plan", "auto", "bypass"] as Mode[]) {
@@ -784,148 +520,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
   // /outside-writes.
   registerPlanSurfaces(pi, plan);
 
-  // ---- /outside-writes + /undo-outside-writes (NEW v1.1.3) --------------
-  // Format a snapshot for display in lists/selectors.
-  function formatSnapshotForDisplay(
-    snap: OutsideWriteSnapshot,
-    externallyModified = false,
-  ): string {
-    const ts = snap.timestamp.replace("T", " ").slice(0, 19);
-    const action = snap.backupContent === null ? "would delete" : "would restore";
-    const flag = externallyModified ? " \u26a0 externally modified" : "";
-    return `${ts} \u00b7 ${snap.toolName} \u00b7 ${snap.originalPath} (${action})${flag}`;
-  }
-
-  // Detect if a file has been externally modified since its snapshot was taken.
-  // Heuristic: if multiple snapshots exist for the same path, OR the current
-  // file content differs from the snapshot's backupContent, the file is
-  // considered externally modified.
-  function isExternallyModified(
-    snap: OutsideWriteSnapshot,
-    allSnaps: OutsideWriteSnapshot[],
-  ): boolean {
-    const samePath = allSnaps.filter((s) => s.originalPath === snap.originalPath);
-    if (samePath.length > 1) return true;
-    try {
-      const current = readFileSync(snap.originalPath, "utf-8");
-      return current !== snap.backupContent;
-    } catch {
-      return false;
-    }
-  }
-
-  pi.registerCommand("outside-writes", {
-    description:
-      "List tracked outside-cwd writes from auto mode (read-only; does not undo)",
-    handler: async (_args, ctx) => {
-      const snaps = listTrackedOutsideWrites(ctx.cwd);
-      if (!snaps.length) {
-        if (ctx.hasUI) uiNotify(ctx, "No tracked outside-cwd writes", "info");
-        return;
-      }
-      const lines = snaps.map((s) => formatSnapshotForDisplay(s, isExternallyModified(s, snaps)));
-      pi.sendMessage(
-        {
-          customType: "outside-writes-list",
-          content: `Tracked outside-cwd writes (${snaps.length}):\n${lines.join("\n")}`,
-          // display metadata for the CC panel renderer (content untouched)
-          details: { command: "/outside-writes" },
-          display: true,
-        },
-        { triggerTurn: false },
-      );
-    },
-  });
-
-  pi.registerCommand("undo-outside-writes", {
-    description:
-      "Restore files modified by auto mode outside cwd. No args = selector; 'all' = restore all; '--list' = list only",
-    handler: async (args, ctx) => {
-      const arg = (args ?? "").trim();
-
-      // --list: alias for /outside-writes
-      if (arg === "--list" || arg === "list") {
-        const snaps = listTrackedOutsideWrites(ctx.cwd);
-        if (!snaps.length) {
-          if (ctx.hasUI) uiNotify(ctx, "No tracked outside-cwd writes", "info");
-          return;
-        }
-        const lines = snaps.map((s) => formatSnapshotForDisplay(s, isExternallyModified(s, snaps)));
-        pi.sendMessage(
-          {
-            customType: "outside-writes-list",
-            content: `Tracked outside-cwd writes (${snaps.length}):\n${lines.join("\n")}`,
-            // display metadata for the CC panel renderer (content untouched)
-            details: { command: "/undo-outside-writes --list" },
-            display: true,
-          },
-          { triggerTurn: false },
-        );
-        return;
-      }
-
-      const allSnaps = listTrackedOutsideWrites(ctx.cwd);
-      if (!allSnaps.length) {
-        if (ctx.hasUI)
-          uiNotify(ctx, "No tracked outside-cwd writes to undo", "info");
-        return;
-      }
-
-      if (arg === "all") {
-        // Restore all without prompting
-        let restored = 0;
-        let deleted = 0;
-        let warned = 0;
-        const externallyModifiedPaths = new Set(
-          allSnaps
-            .filter((s) => isExternallyModified(s, allSnaps))
-            .map((s) => s.originalPath),
-        );
-        for (const snap of allSnaps) {
-          const result = restoreOutsideWrite(snap);
-          if (result.action === "restored") restored++;
-          else if (result.action === "deleted") deleted++;
-          if (externallyModifiedPaths.has(snap.originalPath)) warned++;
-          popTrackedOutsideWrite(ctx.cwd, snap);
-        }
-        if (ctx.hasUI) {
-          const warnMsg =
-            warned > 0
-              ? ` (${warned} file(s) externally modified \u2014 restored anyway)`
-              : "";
-          uiNotify(ctx, 
-            `Restored ${restored}, deleted ${deleted} tracked write(s)${warnMsg}`,
-            "info",
-          );
-        }
-        return;
-      }
-
-      // No args: interactive selector (newest first)
-      if (!ctx.hasUI) return; // (S6: the inner hasUI check was unreachable)
-      const ordered = [...allSnaps].reverse();
-      const choice = await ctx.ui.select(
-        "Restore which tracked outside-cwd write? (newest first)",
-        ordered.map((s) =>
-          formatSnapshotForDisplay(s, isExternallyModified(s, allSnaps)),
-        ),
-      );
-      if (!choice) return;
-      const picked = ordered.find(
-        (s) =>
-          formatSnapshotForDisplay(s, isExternallyModified(s, allSnaps)) === choice,
-      );
-      if (!picked) return;
-      const wasExternal = isExternallyModified(picked, allSnaps);
-      const result = restoreOutsideWrite(picked);
-      popTrackedOutsideWrite(ctx.cwd, picked);
-      const action = result.action === "deleted" ? "Deleted" : "Restored";
-      const warnSuffix = wasExternal
-        ? " (\u26a0 file was externally modified \u2014 restored from snapshot anyway)"
-        : "";
-      uiNotify(ctx, `${action} ${picked.originalPath}${warnSuffix}`, "info");
-    },
-  });
+  registerOutsideWritesCommands(pi);
 
 
     pi.registerShortcut("shift+tab", {
@@ -966,218 +561,20 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     return undefined;
   }
 
-  // plan2 B1 ②: one-shot annotation from session_start — tool schemas that
-  // declare command-shaped fields (fusion-capable tools). Label-only source
-  // hint; no behavior branches on this data.
-  let fusionToolSchemaFields = new Map<string, string[]>();
 
-  function fusionSchemaHint(toolName: string): string {
-    const fields = fusionToolSchemaFields.get(toolName);
-    return fields?.length
-      ? `\n  (tool schema declares command fields: ${fields.join(", ")})`
-      : "";
-  }
-
-  function scanFusionToolSchemas(): void {
-    const found = new Map<string, string[]>();
-    try {
-      for (const info of pi.getAllTools?.() ?? []) {
-        if (!info?.name) continue;
-        // bash/powershell's own `command` IS the primary input, not embedded.
-        if (info.name === "bash" || info.name === "powershell") continue;
-        const fields = declaredCommandFields(info.parameters);
-        if (fields.length > 0) found.set(info.name, fields);
-      }
-      fusionToolSchemaFields = found;
-    } catch {
-      fusionToolSchemaFields = new Map();
-    }
-  }
-
-  // ---- tool_call gate (P2-1: collect -> decide -> interpret) ---------------
-  // Step 1: bypass / rules / plan / ask adjudicate in the pure module
-  // (adjudicate.ts) and execute through interpret.ts ports; auto still runs
-  // the legacy ladder (embedded scan + tiers + classifier) behind the
-  // legacyAuto decision until Step 2/3. Parity pinned by
-  // test/lib/adjudication-parity.test.ts (golden from the pre-refactor gate).
-  function collectAdjudicationFacts(call: ToolCallRequest): AdjudicationFacts {
-    const ctx = call.ctx as ExtensionContext;
-    const tool = call.tool;
-    const input = call.input;
-    const path = String(input.path ?? "");
-    const command = String(input.command ?? "");
-    const familyMatch = matchFamily(tool, input);
-    const planHard = currentMode === "plan"
-      ? planHardBlock(tool, input, {
-          planFilePath: getPlanFilePath(ctx.cwd),
-          isPlanFile: isPlanFilePath(path, ctx.cwd),
-          mcpShaped: isMcpShapedCall(tool, input, knownServersSetFromEnv()),
-          familyClaimed: familyMatch !== null,
-          fusionSchemaHint: fusionSchemaHint(tool),
-        })
-      : undefined;
-    const embedded = extractEmbeddedCommandInputs(tool, input);
-    const isBashLike = tool === "bash" || tool === "powershell";
-    // W5 switch, read per adjudication: env PI_CORE_BASH_PATH_CHECKS
-    // overrides permission-modes.json bashPathChecks (default "all").
-    // safety = W3 + protected-path prompt (P1-4) + allow-rule hardening
-    // (P0-1, enforced inside bash-permission-match); deny = W4 only.
-    const checkMode = isBashLike || embedded.length
-      ? resolveBashPathChecks(loadPermissionModesConfig())
-      : "off";
-    const safetyOn = checkMode === "all" || checkMode === "safety";
-    const denyOn = checkMode === "all" || checkMode === "deny";
-    // P1-1 (2026-11-08): embedded (fusion then_run-style) commands run the
-    // same checks as the main bash command — deny in every mode, write
-    // targets / protected paths wherever their mode checks them.
-    const commandsToCheck = [
-      ...(isBashLike && command ? [command] : []),
-      ...embedded.map((c) => c.command),
-    ];
-    const firstHit = <T,>(fn: (c: string) => T | null): T | null => {
-      for (const c of commandsToCheck) {
-        const hit = fn(c);
-        if (hit !== null) return hit;
-      }
-      return null;
-    };
-    // W3 (safety): first CC-sensitive write target — bypass gate prompt.
-    const bashPathCheck = safetyOn
-      ? firstHit((c) => checkBashWriteTargets(c, ctx.cwd))
-      : null;
-    // P1-4 (safety): bash write onto a pi-own protected path prompts in
-    // every mode (bypass included; decide places it after plan limits).
-    const bashProtectedWrite: BashProtectedWrite | null = safetyOn
-      ? firstHit((c) => checkBashProtectedWrite(c, ctx.cwd))
-      : null;
-    // W4 (deny): first Read/Edit deny-rule hit through a bash path target —
-    // whole-command deny, every mode; reason text carries rule + path + the
-    // switch name so the model does not blind-retry. S2 (spec 2026-11-15-
-    // cleanup-hardening): ONE scan per candidate command yields both the
-    // deny hit and the unrecognized mv/cp flag escalation (the old code ran
-    // the rule scan twice — the second with a hacked empty rule set).
-    let bashDenyRule: string | null = null;
-    let bashFlagAsk: string | null = null;
-    if (denyOn) {
-      let denyHit: ReturnType<typeof checkBashDenyScan>["deny"] = null;
-      let flagEsc: ReturnType<typeof checkBashDenyScan>["flagAsk"] = null;
-      for (const c of commandsToCheck) {
-        const scan = checkBashDenyScan(c, ctx.cwd, mergedPermissionRules);
-        if (denyHit === null && scan.deny !== null) denyHit = scan.deny;
-        if (flagEsc === null && scan.flagAsk !== null) flagEsc = scan.flagAsk;
-        if (denyHit !== null && flagEsc !== null) break;
-      }
-      if (denyHit) {
-        bashDenyRule = `Denied by permission rule [${denyHit.source}]: ${denyHit.rule} — bash references denied path "${denyHit.path}". Adjust the rule, or scope/disable via bashPathChecks / PI_CORE_BASH_PATH_CHECKS.`;
-      }
-      // BH-R3: an unrecognized mv/cp flag escalates to ask (never deny) —
-      // the write targets cannot be path-validated.
-      if (flagEsc) {
-        bashFlagAsk = `bash write targets unverifiable: unrecognized mv/cp flag "${flagEsc.flag}" — approve, or rewrite with explicit paths`;
-      }
-    }
-    // BH-R6: per-segment auto rule matching (soft_deny wins on ANY segment;
-    // fast-allow requires EVERY segment to match, sans command substitution)
-    const autoRules = command
-      ? matchAutoRules(command, autoModeConfig?.allow, autoModeConfig?.soft_deny)
-      : { allowMatched: false, softDenyMatched: false };
-    return {
-      mode: currentMode,
-      tool,
-      input,
-      hasUI: ctx.hasUI,
-      cwd: ctx.cwd,
-      verdict: evaluateToolPermission(tool, input, ctx.cwd, mergedPermissionRules, {
-        // single-source the W5 switch read for this adjudication (review
-        // fix 2026-11-08 P3#10): facts and rule matching share one snapshot
-        allowHardening: safetyOn,
-      }),
-      planHardBlock: planHard,
-      family: familyMatch
-        ? {
-            canonicalId: familyMatch.canonicalId,
-            suggestedRule: familyMatch.family.suggestAllowRule(familyMatch.canonicalId),
-            hasExplicitAskRule: !!familyRuleMentions(mergedPermissionRules, familyMatch.family, familyMatch.canonicalId, "ask"),
-          }
-        : null,
-      familySessionGrant: familyMatch ? hasSessionGrant(familyMatch.canonicalId) : false,
-      embeddedCommands: embedded.map((c) => c.command),
-      embeddedUnsafe: embedded.map((c) => !isSafeCommand(c.command)),
-      embeddedHint: fusionSchemaHint(tool),
-      path,
-      pathSensitive: !!path && isSensitivePath(path, ctx.cwd),
-      pathOutsideCwd: !!path && isOutsideCwd(path, ctx.cwd),
-      pathIsMemoryDir: isMemoryDirWrite(tool, ctx, input),
-      pathCcSafety: !!path && isCcSafetyPath(path, ctx.cwd),
-      bashPathCheck,
-      bashProtectedWrite,
-      bashDenyRule,
-      bashFlagAsk,
-      command,
-      commandSafe: isSafeCommand(command),
-      embeddedAuto: embedded.map((c) => {
-        const tiers = classifyBashTiers(c.command);
-        return {
-          command: c.command,
-          sensitive: commandReferencesSensitivePath(c.command),
-          safe: tiers.safe,
-          autoApprovable: tiers.autoApprovable,
-        };
-      }),
-      bashTiers: command ? classifyBashTiers(command) : undefined,
-      commandSensitive: !!command && commandReferencesSensitivePath(command),
-      // BH-R6: per-segment auto rule matching (auto-rule-match.ts)
-      autoAllowMatched: autoRules.allowMatched,
-      autoSoftDenyMatched: autoRules.softDenyMatched,
-      tier3ReviewLabel: autoEngine.describeTier3Review(tool, input, ctx.cwd),
-    };
-  }
-
-  // The ask-mode 5-choice edit/write dialog (verbatim from the old gate;
-  // the bypass switch stays ask-mode-only — CC-aligned, adjudicated
-  // 2026-09-12; side effects route through the shared executor).
-  async function editWriteChoicePrompt(call: ToolCallRequest, pathVal: string): Promise<Block> {
-    const ctx = call.ctx as ExtensionContext;
-    const tool = call.tool;
-    const input = call.input;
-    if (!ctx.hasUI) {
-      return promptApproval(ctx, tool, `on ${pathVal}`, input);
-    }
-    const choice = await confirmChoice(ctx, `Allow ${tool} on ${pathVal}?`, [
-      "Allow",
-      "Allow always (this project)",
-      "Allow always (global)",
-      "Allow all (enable bypass)",
-      "Block",
-    ]);
-    const decision: ApprovalDecision =
-      choice === "Allow always (this project)"
-        ? "allow_always_local"
-        : choice === "Allow always (global)"
-          ? "allow_always_global"
-          : choice === "Allow all (enable bypass)"
-            ? "bypass"
-            : choice === "Allow"
-              ? "allow"
-              : "block";
-    return applyApprovalDecision(ctx, tool, input, decision, {
-      complianceOnBlock: false,
-      blockReason: `${tool} blocked by user on ${pathVal}`,
-    });
-  }
 
   const adjudicator = createPermissionAdjudicator({
-    collectFacts: collectAdjudicationFacts,
+    collectFacts: facts.collectAdjudicationFacts,
     interpret: (call, decision) =>
       interpretDecision(
         {
           promptWithOptions: (c, label, category) =>
-            promptWithPermissionOptions(c.ctx as ExtensionContext, c.tool, c.input, label, category),
+            approval.promptWithPermissionOptions(c.ctx as ExtensionContext, c.tool, c.input, label, category),
           promptApproval: (c, label) =>
-            promptApproval(c.ctx as ExtensionContext, c.tool, label, c.input),
+            approval.promptApproval(c.ctx as ExtensionContext, c.tool, label, c.input),
           firstSeen: (c, canonicalId, suggestedRule) =>
-            firstSeenPrompt(c.ctx as ExtensionContext, canonicalId, c.tool, c.input, suggestedRule),
-          editWriteChoice: (c, path) => editWriteChoicePrompt(c, path),
+            approval.firstSeenPrompt(c.ctx as ExtensionContext, canonicalId, c.tool, c.input, suggestedRule),
+          editWriteChoice: (c, path) => approval.editWriteChoicePrompt(c, path),
           classifyTier3: (c, tier3) =>
             autoEngine.approveTier3(c.ctx as ExtensionContext, c.tool, c.input, {
               tool: c.tool,
@@ -1191,7 +588,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
               autoEngine.trackOutsideWriteIfNeeded(ctx, c.tool, String(c.input.path ?? ""));
             }
           },
-          noteFamilyAdjudication: (c, outcome) => noteFamilyAdjudication(c.tool, c.input, outcome),
+          noteFamilyAdjudication: (c, outcome) => approval.noteFamilyAdjudication(c.tool, c.input, outcome),
         },
         call,
         decision,
@@ -1459,7 +856,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     ctx: ExtensionContext,
   ): Promise<void> {
     // plan2 B1 ②: enumerate tool schemas once per session (reload re-runs).
-    scanFusionToolSchemas();
+    facts.scanFusionToolSchemas();
 
     // C5: model-profile session init (config ensure + --model-profile
     // pre-activation) lives in the ProfileController.
@@ -1565,91 +962,9 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       await profiles.applyForMode(currentMode, ctx);
     }
 
-    startPermissionForwardingPoller(ctx);
+    forwarding.start(ctx);
   }
 
-  async function handleForwardedPermissionRequest(
-    ctx: ExtensionContext,
-    request: ForwardedPermissionRequest,
-  ): Promise<void> {
-    const agentDir = defaultAgentDir();
-    const name = request.requesterAgentName?.trim();
-    const title = name
-      ? `[Subagent ${name}] ${request.message}`
-      : `[Subagent] ${request.message}`;
-    const sessionId = readSessionId(ctx.sessionManager);
-    // Only the targeted parent session may answer; reject mismatched inbox drain.
-    if (sessionId && sessionId !== request.targetSessionId) {
-      forwardingClaimedIds.delete(request.id);
-      return;
-    }
-    const responderSessionId = request.targetSessionId;
-
-    let decision: ForwardedDecision = "block";
-    let approved = false;
-    let denialReason: string | undefined = `${request.tool} blocked by user`;
-
-    try {
-      const choice = await ctx.ui.select(title, [
-        "Allow",
-        "Allow always (this project)",
-        "Allow always (global)",
-        "Block",
-      ]);
-      if (choice === "Allow") {
-        decision = "allow";
-        approved = true;
-        denialReason = undefined;
-      } else if (choice === "Allow always (this project)") {
-        decision = "allow_always_local";
-        approved = true;
-        denialReason = undefined;
-        await applyApprovalDecision(ctx, request.tool, request.input, "allow_always_local", {
-          ruleCwd: request.cwd,
-          trackWrite: false,
-        });
-      } else if (choice === "Allow always (global)") {
-        decision = "allow_always_global";
-        approved = true;
-        denialReason = undefined;
-        await applyApprovalDecision(ctx, request.tool, request.input, "allow_always_global", {
-          ruleCwd: request.cwd,
-          trackWrite: false,
-        });
-      }
-    } catch {
-      decision = "block";
-      approved = false;
-      denialReason = `${request.tool} blocked: parent approval cancelled`;
-    }
-
-    await writeForwardedResponse(agentDir, request.targetSessionId, {
-      id: request.id,
-      challenge: request.challenge,
-      approved,
-      decision,
-      responderSessionId,
-      respondedAt: new Date().toISOString(),
-      ...(denialReason ? { denialReason } : {}),
-    });
-  }
-
-  function startPermissionForwardingPoller(ctx: ExtensionContext): void {
-    forwardingPoller?.stop();
-    forwardingPoller = undefined;
-    if (!ctx.hasUI || isSubagentChildProcess()) return;
-
-    const agentDir = defaultAgentDir();
-    forwardingPoller = createForwardingPoller({
-      agentDir,
-      hasUI: true,
-      isChild: false,
-      claimedIds: forwardingClaimedIds,
-      getSessionId: () => readSessionId(ctx.sessionManager),
-      onRequest: (request) => handleForwardedPermissionRequest(ctx, request),
-    });
-    forwardingPoller.start();
-  }
 
   pi.on("session_start", onSessionStart);
   pi.on("session_tree", onSessionStart);
@@ -1671,9 +986,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     statsPresenter.reset(); // ST: clear the private cache (legacy keys unaffected)
     publishCapability({ usage: null }); // XPKG-08: shutdown clears the published numbers
     fallbackAdapter.shutdown();
-    forwardingPoller?.stop();
-    forwardingPoller = undefined;
-    forwardingClaimedIds.clear();
+    forwarding.shutdown();
     // P4-FAM-05: session-scoped family state resets on shutdown too
     clearSessionState();
   });
