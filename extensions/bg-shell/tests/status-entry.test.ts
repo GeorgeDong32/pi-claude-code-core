@@ -101,6 +101,29 @@ describe("status entry lifecycle through the real orchestration", () => {
 		assert.equal((rows[0]!.data as TaskStatusData).state, "killed");
 	});
 
+	it("CH-6: after a failed send, a user stop pins the one row to the real end state and no message follows", async () => {
+		// Characterization (no production change): `notifyOnce` rolled `notified`
+		// back when the send threw; the TaskStop that lands before the next poll
+		// tick takes over the report — one row with the true state, and once the
+		// fault clears the poller finds the task reported and stays silent.
+		const s = session();
+		s.faults.failSend = true;
+		const id = await start(s, "echo done");
+		procs.of(id).write("done\n");
+		procs.of(id).exit(0);
+		await clock.until(() => s.faults.sendAttempts >= 1); // the poller tried and failed
+		assert.equal(s.sent.length, 0);
+		assert.equal(s.entries.length, 0); // the row goes out only with a successful send
+		s.faults.failSend = false;
+		await clock.settle(s.toolCall("TaskStop", { id })); // lands before the next poll tick
+		await clock.tick(3);
+		assert.equal(s.sent.length, 0, "no completion message after the fault cleared");
+		const rows = s.entries.filter((e) => e.type === STATUS_ENTRY_TYPE);
+		assert.equal(rows.length, 1, "exactly one status row");
+		assert.equal((rows[0]!.data as TaskStatusData).state, "exited", "the row keeps the real end state");
+		assert.equal((rows[0]!.data as TaskStatusData).exitCode, 0);
+	});
+
 	it("appendStatusEntry is fail-open: a throwing appendEntry never propagates", () => {
 		const pi = { appendEntry: () => { throw new Error("session closed"); } } as never;
 		appendStatusEntry(pi, fakeTask()); // must not throw
