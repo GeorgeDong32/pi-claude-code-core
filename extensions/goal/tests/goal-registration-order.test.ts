@@ -67,7 +67,7 @@ const PI_EVENTS = [
 	"session_shutdown",
 ];
 
-/** Factory-time tool-set sync (goal.ts:1973): no goal focused, normal phase. */
+/** Factory-time tool-set sync (the factory-tail `syncGoalTools()` call): no goal focused, normal phase. */
 const FACTORY_ACTIVE_TOOLS = ["read", "edit", "write", "bash", "grep", "find", "get_goal", "propose_goal_draft"];
 
 interface Recording {

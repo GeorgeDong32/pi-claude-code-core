@@ -1,5 +1,5 @@
 /**
- * goal-commands.ts — the sixteen /goal* command registrations plus their
+ * goal-commands.ts — the fifteen /goal* command registrations plus their
  * handler helpers (SPEC SR E13a: split from goal.ts; registration ORDER is
  * pinned by extensions/goal/tests/goal-registration-order.test.ts).
  *

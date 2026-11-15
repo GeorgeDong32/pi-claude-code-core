@@ -38,7 +38,7 @@
 | `goal-turn-usage.ts` | 消息分类 + 四通道 token/cost 提取(`assistantTurnTokens`/`assistantTurnCost`——cache-inclusive,DEVIATIONS #69;`toolExecutionUsage` 处理执行上报用量;`lastAssistantStopReason` 为 BH-R1 探针)。纯模块 |
 | `goal-summary.ts` | 用量摘要文本(`detailedSummary`)、可序列化 widget 投影(`widgetGoalProjection` + 导出 `WidgetGoalProjection`,DC4b)、缺失 criteria 提示(`missingCriteriaLines`,G3-C20)与第三次尝试阈值(G3-C21)。纯模块 |
 | `goal-settings.ts` | `/goal-settings` 对话框(auditor provider/model/thinking_level)——只读写 auditor 配置文件 |
-| `goal-commands.ts` | `createGoalCommands(pi, deps)`:16 个 `/goal*` 命令注册 + 处理函数,自 goal.ts 逐字迁出;会话状态经窄 deps 对象传入(`lifecycle` 以 `GoalLifecycle` 类型——#120 封装);返回 `focusGoalCommand`(`session_start` 复用)。注册顺序由 `tests/goal-registration-order.test.ts` 钉住 |
+| `goal-commands.ts` | `createGoalCommands(pi, deps)`:15 个 `/goal*` 命令注册 + 处理函数,自 goal.ts 逐字迁出;会话状态经窄 deps 对象传入(`lifecycle` 以 `GoalLifecycle` 类型——#120 封装);返回 `focusGoalCommand`(`session_start` 复用)。注册顺序由 `tests/goal-registration-order.test.ts` 钉住 |
 | `goal-tools.ts` | `registerGoalTools(pi, deps)`:8 个 goal 工具按原顺序注册;`getRunningGoalId` 以 live getter 传入(runningGoalId 为工厂状态、逐 run 变更);`PI_GOAL_AUTO_CONFIRM` 调用时读取;`StringEnum` shim 与 `COMPLETE_STATUS` 在此。注册顺序由 `tests/goal-registration-order.test.ts` 钉住 |
 | `goal-core.ts` | 渲染/状态助手(footer 状态、时长/token 格式化、单行摘要) |
 | `renderers.ts` | 消息渲染器(result / event / audit-event)——自 wiring 拆出(arch review C6),不经工厂即可测 |

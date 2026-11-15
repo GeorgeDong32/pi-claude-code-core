@@ -565,7 +565,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 	pi.registerMessageRenderer<GoalEventDetails>(GOAL_EVENT_ENTRY, renderGoalEvent);
 	pi.registerMessageRenderer<GoalAuditEventDetails>(GOAL_AUDIT_ENTRY, renderGoalAuditEvent);
 
-	// SPEC SR E13a: the sixteen command registrations + handler helpers moved
+	// SPEC SR E13a: the fifteen command registrations + handler helpers moved
 	// verbatim into goal-commands.ts (order pinned by the registration-order
 	// test). Deps wrap the hoisted factory functions as arrows; the BH-R1
 	// error-streak Map and the pending resume note stay owned here.
