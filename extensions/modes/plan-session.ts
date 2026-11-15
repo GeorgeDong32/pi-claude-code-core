@@ -8,6 +8,9 @@
  *
  * Design decisions (behavior-preserving move — quirks are pinned by
  * plan-flow.test.ts and index.test.ts and must NOT be "fixed" here):
+ * - startExecution is INTERNAL-ONLY (SR-4a): it is deliberately NOT exposed on
+ *   the PlanSession interface — the three call sites (agent_end offer,
+ *   /plan-execute, plan_ready) all live in this file.
  * - startExecution keeps the RAW `setModeRaw("auto")` write (skips the BH-E4
  *   generation tail / permission strip / capability publish) — the historical
  *   /plan-execute transition order is: state → tool restrictions → status
@@ -110,7 +113,6 @@ export interface PlanSession {
 	resetOnModeSwitch(mode: PermissionMode, ctx: ExtensionContext): void;
 	/** plan.md is created only when plan mode SETTLES (BH-E4). */
 	onPlanModeSettled(prev: PermissionMode, cwd: string): void;
-	startExecution(ctx: ExtensionContext, todos: TodoItem[]): Promise<void>;
 	/**
 	 * The before_agent_start executing block. Returns the mode block when an
 	 * execution is running (and marks phase="executing"), else undefined.
@@ -359,7 +361,6 @@ export function createPlanSession(deps: PlanSessionDeps): PlanSession {
 			ensurePlanFile(cwd);
 			if (prev !== "plan") planPhase = "exploring";
 		},
-		startExecution,
 		executingPromptBlock(complianceBlock) {
 			if (!(planExecuting && planTodos.length)) return undefined;
 			const remaining = planTodos
