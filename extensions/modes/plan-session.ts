@@ -47,11 +47,13 @@ import { notify as uiNotify } from "../ui/notify.ts";
 import { runPlanApprovalDialog } from "./ui/plan-approval-dialog.ts";
 import {
 	type TodoItem,
+	assistantMessageText,
 	ensurePlanFile,
 	extractPlanSection,
 	extractTodoItems,
 	filterSubstantivePlanItems,
 	hashPlan,
+	isAssistantMessage,
 	markCompletedSteps,
 	readPlanFile,
 	shouldSyncAssistantPlanToFile,
@@ -253,20 +255,8 @@ export function createPlanSession(deps: PlanSessionDeps): PlanSession {
 			planContent ? extractTodoItems(planContent) : [],
 		);
 
-		const isAssistant = (m: any): boolean =>
-			!!m && m.role === "assistant" && Array.isArray(m.content);
-		const getText = (m: any): string =>
-			Array.isArray(m?.content)
-				? m.content
-						.filter((c: any) => c?.type === "text")
-						.map((c: any) => c.text)
-						.join("\n")
-				: typeof m?.content === "string"
-					? m.content
-					: "";
-
-		const lastAssistant = [...event.messages].reverse().find(isAssistant);
-		const assistantText = lastAssistant ? getText(lastAssistant) : "";
+		const lastAssistant = [...event.messages].reverse().find(isAssistantMessage);
+		const assistantText = lastAssistant ? assistantMessageText(lastAssistant) : "";
 		const assistantPlan = assistantText
 			? filterSubstantivePlanItems(extractTodoItems(assistantText))
 			: [];

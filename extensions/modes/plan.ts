@@ -4,7 +4,9 @@
  * 2026-10-03); behavior unchanged. Owns: plan file path/IO (template,
  * ensure/read/write, symlink-annotated path checks), workspace path
  * resolution, and the todo-list text grammar (extract/mark/DONE/completion
- * signals, placeholder filtering, assistant Plan:-section sync).
+ * signals, placeholder filtering, assistant Plan:-section sync). Also hosts
+ * the shared isAssistantMessage/assistantMessageText helpers (SR-4b) —
+ * deliberately not in lib/ and not merged with compaction's `textOf`.
  */
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { createHash } from "node:crypto"
@@ -220,3 +222,23 @@ export function shouldSyncAssistantPlanToFile(planContent: string | null): boole
 	if (!planContent.includes("<!-- permission-modes:plan -->")) return false
 	return filterSubstantivePlanItems(extractTodoItems(planContent)).length === 0
 }
+
+// ---- assistant message helpers (SR-4b) -------------------------------------
+// One shared copy of the isAssistant/getText pair used by index.ts (turn_end)
+// and plan-session.ts (agent_end plan sync). Deliberately NOT merged with
+// compaction's `textOf`: that one requires `typeof text === "string"` per
+// block, so `[{type:"text"},{type:"text",text:"a"}]` yields `"a"` there but
+// `"\na"` here — different semantics, different module.
+
+export const isAssistantMessage = (m: any): boolean =>
+	!!m && m.role === "assistant" && Array.isArray(m.content);
+
+export const assistantMessageText = (m: any): string =>
+	Array.isArray(m?.content)
+		? m.content
+				.filter((c: any) => c?.type === "text")
+				.map((c: any) => c.text)
+				.join("\n")
+		: typeof m?.content === "string"
+			? m.content
+			: "";

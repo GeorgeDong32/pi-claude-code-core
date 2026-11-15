@@ -12,7 +12,7 @@
  * the plan-flow slice of the surface).
  */
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest"
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -509,6 +509,48 @@ describe("plan flow characterization (SPEC SR W-M)", () => {
 		nowMs += 31_000
 		await fireAgentEnd(pi, { messages: [] }, ctx)
 		expect(customCalls).toBe(2)
+	})
+
+	it("agent_end assistant-body sync: empty plan.md gets the assistant Plan: section written and the dialog opens once", async () => {
+		// SR-4b companion pin: this exercises the isAssistantMessage /
+		// assistantMessageText path in plan-session.ts onAgentEnd (the ONLY
+		// sync source is the assistant message body — plan.md is untouched).
+		permissionModesExtension(pi as never)
+		await switchMode("plan")
+		// plan.md is the fresh template after onPlanModeSettled → sync allowed.
+		const assistantBody = makePlanBody(["implement the parser module", "add tests for the parser"])
+		let customCalls = 0
+		const ctx = uiCtx({
+			custom: async () => {
+				customCalls++
+				return "stay"
+			},
+		})
+
+		await fireAgentEnd(
+			pi,
+			{ messages: [{ role: "assistant", content: [{ type: "text", text: assistantBody }] }] },
+			ctx,
+		)
+
+		// plan.md was written with the assistant's plan section
+		expect(existsSync(getPlanFilePath(projDir))).toBe(true)
+		const planMd = readFileSync(getPlanFilePath(projDir), "utf8")
+		expect(planMd).toContain("Plan:")
+		expect(planMd).toContain("1. implement the parser module")
+		expect(planMd).toContain("2. add tests for the parser")
+		// extracted steps were persisted as planTodos
+		expect(await lastModesEntry(pi)).toMatchObject({
+			currentMode: "plan",
+			planTodos: [
+				// cleanStepText strips the leading verbs ("Implement"/"Add")
+				{ step: 1, text: "Implement the parser module", completed: false },
+				{ step: 2, text: "Tests for the parser", completed: false },
+			],
+		})
+		// exactly one dialog, no execution ("stay" chosen)
+		expect(customCalls).toBe(1)
+		expect(pi.sentMessages.filter((m) => m.message.customType === "modes-execute")).toHaveLength(0)
 	})
 
 	it("plan_ready headless: reports auto-execute text but does NOT execute", async () => {

@@ -73,7 +73,7 @@ import { createAdjudicationFacts } from "./adjudication-facts.ts";
 import { createApprovalFlow, type Block } from "./approval-flow.ts";
 import { createForwardingResponder } from "./forwarding-responder.ts";
 import { registerOutsideWritesCommands } from "./outside-writes-commands.ts";
-import { TodoItem, ensurePlanFile } from "./plan.ts";
+import { TodoItem, assistantMessageText, ensurePlanFile, isAssistantMessage } from "./plan.ts";
 import { createPlanSession, registerPlanSurfaces } from "./plan-session.ts";
 import {
   applyInheritedModeForChild,
@@ -241,19 +241,8 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
   // streaming stats (for the working-indicator readout)
   let gitBranch = "";
 
-  // ---- small helpers -----------------------------------------------------
-  const isAssistant = (m: any): boolean =>
-    !!m && m.role === "assistant" && Array.isArray(m.content);
-
-  const getText = (m: any): string =>
-    Array.isArray(m?.content)
-      ? m.content
-          .filter((c: any) => c?.type === "text")
-          .map((c: any) => c.text)
-          .join("\n")
-      : typeof m?.content === "string"
-        ? m.content
-        : "";
+  // (SR-4b) the isAssistant/getText helpers moved to plan.ts as
+  // isAssistantMessage/assistantMessageText — single shared copy.
 
   function persistState(): void {
     pi.appendEntry("modes", {
@@ -785,7 +774,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     // assistant first (TurnEndEvent.message is a union); ctx.model is the
     // direct seam for the cap.
     try {
-      if (isAssistant(event.message)) {
+      if (isAssistantMessage(event.message)) {
         const verdict = classifyLengthStop({
           stopReason: (event.message as { stopReason?: string }).stopReason,
           usage: (event.message as { usage?: { output?: number } }).usage,
@@ -799,8 +788,8 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     }
 
     const msg = event.message;
-    if (!isAssistant(msg)) return;
-    const text = getText(msg);
+    if (!isAssistantMessage(msg)) return;
+    const text = assistantMessageText(msg);
 
     plan.onTurnEnd(text, ctx);
   });

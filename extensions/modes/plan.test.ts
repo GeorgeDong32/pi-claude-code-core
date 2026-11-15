@@ -5,7 +5,7 @@ import { describe, expect, it, beforeEach } from "vitest";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, symlinkSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { TodoItem, extractPlanSection, extractTodoItems, filterSubstantivePlanItems, getPlanFilePath, isCompletionSignal, isPlaceholderPlanItem, isPlanFilePath, markCompletedSteps, shouldSyncAssistantPlanToFile } from "./plan.ts";
+import { TodoItem, assistantMessageText, extractPlanSection, extractTodoItems, filterSubstantivePlanItems, getPlanFilePath, isAssistantMessage, isCompletionSignal, isPlaceholderPlanItem, isPlanFilePath, markCompletedSteps, shouldSyncAssistantPlanToFile } from "./plan.ts";
 
 describe("extractTodoItems", () => {
 	it("extracts numbered items under a Plan: header", () => {
@@ -158,3 +158,47 @@ describe("plan helpers", () => {
 		).toBe(true)
 	})
 })
+
+// SR-4b: the single shared isAssistant/getText pair (plan-session.ts + index.ts
+// both consume it now). Bodies are pinned verbatim — see the `textOf` note in
+// plan.ts for why this is NOT merged with compaction's textOf.
+describe("assistant message helpers (SR-4b)", () => {
+	it("isAssistantMessage: array content → true", () => {
+		expect(isAssistantMessage({ role: "assistant", content: [{ type: "text", text: "hi" }] })).toBe(true);
+	});
+
+	it("isAssistantMessage: string content → false", () => {
+		expect(isAssistantMessage({ role: "assistant", content: "hi" })).toBe(false);
+	});
+
+	it("isAssistantMessage: null → false", () => {
+		expect(isAssistantMessage(null)).toBe(false);
+	});
+
+	it("assistantMessageText: text blocks join with newline, non-text skipped", () => {
+		expect(
+			assistantMessageText({
+				role: "assistant",
+				content: [
+					{ type: "text", text: "first" },
+					{ type: "tool_call", id: "x" },
+					{ type: "text", text: "second" },
+				],
+			}),
+		).toEqual("first\nsecond");
+	});
+
+	it("assistantMessageText: string content passes through", () => {
+		expect(assistantMessageText({ role: "assistant", content: "plain" })).toEqual("plain");
+	});
+
+	it("assistantMessageText: text block missing text yields an empty segment", () => {
+		// map produces [undefined, "a"]; join("\n") stringifies undefined as ""
+		expect(
+			assistantMessageText({
+				role: "assistant",
+				content: [{ type: "text" }, { type: "text", text: "a" }],
+			}),
+		).toEqual("\na");
+	});
+});
