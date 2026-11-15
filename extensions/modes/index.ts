@@ -10,16 +10,12 @@
  *   - bypass  Full auto-approve (old auto semantics); sparse security reminders.
  */
 
-import { Type } from "typebox";
 import {
-  defineTool,
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { Text, truncateToWidth } from "@earendil-works/pi-tui"
 import { MODE_META, modeMetaData } from "./ui/meta.ts";
 import { clearModesStatus, installModesFooter, shortenPath } from "./ui/footer.ts";
-import { clearPlanWidget, updatePlanWidget as updatePlanWidgetUi } from "./ui/plan-widget.ts";
 import { confirmChoice } from "./ui/confirm.ts";
 import { notify as uiNotify } from "../ui/notify.ts";
 // B1 truncation notices ride the same shared entry (alias for clarity at the call site).
@@ -100,10 +96,8 @@ import { OutsideWriteSnapshot, listTrackedOutsideWrites, popTrackedOutsideWrite,
 import { commandReferencesSensitivePath, findProjectRoot, isCcSafetyPath, isOutsideCwd, isSensitivePath } from "./path-safety.ts";
 import { checkBashDenyScan, checkBashProtectedWrite, checkBashWriteTargets, resolveBashPathChecks, type BashProtectedWrite } from "./bash-path-check.ts";
 import { pathToolMatchesRuleContent } from "./path-permission-match.ts";
-import { TodoItem, ensurePlanFile, extractPlanSection, extractTodoItems, filterSubstantivePlanItems, getPlanFilePath, hashPlan, isPlanFilePath, markCompletedSteps, readPlanFile, resolveWorkspacePath, shouldSyncAssistantPlanToFile, writePlanFile } from "./plan.ts";
-import {
-  runPlanApprovalDialog,
-} from "./ui/plan-approval-dialog.ts";
+import { TodoItem, ensurePlanFile, isPlanFilePath, getPlanFilePath, resolveWorkspacePath } from "./plan.ts";
+import { createPlanSession, registerPlanSurfaces } from "./plan-session.ts";
 import {
   createForwardingPoller,
   defaultAgentDir,
@@ -128,18 +122,7 @@ type Mode = PermissionMode;
 const MODE_CYCLE: Mode[] = ["ask", "plan", "auto", "bypass"];
 
 
-// Tools available in plan mode (edit/write only for plan.md via tool_call gate).
-const PLAN_TOOLS = ["read", "bash", "grep", "find", "ls", "edit", "write", "plan_ready"];
 const PLAN_READ_TOOLS = new Set(["read", "grep", "find", "ls"]);
-/**
- * Gate-side classification for pi 0.99's meta tools (SPEC META-01..03):
- * `tool_search` only loads tool declarations (retrieval), `codemode` runs
- * model-written scripts that call other tools (execution surface). MCP
- * tools are detected via the shared lib/mcp-shape.ts predicate (native /
- * proxy / direct-named / bare `mcp_*` — declaring != executing, but every
- * MCP tool is a potential mutation, so plan denies them outright).
- */
-const PLAN_DISABLED = new Set<string>();
 
 type Block = { block: true; reason: string } | undefined;
 
@@ -169,19 +152,10 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
   // slot from this module, yielding to a live CC-TUI (see ui/fallback.ts).
   let fallbackAdapter = createFallbackAdapter({ hasUI: false, setWorkingMessage: () => {}, theme: { fg: (_r, s) => s } });
   let currentMode: Mode = "ask";
-  let planExecuting = false;
-  let planPhase: PlanPhase = "exploring";
-  let lastExtractedPlanHash = "";
-  let lastPlanOfferAt = 0;
-  /** Suppress agent_end re-offer after the user dismisses plan approval (Stay/Esc/Refine). */
-  let suppressPlanOfferUntil = 0;
-  const PLAN_OFFER_COOLDOWN_MS = 60_000;
   let needsAskReminder = false;
   let needsBypassSecurityReminder = false;
   let pendingComplianceInject = false;
   let complianceCategory = "";
-  let toolsBeforePlanMode: string[] | undefined;
-  let planTodos: TodoItem[] = [];
   let projectRoot: string | null = null;
   let classifierConfig = resolveClassifierConfig(loadPermissionModesConfig());
   let autoModeConfig = resolveAutoModeConfig(loadPermissionModesConfig());
@@ -197,6 +171,21 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
   // adjudicator so bypass does not exempt it.
   let batchDupIndex: BatchDupIndex | null = null;
   const parentLoopBreaker = createParentLoopBreaker();
+
+  // ---- plan session (E13b + CORE-17) --------------------------------------
+  // The plan lifecycle (executing flag, phase, todos, offer cooldown/suppress,
+  // pre-plan tool snapshot) is owned by plan-session.ts; index keeps only the
+  // mode state and assembles the persisted `modes` entry via entryFields().
+  // Deps are lazy closures so construction order never matters (no TDZ).
+  const plan = createPlanSession({
+    pi,
+    getMode: () => currentMode,
+    setModeRaw: (mode) => {
+      currentMode = mode;
+    },
+    persistState,
+    applyProfileForMode: (mode, ctx) => profiles.applyForMode(mode, ctx),
+  });
 
   const autoEngine = createAutoEngine({
     getClassifierConfig: () => classifierConfig,
@@ -272,10 +261,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     pi.appendEntry("modes", {
       currentMode,
       activeProfile: profiles.active,
-      planPhase,
-      planExecuting,
-      planTodos,
-      lastExtractedPlanHash,
+      ...plan.entryFields(),
     });
   }
 
@@ -491,23 +477,10 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
   // returned surface.
 
   // ---- tool gating -------------------------------------------------------
+  // The snapshot/restore logic (toolsBeforePlanMode, PLAN_TOOLS) is plan
+  // state — the PlanSession owns it (plan-session.ts).
   function applyToolRestrictions(): void {
-    if (planExecuting) {
-      if (toolsBeforePlanMode !== undefined) {
-        pi.setActiveTools(toolsBeforePlanMode);
-        toolsBeforePlanMode = undefined;
-      }
-      return;
-    }
-    if (currentMode === "plan") {
-      if (toolsBeforePlanMode === undefined)
-        toolsBeforePlanMode = pi.getActiveTools();
-      const kept = toolsBeforePlanMode.filter((t) => !PLAN_DISABLED.has(t));
-      pi.setActiveTools([...new Set([...kept, ...PLAN_TOOLS])]);
-    } else if (toolsBeforePlanMode !== undefined) {
-      pi.setActiveTools(toolsBeforePlanMode);
-      toolsBeforePlanMode = undefined;
-    }
+    plan.applyToolRestrictions();
   }
 
   // ---- mode switching ----------------------------------------------------
@@ -540,7 +513,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     needsBypassSecurityReminder = mode === "bypass";
     pendingComplianceInject = false;
     complianceCategory = "";
-    planExecuting = false;
+    plan.resetOnModeSwitch(mode, ctx);
 
     if (mode === "auto") {
       autoEngine.resetDenialState();
@@ -548,13 +521,6 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     } else if (prev === "auto") {
       applyAutoModePermissionStrip();
     }
-
-    if (mode !== "plan") {
-      planPhase = "exploring";
-      lastExtractedPlanHash = "";
-    }
-    planTodos = [];
-    if (ctx.hasUI) clearPlanWidget(ctx);
 
     applyToolRestrictions();
     clearModesStatus(ctx);
@@ -564,10 +530,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     const run = modeSwitchTail.then(async () => {
       if (gen !== setModeGeneration) return; // superseded while queued
       // plan.md is created only when plan mode SETTLES (BH-E4)
-      if (mode === "plan") {
-        ensurePlanFile(ctx.cwd);
-        if (prev !== "plan") planPhase = "exploring";
-      }
+      if (mode === "plan") plan.onPlanModeSettled(prev, ctx.cwd);
       await profiles.applyForMode(mode, ctx);
       if (gen !== setModeGeneration) return; // superseded mid-flight
       persistState();
@@ -618,7 +581,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     coreBus().publish({
       modes: {
         mode: (patch.mode ?? prev.mode) as "ask" | "plan" | "auto" | "bypass" | "",
-        planPhase: (patch as { planPhase?: PlanPhase }).planPhase ?? prev.planPhase ?? planPhase,
+        planPhase: (patch as { planPhase?: PlanPhase }).planPhase ?? prev.planPhase ?? plan.phase,
         workingStats:
           patch.workingStats !== undefined ? patch.workingStats : prev.workingStats,
         // XPKG-08: mode-only patches keep the latest usage ("usage" NOT in
@@ -815,179 +778,11 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerCommand("plan-execute", {
-    description:
-      "Execute the current plan immediately (switches to auto mode with step tracking)",
-    handler: async (_args, ctx) => {
-      if (currentMode !== "plan" && !planExecuting) {
-        uiNotify(ctx, "Not in plan mode. Use /plan first.", "warning");
-        return;
-      }
-      const planContent = readPlanFile(ctx.cwd);
-      const extracted = filterSubstantivePlanItems(
-        planContent ? extractTodoItems(planContent) : [],
-      );
-      if (!extracted.length) {
-        uiNotify(ctx, "No plan steps found in plan.md. Write a plan first.", "warning");
-        return;
-      }
-      await startPlanExecution(ctx, extracted);
-    },
-  });
-
-  /** P3-1 S2 (SPEC 2026-10-07): the ONE plan→auto execution transition.
-   *  Order follows /plan-execute: state → tool restrictions → status clear →
-   *  plan widget sync → persist → model profile → the modes-execute send.
-   *  The plan_ready path previously missed the widget update after the mode
-   *  flip — unified here (visible widget-sync fix, CHANGELOG'd). */
-  async function startPlanExecution(ctx: ExtensionContext, todos: TodoItem[]): Promise<void> {
-    planExecuting = true;
-    planPhase = "executing";
-    planTodos = todos;
-    currentMode = "auto";
-    applyToolRestrictions();
-    clearModesStatus(ctx);
-    updatePlanWidgetUi(ctx, planTodos);
-    persistState();
-    await profiles.applyForMode("auto", ctx);
-    const steps = planTodos.map((t) => `${t.step}. ${t.text}`).join("\n");
-    pi.sendMessage(
-      {
-        customType: "modes-execute",
-        content: `Execute the plan now. Steps:\n${steps}\n\nStart with step 1. After finishing each step, include a [DONE:n] tag in your reply.`,
-        display: true,
-      },
-      { triggerTurn: true, deliverAs: "followUp" },
-    );
-  }
-
-  // ---- plan approval helpers ---------------------------------------------
-  function markPlanOfferHandled(planContent: string): void {
-    lastPlanOfferAt = Date.now();
-    // Keep agent_end from immediately re-opening the same plan dialog after Stay/Esc.
-    suppressPlanOfferUntil = Date.now() + PLAN_OFFER_COOLDOWN_MS;
-    if (planContent) {
-      lastExtractedPlanHash = hashPlan(planContent);
-    }
-  }
-
-  async function promptPlanRefinement(ctx: ExtensionContext): Promise<void> {
-    if (!ctx.hasUI) return;
-    planPhase = "refining";
-    const refinement = await ctx.ui.editor("Refine the plan:", "");
-    if (refinement?.trim()) {
-      pi.sendUserMessage(refinement.trim(), { deliverAs: "followUp" });
-    }
-  }
-
-  function planReviewClosedToolResult() {
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: "Plan review closed. Wait for the user's next message; do not continue on your own.",
-        },
-      ],
-      terminate: true as const,
-      details: undefined,
-    };
-  }
-
-  // ---- plan_ready tool (model-initiated plan submission) -------------------
-  const PLAN_READY_TOOL_NAME = "plan_ready";
-
-  pi.registerTool(defineTool({
-    name: PLAN_READY_TOOL_NAME,
-    label: "Plan Ready",
-    description:
-      "Submit the completed plan to the user for approval. Only available in plan mode. The user will see the plan and choose to execute, refine, or stay in plan mode.",
-    promptSnippet:
-      "Call plan_ready when your plan in plan.md is complete and ready for user review.",
-    promptGuidelines: [
-      "Only call plan_ready when you have finished exploring and the plan file contains a concrete, numbered implementation plan.",
-      "Do NOT call plan_ready if the plan still has open questions or incomplete sections.",
-      "After calling plan_ready, stop and wait for the user's decision. Do not begin implementation.",
-      "If the user asks to refine, update plan.md and call plan_ready again when ready.",
-    ],
-    parameters: Type.Object({
-      summary: Type.Optional(
-        Type.String({ description: "Brief one-line summary of the plan for the approval dialog." }),
-      ),
-    }),
-    executionMode: "sequential",
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      if (currentMode !== "plan") {
-        return {
-          content: [{ type: "text", text: "plan_ready is only available in plan mode. Current mode: " + currentMode }],
-          details: undefined,
-        };
-      }
-      const planContent = readPlanFile(ctx.cwd);
-      const extracted = filterSubstantivePlanItems(
-        planContent ? extractTodoItems(planContent) : [],
-      );
-      if (!extracted.length) {
-        return {
-          content: [{ type: "text", text: "No plan steps found in plan.md. Write a numbered plan first, then call plan_ready." }],
-          details: undefined,
-        };
-      }
-
-      planTodos = extracted;
-      persistState();
-      updatePlanWidgetUi(ctx, planTodos);
-
-      const summary = params.summary?.trim() || undefined;
-      const stepsPreview = extracted.map((t) => `${t.step}. ${t.text}`).join("\n");
-
-      if (!ctx.hasUI) {
-        // Headless: auto-execute
-        const summaryLine = summary ? `${summary}\n\n` : "";
-        return {
-          content: [{ type: "text", text: `Plan submitted (headless auto-execute).\n${summaryLine}${stepsPreview}` }],
-          details: undefined,
-        };
-      }
-
-      // Suppress agent_end re-offer while this dialog is open and after dismiss.
-      markPlanOfferHandled(planContent ?? "");
-      const choice = await runPlanApprovalDialog(ctx, {
-        summary,
-        planContent: planContent ?? "",
-        stepCount: extracted.length,
-      });
-      markPlanOfferHandled(planContent ?? "");
-
-      if (choice === "execute") {
-        await startPlanExecution(ctx, planTodos);
-        return {
-          content: [{ type: "text", text: "Plan approved by user. Switching to execution mode." }],
-          terminate: true,
-          details: undefined,
-        };
-      }
-
-      if (choice === "refine") {
-        await promptPlanRefinement(ctx);
-        return planReviewClosedToolResult();
-      }
-
-      // stay | cancel (Esc): one dismiss returns to the input prompt.
-      return planReviewClosedToolResult();
-    },
-    renderCall(args, theme) {
-      return new Text(
-        theme.fg("toolTitle", "plan_ready ") + theme.fg("muted", truncateToWidth(String(args?.summary ?? ""), 60)),
-        0, 0,
-      );
-    },
-    renderResult(result, _options, theme) {
-      const first = result.content?.find((c: any) => c.type === "text") as
-        | { text?: string }
-        | undefined;
-      return new Text(theme.fg("muted", truncateToWidth(String(first?.text ?? ""), 80)), 0, 0);
-    },
-  }));
+  // ---- plan surfaces (E13b/CORE-17) ---------------------------------------
+  // /plan-execute + the plan_ready tool live in plan-session.ts now; they
+  // register here, at the historical position between /mode and
+  // /outside-writes.
+  registerPlanSurfaces(pi, plan);
 
   // ---- /outside-writes + /undo-outside-writes (NEW v1.1.3) --------------
   // Format a snapshot for display in lists/selectors.
@@ -1473,20 +1268,15 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
         })
       : "";
 
-    if (planExecuting && planTodos.length) {
-      const remaining = planTodos
-        .filter((t) => !t.completed)
-        .map((t) => `${t.step}. ${t.text}`)
-        .join("\n");
-      modeBlock = `[Plan/executing] Execute steps from plan.md. Remaining:\n${remaining}\nMark progress with [DONE:n] tags.`;
-      planPhase = "executing";
-      if (complianceBlock) modeBlock = `${modeBlock}\n${complianceBlock}`;
+    const execBlock = plan.executingPromptBlock(complianceBlock);
+    if (execBlock !== undefined) {
+      modeBlock = execBlock;
     } else {
       const planPath =
         currentMode === "plan" ? shortenPath(ensurePlanFile(ctx.cwd)) : undefined;
       modeBlock = resolveModePrompt({
         mode: currentMode,
-        planPhase,
+        planPhase: plan.phase,
         planFilePath: planPath,
         needsAskReminder,
         needsBypassSecurityReminder,
@@ -1631,96 +1421,16 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     if (!isAssistant(msg)) return;
     const text = getText(msg);
 
-    if (planExecuting && planTodos.length) {
-      if (markCompletedSteps(text, planTodos) > 0) updatePlanWidgetUi(ctx, planTodos);
-      persistState();
-    }
+    plan.onTurnEnd(text, ctx);
   });
 
   // ---- agent_end: idle reset + plan complete + plan offer ----------------
+  // The plan flow (completion announcement while executing, plan-mode offer
+  // with sync + cooldown) lives in plan-session.ts; it reports whether it
+  // handled the event so this handler can early-return exactly as before.
   pi.on("agent_end", async (event, ctx) => {
     if (ctx.hasUI) ctx.ui.setWorkingMessage();
-
-    // Plan execution in progress: announce completion when all steps are done.
-    if (planExecuting && planTodos.length) {
-      if (planTodos.every((t) => t.completed)) {
-        if (ctx.hasUI) {
-          pi.sendMessage(
-            {
-              customType: "plan-complete",
-              content: "**Plan Complete!** ✓",
-              display: true,
-            },
-            { triggerTurn: false },
-          );
-          clearPlanWidget(ctx);
-        }
-        planExecuting = false;
-        planTodos = [];
-        persistState();
-      }
-      return;
-    }
-
-    // In plan mode: sync plan.md and offer next action (throttled).
-    if (currentMode !== "plan" || !ctx.hasUI || planExecuting) return;
-
-    const planContent = readPlanFile(ctx.cwd);
-    let extracted = filterSubstantivePlanItems(
-      planContent ? extractTodoItems(planContent) : [],
-    );
-
-    const lastAssistant = [...event.messages].reverse().find(isAssistant);
-    const assistantText = lastAssistant ? getText(lastAssistant) : "";
-    const assistantPlan = assistantText
-      ? filterSubstantivePlanItems(extractTodoItems(assistantText))
-      : [];
-
-    if (!extracted.length && assistantPlan.length) {
-      if (shouldSyncAssistantPlanToFile(planContent)) {
-        const planSection = extractPlanSection(assistantText);
-        if (planSection) writePlanFile(ctx.cwd, planSection);
-        extracted = assistantPlan;
-      }
-    } else if (assistantPlan.length) {
-      if (shouldSyncAssistantPlanToFile(planContent)) {
-        const assistantSection = extractPlanSection(assistantText);
-        if (assistantSection) writePlanFile(ctx.cwd, assistantSection);
-        extracted = assistantPlan;
-      }
-    }
-
-    if (!extracted.length) return;
-
-    // Cooldown / Stay dismiss: don't re-offer within 60s of the last offer.
-    if (Date.now() - lastPlanOfferAt < PLAN_OFFER_COOLDOWN_MS) return;
-    if (Date.now() < suppressPlanOfferUntil) return;
-
-    const syncedContent = readPlanFile(ctx.cwd) ?? planContent ?? "";
-    const contentHash = hashPlan(
-      syncedContent || JSON.stringify(extracted),
-    );
-    const isFirst = !lastExtractedPlanHash;
-    const changed = contentHash !== lastExtractedPlanHash;
-    if (!isFirst && !changed) return;
-
-    planTodos = extracted;
-    persistState();
-
-    // Mark before await so a concurrent agent_end cannot open a second dialog.
-    markPlanOfferHandled(syncedContent || JSON.stringify(extracted));
-    const choice = await runPlanApprovalDialog(ctx, {
-      planContent: syncedContent,
-      stepCount: extracted.length,
-    });
-    markPlanOfferHandled(syncedContent || JSON.stringify(extracted));
-
-    if (choice === "execute") {
-      await startPlanExecution(ctx, planTodos);
-    } else if (choice === "refine") {
-      await promptPlanRefinement(ctx);
-    }
-    // stay | cancel (Esc): dialog already closed; return silently to the input prompt.
+    if (await plan.onAgentEnd(event, ctx)) return;
   });
 
   // Compaction reaction (SC §5.9, W5): one named function driven BOTH by the
@@ -1788,14 +1498,9 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
           if (m === "accept-edits") m = "ask";
           if ((MODE_CYCLE as string[]).includes(m)) currentMode = m as PermissionMode;
         }
-        if (typeof last.planPhase === "string")
-          planPhase = last.planPhase as PlanPhase;
-        if (typeof last.planExecuting === "boolean")
-          planExecuting = last.planExecuting;
-        if (Array.isArray(last.planTodos))
-          planTodos = last.planTodos as TodoItem[];
-        if (typeof last.lastExtractedPlanHash === "string")
-          lastExtractedPlanHash = last.lastExtractedPlanHash;
+        // Overlay-ONLY restore of the plan fields lives in the PlanSession;
+        // the mode-name mapping (legacy renames) stays here.
+        plan.restoreFromEntry(last);
         if (typeof last.activeProfile === "string")
           profiles.restoreFromEntry(last.activeProfile);
       }
@@ -1836,7 +1541,7 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     }
 
     applyToolRestrictions();
-    if (planExecuting && planTodos.length) updatePlanWidgetUi(ctx, planTodos);
+    plan.onSessionStartUi(ctx);
     if (currentMode === "ask") needsAskReminder = true;
     if (currentMode === "bypass") needsBypassSecurityReminder = true;
     if (ctx.hasUI) {
