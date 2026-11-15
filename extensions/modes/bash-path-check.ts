@@ -936,7 +936,8 @@ function scanBashDeny(
  * S2 (spec 2026-11-15-cleanup-hardening): the single-scan public entry —
  * ONE pass over the command yields both verdicts: the first Read/Edit
  * deny-rule hit (whole-command deny) and the first unrecognized mv/cp
- * flag escalation (ask). Callers that need both (modes/index.ts buildFacts)
+ * flag escalation (ask). Callers that need both (modes/adjudication-facts.ts
+ * collectAdjudicationFacts)
  * must scan each command once here instead of running the deny scan and a
  * second empty-rules scan (the deleted checkBashFlagEscalation hack).
  */

@@ -1,7 +1,7 @@
 /**
  * adjudicate.ts — the permission adjudication DECIDE half (SPEC 2026-10-07
  * P2-1, A1=B / A2=B). PURE: no pi, no ctx, no disk, no closures. The adapter
- * (index.ts) collects cheap in-memory facts and calls decide(); the decision
+ * (adjudication-facts.ts) collects cheap in-memory facts and calls decide(); the decision
  * is then executed by interpret.ts through injected ports.
  *
  * Adjudication order (the whole point of this module — keep this table in

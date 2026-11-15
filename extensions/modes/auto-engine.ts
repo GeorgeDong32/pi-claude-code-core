@@ -57,7 +57,7 @@ export interface AutoEngineDeps {
 	getAutoModeConfig(): { allow?: string[]; soft_deny?: string[] } | undefined;
 	getMode(): string;
 	getFusionSchemaHint(toolName: string): string;
-	/** The approval-prompt path (index.ts) the engine falls back to. */
+	/** The approval-prompt path (approval-flow.ts) the engine falls back to. */
 	promptWithPermissionOptions(ctx: ExtensionContext, tool: string, input: Record<string, unknown>, label: string, category: string): Promise<Block>;
 	uiNotify(ctx: ExtensionContext, msg: string, level: "info" | "warning" | "error"): void;
 	trackOutsideWrite(cwd: string, record: { timestamp: string; originalPath: string; toolName: string; backupContent: string | null }): void;

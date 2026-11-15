@@ -102,18 +102,19 @@ fail-closed,但 block reason 现在原样携带该 family 给出的建议 allow
 | 领域 | 文件 | 说明 |
 |---|---|---|
 | 权限引擎 | `permissions.ts`、`permission-rule-parser.ts`、`permissions-loader.ts`、`bash-permission-match.ts`、`path-permission-match.ts`、`shell-rule-matching.ts`、`dangerous-permissions.ts` | 规则解析/加载/匹配(Claude-Code 风格 `tool(content)` 规则);loader 合并用户级 + 项目级规则文件 |
-| 裁决 module(P2-1) | `adjudicate.ts`、`interpret.ts`、`classifier-retry.ts` | 纯 `decide(facts)→Decision`(判定顺序表见 adjudicate.ts 头注释)+ `interpretDecision` 经注入端口执行副作用;入口 `createPermissionAdjudicator(deps).check(call)`。Step 1+2 已迁 bypass/规则/plan/ask/auto 阶梯;classifier 经 classify 决策走 `classifier-retry.ts`(clock 注入,Step 3 已完成)。对拍 golden:`test/lib/adjudication-parity.test.ts` |
+| 裁决 module(P2-1) | `adjudication-facts.ts`、`adjudicate.ts`、`interpret.ts`、`classifier-retry.ts` | `adjudication-facts.ts` 收集廉价的内存事实(`createAdjudicationFacts(deps).collectAdjudicationFacts(call)`,含 fusion 工具 schema 扫描);纯 `decide(facts)→Decision`(判定顺序表见 adjudicate.ts 头注释)+ `interpretDecision` 经注入端口执行副作用;入口是 index.ts 里的 `createPermissionAdjudicator(deps).check(call)`。Step 1+2 已迁 bypass/规则/plan/ask/auto 阶梯;classifier 经 classify 决策走 `classifier-retry.ts`(clock 注入,Step 3 已完成)。对拍 golden:`test/lib/adjudication-parity.test.ts` |
+| 审批流 | `approval-flow.ts` | 审批副作用层(`createApprovalFlow(deps)`):唯一决策执行器 `applyApprovalDecision`、四选一 `promptWithPermissionOptions`(含父转发子路径)、规则族 first-seen 弹窗、`promptApproval`、ask 模式 edit/write 五选一对话框;同时导出共享的 `Block` 类型 |
 | 规则族(接缝) | `rule-families.ts` | `registerRuleFamily` —— web-gov/mcp-gov 使用的扩展点;会话授权、裁定缓存、bypass 状态 |
 | auto 分类器 | `classifier-client.ts`、`classifier-prompt.ts`、`classifier-prompts/`、`classifier-transcript.ts`、`classifier-tool*.ts`、`classifier-redact.ts`、`classifier-messages.ts` | auto 模式的可选 LLM 分类器;读取 AGENTS.md 上下文、脱敏、缓存裁定 |
-| 子代理集成 | `permission-forwarding.ts`、`mode-inherit.ts` | 审批转发经 `~/.pi/agent/sessions/permission-modes-forwarding/sessions/<id>/{requests,responses}`(P0-CT-05);`PERMISSION_MODES_INHERITED_MODE` 继承(P0-CT-04) |
+| 子代理集成 | `permission-forwarding.ts`、`mode-inherit.ts`、`forwarding-responder.ts` | 审批转发经 `~/.pi/agent/sessions/permission-modes-forwarding/sessions/<id>/{requests,responses}`(P0-CT-05)——父侧响应器(轮询 + claimed ids + 响应写入)在 `forwarding-responder.ts`;`PERMISSION_MODES_INHERITED_MODE` 继承(P0-CT-04) |
 | Profiles | `profiles.ts` | 模型 profile(`provider/model[:effort]` 经 `lib/model-id.ts`);未设置时 `applyProfileModelForMode` 返回 undefined——没有静默 medium 默认 |
-| Plan 模式 | `session-branch.ts`、`branch-stats.ts`、`fusion-tools.ts`、`injection-probe.ts`、`config.ts`、`plan.ts`、`plan-gate.ts` | plan 阶段跟踪、会话分支 |
+| Plan 模式 | `plan-session.ts`、`session-branch.ts`、`branch-stats.ts`、`fusion-tools.ts`、`injection-probe.ts`、`config.ts`、`plan.ts`、`plan-gate.ts` | `plan-session.ts` = PlanSession 状态属主(E13b/CORE-17:executing 标志、阶段、todos、offer 冷却/suppress、工具快照;注册 /plan-execute + plan_ready);plan 文本/文件原语在 `plan.ts`;`plan-gate.ts` = 纯 plan 硬限制块(P0-1);index.ts 保留模式状态与持久化 entry 的拼装 |
 | 工作统计 presenter | `stats-presenter.ts`、`working-stats.ts` | 流式计数器、working-stats 快照推导、工作消息刷新（C4 批次 1） |
 | auto 模式引擎 | `auto-engine.ts`、`denial-tracking.ts`、`classifier-retry.ts` | 本地 tier-3 阶梯、classifier 调用与拒绝计数（C4 批次 2） |
 | Working stats | `working-stats.ts` | **AR1005-ST(2026-10-05)**:流式统计缓存 —— cheap key = sessionManager 实例(WeakMap id)+ sessionId + leafId(合法空 branch 的 null 可缓存;getter 缺失/抛错 = 不可缓存,绝不当作"空 leaf")。message_update 命中 key = 零 getBranch/getContextUsage 调用(实测 1K/10K/50K branch × 200 次 update 全零;基线为 200 次 getBranch —— 即复现的 10K 下 200 万次 parent-map 读取)。失效:session_start/session_tree/session_shutdown reset;session_compact invalidate;message_end markDirty(先于宿主 append —— 与 leafId key 双保险,契约 AR1005-ST-HOST 对真实 SessionManager 钉住 leaf 移动);model_select onModelChange;turn_start/turn_end force(已提交终态)、before_provider_request forceUsage(不再无条件重求和)。无 cheap key 的旧宿主走无缓存读路径(peer floor 不变);读取失败绝不缓存为成功空快照 |
 | Bash 风险分析 | `bash-analysis.ts` | safe/destructive/auto-fallback/auto-approvable 分级裁决（自旧 `utils.ts` 拆出，arch review C3） |
 | 路径安全与项目身份 | `path-safety.ts` | outside-cwd/敏感路径检测；project root/id/tmp-dir（自 `utils.ts` 拆出） |
-| Outside-write 快照 | `outside-writes.ts` | `<ts>__<hash>.json` track/list/restore/pop 引擎（自 `utils.ts` 拆出；命令层在 `index.ts`） |
+| Outside-write 快照 | `outside-writes.ts`、`outside-writes-commands.ts` | `<ts>__<hash>.json` track/list/restore/pop 引擎（自 `utils.ts` 拆出）；`/outside-writes` + `/undo-outside-writes` 命令层在 `outside-writes-commands.ts` |
 | Mode prompt 手术 | `mode-prompt.ts` | 锚点式 mode 提醒注入 + skill 块过滤（自 `utils.ts` 拆出） |
 | Auto 风险 | `auto-risk.ts` | auto 模式的 bash 分类模式 + outside-cwd 写入风险（自 `utils.ts` 拆出） |
 | UI | `ui/footer.ts`、`ui/meta.ts`、`ui/confirm.ts`、`ui/plan-widget.ts`、`ui/plan-approval-dialog.ts` | `MODE_META` 单点维护 icon/label/role(总线 `meta` 通道) |

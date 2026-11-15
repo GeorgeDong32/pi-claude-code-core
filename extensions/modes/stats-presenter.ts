@@ -142,7 +142,8 @@ export function createStatsPresenter(deps: StatsPresenterDeps) {
 
   /** turn_end stats segment: ONE forced committed-final read feeds the TPS
    * math AND the display refresh (the old handler read the branch twice per
-   * turn_end). The plan-step tracking that follows stays in index.ts. */
+   * turn_end). The plan-step tracking that follows lives in
+   * plan-session.ts (PlanSession.onTurnEnd). */
   function onTurnEndStats(ctx: ExtensionContext): void {
     const stats = workingStats.snapshot(statsHost(ctx), { force: true }).stats;
     const elapsed = Math.max((Date.now() - streamStart) / 1000, 0.001);

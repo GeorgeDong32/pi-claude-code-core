@@ -3,7 +3,7 @@
  * Carved out of the old modes/utils.ts grab-bag (arch review C3, 2026-10-03);
  * behavior unchanged. Owns the <ts>__<hash>.json snapshot records under the
  * project tmp dir (track / list / restore / pop, 100-entry eviction). The
- * command layer lives in modes/index.ts.
+ * command layer lives in modes/outside-writes-commands.ts.
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
 import path from "node:path"
