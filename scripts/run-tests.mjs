@@ -7,7 +7,7 @@
  *   - vitest suites : test/lib, extensions/modes (colocated, P1)
  *   - node:test     : extensions/{effort,goal,review,action-fusion,observation-pack,bg-shell,compaction,memory,web-gov}/tests
  *
- * Missing directories are skipped so the entry works at every phase.
+ * Missing or empty directories are skipped so the entry works at every phase.
  * Exit code is non-zero if any suite fails.
  *
  * CH E9 (2026-11-15): the node:test suites are no longer run through a shell
@@ -65,9 +65,17 @@ const nodeTestDirs = [
 ].filter(existsSync);
 
 for (const dir of nodeTestDirs) {
+	const files = testFiles(dir);
+	if (files.length === 0) {
+		// An empty dir must not reach tsx: with no file args it would glob-
+		// discover **/*.test.* across the whole repo, pulling vitest suites
+		// into node:test (CH-6).
+		console.log(`\n[run-tests] node:test → ${dir}: no *.test.ts files, skipped`);
+		continue;
+	}
 	console.log(`\n[run-tests] node:test → ${dir}`);
 	try {
-		execFileSync(bin("tsx"), ["--test", ...testFiles(dir)], { stdio: "inherit", cwd: root });
+		execFileSync(bin("tsx"), ["--test", ...files], { stdio: "inherit", cwd: root });
 	} catch {
 		failed = true;
 	}
