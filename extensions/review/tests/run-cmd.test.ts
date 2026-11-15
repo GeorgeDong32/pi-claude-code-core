@@ -66,28 +66,46 @@ describe("run-cmd timeout escalation (T1/T2/T3, SPEC CH 2026-11-15)", () => {
 			// The shell execs into sleep 30 (dies on SIGTERM); the orphaned
 			// `sleep 5` keeps the shared stdout pipe open, so `close` cannot
 			// fire until it exits — unless the adapter drains + destroys.
-			defaultRunCmd("sh", ["-c", "sleep 5 & exec sleep 30"], { cwd: tmpdir(), timeoutMs: 200 }),
+			// The shell prints the orphan pid to stderr so the finally below
+			// can reap it (the sleep duration is deliberately NOT shortened —
+			// a shorter orphan would hide drain regressions).
+			defaultRunCmd("sh", ["-c", "sleep 5 & echo $! >&2; exec sleep 30"], { cwd: tmpdir(), timeoutMs: 200 }),
 			6000,
 			"T1b",
 		);
-		const elapsed = Date.now() - t0;
-		assert.ok(r.exitCode !== 0);
-		assert.ok(r.stderr.includes("timed out"));
-		assert.ok(elapsed < 2000, `pipe drain must bound the resolve, took ${elapsed}ms`);
+		try {
+			const elapsed = Date.now() - t0;
+			assert.ok(r.exitCode !== 0);
+			assert.ok(r.stderr.includes("timed out"));
+			assert.ok(elapsed < 2000, `pipe drain must bound the resolve, took ${elapsed}ms`);
+		} finally {
+			// Reap the orphaned sleep so nothing outlives the test.
+			const pid = Number(r.stderr.split("\n")[0]);
+			if (pid > 0) try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
+		}
 	});
 
 	test("T2: timer firing after the child already exited resolves with the REAL exit code", async () => {
 		const t0 = Date.now();
 		const r = await bounded(
-			defaultRunCmd("sh", ["-c", "echo hi; sleep 3 & exit 0"], { cwd: tmpdir(), timeoutMs: 500 }),
+			// The shell prints the orphaned `sleep 3` pid to stderr so the
+			// finally below can reap it (duration NOT shortened — a shorter
+			// orphan would hide the T2 window the test exercises).
+			defaultRunCmd("sh", ["-c", "echo hi; sleep 3 & echo $! >&2; exit 0"], { cwd: tmpdir(), timeoutMs: 500 }),
 			2500,
 			"T2",
 		);
-		const elapsed = Date.now() - t0;
-		assert.equal(r.exitCode, 0, `real exit code expected, got ${r.exitCode} (stderr: ${r.stderr})`);
-		assert.match(r.stdout, /hi/);
-		assert.ok(!r.stderr.includes("timed out"), "an exited child is not a timeout");
-		assert.ok(elapsed < 2000, `must not wait for the orphaned pipe, took ${elapsed}ms`);
+		try {
+			const elapsed = Date.now() - t0;
+			assert.equal(r.exitCode, 0, `real exit code expected, got ${r.exitCode} (stderr: ${r.stderr})`);
+			assert.match(r.stdout, /hi/);
+			assert.ok(!r.stderr.includes("timed out"), "an exited child is not a timeout");
+			assert.ok(elapsed < 2000, `must not wait for the orphaned pipe, took ${elapsed}ms`);
+		} finally {
+			// Reap the orphaned sleep so nothing outlives the test.
+			const pid = Number(r.stderr.split("\n")[0]);
+			if (pid > 0) try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
+		}
 	});
 
 	test("T5: child dead before a due timer is processed → real exit code", async () => {
