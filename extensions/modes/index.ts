@@ -22,10 +22,7 @@ const sharedNotify = uiNotify;
 import { createFallbackAdapter } from "../ui/fallback.ts";
 import { coreBus, type CoreSnapshot } from "../bus.ts"
 import { clearSessionGrants, clearSessionState, listSessionGrants, setBypassIndicator } from "./rule-families.ts"
-import { getSharedEffortOwner, type OwnerEffortLevel } from "../../lib/effort-owner.ts";
 import { registerCompactionSubscriber } from "../../lib/compaction-seam.ts";
-import { homedir } from "node:os";
-import path from "node:path";
 
 
 import {
@@ -63,7 +60,6 @@ import { planCcImport, executeCcImport, formatCcImportReport } from "./cc-import
 import {
   formatMergedRulesForDisplay,
   type PermissionRule,
-  type PermissionVerdict,
 } from "./permissions.ts";
 import { PermissionMode, PlanPhase, filterSkillsFromPrompt, injectModePrompt, resolveModePrompt } from "./mode-prompt.ts";
 import {
@@ -72,12 +68,12 @@ import {
 } from "./adjudicate.ts";
 import { interpretDecision } from "./interpret.ts";
 import { trackOutsideWrite } from "./outside-writes.ts";
-import { findProjectRoot } from "./path-safety.ts";
 import { pathToolMatchesRuleContent } from "./path-permission-match.ts";
 import { createAdjudicationFacts } from "./adjudication-facts.ts";
 import { createApprovalFlow, type Block } from "./approval-flow.ts";
 import { createForwardingResponder } from "./forwarding-responder.ts";
-import { registerOutsideWritesCommands } from "./outside-writes-commands.ts";import { TodoItem, ensurePlanFile, resolveWorkspacePath } from "./plan.ts";
+import { registerOutsideWritesCommands } from "./outside-writes-commands.ts";
+import { TodoItem, ensurePlanFile } from "./plan.ts";
 import { createPlanSession, registerPlanSurfaces } from "./plan-session.ts";
 import { defaultAgentDir, isSubagentChildProcess } from "./permission-forwarding.ts";
 import {
@@ -92,7 +88,6 @@ type Mode = PermissionMode;
 const MODE_CYCLE: Mode[] = ["ask", "plan", "auto", "bypass"];
 
 
-const PLAN_READ_TOOLS = new Set(["read", "grep", "find", "ls"]);
 
 /**
  * Cross-extension capability object (plan B7): the single typed channel to
@@ -124,7 +119,6 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
   let needsBypassSecurityReminder = false;
   let pendingComplianceInject = false;
   let complianceCategory = "";
-  let projectRoot: string | null = null;
   let classifierConfig = resolveClassifierConfig(loadPermissionModesConfig());
   let autoModeConfig = resolveAutoModeConfig(loadPermissionModesConfig());
   let basePermissionRules: PermissionRule[] = [];
@@ -554,15 +548,6 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
   // carries no command substitution). Single-segment verdicts are pinned
   // identical to the legacy whole-command matcher.
 
-  function allowToolCall(): undefined {
-    if (currentMode === "auto") {
-      autoEngine.noteAllowed();
-    }
-    return undefined;
-  }
-
-
-
   const adjudicator = createPermissionAdjudicator({
     collectFacts: facts.collectAdjudicationFacts,
     interpret: (call, decision) =>
@@ -926,15 +911,6 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
       gitBranch = readGitBranch(ctx.sessionManager) ?? "";
     } catch {
       /* ignore */
-    }
-
-    // Cache the project root once per session.
-    if (projectRoot === null) {
-      try {
-        projectRoot = findProjectRoot(ctx.cwd);
-      } catch {
-        projectRoot = null;
-      }
     }
 
     applyToolRestrictions();
