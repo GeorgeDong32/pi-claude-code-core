@@ -11,6 +11,10 @@
 // path), and the waiter reports the end itself via `claimCompletion` —
 // everything `notifyOnce` does except the message. A wait aborted before it
 // claims leaves `notified` false, so the next poll tick reports normally.
+// SR-1a (SPEC TR, 2026-11-15): the wait loop checks registry membership
+// before it settles, so a task `endSession` forgot is left unsettled — its
+// pid can never land in `emptyGroups` and be skipped by the next session's
+// end-kill after the OS reused it.
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -628,8 +632,11 @@ export async function awaitTaskEnd(task: Task, ms: number, signal: AbortSignal):
 		// A kill in flight settles the state itself (SIGTERM first, the state set
 		// once the group is gone): a refresh here would read the dead pid before
 		// the reason is recorded and call the end `exit-unknown`.
-		if (task.killing === undefined) refresh(registry, task);
+		// Membership comes first: `endSession` forgets tasks without settling
+		// them, and a refresh of a forgotten task would mark its group empty —
+		// the next session's end-kill would then skip a pid the OS has reused.
 		if (getRegistry().tasks.get(task.id) !== task) return true;
+		if (task.killing === undefined) refresh(registry, task);
 		if (task.state !== "running") return true;
 		if (signal.aborted) throw new Error("aborted");
 		const left = deadline - Date.now();

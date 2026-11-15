@@ -213,6 +213,25 @@ describe("TaskOutput with block: true", () => {
 		const output = text(await clock.settle(call));
 		assert.match(output, /\[still running after 5 s\]$/);
 	});
+
+	it("SR-1a: a task endSession forgot is not settled — its pid never lands in emptyGroups", async () => {
+		const s = session();
+		const id = await start(s, "echo done");
+		const call = s.toolCall("TaskOutput", { id, block: true });
+		const task = getRegistry().tasks.get(id)!;
+		assert.equal(task.waiting, 1); // the call is blocked on the task
+		procs.of(id).write("done\n");
+		procs.of(id).exit(0); // marker in the log, group gone — the poller has not ticked
+		// The session ends while the wait sleeps: endSession forgets the task (its
+		// state is still `running`), so the waking loop must find the task gone
+		// before it settles anything — a `refresh` here would mark the group empty,
+		// and the next session's end-kill would then skip a reused pid.
+		await s.shutdown("quit");
+		const output = text(await clock.settle(call));
+		assert.match(output, /done/);
+		assert.equal(getRegistry().emptyGroups.has(task.pid), false, "a forgotten task's pid must not be marked empty");
+		assert.equal(getRegistry().emptyGroups.size, 0);
+	});
 });
 
 describe("TaskOutput block/timeout validation", () => {
