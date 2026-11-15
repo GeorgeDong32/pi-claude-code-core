@@ -24,6 +24,12 @@
 | [清理与加固](2026-11-15-cleanup-hardening.md) | CH 批：review/ 深审遗留 R2–R12（R9 记录、R11 三处对账 D-CH-2、R12 干跑只取元数据 D-CH-3）、Standards 六异味 S1–S6、run-cmd 超时加固 T1–T4（SIGKILL 升级/竞态/≤0 语义/结构化 timedOut）、D1 memory inFlight 钉测 + D2 FX-2 上游提案草稿、BH P3 小项 E1–E12（E4/E13 不做；E1 放行 cd + 路径追踪 D-CH-4）；三路并行（W-R/W-M/W-B） | **已实施完成（2026-11-15）**：22 提交合入（W-B→W-M→W-R 变基 ff），main `d9e610b` 三门 + 金丝雀全绿且 test 零失败（vitest 1249 / node:test 1108）；三路审查均 PASS-with-nits（W-M 审查 P1 引号并置绕过合入前修复 `62a405d`）；E12 directive −26%（15,311→11,363 字符）；台账见 CHANGELOG Unreleased + DEVIATIONS CH-1…10 + PROGRESS 同日节 |
 | [拆分、阻塞等待与真机验收](2026-11-15-split-wait-realhost.md) | SR 批：E4 TaskOutput 阻塞等待（block/timeout 秒制）、E13 goal.ts / modes/index.ts 拆分（modes 侧连带 PlanSession，关闭 CORE-17）+ 死代码清理；W-H 真机验收（rex + glm-5.3-flash：H-SC-1…7 + S3-GLM + AR1005-RU/ST-HOST + XPKG-09 异步面）；先装 0.6.0（两机）并清理 sc-* 残留 | **已实施完成（2026-11-15）**：阶段1 双机 0.6.0（4ce33f8，用户授权）；阶段2 三路合入 W-B→W-G→W-M 变基 ff（…`be013d8`），main 四门全绿（vitest 1260 / node:test 1130 / contracts 108+4todo / 金丝雀 5/5）；阶段3 真机 H-SC-1/2/3/4/5b/6 PASS（6 带 CPA 注记）、H-SC-7 机制 PASS（真实 orchestrator run 待证据）、S3-GLM PASS（MiniMax/OpenAI 待证据）、RU-HOST/XPKG-09 PASS、ST-HOST ⑪ 已裁决（前提反转无影响）；本地提交未 push（D-SR-5）；台账 CHANGELOG Unreleased + DEVIATIONS SR-1…11 + PROGRESS 同日节，沙盒证据 `~/.cache/pi-core-acceptance/2026-11-15/` |
 
+## 新增：收尾与发版（2026-11-15，TR）
+
+| spec | 内容 | 状态 |
+|---|---|---|
+| [证据补完、H-SC-7 真实 run、P3 卫生批与 0.7.0 发版](2026-11-15-tail-release.md) | TR 批：A 真机补证据（S3-MiniMax/GPT/OpenAI 兼容 + H-SC-6 严格腿）、B H-SC-7 真实 orchestrator run（带被动收集兜底 D-TR-3）、C P3 卫生批（SR-1/SR-4/CH-6/CH-8 记档项，3 路并行）、D 发版 0.7.0 + push + 双机安装（D-TR-4 用户授权）；FX-2 本轮不做（D-TR-2） | 已批准（2026-11-15），实施中 |
+
 ## 实际状态与续做范围
 
 | 优先级 | spec | 清单项 | 当前状态 |
