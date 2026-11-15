@@ -34,6 +34,14 @@
  *     convention) — the timer is simply not armed.
  *   - T4/S5: timed-out results carry `timedOut: true` on CmdResult so
  *     callers branch on data, not stderr text.
+ *   - CH-8a (2026-11-15): the timer body is deferred one check-phase hop
+ *     (setTimeout → setImmediate) so a child that died before a due timer
+ *     is delivered by the poll phase first and resolves with its real exit
+ *     code (T5) instead of being misclassified as a timeout. A child
+ *     exiting after that poll phase but before the check phase is truly
+ *     simultaneous with the deadline — inherent, not fixed. The timeout
+ *     classification deliberately ignores the exit signal (a child that
+ *     traps TERM and exits 0 would be misread; compare T1a).
  */
 import { spawn } from "node:child_process";
 
@@ -122,7 +130,20 @@ export async function defaultRunCmd(cmd: string, args: string[], opts: RunCmdOpt
 				resolve(r);
 			};
 			if (hasTimeout) {
-				timer = setTimeout(() => {
+				// CH-8a: the timer body is deferred one libuv phase (check
+				// phase via setImmediate). Without the hop, timers run BEFORE
+				// poll in one iteration: a child that already died (zombie,
+				// exit pending) plus a timer due in the same iteration sees
+				// exited === false and is misclassified as a timeout. The
+				// poll phase in between delivers the pending exit, so the T2
+				// branch below resolves with the real exit code. The
+				// `settled` guard covers an immediate firing after finalize.
+				// Inherent (not fixed): a child exiting after that poll phase
+				// but before the check phase is truly simultaneous with the
+				// deadline. Deliberately NOT "exit signal === null means not
+				// timed out" — that would misclassify a child that traps TERM
+				// and exits 0 (compare T1a).
+				timer = setTimeout(() => setImmediate(() => {
 					if (settled) return;
 					if (exited) {
 						// T2: the child is already dead — this is not a timeout.
@@ -142,7 +163,7 @@ export async function defaultRunCmd(cmd: string, args: string[], opts: RunCmdOpt
 							/* already gone */
 						}
 					}, RUN_CMD_KILL_GRACE_MS);
-				}, opts.timeoutMs);
+				}), opts.timeoutMs);
 			}
 			child.stdout?.setEncoding("utf-8");
 			child.stderr?.setEncoding("utf-8");

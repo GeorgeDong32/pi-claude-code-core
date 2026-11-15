@@ -90,6 +90,25 @@ describe("run-cmd timeout escalation (T1/T2/T3, SPEC CH 2026-11-15)", () => {
 		assert.ok(elapsed < 2000, `must not wait for the orphaned pipe, took ${elapsed}ms`);
 	});
 
+	test("T5: child dead before a due timer is processed → real exit code", async () => {
+		// libuv runs timers BEFORE poll in one iteration: a child that died
+		// while the loop was blocked plus a timer due in the same iteration
+		// used to see exited === false (the exit callback has not run yet),
+		// mark timedOut and SIGTERM a zombie — resolving exitCode 1 /
+		// timedOut: true instead of the real exit code. Deferring the timer
+		// body one check-phase hop lets the poll phase deliver the pending
+		// exit so the T2 branch handles it.
+		const p = defaultRunCmd("sh", ["-c", "exit 0"], { cwd: tmpdir(), timeoutMs: 5 });
+		const end = Date.now() + 300;
+		while (Date.now() < end) {
+			// block the event loop so the child can die before its exit
+			// callback is delivered and the 5ms timer comes due
+		}
+		const r = await p;
+		assert.equal(r.exitCode, 0, `real exit code expected, got ${r.exitCode} (stderr: ${r.stderr})`);
+		assert.equal(r.timedOut, undefined, "a child that died before the timer is not a timeout");
+	});
+
 	test("T3: timeoutMs <= 0 means NO timeout (Node convention)", async () => {
 		const r = await defaultRunCmd("sleep", ["0.3"], { cwd: tmpdir(), timeoutMs: 0 });
 		assert.equal(r.exitCode, 0, `sleep 0.3 must survive a 0 timeout, got ${r.exitCode} (${r.stderr})`);
