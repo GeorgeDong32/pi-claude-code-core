@@ -42,7 +42,7 @@ A watcher process (outside the task's group) kills the group if pi dies.
 | Tool | Purpose |
 |---|---|
 | `bash` (overridden) | adds `background` / `waitFor` / `description` (a short human label, CC parity — shown with the id everywhere tasks are listed); without them it is pi's own bash over the same wrapper |
-| `TaskOutput` | incremental read from the task's read position; `latest`, `filter` regex; optional `block: true` waits for the task to end first — up to `timeout` seconds (default 30, maximum 600, over the cap throws), a user message ends the wait early with the output so far |
+| `TaskOutput` | incremental read from the task's read position; `latest`, `filter` regex; optional `block: true` waits for the task to end first — up to `timeout` seconds (above 0, default 30, maximum 600, out-of-range values throw), a user message ends the wait early with the output so far |
 | `TaskStop` | SIGTERM to the process group → grace → SIGKILL; no completion message follows |
 | `TaskList` | one line per task: id, state, runtime, command |
 
@@ -104,9 +104,11 @@ reattach — both are deliberate scope cuts (DEVIATIONS).
 CC's `TaskOutput` blocks by default and takes its `timeout` in milliseconds.
 Core's `block` defaults to false (the notification already wakes an idle
 agent, so a plain read stays the common case) and `timeout` is in seconds —
-default 30, maximum 600; a value over the cap throws
-(`timeout is in seconds (not ms); maximum is 600`) instead of being clamped,
-and `timeout` without `block: true` throws too (E4, D-SR-3).
+above 0 and finite, default 30, maximum 600; an out-of-range value throws
+(`timeout is in seconds (not ms); must be a finite number above 0`, or
+`timeout is in seconds (not ms); maximum is 600` past the cap) instead of
+being clamped, and `timeout` without `block: true` throws too (E4, D-SR-3;
+SR-1b).
 
 ## Known deviations from upstream pi-bg-bash
 

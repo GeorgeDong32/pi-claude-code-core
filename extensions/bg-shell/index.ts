@@ -10,8 +10,9 @@
 // direction); do not port that.
 //
 // E4 (SPEC SR, 2026-11-15): TaskOutput gained optional `block`/`timeout`
-// parameters (seconds, default 30, cap 600 — over the cap throws, never
-// clamps). A blocking call waits via `awaitTaskEnd` and claims the completion
+// parameters (seconds, above 0 and finite, default 30, cap 600 — out-of-range
+// values throw, never clamp; SR-1b). A blocking call waits via `awaitTaskEnd`
+// and claims the completion
 // via `claimCompletion`, so no followUp message follows; a plain read of a
 // finished task also claims through `claimCompletion`, which — unlike the old
 // inline flag in `readOutput` — appends the status row and gzips the log
@@ -145,12 +146,15 @@ export default function (pi: ExtensionAPI): void {
 				}),
 			),
 			timeout: Type.Optional(
-				Type.Number({ description: "Seconds (not ms) to wait when `block: true`; default 30, maximum 600" }),
+				Type.Number({ description: "Seconds (not ms), above 0, to wait when `block: true`; default 30, maximum 600" }),
 			),
 		}),
 		async execute(_toolCallId, params, signal) {
 			const task = getRegistry().tasks.get(params.id);
 			if (task === undefined) throw new Error(`Unknown task id: ${params.id}. TaskList lists this session's tasks.`);
+			// Before the cap check, so Infinity gets the finite message, not 600's.
+			if (params.timeout !== undefined && (!Number.isFinite(params.timeout) || params.timeout <= 0))
+				throw new Error("timeout is in seconds (not ms); must be a finite number above 0");
 			if (params.timeout !== undefined && params.timeout > BLOCK_MAX_SECONDS)
 				throw new Error("timeout is in seconds (not ms); maximum is 600");
 			if (params.timeout !== undefined && !params.block) throw new Error("timeout applies only with block: true");

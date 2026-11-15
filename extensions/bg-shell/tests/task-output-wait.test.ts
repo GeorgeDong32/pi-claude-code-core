@@ -255,4 +255,20 @@ describe("TaskOutput block/timeout validation", () => {
 		await assert.rejects(() => s.toolCall("TaskOutput", { id: "bg-99" }), /Unknown task id: bg-99/);
 		await assert.rejects(() => s.toolCall("TaskOutput", { id: "bg-99", block: true }), /Unknown task id: bg-99/);
 	});
+
+	const rejectsNonPositive = async (timeout: number) => {
+		const s = session();
+		const id = await start(s, "sleep 30");
+		// settle keeps a red run bounded: today 0/negative return a bogus read and
+		// NaN/Infinity block forever, which settle turns into a clean failure.
+		await assert.rejects(
+			() => clock.settle(s.toolCall("TaskOutput", { id, block: true, timeout })),
+			/^Error: timeout is in seconds \(not ms\); must be a finite number above 0$/,
+		);
+	};
+
+	it("a timeout of 0 throws (must be above 0)", () => rejectsNonPositive(0));
+	it("a negative timeout throws", () => rejectsNonPositive(-5));
+	it("a NaN timeout throws", () => rejectsNonPositive(Number.NaN));
+	it("an Infinity timeout throws", () => rejectsNonPositive(Number.POSITIVE_INFINITY));
 });
