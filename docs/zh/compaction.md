@@ -265,3 +265,15 @@ pi 1.5.2 上反转（message_end 在 SessionManager append 之后触发——mod
 `~/.cache/pi-core-acceptance/2026-11-15/LEDGER.md`（原始 jsonl/截屏不入库）。
 未了项：H-SC-7 真实 orchestrator run、S3 其余端点、H-SC-6 直连故障注入；
 SC-1 的三次未归因遗漏仍无原因码。
+2026-11-15 TR 批收尾（沙盒 `~/.cache/pi-core-acceptance/2026-11-15-tr/`）：上节未了项
+大部分清账——H-SC-7 真实 orchestrator run **全判据 PASS**（完整 L2 流水线真实跑完：
+planner/worker×3/GK 独立会话、t1–t3 merge、一轮 rework；压缩恰落在 t2 merged 后 t3
+派出前（tokensBefore 90,282，ST-01 applied/validated，摘要 9,369 字符）；摘要台账
+`[flow r1 · reviewing]` 含开放 run + 闭环各一行 + 开放 t3 + 哨兵行，诱饵 board 零入
+台账；压缩后派 t3 用台账 id、tool 日志仅协议命令，零 board 重读）；S3-MiniMax PASS
+（M3.1-Flash，applied/validated，2,533 字符正文）；S3-OpenAI 兼容路径 PASS（pi
+openai-completions 适配器全链路，3,041 字符正文）；H-SC-6 严格腿 PASS（真·死模型
+127.0.0.1:9：预压 refused+冷却→阈值原生触发→regenerate 腿按设计用会话模型
+（`summaryModel` 只管预压）→native-backfill 真摘要→会话存活）——上批「CPA 兜底
+路由使持续死模型不可构造」的注记就此闭环。仍待证据：S3-GPT（CPA 部署无 gpt 后端，
+400 unknown provider；恢复条件=可路由 GPT 端点）；SC-1 三次未归因遗漏仍无原因码。

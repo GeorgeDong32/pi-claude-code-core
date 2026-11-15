@@ -28,7 +28,7 @@
 
 | spec | 内容 | 状态 |
 |---|---|---|
-| [证据补完、H-SC-7 真实 run、P3 卫生批与 0.7.0 发版](2026-11-15-tail-release.md) | TR 批：A 真机补证据（S3-MiniMax/GPT/OpenAI 兼容 + H-SC-6 严格腿）、B H-SC-7 真实 orchestrator run（带被动收集兜底 D-TR-3）、C P3 卫生批（SR-1/SR-4/CH-6/CH-8 记档项，3 路并行）、D 发版 0.7.0 + push + 双机安装（D-TR-4 用户授权）；FX-2 本轮不做（D-TR-2） | 已批准（2026-11-15），实施中 |
+| [证据补完、H-SC-7 真实 run、P3 卫生批与 0.7.0 发版](2026-11-15-tail-release.md) | TR 批：A 真机补证据（S3-MiniMax/GPT/OpenAI 兼容 + H-SC-6 严格腿）、B H-SC-7 真实 orchestrator run（带被动收集兜底 D-TR-3）、C P3 卫生批（SR-1/SR-4/CH-6/CH-8 记档项，3 路并行）、D 发版 0.7.0 + push + 双机安装（D-TR-4 用户授权）；FX-2 本轮不做（D-TR-2） | **已实施（2026-11-15）**：C 批 16 提交线性合入 main `6cdfe6a`，四门全绿（vitest 91 文件 / node:test 1138 / contracts 108+4todo / 金丝雀 5/5）；A：S3-MiniMax、S3-OpenAI 兼容、H-SC-6 严格腿 PASS，S3-GPT 待证据（CPA 无 gpt 后端）；B：H-SC-7 真实 orchestrator run 全判据 PASS（台账 flow r1·reviewing、诱饵零入台账、压缩后派 t3 零重读）；D：发版冒烟 PASS→0.7.0（tag v0.7.0 已推，双机安装核验）。台账：DEVIATIONS TR 节 + SR-1/SR-11 勘误 + SC-3 收窄；沙盒 `~/.cache/pi-core-acceptance/2026-11-15-tr/` |
 
 ## 实际状态与续做范围
 

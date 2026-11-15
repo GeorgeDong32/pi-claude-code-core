@@ -1,4 +1,14 @@
-# PROGRESS — pi-claude-code-core 实施进度
+# PROGRESS
+
+## 2026-11-15 TR 收尾与发版批（SPEC-2026-11-15-tail-release.md）
+
+- **C（P3 卫生批，3 路并行 worker + 3 路独立审查，PASS-with-nits P3-only）**：bg-shell SR-1a/1b（TaskOutput await 间隙守卫 + timeout ≤0/非有限前置拒绝——勘误：原以为上限兜底已拒，实测 0/负数被接受）、CH-6①②③（TaskStop 汇入去重 notified 守卫、特征测试钉「发送失败回滚后 TaskStop 抢先」、run-tests 空目录跳过）；modes SR-4a/4b/4c（PlanSession.startExecution 接口成员删除、isAssistant/getMessage 合并 plan.ts 导出、adjudication-facts 七场景字面量钉测新建）；review CH-8a/8b/8d/8e（run-cmd 同拍超时竞态 setImmediate 修正、review 状态武装收窄至 directive message_start + pi-review-directive 常量、孤儿 sleep 进程组收割、尾随换行）。审查记档项不改（killForLogLimit 行强制 killed=既有行为、any=spec 逐字、测试 tmpdir 假设、review steer 武装无 harness 用例）。三 nit 直修：W-M cleanStepText 注释更正（只剥 "Add"）、W-R pi-review-directive 常量提升 + /proc 孤儿 pid 解析按行正则。16 提交线性合入（W-B→W-M→W-R，rebase ff，无 merge commit）。
+- **门禁（main 6cdfe6a）**：check 双过；vitest 91 文件（新增 adjudication-facts 7）；node:test 1138（bg-shell 305+7、review 204+1、其余平）；contracts 108+4todo；金丝雀 5/5。**如实**：首轮全量 1 个 bg-shell 失败（未捕获名，负载敏感一次性抖动，疑似 T5 竞态测试）；同套件连续 4 次 + 全量重跑共 5 次全绿。合入事故：git add -A 把 worktree 的 node_modules 符号链接提交并经 checkout 覆盖主仓真实 node_modules——amend 移除 + pnpm store 1.2s 重建，事故后四门全部重跑通过。
+- **A（真机补证据）**：S3-MiniMax PASS（M3.1-Flash + 8192：applied/validated，2,533 字符正文，compute-ready 5,962ms）；S3-OpenAI 兼容 PASS（沙盒 CPAO provider 走 pi openai-completions 适配器全链路，3,041 字符正文）；S3-GPT 待证据（CPA 代理 gpt-6* 全系 400 unknown provider——非 core 缺陷，refused 行为顺带再证）；H-SC-6 严格腿 PASS（127.0.0.1:9 真·死模型：预压 refused+冷却 10 turns→阈值 124,779 原生触发→regenerate 腿按设计用会话模型（index.ts regenerateNow: ctx.model，summaryModel 只管预压）→20.5s 真摘要 3,906 字符 native-backfill→probe 双事件→会话存活 48k 续聊）。
+- **B（H-SC-7 真实 orchestrator run）全判据 PASS**：被测会话（core 6cdfe6a 线 + TUI + probe，bypass，cwd=目标仓）完整跑 L2：planner session 产出 specs/r1-three-files.md@a019bbcb（3 串行 task）→worker/GK 独立 session（w/a·w1 feat 6dfe5ce→GK merge 6116b10→w/b·w2 fix 054abeb→merge e7e1aa0）→**压缩**（tokensBefore 90,282，ST-01 applied/validated，9,369 字符摘要，estPost 50,492）→w/c·w3 压缩后正确派发（仅协议工具，无 board 重读；一轮 rework 重做通过）→GK 回收、board r1:done。摘要台账 `[flow r1 · reviewing]` 含开放 run+闭环各一行+t3 todo+哨兵行，台账层诱饵零出现（模型叙事曾提及 decoy 一次，如实记）。全程两次用户提示（session-vs-window 澄清、GK 闲置推动），GK 未挂 watch 改轮询被 orchestrator 检出并发纪律提醒。
+- **台账与发版**：沙盒 LEDGER `~/.cache/pi-core-acceptance/2026-11-15-tr/`（字段级数字，原始 36MB 不入库）；DEVIATIONS TR 节 + SR-1/SR-11 勘误 + SC-3 收窄至 S3-GPT；CHANGELOG TR 条目；docs compaction 真机节增补；spec/README TR 行转已实施。0.7.0 发版（D-TR-4 用户授权）：发版前冒烟（E4 TaskOutput block/timeout 真机首测 + /smart-compact status）PASS → bump 0.7.0 → CHANGELOG 定版 → tag v0.7.0 → push main+tag → sync-deploy-copies 双机。
+
+--- — pi-claude-code-core 实施进度
 
 > 每模块:状态 / 复查结论 / 测试计数 / 剩余风险。日期均为 2026-09。
 

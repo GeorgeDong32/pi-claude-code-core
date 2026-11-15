@@ -1,4 +1,4 @@
-## Unreleased — 拆分与真机验收批（SR）
+## Unreleased — 拆分与真机验收批（SR）+ 收尾发版批（TR）
 
 ### Added
 
@@ -7,7 +7,13 @@
 
 ### Changed
 
-- 内部拆分（行为不变）：`extensions/goal/goal.ts` 2378→1022 行（entries/turn-usage/summary/settings/commands/tools 六面），`extensions/modes/index.ts` 1975→969 行（plan-session/adjudication-facts/approval-flow/forwarding-responder/outside-writes-commands 五面 + plan-flow 特征测试）。真机验收（rex 驱动 TUI + GLM-5.3-flash，H-SC-1~7/S3）全部通过，细节见 DEVIATIONS.md SR 节与 `~/.cache/pi-core-acceptance/`（证据不入库）。
+- 内部拆分（行为不变）：`extensions/goal/goal.ts` 2378→1022 行（entries/turn-usage/summary/settings/commands/tools 六面），`extensions/modes/index.ts` 1975→969 行（plan-session/adjudication-facts/approval-flow/forwarding-responder/outside-writes-commands 五面 + plan-flow 特征测试）。
+- **bg-shell TaskOutput `timeout` 校验收紧（TR-1）**：`0`、负数与非有限值现在直接拒绝（"timeout is in seconds (not ms); must be a finite number above 0"）——此前 0/负数被当作普通读取并返回误导性的 "[still running after 0 s]"。
+- **bg-shell TaskStop 去重（TR-1）**：对同一运行中任务的并发 TaskStop 只写一行 killed 状态（此前每个汇入进行中 kill 的调用都追加一行）。
+- **review 状态武装收窄（TR-1，R11 后续）**：`running` 状态只在 review 指令消息真正进入回合时武装并对其回合对账——此前任何无关 agent 回合（用户插话、goal 续跑等）都可能把 `running` 提前复位为 `idle`（报告工具随后自愈，状态行会闪断）。
+- **review run-cmd 同拍超时竞态（TR-1）**：子进程在超时定时器到期前已退出（同一轮事件循环）时，现在返回真实退出码而不是误标 `timedOut`（判定延一拍让 poll 阶段先递送退出事件；与 deadline 真正同时的极端窗口仍在，已文档化）。
+- 真机验收收尾（rex + GLM-5.3-flash）：SR 批 H-SC-1~7/S3 全景之后，TR 批补齐 H-SC-7 真实 orchestrator run（全判据 PASS）、S3-MiniMax 与 OpenAI 兼容路径（PASS）、H-SC-6 真·死模型严格腿（PASS）；S3-GPT 因 CPA 代理无 gpt 后端记待证据。细节见 DEVIATIONS.md SR/TR 节与 `~/.cache/pi-core-acceptance/`（证据不入库）。
+- 内部：`scripts/run-tests.mjs` 空测试目录跳过（此前会触发 tsx 全仓 glob 把 vitest 套件也卷进来）；`PlanSession.startExecution` 未用接口成员删除；modes 内重复 helper 合并；review/modes 尾随换行补齐。
 
 ## 0.6.0 (2026-11-15) — 清理加固批（CH）
 

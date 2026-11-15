@@ -320,3 +320,21 @@ field-level ledger: `~/.cache/pi-core-acceptance/2026-11-15/LEDGER.md` (raw
 jsonl/screens stay outside the repository). Outstanding: H-SC-7's real
 orchestrator run, S3's remaining endpoints, H-SC-6 direct-endpoint fault
 injection; SC-1's three unattributed misses still have no reason codes.
+TR batch close-out (2026-11-15, sandbox `~/.cache/pi-core-acceptance/2026-11-15-tr/`):
+most of the items left open above are now settled. H-SC-7's real orchestrator run:
+**all criteria PASS** — a full L2 pipeline ran for real (planner / 3 workers /
+gatekeeper as independent sessions, t1–t3 merged, one rework round); compaction
+landed exactly between t2's merge and t3's dispatch (tokensBefore 90,282, ST-01
+applied/validated, 9,369-char summary); the summary ledger `[flow r1 · reviewing]`
+carried the open run, one line per merged task, the open t3, and the sentinels,
+with the decoy board absent from the ledger; after compaction, t3 was dispatched
+from ledger ids with protocol commands only and zero board re-reads. S3-MiniMax
+PASS (M3.1-Flash, applied/validated, 2,533-char body); S3-OpenAI-compatible PASS
+(full openai-completions adapter path, 3,041-char body); H-SC-6 strict leg PASS
+(a genuinely dead endpoint 127.0.0.1:9: precompute refused + cooldown → native
+threshold trigger → the regenerate leg uses the session model by design
+(`summaryModel` governs precompute only) → a real summary via native-backfill →
+session survived). This closes the earlier note that CPA's fallback routing made
+a persistently dead model unconstructible. Still pending evidence: S3-GPT (the
+CPA deployment has no gpt backend, 400 unknown provider; resume condition = a
+routable GPT endpoint); SC-1's three unattributed misses still have no reason codes.
