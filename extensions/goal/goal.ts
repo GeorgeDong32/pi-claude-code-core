@@ -27,161 +27,38 @@
  * - runningGoalId is factory state passed to the tools as a live getter.
  */
 
-import { Type } from "typebox";
-import { defineTool, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { notify as uiNotify } from "../ui/notify.ts";
 import { isSubagentChildProcess } from "../modes/permission-forwarding.ts";
 import { coreBus } from "../bus.ts";
 import { registerCompactionSubscriber } from "../../lib/compaction-seam.ts";
-import { Text } from "@earendil-works/pi-tui";
 
-// pi-ai 1.5.0 StringEnum returns a pi-schema `Schema`, which no longer unifies with
-// the typebox `TSchema` that defineTool's params generic expects — recreate it as a
-// typebox TUnsafe with the identical `{ type: "string", enum: [...] }` wire shape.
-function StringEnum<T extends readonly string[]>(values: T, options?: { description?: string; default?: T[number] }) {
-	return Type.Unsafe<T[number]>({ type: "string", enum: [...values], ...(options?.description !== undefined ? { description: options.description } : {}), ...(options?.default !== undefined ? { default: options.default } : {}) });
-}
-
-import {
-	footerStatus,
-	formatDuration,
-	formatTokenValue,
-	formatCostValue,
-	statusLabel,
-	truncateText,
-	displayObjectiveTitle,
-	pauseReasonLabel,
-	oneLineSummary,
-} from "./goal-core.ts";
-import { renderGoalAuditEvent, renderGoalEvent, renderGoalResult, type GoalAuditEventDetails } from "./renderers.ts";
-import {
-	buildDraftConfirmationText,
-	goalDraftingPrompt,
-	validateGoalDraftProposal,
-	type GoalDraftingFocus,
-} from "./goal-draft.ts";
-import {
-	goalAuditorConfigPath,
-	loadGoalAuditorFileConfig,
-	saveGoalAuditorFileConfig,
-	type GoalAuditorConfig,
-} from "./goal-auditor.ts";
-import {
-	proposalDialogFailureMessage,
-	registerQuestionnaireTools,
-	shouldAutoConfirmProposal,
-	showProposalDialog,
-} from "./goal-questionnaire.ts";
-import {
-	ABORT_GOAL_TOOL_NAME,
-	ACTIVE_GOAL_TOOL_NAMES,
-	CREATE_GOAL_TOOL_NAME,
-	POST_STOP_ALLOWED_TOOLS,
-	PROPOSE_DRAFT_TOOL_NAME,
-	QUESTIONNAIRE_TOOL_NAME,
-	QUESTION_TOOL_NAME,
-	SISYPHUS_STEP_TOOL_NAME,
-	GOAL_PROGRESS_TOOL_NAMES,
-	lifecycleToolNamesForGoalStatus,
-	TWEAK_APPLY_TOOL_NAME,
-} from "./goal-tool-names.ts";
-import {
-	asRecord,
-	cloneGoal,
-	createGoal,
-	goalFocusDetails,
-	normalizeGoalRecord,
-	normalizeGoalFocusEntry,
-	nowIso,
-	type AssistantMessageLike,
-	type DraftingFocus,
-	type GoalFocusEntry,
-	type GoalFocusReason,
-	type GoalCreationConfig,
-	type GoalEventDetails,
-	type GoalEventKind,
-	type GoalRecord,
-	type GoalResultKind,
-	type GoalStateEntry,
-	type GoalStatus,
-	type GoalUsage,
-	type StopReason,
-} from "./goal-record.ts";
+import { footerStatus, truncateText, displayObjectiveTitle, pauseReasonLabel } from "./goal-core.ts";
+import { renderGoalAuditEvent, renderGoalEvent, type GoalAuditEventDetails } from "./renderers.ts";
+import { registerQuestionnaireTools } from "./goal-questionnaire.ts";
+import { ACTIVE_GOAL_TOOL_NAMES, CREATE_GOAL_TOOL_NAME, PROPOSE_DRAFT_TOOL_NAME, QUESTIONNAIRE_TOOL_NAME, QUESTION_TOOL_NAME, SISYPHUS_STEP_TOOL_NAME, lifecycleToolNamesForGoalStatus, TWEAK_APPLY_TOOL_NAME } from "./goal-tool-names.ts";
+import { asRecord, cloneGoal, goalFocusDetails, normalizeGoalRecord, normalizeGoalFocusEntry, nowIso, type AssistantMessageLike, type GoalFocusEntry, type GoalFocusReason, type GoalCreationConfig, type GoalEventDetails, type GoalRecord, type GoalUsage } from "./goal-record.ts";
 import { createGoalAccounting } from "./goal-accounting.ts";
-import {
-	appendGoalEvent,
-	latestAuditorResultForGoal,
-	readGoalLedger,
-	type GoalLedgerEvent,
-} from "./goal-ledger.ts";
+import { appendGoalEvent, latestAuditorResultForGoal, readGoalLedger } from "./goal-ledger.ts";
 import { buildCompactionSummary } from "./goal-compaction.ts";
-import {
-	archiveGoalFile,
-	mergeGoalPromptFromDisk,
-	readActiveGoalPool,
-	sanitizeGoalPaths,
-	writeActiveGoalFile,
-} from "./storage/goal-files.ts";
-import {
-	buildGoalListText,
-	buildUnfocusedOpenGoalsSummary,
-	goalSelectorLabel,
-	mergeFocusedGoalWithDisk,
-	openGoalsFromPool,
-	otherOpenGoalCount,
-} from "./goal-pool.ts";
-import {
-	auditorRejectionBlock,
-	continuationPrompt,
-	goalPrompt,
-	goalTweakDraftingPrompt,
-	staleContinuationPrompt,
-	unfocusedOpenGoalsPrompt,
-	untrustedObjectiveBlock,
-} from "./prompts/goal-prompts.ts";
+import { archiveGoalFile, mergeGoalPromptFromDisk, readActiveGoalPool, sanitizeGoalPaths, writeActiveGoalFile } from "./storage/goal-files.ts";
+import { openGoalsFromPool, otherOpenGoalCount } from "./goal-pool.ts";
+import { auditorRejectionBlock, continuationPrompt, goalPrompt, staleContinuationPrompt, unfocusedOpenGoalsPrompt, untrustedObjectiveBlock } from "./prompts/goal-prompts.ts";
 import { buildGoalRunningNotification } from "./widgets/goal-notifications.ts";
 import { createGoalUi } from "./ui.ts";
 
-import {
-	abortGoalCommandMessage,
-	buildCompletionReport,
-	buildGoalCreatedReport,
-	clearGoalCommandMessage,
-	shouldArmPostCompactReminder,
-	shouldInjectPostCompactReminder,
-	validateGoalAbort,
-	validateGoalCompletion,
-	validatePauseGoal,
-	validateResumeGoal,
-} from "./goal-policy.ts";
+import { shouldArmPostCompactReminder, shouldInjectPostCompactReminder } from "./goal-policy.ts";
 import { createContinuationLoop } from "./goal-continuation.ts";
 import { createGoalLifecycle } from "./goal-lifecycle.ts";
-import { createPendingAchievementSlot, runCompletionAudit } from "./goal-audit-flow.ts";
+import { createPendingAchievementSlot } from "./goal-audit-flow.ts";
 import type { runGoalCompletionAuditor } from "./goal-auditor.ts";
-import {
-	FOCUS_ENTRY,
-	GOAL_AUDIT_ENTRY,
-	GOAL_EVENT_ENTRY,
-	STATE_ENTRY,
-	extractGoalIdFromInjectedMessage,
-	goalDetails,
-	goalEventMessageId,
-} from "./goal-entries.ts";
-import {
-	assistantTurnCost,
-	assistantTurnTokens,
-	hasAbortedAssistantMessage,
-	isAbortedAssistantMessage,
-	isToolUseAssistantMessage,
-	lastAssistantStopReason,
-	toolExecutionUsage,
-} from "./goal-turn-usage.ts";
+import { FOCUS_ENTRY, GOAL_AUDIT_ENTRY, GOAL_EVENT_ENTRY, STATE_ENTRY, extractGoalIdFromInjectedMessage, goalDetails, goalEventMessageId } from "./goal-entries.ts";
+import { assistantTurnCost, assistantTurnTokens, hasAbortedAssistantMessage, isAbortedAssistantMessage, isToolUseAssistantMessage, lastAssistantStopReason, toolExecutionUsage } from "./goal-turn-usage.ts";
 import { widgetGoalProjection } from "./goal-summary.ts";
 import { createGoalCommands } from "./goal-commands.ts";
 import { registerGoalTools } from "./goal-tools.ts";
 
 
-const CONTINUATION_IDLE_RETRY_MS = 50;
 /**
  * BH-R1 (spec 2026-11-14-backtest-hardening): provider-error continuation
  * guard. A run whose last assistant message ended stopReason "error" used to
@@ -193,30 +70,6 @@ const CONTINUATION_IDLE_RETRY_MS = 50;
 const CONTINUATION_ERROR_PAUSE_THRESHOLD = 2;
 const PROVIDER_ERROR_PAUSE_PREFIX = "provider error: ";
 const PROVIDER_ERROR_PAUSE_ACTION = "Check the model provider or quota (rate limit / credits), then run /goal resume to continue.";
-/**
- * Tools that count as "real work" toward the active goal. If a non-tool-use
- * turn ends without any of these having been called, we DO NOT queue the next
- * autoContinue — the agent was just chatting. This stops infinite chat loops.
- */
-
-
-/**
- * Tools that are NEVER blocked by the post-stop in-turn block. After pause_goal,
- * abort_goal, update_goal=complete, or apply_goal_tweak fires, the agent should
- * yield the turn; we block all subsequent tool calls except these read-only inspections.
- */
-
-/**
- * Thin session-local confirmation intent for /goals and /sisyphus.
- * It protects mode consistency and user confirmation without turning drafting
- * into a separate long-running runtime state machine.
- */
-interface GoalConfirmationIntent {
-	focus: GoalDraftingFocus;
-	originalTopic: string;
-	startedAt: number;
-}
-
 
 
 // ---------- extension entry point ----------
@@ -545,48 +398,6 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 
 	function refreshGoalDisplayFromDisk(ctx: ExtensionContext): void {
 		lifecycle.refreshDisplayFromDisk(ctx);
-	}
-
-	/**
-	 * Live above-editor widget for the active goal. Inspired by rpiv-todo's
-	 * TodoOverlay: register the widget once with a factory, read live state
-	 * via the closure at render time, and call `tui.requestRender()` on every
-	 * state change so the overlay refreshes without re-registration.
-	 *
-	 * Layout (sisyphus, running):
-	 *   ◆ Sisyphus  [▰▰▰▱▱] 3/5
-	 *   ├─ ⟡ extract validator … wire it … update tests.
-	 *   ├─ Status: sisyphus running · auto-continue · 14m 21s · 24.3k tokens
-	 *   └─ .pi/goals/active_goal_xxx.md
-	 *
-	 * Layout (paused with blocker):
-	 *   ⊘ Goal paused
-	 *   ├─ ⟡ improve benchmark coverage for the parser
-	 *   ├─ Status: paused (agent) · 2m 14s · 12.4k tokens
-	 *   ├─ Blocker: cannot find the tests directory
-	 *   └─ Suggested: ask the user for the test location
-	 */
-	// DC4b: serializable projection of the fields renderGoalWidgetLines
-	// consumes — carrying it on the snapshot makes the widget rebuildable
-	// by any consumer without closure getters.
-	function widgetGoalProjection(goal: NonNullable<ReturnType<typeof goalForDisplay>>): {
-		objective: string; status: string; sisyphus: boolean;
-		stopReason?: string; pauseReason?: string; pauseSuggestedAction?: string;
-		activePath?: string; archivedPath?: string; tokensUsed: number; activeSeconds: number; costUsed: number;
-	} {
-		return {
-			objective: goal.objective,
-			status: goal.status,
-			sisyphus: goal.sisyphus,
-			...(goal.stopReason !== undefined ? { stopReason: goal.stopReason } : {}),
-			...(goal.pauseReason !== undefined ? { pauseReason: goal.pauseReason } : {}),
-			...(goal.pauseSuggestedAction !== undefined ? { pauseSuggestedAction: goal.pauseSuggestedAction } : {}),
-			...(goal.activePath !== undefined ? { activePath: goal.activePath } : {}),
-			...(goal.archivedPath !== undefined ? { archivedPath: goal.archivedPath } : {}),
-			tokensUsed: goal.usage.tokensUsed,
-			activeSeconds: goal.usage.activeSeconds,
-			costUsed: goal.usage.costUsed,
-		};
 	}
 
 	function publishGoalChannel(
