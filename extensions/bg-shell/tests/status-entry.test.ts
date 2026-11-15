@@ -89,6 +89,18 @@ describe("status entry lifecycle through the real orchestration", () => {
 		assert.equal((s.entries[0]!.data as TaskStatusData).state, "exited");
 	});
 
+	it("CH-6: two concurrent TaskStops on one running task append exactly one killed row", async () => {
+		const s = session();
+		const id = await start(s, "sleep 30");
+		// The second call joins the kill already in flight; only the first appends.
+		await Promise.all([clock.settle(s.toolCall("TaskStop", { id })), clock.settle(s.toolCall("TaskStop", { id }))]);
+		await clock.tick(3);
+		assert.equal(s.sent.length, 0); // no completion message on a user stop
+		const rows = s.entries.filter((e) => e.type === STATUS_ENTRY_TYPE);
+		assert.equal(rows.length, 1, "exactly one killed row for the joined kill");
+		assert.equal((rows[0]!.data as TaskStatusData).state, "killed");
+	});
+
 	it("appendStatusEntry is fail-open: a throwing appendEntry never propagates", () => {
 		const pi = { appendEntry: () => { throw new Error("session closed"); } } as never;
 		appendStatusEntry(pi, fakeTask()); // must not throw

@@ -452,11 +452,12 @@ export async function killTask(
 	}
 	if (!options.notify) {
 		// Joining a kill already in flight (CH E5 note): the group kill under way
-		// really is ending the task, so the `killed` row is truthful here — and
-		// `notified = true` suppresses the in-flight kill's own notify path, so
-		// this stays the one row.
+		// really is ending the task, so the `killed` row is truthful here. The
+		// in-flight kill's own notify path is suppressed by `notified`, and a
+		// second joining TaskStop finds `notified` already set and appends
+		// nothing — one row per kill, however many calls join it (CH-6).
+		if (!task.notified && registry.pi !== undefined) appendStatusEntry(registry.pi, task, { state: "killed" });
 		task.notified = true;
-		if (registry.pi !== undefined) appendStatusEntry(registry.pi, task, { state: "killed" });
 	}
 	return task.killing;
 }
