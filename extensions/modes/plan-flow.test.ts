@@ -543,7 +543,7 @@ describe("plan flow characterization (SPEC SR W-M)", () => {
 		expect(await lastModesEntry(pi)).toMatchObject({
 			currentMode: "plan",
 			planTodos: [
-				// cleanStepText strips the leading verbs ("Implement"/"Add")
+				// cleanStepText strips only the leading "Add" verb — "Implement" is retained verbatim
 				{ step: 1, text: "Implement the parser module", completed: false },
 				{ step: 2, text: "Tests for the parser", completed: false },
 			],
