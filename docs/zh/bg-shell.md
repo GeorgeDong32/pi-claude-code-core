@@ -38,13 +38,19 @@ renderer——first-wins 下会永久遮蔽 TUI 的。独立 watcher 进程（�
 | 工具 | 用途 |
 |---|---|
 | `bash`（覆盖） | 增加 `background` / `waitFor` / `description`（短人话标签，对齐 CC——随 id 显示在所有任务列表处）；不带时即 pi 原生 bash 走同一 wrapper |
-| `TaskOutput` | 从任务读位置增量读取；`latest` 跳到最新、`filter` 正则过滤 |
+| `TaskOutput` | 从任务读位置增量读取；`latest` 跳到最新、`filter` 正则过滤；可选 `block: true` 先等任务结束——至多 `timeout` 秒（默认 30、上限 600，超上限直接报错），用户插话则提前结束等待、返回已有输出 |
 | `TaskStop` | 对进程组 SIGTERM → 宽限 → SIGKILL；随后不再发完成消息 |
 | `TaskList` | 每任务一行：id、状态、时长、命令 |
 
 模型通过 `TaskOutput` 读取已结束的任务时，读取本身即认领通知（对齐 CC
 的 `markTaskNotified`）：工具结果已携带输出与退出状态，不再补发冗余的
 完成消息——否则该消息会排在发起读取的那轮 turn 之后、迟到且重复。
+自 E4（SPEC SR，2026-11-15）起，认领改走 registry 的 `claimCompletion`，
+按其余完成同样的方式上报（只是不发消息）：追加状态行（BG-ENTRY-03），
+进程组退出后压缩日志——读取落在退出与下次轮询之间时，任务不再漏报。
+阻塞式 `TaskOutput`（`block: true`）等待期间持有任务（`waiting` 计数），
+轮询与任何 kill 路径都不会在其下方向它发完成消息——由等待者认领；等待在
+认领前被中止时 `notified` 保持 false，由下一次轮询正常上报。
 
 `/tasks` 打开管理面板（TUI：enter 看输出、x 确认后杀、q/esc 关闭、1 秒刷新；
 RPC 降级 `ui.select`；无 UI 打印列表）。`ctrl+shift+b` 把前台运行中的调用
@@ -83,9 +89,17 @@ CC 的 `/tasks` 还列 agent/teammate/workflow 任务并提供 `f`（重挂前�
 我们只管 shell 任务，且 pi 没有 turn 内重挂机制——两者都是刻意的范围裁剪
 （DEVIATIONS）。
 
+CC 的 `TaskOutput` 默认阻塞，`timeout` 以毫秒计。core 的 `block` 默认
+false（完成通知本就会唤醒空闲的 agent，普通读取才是常见路径），`timeout`
+以秒计——默认 30、上限 600；超过上限直接报错
+（`timeout is in seconds (not ms); maximum is 600`）而不截断，不带
+`block: true` 传 `timeout` 同样报错（E4，D-SR-3）。
+
 ## 与上游 pi-bg-bash 的已知偏离
 
 上游 0.5.0+ 完全移除了基于定时器的自动转后台（只剩 `waitFor` 命中与用户
 快捷键两种晋升）。core 保留自动转后台，且自 BH-R4 起扩展到带显式
 `timeout` 的调用（timeout 成为该任务的截止时间）——这是刻意的 vendor
-偏离（D-BH-2；见 DEVIATIONS）。
+偏离（D-BH-2；见 DEVIATIONS）。上游完全没有阻塞式 `TaskOutput`：
+`block`/`timeout` 与读取即认领的上报（状态行 + gzip）都是 core 新增
+（E4，SPEC SR）。

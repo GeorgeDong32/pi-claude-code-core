@@ -42,7 +42,7 @@ A watcher process (outside the task's group) kills the group if pi dies.
 | Tool | Purpose |
 |---|---|
 | `bash` (overridden) | adds `background` / `waitFor` / `description` (a short human label, CC parity — shown with the id everywhere tasks are listed); without them it is pi's own bash over the same wrapper |
-| `TaskOutput` | incremental read from the task's read position; `latest`, `filter` regex |
+| `TaskOutput` | incremental read from the task's read position; `latest`, `filter` regex; optional `block: true` waits for the task to end first — up to `timeout` seconds (default 30, maximum 600, over the cap throws), a user message ends the wait early with the output so far |
 | `TaskStop` | SIGTERM to the process group → grace → SIGKILL; no completion message follows |
 | `TaskList` | one line per task: id, state, runtime, command |
 
@@ -50,6 +50,15 @@ When the agent reads a finished task through `TaskOutput`, the read claims
 the notification (CC `markTaskNotified` parity): the tool result already
 carries the output and the exit state, so no redundant completion message
 follows — otherwise it would queue behind the very turn that did the reading.
+Since E4 (SPEC SR, 2026-11-15) the claim runs through the registry's
+`claimCompletion`, so it reports the end the way every other completion does
+minus the message: the status row is appended (BG-ENTRY-03) and the log is
+gzipped once the process group is gone — a read landing between the exit and
+the next poll tick no longer leaves the task unreported. A blocking
+`TaskOutput` (`block: true`) holds its task (`waiting` counter) while it
+waits, so neither the poller nor a kill path can send the completion
+underneath it — the waiter claims it; a wait aborted before claiming leaves
+`notified` false, and the next poll tick reports normally.
 
 `/tasks` opens the management panel (TUI: enter = output view, x = kill after
 confirm, q/esc closes, 1 s refresh; RPC degrades to `ui.select`; no-UI prints
@@ -92,9 +101,18 @@ CC's `/tasks` also lists agent/teammate/workflow tasks and offers `f`
 (reattach to foreground). We manage shell tasks only and pi has no turn
 reattach — both are deliberate scope cuts (DEVIATIONS).
 
+CC's `TaskOutput` blocks by default and takes its `timeout` in milliseconds.
+Core's `block` defaults to false (the notification already wakes an idle
+agent, so a plain read stays the common case) and `timeout` is in seconds —
+default 30, maximum 600; a value over the cap throws
+(`timeout is in seconds (not ms); maximum is 600`) instead of being clamped,
+and `timeout` without `block: true` throws too (E4, D-SR-3).
+
 ## Known deviations from upstream pi-bg-bash
 
 Upstream 0.5.0+ removed timer-based auto-promotion entirely (only `waitFor`
 matches or the user shortcut promote now). Core keeps auto-promotion and, since
 BH-R4, extends it to calls with an explicit `timeout` (which becomes the
 promoted task's deadline) — a deliberate vendored deviation (D-BH-2; DEVIATIONS).
+Upstream has no blocking `TaskOutput` at all: `block`/`timeout` and the
+claim-on-read report (status row + gzip) are core additions (E4, SPEC SR).
