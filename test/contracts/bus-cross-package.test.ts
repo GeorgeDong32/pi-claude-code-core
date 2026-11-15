@@ -13,8 +13,10 @@
  *          the two text header lines are a model-facing protocol only.
  * XPKG-05: then_run param shape — plain string AND the { command } object
  *          action-fusion actually registers.
- * XPKG-09-HOST: aboveEditor widget ordering — real-host sequencing evidence
- *          not available here; registered as test.todo per the todo gate.
+ * XPKG-09-HOST: aboveEditor widget ordering — synthetic faces here; the
+ *          real-host faces (both load orders AND timer-driven mid-turn
+ *          async registration) are evidenced in the comments below / the
+ *          README row (2026-10-08 + 2026-11-15 host batches).
  */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { clearCoreGlobals, snapshotCoreGlobals, restoreCoreGlobals } from "./fake-host.ts";
@@ -167,6 +169,16 @@ describe("XPKG-09-HOST aboveEditor widget ordering", () => {
 	// handler only reorders itself against TIMER-deferred registrations
 	// (like that requeue), never against other session_start handlers
 	// (TUI repo docs/evidence/2026-10-08-host run/ht4a, ht4b, ht5m-*,
-	// ht2j-*). Remaining UNCOVERED async surface keeps this todo open:
-	it.todo("arbitrary async widget registration OUTSIDE session_start (e.g. a timer firing mid-agent-turn) — ordering under it is still best-effort and needs its own host evidence batch");
+	// ht2j-*).
+	//
+	// The previously-uncovered async face is now evidenced too (2026-11-15
+	// SR host batch, real pi 1.5.2 TUI via rex PTY, GLM-5.3-flash): a
+	// probe timer fired MID-AGENT-TURN (between before_agent_start and
+	// turn_end, probe timestamps on file) and registered an aboveEditor
+	// widget — under BOTH load orders (core-before-tui and tui-before-core)
+	// it landed at the map tail, below session_start-registered widgets.
+	// The todo itself stays: the scenario still cannot be automated in
+	// this suite (needs a model-driven live host); evidence at
+	// ~/.cache/pi-core-acceptance/2026-11-15/ (run/h-sc-5b + run/host-todos).
+	it.todo("arbitrary async widget registration OUTSIDE session_start (e.g. a timer firing mid-agent-turn) — evidenced 2026-11-15 (mid-turn timer widget lands at map tail under both load orders); todo retained because the scenario cannot be automated here");
 });

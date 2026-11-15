@@ -318,18 +318,19 @@ describe("AR1005-FU-HOST renderer render facts (2026-10-05-core-architecture-rel
 //   3. send a second user message triggering another matching call —
 //      exactly one turn_start must have separated the two batches.
 describe("AR1005-RU-HOST turn lifecycle (2026-10-05-core-architecture-reliability)", () => {
-	it.todo("⑨ real run loop: one turn_start per turn; tool calls within a turn share it (Phase 4 host acceptance — manual steps in the comment above)");
+	it.todo("⑨ real run loop: one turn_start per turn; tool calls within a turn share it (Phase 4 host acceptance — manual steps in the comment above) — EXECUTED PASS 2026-11-15 SR host batch (real pi 1.5.2 TUI via rex, GLM-5.3-flash: two reads in one message share one turn_start; next message's call lands after a fresh before_agent_start→turn_start; evidence ~/.cache/pi-core-acceptance/2026-11-15/run/host-todos); todo retained: not automatable in-suite");
 });
 
 // ── AR1005-ST-HOST (spec 2026-10-05 §13): the host facts the modes
 // working-stats cache depends on. The leaf-identity half is pinned against
 // the REAL SessionManager below (an appended committed entry moves
 // getLeafId and appears in getBranch — that is what invalidates the cache
-// key). The message_end-before-append ordering is a run-loop property that
-// cannot be driven without a model — registered todo with the Phase 4
-// target and manual steps (spec §13.2); defensively, the modes wiring ALSO
-// marks the snapshot dirty on message_end, so the cache never relies on
-// the ordering alone. ──
+// key). The message_end-vs-append ordering was adjudicated on a real run
+// loop (2026-11-15 SR host batch, pi 1.5.2): append happens BEFORE
+// message_end fires — the opposite of the assumption this todo originally
+// registered under; the todo below records the evidence. Correctness is
+// unaffected either way: the modes wiring marks the snapshot dirty on
+// multiple events, so the cache never relied on the ordering alone. ──
 import { SessionManager as RealSessionManager } from "@earendil-works/pi-coding-agent";
 import { mkdtempSync, rmSync } from "node:fs";
 
@@ -350,7 +351,7 @@ describe("AR1005-ST-HOST branch identity (2026-10-05-core-architecture-reliabili
 		}
 	});
 
-	it.todo("⑪ real run loop: message_end fires before SessionManager append (Phase 4 host acceptance — manual: breakpoint/log both in a live session; the modes cache also marks dirty on message_end, so correctness never relies on the ordering alone)");
+	it.todo("⑪ real run loop: message_end vs SessionManager append ordering (Phase 4 host acceptance) — ADJUDICATED 2026-11-15 SR host batch (real pi 1.5.2 TUI via rex, GLM-5.3-flash): 11/11 message_end moments had getLeafId() already including the message and getBranch() already +1 — append happens BEFORE message_end fires, inverting the assumption this todo was registered under; the modes cache marks dirty on multiple events by design, so correctness never relied on the ordering (README row corrected). Evidence ~/.cache/pi-core-acceptance/2026-11-15/run/host-todos; todo retained: not automatable in-suite");
 });
 
 /* ── PI12-BAS-HOST (pi 1.2.0 upgrade batch, 2026-10-14) ──
