@@ -42,6 +42,7 @@ import {
 	writeConfig,
 } from "./src/config.js";
 import { prepareRun } from "./src/review-run.js";
+import { REVIEW_DIRECTIVE_CUSTOM_TYPE } from "./src/directive.js";
 import { registerReviewReportTool } from "./src/tool-wrapper.js";
 import { registerPiReviewRenderer } from "./src/tui-renderer.js";
 
@@ -119,9 +120,9 @@ export default function (pi: ExtensionAPI) {
 		// goal continuation, retry) used to arm the flag and its agent_end
 		// reset running → idle before the directive was even delivered.
 		// Only the review directive message (role "custom", customType
-		// "pi-review-directive" — the literal sent below) arms the run.
+		// REVIEW_DIRECTIVE_CUSTOM_TYPE — the constant sent below) arms the run.
 		const m = event?.message as { role?: string; customType?: string } | undefined;
-		if (liveRun && m?.role === "custom" && m.customType === "pi-review-directive") liveRunArmed = true;
+		if (liveRun && m?.role === "custom" && m.customType === REVIEW_DIRECTIVE_CUSTOM_TYPE) liveRunArmed = true;
 	});
 	pi.on("agent_end", () => {
 		// R11 ①: an armed live run whose turn ended without the report tool
@@ -212,7 +213,7 @@ export default function (pi: ExtensionAPI) {
 				// Hidden directive → main agent executes as a turn.
 				pi.sendMessage(
 					{
-						customType: "pi-review-directive",
+						customType: REVIEW_DIRECTIVE_CUSTOM_TYPE,
 						content: prepared.directiveText,
 						display: false,
 					},

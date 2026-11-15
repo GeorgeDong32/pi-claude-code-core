@@ -50,6 +50,9 @@ import type { ReviewerSpec, ReviewTarget } from "./types.js";
  * when the prompt grows.
  */
 export const REVIEW_DIRECTIVE_MAX_CHARS = 12_500;
+// Single authority for the hidden directive customType (sent via sendMessage
+// and matched on message_start for R11 arming — CH-8b).
+export const REVIEW_DIRECTIVE_CUSTOM_TYPE = "pi-review-directive";
 
 export interface ReviewDirectiveInput {
 	target: ReviewTarget;

@@ -80,7 +80,7 @@ describe("run-cmd timeout escalation (T1/T2/T3, SPEC CH 2026-11-15)", () => {
 			assert.ok(elapsed < 2000, `pipe drain must bound the resolve, took ${elapsed}ms`);
 		} finally {
 			// Reap the orphaned sleep so nothing outlives the test.
-			const pid = Number(r.stderr.split("\n")[0]);
+			const pid = Number(r.stderr.match(/^\d+$/m)?.[0]);
 			if (pid > 0) try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
 		}
 	});
@@ -103,7 +103,7 @@ describe("run-cmd timeout escalation (T1/T2/T3, SPEC CH 2026-11-15)", () => {
 			assert.ok(elapsed < 2000, `must not wait for the orphaned pipe, took ${elapsed}ms`);
 		} finally {
 			// Reap the orphaned sleep so nothing outlives the test.
-			const pid = Number(r.stderr.split("\n")[0]);
+			const pid = Number(r.stderr.match(/^\d+$/m)?.[0]);
 			if (pid > 0) try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
 		}
 	});
