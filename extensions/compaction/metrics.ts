@@ -1,9 +1,3 @@
-/*
- * SC-MET-01: opt-in-by-mode, content-free runtime measurements for M1 diagnosis.
- * This separate display-only entry leaves the frozen ST-01 schema untouched.
- * Only reconciled commits count as successes; live takeover is not the
- * counterfactual M1 produced by replay. No timers, network, or policy effects.
- */
 import type { ControllerPhase } from "./types.ts";
 
 export const COMPACTION_METRICS_ENTRY_TYPE = "cc-core-compaction-metrics";
@@ -33,11 +27,9 @@ export function recordCompactionMetric(write: (data: CompactionMetric) => void, 
 	try {
 		write({ ...data, v: 1, at: Date.now() });
 	} catch {
-		/* INV-1: diagnostics are best-effort. */
 	}
 }
 
-/** Project only measurement rows; never retain message/summary bodies. */
 export function metricFromEntry(entry: unknown): CompactionMetric | undefined {
 	if (!entry || typeof entry !== "object") return undefined;
 	const row = entry as { type?: string; customType?: string; data?: CompactionMetric };
@@ -53,7 +45,6 @@ function sampleStats(values: number[]) {
 	return { samples: sorted.length, p50: percentile(0.5), p90: percentile(0.9) };
 }
 
-/** Each input is one session file, preventing cross-session id collisions. */
 export function summarizeCompactionMetrics(sessions: ReadonlyArray<ReadonlyArray<CompactionMetric>>) {
 	let sessionsWithMetrics = 0;
 	let computeStarts = 0;

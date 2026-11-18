@@ -55,21 +55,16 @@ interface BoardFile {
 	gates?: Array<{ id?: string; run?: string; task?: string; question?: string; status?: string }>;
 }
 
-/** Sentinel markers (LED-05/05c) — rex-flow's in-conversation reporting. */
 const SENTINEL = /===FLOW-REPORT===/;
 const RUN_DONE = /\brun-done\b|\brun_done\b/;
 const RUN_ID = /\br([0-9][0-9a-z_-]*)\b/;
 
 export interface SessionObservation {
-	/** Run ids seen in the branch (sentinels, --run args, tool calls). */
 	observedRunIds: Set<string>;
-	/** Board paths / project dirs the session itself used. */
 	usedBoardHints: string[];
-	/** Sentinel one-liners for the sentinel-only degradation view. */
 	sentinels: string[];
 }
 
-/** Scan the compressed region for sentinels, run ids and board-usage hints. */
 export function observeSession(region: CompressedRegionView): SessionObservation {
 	const observedRunIds = new Set<string>();
 	const usedBoardHints: string[] = [];
@@ -84,10 +79,8 @@ export function observeSession(region: CompressedRegionView): SessionObservation
 					const ids = line.match(new RegExp(RUN_ID, "g")) ?? [];
 					for (const id of ids) observedRunIds.add(id);
 				}
-				// --board <path> hints.
 				const boardArg = /--board[ =]+(\S+)/.exec(line);
 				if (boardArg) usedBoardHints.push(boardArg[1]);
-				// dispatch/evidence file paths → project dir hint.
 				const dispatchPath = /(\S*\.rex-flow\/projects\/\S+?)\/(?:dispatch|evidence)\//.exec(line);
 				if (dispatchPath) usedBoardHints.push(dispatchPath[1]);
 			}
@@ -109,7 +102,7 @@ function textualContent(message: unknown): string {
 function readBoard(path: string): BoardFile | undefined {
 	try {
 		const stat = statSync(path);
-		if (stat.size > BOARD_MAX_BYTES) return undefined; // board-too-large
+		if (stat.size > BOARD_MAX_BYTES) return undefined;
 		return JSON.parse(readFileSync(path, "utf-8")) as BoardFile;
 	} catch {
 		return undefined; // missing / corrupt / unreadable
@@ -137,7 +130,6 @@ function discoverCandidatePaths(settings: CompactionSettings, homeDir: string, h
 			if (existsSync(board)) candidates.push(board);
 		}
 	}
-	// Legacy layout (E8): ~/rex-flow/boards/*.json
 	const legacy = join(homeDir, "rex-flow", "boards");
 	if (existsSync(legacy)) {
 		for (const name of readdirSync(legacy)) {
@@ -152,17 +144,14 @@ export interface FlowLedgerInput {
 	homeDir: string;
 	settings: CompactionSettings;
 	region: CompressedRegionView;
-	/** Run ids carried over from the previous ledger block (LED-02b). */
 	previousRunIds?: Set<string>;
 }
 
 export interface FlowLedgerResult {
 	state: FlowLedgerState;
-	/** Why a board was not used (telemetry reason codes, LED-05b). */
 	reason?: "board-none" | "board-unassociated" | "board-too-large" | "board-corrupt";
 }
 
-/** Build the flow ledger state (LED-05b discovery + association + LED-05). */
 export function buildFlowLedger(input: FlowLedgerInput): FlowLedgerResult {
 	const observation = observeSession(input.region);
 	const observed = new Set([...observation.observedRunIds, ...(input.previousRunIds ?? [])]);
@@ -176,9 +165,6 @@ export function buildFlowLedger(input: FlowLedgerInput): FlowLedgerResult {
 	const candidates = discoverCandidatePaths(input.settings, input.homeDir, observation.usedBoardHints);
 	if (candidates.length === 0) return sentinelOnly("board-none");
 
-	// Association: (a) explicit source (settings/hints) or (b) repo match +
-	// observed run. Pick the FIRST associated board. Reason codes: readable
-	// candidates that simply did not associate win over corrupt ones.
 	let sawReadableBoard = false;
 	let sawCorruptBoard = false;
 	let explicitBoardWasCorrupt = false;
@@ -217,7 +203,7 @@ function trusted(board: BoardFile, boardPath: string, observed: Set<string>, obs
 			continue;
 		}
 		if (!observed.has(run.id)) {
-			otherOpenRuns += 1; // on this board, not touched by this session
+			otherOpenRuns += 1;
 			continue;
 		}
 		const lastNote = runTasks
@@ -244,7 +230,6 @@ function trusted(board: BoardFile, boardPath: string, observed: Set<string>, obs
 			lastSentinels: observation.sentinels.filter((line) => line.includes(run.id)).slice(-12),
 		});
 	}
-	// Closed rows cap (LED-05): ≤8 lines + overflow pointer.
 	const closedCapped = closed.slice(0, 8);
 	if (closed.length > 8) closedCapped.push({ id: "+K", label: `+${closed.length - 8} older (see board)` });
 
@@ -253,14 +238,9 @@ function trusted(board: BoardFile, boardPath: string, observed: Set<string>, obs
 	};
 }
 
-/** Parse run ids out of a previous ledger block for the LED-02b carry-over. */
 export function previousLedgerRunIds(previousSummary: string | undefined): Set<string> {
 	const ids = new Set<string>();
 	if (!previousSummary) return ids;
-	// D4 (2026-11-10 review D): read ONLY the LAST complete v1 block (shared
-	// helper with parseCarriedDirectives) — a forged block echoed in the
-	// narrative must not shadow the real one; unknown versions are ignored
-	// (INV-9), superseding B6's any-version match.
 	const body = lastLedgerBlockBody(previousSummary);
 	if (body === undefined) return ids;
 	for (const id of body.match(new RegExp(RUN_ID, "g")) ?? []) ids.add(id);

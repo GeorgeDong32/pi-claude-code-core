@@ -1,50 +1,24 @@
-/**
- * rule-families.ts — the modes permission engine's family extension point
- * (P4-FAM-01, DESIGN-MCP-GOV ①「规则大脑」的地基).
- *
- * A RuleFamily claims unknown tools (mapPiToolToCcTool misses — everything
- * `mcp_*`-shaped today) and maps them to a canonicalId that the EXISTING
- * pm rule files can express. Verdicts fold back into evaluateToolPermission
- * before its passthrough, so step-2 consumption (deny→block / allow→pass /
- * ask→first-seen prompt) is shared machinery, not new code.
- *
- * sessionGrants (P4-FAM-05) is THE session-scoped authorization store: an
- * in-memory Set of canonicalIds granted "for this session" via the
- * first-seen dialog. Cleared on session_start/shutdown; headless and
- * forwarded approvals land here too (via noteAdjudicated).
- */
 
 import type { PermissionBehavior, PermissionRule } from "./permissions.ts";
 
 export type FamilyVerdict = "deny" | "allow" | "ask";
 
 export interface RuleFamily {
-	/** Stable family id ("mcp", "web", …). */
 	id: string;
-	/** CanonicalId for this tool call, or null when the family does not claim it. */
 	match(toolName: string, input: Record<string, unknown>): string | null;
-	/** Rule-file verdict for the canonicalId (deny > ask > allow order kept here). */
 	resolve(canonicalId: string, rules: PermissionRule[]): FamilyVerdict;
-	/** Suggested persistent rule ("Allow always"), e.g. `mcp_exa_*`. */
 	suggestAllowRule(canonicalId: string): string;
-	/**
-	 * Does this rule text govern the canonicalId? Families know their own
-	 * rule grammar (`mcp_exa_*` prefixes vs `webfetch(domain:host)`) — the
-	 * generic exact/trailing-* match in lib/rule-text only covers mcp.
-	 */
 	matchesRule(rule: PermissionRule, canonicalId: string): boolean;
 }
 
 const families: RuleFamily[] = [];
 
-/** Register a family (called by mcp-gov / web-gov at assembly). Later wins on duplicate id. */
 export function registerRuleFamily(family: RuleFamily): void {
 	const idx = families.findIndex((f) => f.id === family.id);
 	if (idx >= 0) families[idx] = family;
 	else families.push(family);
 }
 
-/** Test isolation: drop every family. */
 export function clearRuleFamilies(): void {
 	families.length = 0;
 }
@@ -54,7 +28,6 @@ export interface FamilyMatch {
 	canonicalId: string;
 }
 
-/** First family that claims the tool call (registration order). */
 export function matchFamily(toolName: string, input: Record<string, unknown>): FamilyMatch | null {
 	for (const family of families) {
 		const canonicalId = family.match(toolName, input);
@@ -63,10 +36,6 @@ export function matchFamily(toolName: string, input: Record<string, unknown>): F
 	return null;
 }
 
-/**
- * Family verdict for a tool call: null when no family claims it. The deny >
- * ask > allow order follows the pm engine's existing behavior sweep.
- */
 export function familyVerdictFor(
 	toolName: string,
 	input: Record<string, unknown>,
@@ -77,12 +46,6 @@ export function familyVerdictFor(
 	return { match, verdict: match.family.resolve(match.canonicalId, rules) };
 }
 
-/**
- * First rule of `behavior` whose text governs the canonicalId, per the
- * family's own rule grammar — used for honest deny display and to route
- * explicit ask rules to the full permission dialog instead of the
- * first-seen prompt.
- */
 export function familyRuleMentions(
 	rules: PermissionRule[],
 	family: RuleFamily,
@@ -92,11 +55,9 @@ export function familyRuleMentions(
 	return rules.find((r) => r.behavior === behavior && family.matchesRule(r, canonicalId));
 }
 
-// ---- bypass indicator (P4-MC-03 mirror's 2nd allow branch) ----------------
 
 let bypassActive = false;
 
-/** modes setMode updates this so the broker mirror can honor bypass. */
 export function setBypassIndicator(active: boolean): void {
 	bypassActive = active;
 }
@@ -105,7 +66,6 @@ export function isBypassActive(): boolean {
 	return bypassActive;
 }
 
-// ---- session grants (P4-FAM-05) -------------------------------------------
 
 const sessionGrants = new Set<string>();
 
@@ -117,12 +77,10 @@ export function hasSessionGrant(canonicalId: string): boolean {
 	return sessionGrants.has(canonicalId);
 }
 
-/** session_start / session_shutdown lifecycle hook. */
 export function clearSessionGrants(): void {
 	sessionGrants.clear();
 }
 
-/** spec P4-FAM-05: grants reset on session_start AND session_shutdown. */
 export function clearSessionState(): void {
 	sessionGrants.clear();
 	adjudicated.clear();
@@ -132,7 +90,6 @@ export function listSessionGrants(): string[] {
 	return [...sessionGrants];
 }
 
-// ---- adjudication record (P4-MC-03 onAdjudicated) --------------------------
 
 export type AdjudicationOutcome = "rule-allow" | "allow-once" | "session-grant" | "classifier-allow" | "forwarded-allow" | "deny";
 
@@ -142,14 +99,8 @@ export interface Adjudication {
 	at: number;
 }
 
-/** canonicalId → last adjudication (the broker mirror's cache view). */
 const adjudicated = new Map<string, Adjudication>();
 
-/**
- * THE single record point for gate final outcomes on family tools
- * (P4-MC-03: no per-branch scattered recording). Callers:
- * modes' allow path, the first-seen dialog, forwarded approvals.
- */
 export function noteAdjudicated(canonicalId: string, outcome: AdjudicationOutcome): void {
 	adjudicated.set(canonicalId, { canonicalId, outcome, at: Date.now() });
 }

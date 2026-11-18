@@ -21,15 +21,8 @@ import { dirname, join } from "node:path";
 import { LEAN_BUDGETS } from "./lean-agents.js";
 import type { PiReviewConfig, ReviewerSpec, RoutingMode, VerdictPolicy } from "./types.js";
 
-/**
- * Cheap model used by default for the gate (dedupe + re-score + verdict).
- * The gate is pure de-noise reasoning, so it defaults to a cheap tier;
- * reviewers stay on "inherit" to follow the parent session's stronger model.
- * Override via config.json (`gate.model`) or `--gate-model`.
- */
 export const DEFAULT_GATE_MODEL = "anthropic/claude-haiku-4-5";
 
-/** Default reviewer and gate config shipped with the package (v0.7). */
 export const DEFAULT_CONFIG: PiReviewConfig = {
 	schemaVersion: 1,
 	gate: {
@@ -80,16 +73,8 @@ export const DEFAULT_CONFIG: PiReviewConfig = {
 			model: "inherit",
 		},
 	},
-	// No budgets override by default — lean-agents' LEAN_BUDGETS owns the
-	// defaults (26 turns); a stale hard-coded 20 here would silently regress
-	// them whenever config was wired through.
 };
 
-/**
- * Canonical config file path — top-level beside `permission-modes.json`,
- * `settings.json`, etc. (mirrors pi-permission-modes), so it is easy to find.
- * Tests override it via `setConfigPath` to point at a sandbox.
- */
 const DEFAULT_CONFIG_PATH = join(homedir(), ".pi", "agent", "pi-review.json");
 let _configPath = DEFAULT_CONFIG_PATH;
 
@@ -97,7 +82,6 @@ export function configPath(): string {
 	return _configPath;
 }
 
-/** Override the config path (used by tests). Pass nothing to reset to default. */
 export function setConfigPath(p?: string): void {
 	_configPath = p ?? DEFAULT_CONFIG_PATH;
 }
@@ -108,12 +92,9 @@ export function setConfigPath(p?: string): void {
  * to mergeWithDefaults().
  */
 export function loadRawConfig(): Record<string, unknown> {
-	// shared settings-JSON primitive (P2-REV-06): silent {} fallback,
-	// identical semantics to the previous inline implementation
 	return readJson<Record<string, unknown>>(configPath(), {});
 }
 
-/** Legacy config keys that no longer drive behavior (migration warning only). */
 export const LEGACY_CONFIG_KEYS = [
 	"concurrency",
 	"inheritance",
@@ -122,7 +103,6 @@ export const LEGACY_CONFIG_KEYS = [
 	"reviewers.<id>.timeoutMs",
 ] as const;
 
-/** Detect legacy keys in a raw config and return human-readable warnings. */
 export function legacyConfigWarnings(raw: Record<string, unknown>): string[] {
 	const warnings: string[] = [];
 	if ("concurrency" in raw) {
@@ -160,7 +140,6 @@ export function mergeWithDefaults(raw: unknown): PiReviewConfig {
 		base.schemaVersion = r.schemaVersion as 1;
 	}
 
-	// Gate block.
 	if (r.gate && typeof r.gate === "object" && !Array.isArray(r.gate)) {
 		const g = r.gate as Record<string, unknown>;
 		if (typeof g.model === "string") base.gate.model = g.model;
@@ -173,11 +152,8 @@ export function mergeWithDefaults(raw: unknown): PiReviewConfig {
 			const vp = parseVerdictPolicy(g.verdictPolicy);
 			if (vp) base.gate.verdictPolicy = vp;
 		}
-		// Legacy: `scorePerIssue` ignored with a migration warning (see
-		// legacyConfigWarnings). Explicitly dropped here so it cannot leak.
 	}
 
-	// Routing block.
 	if (r.routing && typeof r.routing === "object" && !Array.isArray(r.routing)) {
 		const rt = r.routing as Record<string, unknown>;
 		if (typeof rt.mode === "string") {
@@ -186,7 +162,6 @@ export function mergeWithDefaults(raw: unknown): PiReviewConfig {
 		}
 	}
 
-	// Reviewer overrides — keyed by id. tools/timeoutMs are ignored (legacy).
 	if (r.reviewers && typeof r.reviewers === "object" && !Array.isArray(r.reviewers)) {
 		const reviewers = r.reviewers as Record<string, unknown>;
 		for (const [id, rawR] of Object.entries(reviewers)) {
@@ -205,9 +180,6 @@ export function mergeWithDefaults(raw: unknown): PiReviewConfig {
 		}
 	}
 
-	// Optional budgets (directive path). The empty-object fallback mirrors
-	// lean-agents' defaults — a hard-coded 20 here would silently regress the
-	// 26-turn default whenever a user wrote `budgets: {}`.
 	if (r.budgets && typeof r.budgets === "object" && !Array.isArray(r.budgets)) {
 		const b = r.budgets as Record<string, unknown>;
 		base.budgets = base.budgets ?? {
@@ -230,7 +202,6 @@ export function mergeWithDefaults(raw: unknown): PiReviewConfig {
 	return base;
 }
 
-/** Threshold is 0-10 inclusive; values outside are clamped. NaN falls back to 8 (default). */
 export function clampThreshold(n: number): number {
 	if (Number.isNaN(n)) return 8;
 	if (n === Infinity) return 10;
@@ -251,10 +222,6 @@ export function parseRoutingMode(raw: string): RoutingMode | null {
 	return null;
 }
 
-/**
- * Validate a merged config. Returns ok=false with a list of human-readable
- * errors when something is wrong. Used by /review-config to surface bad edits.
- */
 export function validateConfig(cfg: PiReviewConfig): { ok: true } | { ok: false; errors: string[] } {
 	const errors: string[] = [];
 	if (cfg.schemaVersion !== 1) {
@@ -291,11 +258,6 @@ export function writeConfig(cfg: PiReviewConfig): void {
 	writeJsonAtomic(configPath(), cfg);
 }
 
-/**
- * Read → merge → validate in one call. Returns the effective config plus any
- * validation issues. When validation fails, the function still returns the
- * merged config (best-effort) so the caller can decide whether to proceed.
- */
 export function loadConfig(): { config: PiReviewConfig; errors: string[]; legacyWarnings: string[] } {
 	const raw = loadRawConfig();
 	const config = mergeWithDefaults(raw);
@@ -307,10 +269,6 @@ export function loadConfig(): { config: PiReviewConfig; errors: string[]; legacy
 	};
 }
 
-/**
- * Resolve the "inherit" sentinel against a real model id. Falls back to a
- * sensible default when the parent session has no model (e.g. RPC mode).
- */
 export function resolveModel(value: string | "inherit", parentModelId: string | undefined): string {
 	if (value === "inherit") {
 		return parentModelId && parentModelId.length > 0

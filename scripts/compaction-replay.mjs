@@ -1,26 +1,4 @@
 #!/usr/bin/env -S tsx
-/**
- * Smart Compaction replay & calibration (SPEC SC §7.2 / task W2).
- *
- * Reads pi session jsonl corpora (READ-ONLY, metadata + in-memory message
- * text for cut selection only) and simulates the controller over each
- * session's REAL token trajectory using the REAL policy/cutpoint modules
- * (W1). Output is AGGREGATES ONLY (INV-7) — never summary text, never user
- * content, never session ids.
- *
- * Metrics (spec §7.2): M1 threshold-precommit rate, M2 cut legality, M3
- * tail floor, M3b capacity + V8b-at-apply, M4 split share vs native, M5
- * boundary classes, M6 native blocking total, M7 feasibility coverage, M8
- * estimate-vs-real deviation, M9 rate/burst distribution, M10 wasted-compute
- * rate. The O1/O2 comparison runs the SAME replay under three schemes:
- * fixed-ratio (Appendix C), fixed-lead (T_n − X, X ∈ {25K,50K,75K}) and
- * rate-adaptive, reporting M1/M3b/M10 per scheme.
- *
- * Usage:
- *   tsx scripts/compaction-replay.mjs <dir-or-file>... [--self-check] [--json]
- * Exit 0 on success; --self-check asserts the metric math on synthetic
- * fixtures (also covered by test/lib/compaction-replay.test.ts).
- */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
@@ -28,9 +6,7 @@ import { effectiveThreshold, evaluate, initialState, jointFeasibility, estimateP
 import { selectCut, suffixTokenSums } from "../extensions/compaction/cutpoint.ts";
 import { DEFAULT_COMPACTION_CORE_SETTINGS } from "../extensions/compaction/settings.ts";
 
-// ─── corpus loading ─────────────────────────────────────────────────────────
 
-/** Parse one jsonl file into raw entries (throws on absent file). */
 export function parseSessionFile(path) {
 	const lines = readFileSync(path, "utf-8").split("\n");
 	const entries = [];
@@ -40,13 +16,11 @@ export function parseSessionFile(path) {
 		try {
 			entries.push(JSON.parse(trimmed));
 		} catch {
-			// skip malformed line
 		}
 	}
 	return entries;
 }
 
-/** usage → context tokens (mirrors pi calculateContextTokens). */
 export function contextTokensOf(usage) {
 	if (!usage || typeof usage !== "object") return null;
 	if (typeof usage.totalTokens === "number" && usage.totalTokens > 0) return usage.totalTokens;
@@ -55,14 +29,10 @@ export function contextTokensOf(usage) {
 	return total > 0 ? total : null;
 }
 
-/**
- * Reduce raw entries to the replay view: turn samples (assistant turns with
- * usage), native compaction events, and a message view for cut selection.
- */
 export function extractSession(entries) {
 	const turns = [];
 	const compactions = [];
-	const messages = []; // {role, textChars, ts, entryId, toolCalls}
+	const messages = [];
 	let prevEntryTs = null;
 	for (const entry of entries) {
 		const entryTs = Date.parse(entry.timestamp ?? "");
@@ -91,20 +61,16 @@ export function extractSession(entries) {
 				t: entryTs,
 				tokensBefore: typeof entry.tokensBefore === "number" ? entry.tokensBefore : null,
 				summaryChars: typeof entry.summary === "string" ? entry.summary.length : 0,
-				// E1 proxy: the gap to the PREVIOUS ENTRY of any type is the
-				// user-felt blocking (the summarization ran between them).
 				blockedMsProxy: prevEntryTs !== null && entryTs > prevEntryTs ? entryTs - prevEntryTs : null,
 			});
 		}
 		if (Number.isFinite(entryTs)) prevEntryTs = entryTs;
 	}
-	// Simplified per-turn increments.
 	for (let i = 1; i < turns.length; i += 1) turns[i].increment = Math.max(0, turns[i].tokens - turns[i - 1].tokens);
 	turns[0] && (turns[0].increment = turns[0].tokens);
 	return { turns, compactions, messages };
 }
 
-/** Effective T_n per session: median compaction tokensBefore when present. */
 export function sessionThreshold(session) {
 	const observed = session.compactions.map((c) => c.tokensBefore).filter((v) => v !== null && v > 0);
 	if (observed.length === 0) return null;
@@ -112,45 +78,32 @@ export function sessionThreshold(session) {
 	return observed[Math.floor(observed.length / 2)];
 }
 
-// ─── schemes ────────────────────────────────────────────────────────────────
 
-/**
- * A scheme maps (T_n, recent rates) → the token level at which precompute
- * starts. applyRatio stays fixed at settings.applyRatio for all schemes.
- */
 export const SCHEMES = {
 	"fixed-ratio": (tn, params) => params.precomputeRatio * tn,
 	"fixed-lead-25k": (tn) => tn - 25_000,
 	"fixed-lead-50k": (tn) => tn - 50_000,
 	"fixed-lead-75k": (tn) => tn - 75_000,
 	"rate-adaptive": (tn, params, ratePerMin, latencyMs) => {
-		if (ratePerMin <= 0) return params.precomputeRatio * tn; // no data → ratio default
-		const projectedMs = ((tn - (tn * params.precomputeRatio)) / ratePerMin) * 60_000; // remaining from p to T_n
+		if (ratePerMin <= 0) return params.precomputeRatio * tn;
+		const projectedMs = ((tn - (tn * params.precomputeRatio)) / ratePerMin) * 60_000;
 		const budget = Math.max(latencyMs * 1.5, 60_000);
-		// Start earlier when the remaining window is short relative to budget.
 		const fraction = Math.min(1, budget / Math.max(projectedMs, 1));
 		return tn - (tn - params.precomputeRatio * tn) / Math.max(fraction, 0.25);
 	},
 };
 
-// ─── simulation ─────────────────────────────────────────────────────────────
 
 const SUMMARY_LATENCY_BASE_MS = 10_000;
-const SUMMARY_LATENCY_PER_INPUT_TOKEN_MS = 0.5; // spec §7.2: 10s + 0.5ms per input token
+const SUMMARY_LATENCY_PER_INPUT_TOKEN_MS = 0.5;
 
 export function summaryLatencyMs(inputTokens) {
 	return SUMMARY_LATENCY_BASE_MS + SUMMARY_LATENCY_PER_INPUT_TOKEN_MS * inputTokens;
 }
 
-/**
- * Per-session usage/chars calibration: pi's own threshold estimate rides on
- * the last assistant USAGE (system prompt + tool definitions + expansion ≈
- * 2.5–4.5× the persisted message chars/4 — the POL-10 overhead). The cut
- * window must be measured on the usage scale, so message sizes are scaled.
- */
 export function sessionCharScale(session) {
 	const compaction = session.compactions.find((c) => c.tokensBefore && c.tokensBefore > 0);
-	if (!compaction) return 3.0; // corpus median fallback
+	if (!compaction) return 3.0;
 	const visible = session.messages.filter((m) => m.ts <= compaction.t);
 	const chars = visible.reduce((sum, m) => sum + m.textChars, 0);
 	const usage = [...session.turns].filter((t) => t.t <= compaction.t).at(-1)?.tokens ?? 0;
@@ -159,7 +112,6 @@ export function sessionCharScale(session) {
 	return Math.min(8, Math.max(1, usage / estimate));
 }
 
-/** Projected-entry view of the corpus messages for selectCut (in-memory). */
 function cutView(messages, uptoTs, scale) {
 	const visible = messages.filter((m) => m.ts <= uptoTs);
 	return visible.map((m, index) => {
@@ -169,13 +121,9 @@ function cutView(messages, uptoTs, scale) {
 				? { role: "assistant", content: buildAssistantContent({ ...m, textChars: chars }) }
 				: m.role === "toolResult"
 					? { role: "toolResult", content: [{ type: "toolResult", toolCallId: "c", output: "x".repeat(chars) }] }
-					: // Non-standard roles (bashExecution/custom/…) project as
-						// plain text here — the replay only needs the token scale.
+					:
 						{ role: "user", content: [{ type: "text", text: "x".repeat(chars) }] };
 		return {
-			// NOTE: the raw message rides INSIDE sourceEntry too — the native
-			// findCutPoint (inside selectCut) projects via
-			// sessionEntryToContextMessages(sourceEntry).
 			sourceEntry: {
 				type: "message",
 				id: m.entryId || `m${index}`,
@@ -232,11 +180,7 @@ export function simulateSession(session, tn, schemeName, params = DEFAULT_COMPAC
 	result.infeasible = !feasibility.feasible;
 
 	let state = initialState();
-	let snapshot = null; // {readyAt, cut, tailTokens, tokensAtSnapshot, valid}
-	// Last controller commit time survives later snapshots (M1 numerator);
-	// `reduction` models the context drop after OUR commit (the corpus
-	// trajectory only reflects NATIVE compactions — without this the sim
-	// would treadmill: P stays high → recompute → re-propose forever).
+	let snapshot = null;
 	let lastCommittedAt = null;
 	let reduction = 0;
 	const nextCompaction = [...session.compactions];
@@ -252,7 +196,6 @@ export function simulateSession(session, tn, schemeName, params = DEFAULT_COMPAC
 
 	for (const turn of session.turns) {
 		turnIdx += 1;
-		// Native crossing? (the corpus's real compaction event time)
 		while (compactionTimes.length > 0 && turn.t >= compactionTimes[0]) {
 			compactionTimes.shift();
 			result.crossings += 1;
@@ -262,8 +205,6 @@ export function simulateSession(session, tn, schemeName, params = DEFAULT_COMPAC
 				result.computesWasted += 1;
 				result.wastedInputTokens += snapshot?.inputTokens ?? turn.tokens;
 			}
-			// Native compaction resets the controller (external compaction);
-			// the corpus trajectory already reflects ITS context drop.
 			state = initialState(state.generation + 1);
 			snapshot = null;
 			lastCommittedAt = null;
@@ -285,8 +226,6 @@ export function simulateSession(session, tn, schemeName, params = DEFAULT_COMPAC
 			feasibility,
 			mayCompute: !result.infeasible,
 		};
-		// computing → ready when the modeled summary latency has elapsed
-		// (SUM-07 timing; one promise chain, no timers in the model).
 		if (state.phase === "computing" && snapshot && turn.t >= snapshot.readyAt) {
 			state = evaluate(state, { type: "compute-ok" }, policySettings).state;
 		}
@@ -306,7 +245,7 @@ export function simulateSession(session, tn, schemeName, params = DEFAULT_COMPAC
 			});
 			if (cutResult.status !== "infeasible") {
 				result.cutsTotal += 1;
-				result.cutsLegal += 1; // selectCut never returns illegal cuts (CUT-01)
+				result.cutsLegal += 1;
 				result.tailFloorOk += cutResult.cut.tailTokens >= 20_000 ? 1 : 0;
 				result.capacityTotal += 1;
 				result.capacityOk += cutResult.cut.tailTokens <= feasibility.tailMax ? 1 : 0;
@@ -320,14 +259,10 @@ export function simulateSession(session, tn, schemeName, params = DEFAULT_COMPAC
 					inputTokens: effectiveTokens * 0.4,
 				};
 			} else {
-				// infeasible window: no compute actually starts
 				state = { ...state, phase: "infeasible-window" };
 				result.computesStarted -= 1;
 			}
 		}
-		// evaluate's propose action is the SINGLE propose source; the apply
-		// gate here is the V8b efficiency check with the grown tail (spec
-		// §7.2 M3b: real increments between snapshot and apply).
 		if (decision.action.type === "propose" && snapshot) {
 			const grownTail = snapshot.cut.tailTokens + Math.max(0, effectiveTokens - snapshot.tokensAtSnapshot);
 			result.v8bTotal += 1;
@@ -335,8 +270,6 @@ export function simulateSession(session, tn, schemeName, params = DEFAULT_COMPAC
 			result.v8bPass += v8bOk ? 1 : 0;
 			if (v8bOk) {
 				lastCommittedAt = turn.t;
-				// Context drop: the compressed region (effective context at
-				// snapshot minus kept tail minus the summary estimate).
 				reduction = Math.max(0, snapshot.tokensAtSnapshot - snapshot.cut.tailTokens - params.summaryTokenEstimate);
 				snapshot = null;
 				state = evaluate(state, { type: "reconcile-committed" }, policySettings).state;
@@ -348,9 +281,6 @@ export function simulateSession(session, tn, schemeName, params = DEFAULT_COMPAC
 			}
 		}
 	}
-	// Session end with a live compute = wasted (M10). Trailing compactions
-	// the turn loop never reached still count as threshold events (M1
-	// denominator); the live-compute waste is only counted once.
 	let endWasteCounted = false;
 	if ((state.phase === "computing" || state.phase === "ready") && snapshot?.committedAt === undefined) {
 		result.computesWasted += 1;
@@ -378,18 +308,15 @@ function ratePerMinute(turns) {
 	return Math.max(0, (last.tokens - first.tokens) / minutes);
 }
 
-// ─── corpus-level metrics independent of the controller ────────────────────
 
-/** M6/M8: native blocking totals + estimate-vs-real deviation. */
 export function nativeCorpusMetrics(session) {
 	const blockingMs = [];
 	const deviations = [];
 	for (let i = 0; i < session.compactions.length; i += 1) {
 		const compaction = session.compactions[i];
 		if (compaction.blockedMsProxy !== null && compaction.blockedMsProxy < 600_000) {
-			blockingMs.push(compaction.blockedMsProxy); // E1: 53–171s; cap outliers
+			blockingMs.push(compaction.blockedMsProxy);
 		}
-		// M8: estimatePost(summary + kept tail) vs the first REAL usage after.
 		const after = session.turns.find((t) => t.t > compaction.t);
 		if (after && compaction.tokensBefore) {
 			const est = estimatePost({
@@ -400,7 +327,7 @@ export function nativeCorpusMetrics(session) {
 				contextWindow: Number.MAX_SAFE_INTEGER,
 				unknownOverheadTokens: 0,
 			});
-			const estimate = compaction.summaryChars / 4 + 20_000; // summary + keep
+			const estimate = compaction.summaryChars / 4 + 20_000;
 			deviations.push(Math.abs(estimate - after.tokens) / Math.max(after.tokens, 1));
 			void est;
 		}
@@ -408,7 +335,6 @@ export function nativeCorpusMetrics(session) {
 	return { blockingMs, deviations };
 }
 
-/** M9: rate + burst distributions across all turns of a session. */
 export function sessionRateMetrics(session) {
 	const increments = session.turns.map((t) => t.increment ?? 0).filter((v) => v > 0);
 	if (session.turns.length < 2) return { tokensPerMin: null, increments: [] };
@@ -421,7 +347,6 @@ export function sessionRateMetrics(session) {
 	};
 }
 
-// ─── aggregation ────────────────────────────────────────────────────────────
 
 function quantile(sorted, q) {
 	if (sorted.length === 0) return null;
@@ -465,7 +390,7 @@ export function aggregate(perSession) {
 	}
 	return {
 		m1_thresholdPrecommitRate: totals.crossings > 0 ? totals.precommitted / totals.crossings : null,
-		m2_cutLegalRate: totals.cutsTotal > 0 ? 1 : null, // selectCut construction guarantee, pinned by CUT-01
+		m2_cutLegalRate: totals.cutsTotal > 0 ? 1 : null,
 		m3_tailFloorRate: totals.cutsTotal > 0 ? totals.tailFloorOk / totals.cutsTotal : null,
 		m3b_capacityRate: totals.capacityTotal > 0 ? totals.capacityOk / totals.capacityTotal : null,
 		m3b_v8bAtApplyRate: totals.v8bTotal > 0 ? totals.v8bPass / totals.v8bTotal : null,
@@ -478,7 +403,6 @@ export function aggregate(perSession) {
 	};
 }
 
-// ─── CLI ────────────────────────────────────────────────────────────────────
 
 function collectJsonl(path, out) {
 	const st = statSync(path);
@@ -490,9 +414,6 @@ function collectJsonl(path, out) {
 }
 
 export function selfCheck() {
-	// Synthetic session: two crossings; the first is precommitted (compute
-	// finishes before the crossing), the second is not (compute starts too
-	// late under fixed-lead-75k with a slow rate).
 	const minute = 60_000;
 	const turns = [];
 	let t = 0;
@@ -503,12 +424,10 @@ export function selfCheck() {
 		tokens += 3_500;
 	}
 	const tn = sessionThreshold({ turns, compactions: [], messages: [] }) ?? null;
-	// Force a known T_n of 250_000: the trajectory crosses it at turn ~70.
 	const forcedTn = 250_000;
 	const crossingTurn = turns.findIndex((turn) => turn.tokens >= forcedTn);
 	if (crossingTurn < 0) throw new Error("self-check: fixture must cross the threshold");
 	const compactions = [{ t: turns[crossingTurn].t, tokensBefore: forcedTn, summaryChars: 4_000, blockedMsProxy: 90_000 }];
-	// Minimal message view so selectCut has a projection to work on.
 	const messages = turns.map((turn, i) => ({
 		role: i % 2 === 0 ? "user" : "assistant",
 		textChars: 4_000,
@@ -525,7 +444,6 @@ export function selfCheck() {
 	if (aggregateResult.m1_thresholdPrecommitRate !== 1 && aggregateResult.m1_thresholdPrecommitRate !== 0) {
 		throw new Error("self-check: M1 must be 0 or 1 on a single-crossing fixture");
 	}
-	// Cut metrics now exist (message view present): every cut legal + floored.
 	if (fixedRatio.cutsTotal === 0) throw new Error("self-check: expected cut metrics from the message view");
 	if (fixedRatio.cutsLegal !== fixedRatio.cutsTotal) throw new Error("self-check: every selectCut result must be legal");
 	if (fixedRatio.tailFloorOk !== fixedRatio.cutsTotal) throw new Error("self-check: every cut must keep >= keepRecentTokens");
@@ -611,7 +529,7 @@ function main() {
 		),
 	};
 	if (asJson) console.log(JSON.stringify(report, null, 2));
-	else console.log(JSON.stringify(report, null, 2)); // aggregates only either way
+	else console.log(JSON.stringify(report, null, 2));
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

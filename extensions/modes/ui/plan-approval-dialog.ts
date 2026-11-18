@@ -18,22 +18,11 @@ export type PlanApprovalChoice = "execute" | "refine" | "stay" | "cancel";
 
 export const MAX_PLAN_CHARS = 200_000;
 export const MIN_PLAN_VIEWPORT_LINES = 6;
-/** Top border + title + separator. */
 export const HEADER_BASE_LINES = 3;
-/** Separator + 3 options + shortcut footer + bottom border. */
 export const FOOTER_CHROME_LINES = 6;
-/**
- * Conservative chrome budget (header base + summary + trunc + scroll status + footer).
- * Used as a floor when sizing short terminals.
- */
 export const DIALOG_CHROME_RESERVE =
   HEADER_BASE_LINES + 1 + 1 + 1 + FOOTER_CHROME_LINES;
-/** @deprecated Use DIALOG_CHROME_RESERVE */
 export const FULLSCREEN_CHROME_RESERVE = DIALOG_CHROME_RESERVE;
-/**
- * Near-fullscreen panel (Cursor / Claude Code style). Leaves a thin strip of
- * chat visible above; options stay pinned to the bottom of the panel.
- */
 export const DIALOG_MAX_HEIGHT_RATIO = 0.92;
 
 const OPTIONS = [
@@ -58,10 +47,6 @@ export function computeHeaderChromeLines(hasSummary = false, truncated = false):
   return HEADER_BASE_LINES + (hasSummary ? 1 : 0) + (truncated ? 1 : 0);
 }
 
-/**
- * Scrollable plan rows inside the panel. Reserves one line for a scroll status
- * row so the option footer can stay pinned at the bottom.
- */
 export function computePlanViewportLines(
   termRows: number,
   hasSummary = false,
@@ -85,7 +70,6 @@ export function truncatePlanContent(planContent: string): {
   };
 }
 
-/** Returns -1 for wheel up, +1 for wheel down, 0 if not a wheel event. */
 export function parseMouseWheelDelta(input: string): number {
   const sgr = SGR_MOUSE_RE.exec(input);
   if (sgr) {
@@ -147,9 +131,6 @@ export async function runPlanApprovalDialog(
     stepCount: number;
   },
 ): Promise<PlanApprovalChoice> {
-  // Near-fullscreen bottom-anchored overlay: tall scrollable plan + sticky
-  // options. Overlay plumbing is shared (P0-LB-03, P1-PM-04 ③); the dialog
-  // component itself is unchanged.
   return showComponentOverlay<PlanApprovalChoice>(ctx, {
     component: (tui, theme, _kb, done) =>
       createPlanApprovalComponent({
@@ -281,7 +262,6 @@ class PlanApprovalComponent implements Component {
     const border = (text: string) => this.theme.fg("border", text);
     const clip = (line: string) => truncateToWidth(line, innerWidth, "…", true);
 
-    // --- sticky footer (fixed) ---
     const footer: string[] = [
       clip(dim("─".repeat(Math.min(innerWidth, 60)))),
     ];
@@ -295,7 +275,6 @@ class PlanApprovalComponent implements Component {
     footer.push(clip(dim(FOOTER)));
     footer.push(clip(border("─".repeat(innerWidth))));
 
-    // --- header (fixed) ---
     const header: string[] = [
       clip(border("─".repeat(innerWidth))),
       clip(accent(bold(`Plan ready (${this.stepCount} steps)`))),
@@ -308,14 +287,11 @@ class PlanApprovalComponent implements Component {
       header.push(clip(this.theme.fg("warning", "… truncated, see plan.md for full content")));
     }
 
-    // Body fills everything between header and footer. Pad short plans inside
-    // the body so options stay pinned to the bottom of the panel.
     let bodyBudget = maxRenderLines - header.length - footer.length;
     bodyBudget = Math.max(1, bodyBudget);
 
     const needsScroll = planLines.length > bodyBudget;
     if (needsScroll) {
-      // Steal one body row for the scroll status line.
       bodyBudget = Math.max(1, bodyBudget - 1);
     }
 
@@ -344,7 +320,6 @@ class PlanApprovalComponent implements Component {
 
     const lines = [...header, ...body, ...footer];
 
-    // Safety: never clip the sticky footer if we somehow overflowed.
     if (lines.length > maxRenderLines) {
       const keepHeader = header.length;
       const keepFooter = footer.length;
@@ -355,7 +330,6 @@ class PlanApprovalComponent implements Component {
         ...footer,
       ].slice(0, maxRenderLines);
     } else if (lines.length < maxRenderLines) {
-      // Extra slack goes into the body (before footer), never after options.
       const pad = maxRenderLines - lines.length;
       this.cachedLines = [
         ...header,

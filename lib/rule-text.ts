@@ -18,7 +18,6 @@ interface RuleValueShape {
 	ruleContent?: string;
 }
 
-/** Serialize a rule's value to its canonical rule-file text. */
 export function ruleValueText(rule: RuleLike): string {
 	const value = rule.ruleValue;
 	if (typeof value === "string") return value;
@@ -32,7 +31,6 @@ export function ruleValueText(rule: RuleLike): string {
 	return String(value);
 }
 
-/** Escape `\`, `(`, `)` — same grammar as modes' permission-rule-parser. */
 function escapeRuleContent(content: string): string {
 	return content
 		.replace(/\\/g, "\\\\")
@@ -40,12 +38,10 @@ function escapeRuleContent(content: string): string {
 		.replace(/\)/g, "\\)");
 }
 
-/** Exact match or trailing-wildcard prefix match (`mcp_exa_*`). */
 export function ruleMatchesId(text: string, canonicalId: string): boolean {
 	return text === canonicalId || (text.endsWith("*") && canonicalId.startsWith(text.slice(0, -1)));
 }
 
-/** True when `path` is `dir` itself or inside it (separator-aware). */
 export function isInsideDir(path: string, dir: string): boolean {
 	return path === dir || path.startsWith(`${dir}/`);
 }

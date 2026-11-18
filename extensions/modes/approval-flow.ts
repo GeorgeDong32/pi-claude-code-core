@@ -1,30 +1,3 @@
-/**
- * modes/approval-flow.ts — the approval side-effect layer, extracted
- * verbatim from the modes extension factory (index.ts) in SPEC SR W-M.
- * Owns every user-approval interaction path and the ONE decision executor:
- * - noteFamilyAdjudication: the single record point for family-tool allow
- *   outcomes (P4-MC-03) — every gate allow path funnels through
- *   applyApprovalDecision or the step-2 allow branch, both of which call
- *   this, so the broker mirror's cache view can never miss an approved call.
- * - applyApprovalDecision: single place executing an approval decision's
- *   side effects (allow-always persistence + rule reload + gitignore
- *   warning + notify, outside-write tracking on EVERY allow path,
- *   compliance-inject on block). The three approval flows (interactive
- *   select, ask-mode inline select, forwarded-parent responder) used to
- *   duplicate this and had diverged — the ask flow dropped write tracking
- *   and notifications (plan B2).
- * - promptWithPermissionOptions: the 4-choice approval prompt, including
- *   the parent-forwarding child path and the P3-PM-01 memory-dir carve-out.
- * - firstSeenPrompt: the P4-FAM-02/05 first-seen dialog for family tools.
- * - promptApproval / editWriteChoicePrompt: the gate's prompt ports.
- *
- * Live state reaches this module through injected deps (index.ts owns it):
- * reloadRules (rule reload after persistence), setMode (bypass decision),
- * a lazy auto-engine getter (outside-write tracking), and a compliance
- * setter (the factory's pendingComplianceInject/complianceCategory pair).
- * Rule families are resolved lazily per call — never captured at factory
- * time.
- */
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { notify as uiNotify } from "../ui/notify.ts";
 import { confirmChoice } from "./ui/confirm.ts";
@@ -61,8 +34,6 @@ export type ApprovalDecision =
 	| "bypass"
 	| "block";
 
-/** The slice of the auto engine the approval flow needs (lazy — the engine
- *  is constructed after this module in the factory). */
 export interface ApprovalFlowAutoEngine {
 	trackOutsideWriteIfNeeded(
 		ctx: ExtensionContext,
@@ -72,26 +43,13 @@ export interface ApprovalFlowAutoEngine {
 }
 
 export interface ApprovalFlowDeps {
-	/** reloadMergedPermissionRules — re-merge + strip + cache invalidation. */
 	reloadRules(cwd: string): void;
 	setMode(mode: PermissionMode, ctx: ExtensionContext): Promise<void>;
-	/** Lazy getter: the auto engine is built after this module in the factory. */
 	getAutoEngine(): ApprovalFlowAutoEngine;
-	/** Writes the factory's pendingComplianceInject/complianceCategory pair. */
 	setCompliance(inject: boolean, category: string): void;
 }
 
 export function createApprovalFlow(deps: ApprovalFlowDeps) {
-	/**
-	 * Single place that executes an approval decision's side effects:
-	 * allow-always persistence + rule reload + gitignore warning + notify,
-	 * outside-write tracking on EVERY allow path, compliance-inject on block.
-	 * Options narrow execution for the forwarding paths:
-	 * - ruleCwd: parent responder persists rules against the child's cwd
-	 * - persistRules:false when the other side already persisted (child poll)
-	 * - trackWrite:false on the parent responder (tracking is the child's job)
-	 * - complianceOnBlock:false in ask mode (no classifier compliance there)
-	 */
 	async function applyApprovalDecision(
 		ctx: ExtensionContext,
 		tool: string,
@@ -118,9 +76,6 @@ export function createApprovalFlow(deps: ApprovalFlowDeps) {
 
 		if (decision === "allow") {
 			trackOutsideWrite();
-			// P4-MC-03: one-shot "Allow" on a family tool (incl. the explicit
-			// ask-rule path through promptWithPermissionOptions) must reach the
-			// broker mirror's cache — gate allow ⇒ mirror allow
 			noteFamilyAdjudication(tool, input, "allow-once");
 			return undefined;
 		}
@@ -153,7 +108,6 @@ export function createApprovalFlow(deps: ApprovalFlowDeps) {
 					);
 				}
 			} else {
-				// Rules were persisted by the other side; just pick them up.
 				deps.reloadRules(ctx.cwd);
 			}
 			trackOutsideWrite();
@@ -173,12 +127,6 @@ export function createApprovalFlow(deps: ApprovalFlowDeps) {
 		};
 	}
 
-	/**
-	 * Single record point for family-tool allow outcomes (P4-MC-03): every
-	 * gate allow path funnels through applyApprovalDecision or the step-2
-	 * allow branch, both of which call this — the broker mirror's cache view
-	 * can never miss a gate-approved call.
-	 */
 	function noteFamilyAdjudication(
 		tool: string,
 		input: Record<string, unknown>,
@@ -188,9 +136,6 @@ export function createApprovalFlow(deps: ApprovalFlowDeps) {
 		if (match) noteAdjudicated(match.canonicalId, outcome);
 	}
 
-	// P3-PM-01: memory-dir writes skip the approval dialog (plain-file
-	// memory workflow); the memory module's secret guard still runs after
-	// this gate returns undefined (interception is unaffected).
 	function isMemoryDirWrite(tool: string, ctx: { cwd?: string }, input: Record<string, unknown> | undefined): boolean {
 		if (tool !== "write" && tool !== "edit") return false;
 		const path = typeof input?.path === "string" ? input.path : "";
@@ -206,7 +151,7 @@ export function createApprovalFlow(deps: ApprovalFlowDeps) {
 		category: string,
 	): Promise<Block> {
 		if (isMemoryDirWrite(tool, ctx, input)) {
-			return undefined as unknown as Block; // P3-PM-01 carve-out: skip dialog
+			return undefined as unknown as Block;
 		}
 		if (!ctx.hasUI) {
 			const isChild = isSubagentChildProcess();
@@ -275,7 +220,6 @@ export function createApprovalFlow(deps: ApprovalFlowDeps) {
 		return applyApprovalDecision(ctx, tool, input, decision, { category });
 	}
 
-	// P4-FAM-02/05: the first-seen dialog for family-claimed tools.
 	async function firstSeenPrompt(
 		ctx: ExtensionContext,
 		canonicalId: string,
@@ -284,12 +228,6 @@ export function createApprovalFlow(deps: ApprovalFlowDeps) {
 		suggestedRule: string,
 	): Promise<Block> {
 		if (!ctx.hasUI) {
-			// headless/forwarded path: fail closed (unchanged from 2.8.0).
-			// D6=B (user 2026-10-08, spec 2026-10-07 P3-1 S3): keep the original
-			// reason prefix and append the family's own suggested allow rule so the
-			// user can pre-approve in a parent/interactive session. No grant is
-			// written, no dialog, and no parent-forwarding request is created —
-			// family first-seen never enters the forwarding protocol.
 			return {
 				block: true,
 				reason:
@@ -306,7 +244,7 @@ export function createApprovalFlow(deps: ApprovalFlowDeps) {
 		])) ?? "Block";
 		if (choice === "Allow once") {
 			noteAdjudicated(canonicalId, "allow-once");
-			return undefined as unknown as Block; // this call passes; nothing recorded
+			return undefined as unknown as Block;
 		}
 		if (choice === "Allow for this session") {
 			grantSession(canonicalId);
@@ -330,7 +268,6 @@ export function createApprovalFlow(deps: ApprovalFlowDeps) {
 		return { block: true, reason: `${canonicalId} blocked by user` };
 	}
 
-	// ---- prompts -----------------------------------------------------------
 	async function promptApproval(
 		ctx: ExtensionContext,
 		tool: string,
@@ -340,9 +277,6 @@ export function createApprovalFlow(deps: ApprovalFlowDeps) {
 		return promptWithPermissionOptions(ctx, tool, input, label, "user-prompt");
 	}
 
-	// The ask-mode 5-choice edit/write dialog (verbatim from the old gate;
-	// the bypass switch stays ask-mode-only — CC-aligned, adjudicated
-	// 2026-09-12; side effects route through the shared executor).
 	async function editWriteChoicePrompt(call: ToolCallRequest, pathVal: string): Promise<Block> {
 		const ctx = call.ctx as ExtensionContext;
 		const tool = call.tool;

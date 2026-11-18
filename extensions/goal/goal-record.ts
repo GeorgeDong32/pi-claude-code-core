@@ -7,9 +7,6 @@ export type GoalFocusReason = "created" | "selected" | "resumed" | "completed" |
 export interface GoalUsage {
 	tokensUsed: number;
 	activeSeconds: number;
-	/** USD spent on model requests attributed to this goal (parent turns +
-	 * tool_result-reported execution usage). Fractional by nature — never
-	 * floored. Records written before this field existed read back as 0. */
 	costUsed: number;
 }
 
@@ -22,27 +19,19 @@ export interface GoalRecord {
 	sisyphus: boolean;
 	createdAt: string;
 	updatedAt: string;
-	/** How many completion audits this goal has been through (persisted per attempt). */
 	auditAttempts?: number;
 	activePath?: string;
 	archivedPath?: string;
 	stopReason?: StopReason;
-	// Set by the agent's pause_goal tool. Cleared when the goal becomes active again.
 	pauseReason?: string;
 	pauseSuggestedAction?: string;
-	// Standing user note attached via /goal-note. Rides every goal prompt and
-	// checkpoint until cleared by the user; the agent never writes it.
 	userNote?: string;
 }
 
-/** B3: structured render classification for goal tool results. When
- * present the renderer shows the result text verbatim; entries persisted
- * by older versions lack it and fall back to the legacy prefix match. */
 export type GoalResultKind = "created" | "rejected" | "complete" | "paused" | "aborted";
 
 export interface GoalStateEntry {
 	version: 3;
-	/** B3: optional render classification — additive, no version bump. */
 	kind?: GoalResultKind;
 	goal: GoalRecord | null;
 }
@@ -149,8 +138,6 @@ export function normalizeUsage(value: unknown): GoalUsage {
 	if (!raw) return emptyUsage();
 	const tokensUsed = typeof raw.tokensUsed === "number" && Number.isFinite(raw.tokensUsed) ? Math.max(0, Math.floor(raw.tokensUsed)) : 0;
 	const activeSeconds = typeof raw.activeSeconds === "number" && Number.isFinite(raw.activeSeconds) ? Math.max(0, Math.floor(raw.activeSeconds)) : 0;
-	// costUsed: fractional USD — no flooring; pre-cost records simply have no
-	// field and read back as 0 (upgrade-safe).
 	const costUsed = typeof raw.costUsed === "number" && Number.isFinite(raw.costUsed) ? Math.max(0, raw.costUsed) : 0;
 	return { tokensUsed, activeSeconds, costUsed };
 }

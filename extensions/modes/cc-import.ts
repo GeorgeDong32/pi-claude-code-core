@@ -37,11 +37,8 @@ export type CcSourceScope = "user" | "project" | "local" | "history"
 export interface CcRuleMapping {
 	scope: CcSourceScope
 	behavior: PermissionBehavior
-	/** The rule text as CC wrote it. */
 	ccRule: string
-	/** The rule text core will store. */
 	coreRule: string
-	/** Optional note for the report (e.g. tool pi does not have). */
 	note?: string
 }
 
@@ -56,7 +53,6 @@ export interface CcSourceFile {
 	scope: CcSourceScope
 	filePath: string
 	exists: boolean
-	/** Behaviors found in this file (for the report). */
 	behaviors: PermissionBehavior[]
 }
 
@@ -66,10 +62,8 @@ export interface CcImportPlan {
 	skipped: CcSkippedRule[]
 }
 
-/** PI tools that a bare CC tool-name rule can never match (report note). */
 const PI_ABSENT_CC_TOOLS = new Set(["websearch", "task", "taskoutput", "taskstop", "killshell", "killbash", "bashoutput", "notebookedit", "todowrite", "todoread"])
 
-/** Map one CC rule string onto core rule syntax; null = unmappable. */
 export function mapCcRule(ccRule: string): { coreRule: string; note?: string } | null {
 	const trimmed = ccRule.trim()
 	if (!trimmed) return null
@@ -78,13 +72,10 @@ export function mapCcRule(ccRule: string): { coreRule: string; note?: string } |
 	const tool = parsed.toolName
 	const content = parsed.ruleContent
 
-	// MCP wire names: CC doubles the underscores, core's mcp family uses
-	// the canonical single-underscore form (mcp_server_tool / mcp_server_*).
 	if (tool.startsWith("mcp__")) {
 		const rest = tool.slice("mcp__".length)
 		if (!rest) return null
 		const single = rest.replace(/__/g, "_")
-		// mcp__server (bare) or mcp__server__* → server-wide wildcard
 		if (single.endsWith("_*") || !single.includes("_")) {
 			const server = single.replace(/\*$/, "").replace(/_$/, "")
 			return { coreRule: `mcp(${server}_*)` }
@@ -93,20 +84,15 @@ export function mapCcRule(ccRule: string): { coreRule: string; note?: string } |
 	}
 
 	const lower = tool.toLowerCase()
-	// web-gov family rules are lowercase webfetch(domain:host).
 	if (lower === "webfetch" && content !== undefined) {
 		return { coreRule: `webfetch(${content})` }
 	}
 	if (lower === "webfetch") return { coreRule: "webfetch" }
 
-	// A bare tool name must look like a tool name — reject prose/garbage the
-	// lenient CC parser still "parsed" (spaces, dangling parens, …).
 	if (content === undefined && !/^[A-Za-z][A-Za-z0-9_.-]*$/.test(tool)) {
 		return null
 	}
 
-	// Built-in CC tool rules pass through verbatim (core stores CC syntax).
-	// A bare name pi does not have still imports (harmless, never matches).
 	const note = content === undefined && PI_ABSENT_CC_TOOLS.has(lower)
 		? "no matching pi tool; rule stays inert"
 		: undefined
@@ -133,7 +119,6 @@ function behaviorsFromPermissions(perms: unknown): Partial<Record<PermissionBeha
 	return out
 }
 
-/** Read all CC sources and build the import plan (no writes). */
 export function planCcImport(opts: { cwd: string; home?: string }): CcImportPlan {
 	const home = opts.home ?? homedir()
 	const plan: CcImportPlan = { sources: [], rules: [], skipped: [] }
@@ -163,7 +148,6 @@ export function planCcImport(opts: { cwd: string; home?: string }): CcImportPlan
 		}
 	}
 
-	// Legacy history: ~/.claude.json → projects.<cwd>.allowedTools (allow only).
 	const claudeJsonPath = path.join(home, ".claude.json")
 	if (existsSync(claudeJsonPath)) {
 		const data = readJson<Record<string, unknown>>(claudeJsonPath, {})
@@ -200,8 +184,6 @@ const SCOPE_DESTINATION: Record<CcSourceScope, "global" | "project" | "local"> =
 }
 
 function existingRulesAt(scope: CcSourceScope, cwd: string, home: string): Set<string> {
-	// Read the destination file core will write, normalized, so repeated
-	// imports report "already present" instead of rewriting.
 	if (scope === "user") {
 		const p = getConfigPath()
 		if (!existsSync(p)) return new Set()
@@ -228,7 +210,6 @@ export interface CcImportResult {
 	imported: number
 	skippedExisting: number
 	failed: number
-	/** Written rules per destination file, for the summary. */
 	perDestination: Record<string, number>
 }
 
@@ -259,7 +240,6 @@ export function executeCcImport(plan: CcImportPlan, opts: { cwd: string; home?: 
 	return result
 }
 
-/** Human-readable report shared by dry-run and the post-import summary. */
 export function formatCcImportReport(plan: CcImportPlan, result?: CcImportResult): string {
 	const lines: string[] = []
 	lines.push("**Claude Code permission import**")

@@ -1,58 +1,3 @@
-/**
- * memory/recall.ts — the recall v2 deep module
- * (spec 2026-10-02-memory-recall-v2, R1; AR1005-RC 2026-10-05: request
- * lifecycle, cancellation and error convergence).
- *
- * THREE entries (the only ways in):
- *   onUserMessage(text, history, waitMs) — per real user message. Hygiene,
- *     history-derived exclusions, selector race against waitMs. Returns the
- *     block when the selector answers in time (prompt path returns it from
- *     before_agent_start as a persisted custom message), else null and the
- *     selection keeps running, delivering the moment it completes (v1.2:
- *     sendMessage(triggerTurn:false) rides pi's pending-custom-message
- *     queue — never parked in a slot, never discarded).
- *     TOTAL PROMISE SEMANTICS (AR1005-RC-02): this method never rejects —
- *     every entry-stage and deferred-stage throw converges to null plus at
- *     most one diagnostic per failed request, so `void onUserMessage(...)`
- *     in the steer wiring cannot produce an unhandled rejection.
- *   abort() — reusable reset (run boundary / supersede intent): cancel the
- *     current request, clear the run-scoped dedup; later messages accepted.
- *   dispose() — AR1005-RC-01: terminal, idempotent. Invalidate the current
- *     request, cancel waits, clear state; subsequent onUserMessage calls
- *     return null WITHOUT touching the selector.
- *
- * Request lifecycle (AR1005-RC-01): every request owns a private generation
- * + AbortController + wait timer + a "cancelled" resolver. A new user
- * message, abort, dispose or machine replacement bumps the generation and
- * resolves the old request's cancelled promise — an in-flight `await`
- * returns null immediately (bounded, never hangs on a selector that ignores
- * the signal), and a LATE completion (adapter ignored the AbortSignal) is
- * dropped without reading history, delivering, or mutating the new
- * request's state. Validity is re-checked after EVERY await, before
- * reading history, before returning an immediate block, before deliver —
- * including the positive-waitMs immediate branch.
- *
- * Delivery accounting (AR1005-RC-03): deferred requests update
- * runDelivered/deliveries ONLY after deliver() returns synchronously; a
- * throwing deliver leaves the file eligible (no permanent false marking).
- * Immediate keeps the "returning the block counts as delivered" convention.
- * This is in-module delivery bookkeeping, not a cross-process
- * exactly-once claim.
- *
- * ALL session state is DERIVED from the projection history on every call
- * (D9 — no closure state can go stale across driver quirks):
- *   RV-06 hard dedup — keys in pi-memory-recall details since the last
- *     compactionSummary never re-enter a manifest, plus run-scoped keys.
- *   RV-07 read suppression — read toolCalls hitting a memory file (path
- *     resolved against cwd) exclude it.
- *   RV-08 budget — session bytes are the sum of past details.bytes;
- *     per-file bodies truncate at RECALL_FILE_MAX_BYTES with a path note.
- *   RV-13 recentTools — tools with ≥1 success and 0 failure since the last
- *     real user message.
- *
- * Zero pi imports: pure over injected ports (Selector + file provider),
- * node-testable directly; the wiring owns every pi type.
- */
 
 import { isAbsolute, resolve as resolvePath } from "node:path";
 
@@ -68,45 +13,28 @@ import type { SelectionCandidate, Selector, SelectorOutcome } from "./selector.t
 
 export const RECALL_CUSTOM_TYPE = "pi-memory-recall";
 
-/** B (recall-frequency-tuning spec): first N user turns of a conversation
- * run no selector — short task-in/task-out sessions keep their fresh
- * context and skip the p50-3s selector cost entirely. Test-only env
- * overrides follow the CC_CORE_BG_PROMOTE_MS pattern; <= 0 disables the
- * gate. */
 function recallTurnThreshold(envName: string, fallback: number): number {
 	const n = Number(process.env[envName]);
-	// <= 0 disables the gate (matches the header comment); a negative or
-	// malformed value never widens the gate back to the default.
 	return Number.isFinite(n) && n > 0 ? Math.floor(n) : Number.isFinite(n) ? 0 : fallback;
 }
-/** Read per check (not import time) so tests can flip the env seam after
- * the module graph loads. Two env reads per user turn — negligible. */
 export function recallWarmupTurns(): number {
 	return recallTurnThreshold("PI_CORE_RECALL_WARMUP_TURNS", 3);
 }
-/** B: minimum user turns between two actual selector runs. The steady-state
- * interval is cooldown + 1 (the run turn itself). */
 export function recallCooldownTurns(): number {
 	return recallTurnThreshold("PI_CORE_RECALL_COOLDOWN_TURNS", 2);
 }
 
-/** Frozen details v1 field set — pinned by the contract suite (P0-CT-08). */
 export const RECALL_DETAILS_FIELDS = ["v", "delivery", "model", "files", "bytes", "elapsedMs"] as const;
 
 export interface RecallDetailsV1 {
 	v: 1;
 	delivery: "immediate" | "deferred";
-	/** "provider/id" of the selector model. */
 	model: string;
 	files: Array<{ key: string; bytes: number; truncated: boolean }>;
-	/** Whole rendered block bytes — the session budget unit (RV-08). */
 	bytes: number;
-	/** Selector wall time — real-world input for R2 waitMs calibration. */
 	elapsedMs: number;
 }
 
-/** A candidate with its full content (frontmatter + body) — the machine
- * renders bodies; the selector never sees them. */
 export type RecallFile = SelectionCandidate & { body: string };
 
 export interface RecallBlock {
@@ -124,23 +52,12 @@ export interface RecallStats {
 }
 
 export interface RecallMachine {
-	/** history is a THUNK: the machine calls it only when it actually needs
-	 * a snapshot (a parked selection completing after disposal never
-	 * touches it). Total promise: never rejects (AR1005-RC-02). */
 	onUserMessage(text: string, history: () => readonly unknown[], waitMs: number): Promise<RecallBlock | null>;
-	/** Reusable reset: cancel the current request, clear the run-scoped
-	 * dedup; later messages are accepted. */
 	abort(): void;
-	/** Terminal teardown (AR1005-RC-01): idempotent and irreversible —
-	 * invalidates the current request, cancels waits, clears state;
-	 * subsequent onUserMessage calls return null without a selector call. */
 	dispose(): void;
 	readonly stats: RecallStats;
 }
 
-/** RV-02: strip pi's skill wrapper — the SKILL BODY is reference material
- * for the model, not the user's intent, and recall keys off intent.
- * Loop-tolerant (multiple blocks) and whitespace-trimmed. */
 export function stripSkillWrapper(text: string): string {
 	let out = text;
 	for (;;) {
@@ -150,7 +67,6 @@ export function stripSkillWrapper(text: string): string {
 	}
 }
 
-/** Byte-safe head cut on a UTF-8 budget (never splits a code point). */
 export function truncateUtf8(text: string, maxBytes: number): { text: string; truncated: boolean } {
 	if (Buffer.byteLength(text, "utf8") <= maxBytes) return { text, truncated: false };
 	let out = "";
@@ -161,10 +77,6 @@ export function truncateUtf8(text: string, maxBytes: number): { text: string; tr
 	return { text: out, truncated: true };
 }
 
-/** Freshness header (AD2/OPT-3, migrated from selection.ts): graded age;
- * only genuinely stale memories carry the verify hint.
- * G2-C13: age follows effectiveAgeMs (created-aware, consolidation-stamp
- * guarded) — the manifest display and this hint share the one rule. */
 export function freshnessHeader(mtimeMs: number, content: string | undefined, now = Date.now()): string | null {
 	const ageMs = content === undefined ? now - mtimeMs : effectiveAgeMs(content, mtimeMs, now);
 	const ageDays = Math.floor(ageMs / (24 * 60 * 60 * 1000));
@@ -173,12 +85,10 @@ export function freshnessHeader(mtimeMs: number, content: string | undefined, no
 	return `[${ageDays} days ago — verify before relying on it]`;
 }
 
-/** Budgets are byte-denominated everywhere (CJK .length undercounts ~3×). */
 export function byteLength(text: string): number {
 	return Buffer.byteLength(text, "utf8");
 }
 
-/** RV-02 hygiene: skill-strip → trim → min/max length. null = skip recall. */
 export function recallQuery(text: string): string | null {
 	const stripped = stripSkillWrapper(text);
 	if (stripped.length < RECALL_QUERY_MIN_CHARS) return null;
@@ -201,13 +111,9 @@ interface ToolCallPartLike {
 }
 
 interface DerivedHistory {
-	/** RV-06: keys already delivered since the last compaction. */
 	surfaced: Set<string>;
-	/** RV-07: absolute memory-file paths read via the read tool. */
 	read: Set<string>;
-	/** RV-08: session bytes already spent (sum of past details.bytes). */
 	bytesUsed: number;
-	/** RV-13: tools with ≥1 success and 0 failure since the last real user message. */
 	recentTools: string[];
 }
 
@@ -221,9 +127,6 @@ function messageText(message: ProjectionMessageLike): string {
 		.join("\n");
 }
 
-/** Derive dedup/read/budget/tool state from the projection (D9). One
- * backward pass; surfaced/read/bytes scan back to the last
- * compactionSummary, tool tracking stops at the last real user message. */
 export function deriveHistory(messages: readonly unknown[], cwd: string): DerivedHistory {
 	const surfaced = new Set<string>();
 	const read = new Set<string>();
@@ -233,7 +136,7 @@ export function deriveHistory(messages: readonly unknown[], cwd: string): Derive
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const m = messages[i] as ProjectionMessageLike | null;
 		if (!m || typeof m !== "object") continue;
-		if (m.role === "compactionSummary") break; // RV-06 window boundary
+		if (m.role === "compactionSummary") break;
 		if (m.customType === RECALL_CUSTOM_TYPE) {
 			const details = m.details as Partial<RecallDetailsV1> | undefined;
 			if (details && details.v === 1) {
@@ -243,7 +146,7 @@ export function deriveHistory(messages: readonly unknown[], cwd: string): Derive
 			continue;
 		}
 		if (m.role === "user" && !m.customType) {
-			toolsClosed = true; // RV-13 window boundary — keep scanning dedup state
+			toolsClosed = true;
 			continue;
 		}
 		if (m.role === "toolResult" && typeof m.toolName === "string" && !toolsClosed) {
@@ -271,8 +174,6 @@ export function deriveHistory(messages: readonly unknown[], cwd: string): Derive
 	return { surfaced, read, bytesUsed, recentTools };
 }
 
-/** Render the delivered block (RV-11): one `## title (key)` section per
- * file, freshness line when stale, byte-truncated body with a path note. */
 export function renderRecallBlock(
 	files: RecallFile[],
 	opts: { delivery: "immediate" | "deferred"; model: string; elapsedMs: number; remainingSessionBytes: number },
@@ -288,7 +189,7 @@ export function renderRecallBlock(
 		const note = cut.truncated ? `\n\n> truncated at 4KB — read the full file: ${file.absPath}` : "";
 		const section = `## ${file.title} (${file.key})${freshness ? `\n${freshness}` : ""}\n\n${cut.text}${note}`;
 		const sectionBytes = byteLength(section);
-		if (used + sectionBytes > opts.remainingSessionBytes) break; // RV-08: never bust the session lane
+		if (used + sectionBytes > opts.remainingSessionBytes) break;
 		used += sectionBytes;
 		sections.push(section);
 		detailFiles.push({ key: file.key, bytes: sectionBytes, truncated: cut.truncated });
@@ -309,11 +210,6 @@ export function renderRecallBlock(
 	};
 }
 
-/** Build the machine over injected ports. `files` is re-read per message
- * (the corpus may change between turns); `history` snapshots arrive per
- * call from the wiring. `diagnose` (AR1005-RC-02) receives at most one
- * controlled line per FAILED request — cancellations and supersedes stay
- * silent. */
 export function createRecall(deps: {
 	selector: Selector;
 	modelLabel: string;
@@ -321,9 +217,6 @@ export function createRecall(deps: {
 	cwd: string;
 	deliver: (block: RecallBlock) => void;
 	diagnose?: (message: string) => void;
-	/** B: user turns already in the conversation when the machine is created
-	 * (resume seeding — derived from the sessionManager branch, never from
-	 * agent.state.messages which already holds the in-flight message). */
 	initialUserTurns?: number;
 }): RecallMachine {
 	const stats: RecallStats = { selections: 0, empties: 0, failures: 0, lastReason: null, deliveries: 0 };
@@ -331,13 +224,9 @@ export function createRecall(deps: {
 	const diagnose = deps.diagnose ?? (() => {});
 	let disposed = false;
 	let generation = 0;
-	// B (recall-frequency-tuning): warmup + cooldown counters. Uniform rule:
-	// a turn without an actual selector run increments turnsSinceRun; a run
-	// resets it to 0. Eligible at >= RECALL_COOLDOWN_TURNS.
 	let userTurns = deps.initialUserTurns ?? 0;
 	let turnsSinceRun = Number.POSITIVE_INFINITY;
 
-	/** Per-request lifecycle record (AR1005-RC-01). */
 	interface RequestState {
 		controller: AbortController;
 		timer: ReturnType<typeof setTimeout> | null;
@@ -356,15 +245,10 @@ export function createRecall(deps: {
 			);
 	}
 
-	/** Build the block WITHOUT touching delivery bookkeeping (AR1005-RC-03:
-	 * the caller commits only after its delivery rule succeeds). */
 	function assemble(
 		outcome: Extract<SelectorOutcome, { kind: "selected" }>,
 		history: DerivedHistory,
 		delivery: "immediate" | "deferred",
-		// C7 (arch review 2026-10-03): the entry-time candidate pool — reuse it
-		// instead of a second deps.files() pass. The real selector can only
-		// return keys from the pool it was shown, so byKey loses nothing.
 		pool: RecallFile[],
 	): RecallBlock | null {
 		const byKey = new Map(pool.map((f) => [f.key, f]));
@@ -383,7 +267,6 @@ export function createRecall(deps: {
 		});
 	}
 
-	/** Commit the run-scoped dedup + delivery counter (AR1005-RC-03). */
 	function commitDelivery(block: RecallBlock): void {
 		for (const f of block.details.files) runDelivered.add(f.key);
 		stats.deliveries++;
@@ -393,10 +276,6 @@ export function createRecall(deps: {
 		return err instanceof Error ? `${err.message}` : String(err);
 	}
 
-	/** Invalidate the current request (new message / abort / dispose /
-	 * replacement): bump the generation, abort the controller, clear the
-	 * wait timer AND resolve the request's cancelled promise so an
-	 * in-flight await never hangs on an abort-ignoring selector. */
 	function invalidateCurrent(): void {
 		generation++;
 		const req = current;
@@ -410,16 +289,11 @@ export function createRecall(deps: {
 	return {
 		async onUserMessage(text, history, waitMs) {
 			if (disposed) return null;
-			// RV-05/D8: a newer user message always wins
 			invalidateCurrent();
 			const myGen = generation;
 			const isCurrent = () => !disposed && generation === myGen;
 
 			try {
-				// B: warmup + cooldown gate — before any hygiene/dedup work (skip
-				// early, skip cheap). Every turn that reaches no actual selector
-				// run increments turnsSinceRun; the reset happens exactly where
-				// the selection promise is constructed below.
 				userTurns += 1;
 				if (userTurns <= recallWarmupTurns()) {
 					turnsSinceRun += 1;
@@ -435,18 +309,18 @@ export function createRecall(deps: {
 				const query = recallQuery(text);
 				if (query === null) {
 					stats.empties++;
-					turnsSinceRun += 1; // no selector run — keep cooling, don't reset
+					turnsSinceRun += 1;
 					return null;
 				}
 				const derived = deriveHistory(history(), deps.cwd);
 				if (derived.bytesUsed >= RECALL_SESSION_MAX_BYTES) {
-					turnsSinceRun += 1; // RV-08: silent, no selector call
+					turnsSinceRun += 1;
 					return null;
 				}
 				const candidates = eligible(derived);
 				if (candidates.length === 0) {
 					stats.empties++;
-					turnsSinceRun += 1; // suppressed turn: not a run, not a penalty
+					turnsSinceRun += 1;
 					return null;
 				}
 
@@ -458,14 +332,7 @@ export function createRecall(deps: {
 				const req: RequestState = { controller, timer: null, cancel: () => resolveCancelled("cancelled") };
 				current = req;
 
-				// B: the selector is now actually running — reset the cooldown
-				// clock (failures below still count as a run; the spec's uniform
-				// rule keys on "selection promise constructed").
 				turnsSinceRun = 0;
-				// AR1005-RC-02: a selector that throws SYNCHRONOUSLY (runtime
-				// violating the declared Promise) must not escape either —
-				// Promise.resolve(...) keeps an already-settled native promise's
-				// identity (no extra tick) and normalizes everything else.
 				let selection: Promise<SelectorOutcome>;
 				try {
 					selection = Promise.resolve(
@@ -492,7 +359,7 @@ export function createRecall(deps: {
 						: timeoutNow;
 				const bounded = await Promise.race([selection, timerGate, cancelled]);
 
-				if (bounded === "cancelled") return null; // superseded/aborted/disposed mid-wait: silent, no stale block
+				if (bounded === "cancelled") return null;
 				if (bounded === "timeout" && timedOut) {
 					// spec v1.2: the selection keeps running and DELIVERS THE MOMENT IT
 					// COMPLETES — the wiring's sendMessage(triggerTurn:false) rides pi's
@@ -502,9 +369,6 @@ export function createRecall(deps: {
 					void selection
 						.then((outcome) => {
 							try {
-								// AR1005-RC-01/02: validity FIRST — a late result (adapter
-								// ignored the AbortSignal, session replaced/disposed) reads
-								// no history, delivers nothing, mutates nothing.
 								if (!isCurrent()) {
 									if (current === req) current = null;
 									return;
@@ -512,15 +376,9 @@ export function createRecall(deps: {
 								if (current === req) current = null;
 								if (outcome.kind === "selected") {
 									stats.selections++;
-									// C7 disclosure: the deferred pass re-derives history (mandatory —
-									// RV-07 drops files read during the selection) but reuses the
-									// ENTRY-TIME pool: files written or deleted by automation between
-									// entry and delivery deliver their entry-time body (stale by
-									// seconds); keys outside the pool (only a non-conforming Selector
-									// could produce them) are dropped.
 									const block = assemble(outcome, deriveHistory(history(), deps.cwd), "deferred", candidates);
 									if (block) {
-										deps.deliver(block); // AR1005-RC-03: commit only on sync success
+										deps.deliver(block);
 										commitDelivery(block);
 									} else stats.empties++;
 								} else if (outcome.kind === "empty") stats.empties++;
@@ -529,25 +387,19 @@ export function createRecall(deps: {
 									stats.lastReason = outcome.reason;
 								}
 							} catch (err) {
-								// AR1005-RC-02/03: history/assemble/deliver throws — ONE
-								// diagnostic, no false deliveries, no unhandled rejection.
 								stats.failures++;
 								stats.lastReason = "deliver_error";
 								diagnose(`deferred delivery failed: ${describeError(err)}`);
 							}
 						})
 						.catch((err: unknown) => {
-							// Defense-in-depth: the chain above cannot reject (selection
-							// is pre-catch'd and the callback is fully try/caught), but
-							// every chain keeps an explicit rejection handler (RC-02).
 							diagnose(`deferred chain rejected: ${describeError(err)}`);
 						});
 					return null;
 				}
-				// selection won the race (or settled first at waitMs=0)
-				if (req.timer !== null) clearTimeout(req.timer); // AR1005-RC-02: timer cleanup at race end
+				if (req.timer !== null) clearTimeout(req.timer);
 				if (current === req) current = null;
-				if (!isCurrent()) return null; // abort/dispose/new message during the wait — no stale block
+				if (!isCurrent()) return null;
 				const outcome = bounded as SelectorOutcome;
 				if (outcome.kind === "empty") {
 					stats.empties++;
@@ -560,12 +412,10 @@ export function createRecall(deps: {
 				}
 				stats.selections++;
 				const block = assemble(outcome, derived, "immediate", candidates);
-				if (block) commitDelivery(block); // immediate: returning the block counts as delivered (existing convention)
+				if (block) commitDelivery(block);
 				else stats.empties++;
 				return block;
 			} catch (err) {
-				// AR1005-RC-02: entry-stage throws (files/history/derive) converge
-				// to null + ONE diagnostic — total promise, no unhandled rejection.
 				stats.failures++;
 				stats.lastReason = "entry_error";
 				diagnose(`request failed: ${describeError(err)}`);

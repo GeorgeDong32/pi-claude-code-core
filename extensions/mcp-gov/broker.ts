@@ -17,7 +17,6 @@
 import { canonicalizeMcpTool, directKnownServersFromEnv } from "./family.ts";
 
 export interface McpApprovalEvent {
-	/** adapter-side id (best effort — see P4-MC-07) */
 	callId?: string;
 	server?: string;
 	tool?: string;
@@ -27,27 +26,21 @@ export type MirrorDecision = "allow_once" | "deny";
 
 export interface McpEventPort {
 	present: boolean;
-	/** Subscribe to adapter approval requests; returns unsubscribe. */
 	onApprovalRequest?(handler: (event: McpApprovalEvent) => MirrorDecision): () => void;
-	/** Live snapshot for the panel (absent → panel falls back to inventory). */
 	snapshot?(): { connected: boolean; version: number; servers?: string[] };
 }
 
 export interface MirrorDeps {
-	/** canonicalId → outcome recorded by the gate (rule-families). */
 	getAdjudication(canonicalId: string): { outcome: string } | undefined;
 	bypassActive(): boolean;
-	/** Rule lookup over the current merged pm rules. */
 	hasAllowRule(canonicalId: string): boolean;
 	hasSessionGrant(canonicalId: string): boolean;
-	/** deny counter for the /core panel */
 	onDeny?: (canonicalId: string) => void;
 }
 
 export interface BrokerMirror {
 	start(): void;
 	stop(): void;
-	/** The sync pure decision — exported for the consistency matrix tests. */
 	decide(canonicalId: string): MirrorDecision;
 	denyCount(): number;
 }
@@ -76,7 +69,7 @@ export function createBrokerMirror(port: McpEventPort, deps: MirrorDeps): Broker
 
 	function decide(canonicalId: string): MirrorDecision {
 		const adjudication = deps.getAdjudication(canonicalId);
-		if (adjudication && adjudication.outcome !== "deny") return "allow_once"; // cache hit
+		if (adjudication && adjudication.outcome !== "deny") return "allow_once";
 		if (adjudication?.outcome === "deny") {
 			denies++;
 			deps.onDeny?.(canonicalId);
@@ -92,8 +85,7 @@ export function createBrokerMirror(port: McpEventPort, deps: MirrorDeps): Broker
 
 	return {
 		start() {
-			if (!port.present || !port.onApprovalRequest) return; // absent adapter → idle
-			// defensive: a second start never stacks subscriptions
+			if (!port.present || !port.onApprovalRequest) return;
 			unsubscribe?.();
 			unsubscribe = port.onApprovalRequest((event) => decide(canonicalIdForEvent(event)));
 		},
@@ -106,10 +98,8 @@ export function createBrokerMirror(port: McpEventPort, deps: MirrorDeps): Broker
 	};
 }
 
-/** Production port: dynamic import probe of pi-mcp-adapter (P4-MC-05). */
 export async function probeMcpAdapterPort(): Promise<McpEventPort> {
 	try {
-		// variable specifier keeps tsc from resolving the optional peer
 		const specifier = "pi-mcp-adapter";
 		const adapter = (await import(/* @vite-ignore */ specifier)) as {
 			onApprovalRequest?: unknown;
@@ -125,6 +115,6 @@ export async function probeMcpAdapterPort(): Promise<McpEventPort> {
 					: undefined,
 		};
 	} catch {
-		return { present: false }; // not installed → zero side effects
+		return { present: false };
 	}
 }

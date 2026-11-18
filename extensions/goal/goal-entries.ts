@@ -16,7 +16,6 @@
  */
 import { asRecord, cloneGoal, type GoalRecord, type GoalResultKind, type GoalStateEntry } from "./goal-record.ts";
 
-// ---------- entry / render helpers ----------
 
 export const STATE_ENTRY = "pi-goal-state";
 export const FOCUS_ENTRY = "pi-goal-focus";
@@ -24,15 +23,10 @@ export const GOAL_EVENT_ENTRY = "pi-goal-event";
 export const GOAL_AUDIT_ENTRY = "pi-goal-audit-event";
 
 export function goalDetails(goal: GoalRecord | null, kind?: GoalResultKind): GoalStateEntry {
-	// B3: kind is optional — persisted entries from older versions have none
-	// and render via the legacy prefix fallback. Adding a field is additive;
-	// version stays 3 (frozen entry shape, invariant 7).
 	return { version: 3, ...(kind ? { kind } : {}), goal: goal ? cloneGoal(goal) : null };
 }
 
 export function extractGoalIdFromInjectedMessage(text: string): string | null {
-	// Drafting messages (new goal, sisyphus, or tweak) have no continuation goalId and
-	// must never be treated as stale-continuation triggers.
 	if (/^\[GOAL (?:DRAFTING|TWEAK DRAFTING)\b/.test(text)) return null;
 	// Phase 5 C1: structured outer marker `<pi_goal_continuation goal_id="..." kind="...">`.
 	// Borrowed from pi-codex-goal. More robust than bare bracket text because

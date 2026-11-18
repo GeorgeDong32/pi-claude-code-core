@@ -23,10 +23,7 @@ import { invalidateMemDirCache, isMemoryFile, scanMemoryDir, type MemoryEntry } 
 import { MEMORY_INDEX_MAX } from "../../lib/context-budget.ts";
 
 export type MemoryWriteContent =
-	/** Byte-faithful copy/replace — migration imports and raw rewrites.
-	 * NEVER re-serialized: unknown frontmatter fields survive verbatim. */
 	| { kind: "raw"; text: string }
-	/** Structured add: the ONE serializer below renders the document. */
 	| { kind: "memory"; body: string; meta: MemoryDocMeta };
 
 export interface MemoryDocMeta {
@@ -35,8 +32,6 @@ export interface MemoryDocMeta {
 	type?: string;
 }
 
-/** The ONE frontmatter serializer (was store.ts#renderFile + the importers'
- *  inline template — two encodings that could drift). */
 export function serializeMemoryDocument(body: string, meta: MemoryDocMeta): string {
 	const type = meta.type ?? "reference";
 	return `---\nname: ${meta.name}\ndescription: ${meta.description}\nmetadata:\n  type: ${type}\n---\n\n${body}\n`;
@@ -64,15 +59,12 @@ function atomicWriteText(dir: string, name: string, text: string, opts: { invali
 		try {
 			unlinkSync(tmp);
 		} catch {
-			/* nothing landed */
 		}
 		throw err;
 	}
 	if (opts.invalidate !== false) invalidateMemDirCache(dir);
 }
 
-/** Remove one document. ENOENT is idempotent (still drops a possibly-stale
- *  cache entry); any other error propagates to the caller's handling. */
 export function removeDocument(dir: string, name: string): void {
 	try {
 		unlinkSync(join(dir, name));
@@ -82,13 +74,8 @@ export function removeDocument(dir: string, name: string): void {
 	invalidateMemDirCache(dir);
 }
 
-// ─── index reconcile (moved from memdir — the WRITE orchestration lives
-//     with the writer; scanning/parsing stay in memdir) ───
 
 export const INDEX_MAX_LINES = 200;
-// B2: derived from the single budget authority (lib/context-budget.ts) —
-// the bus contextBudget channel publishes the same number, so a bump can
-// never silently diverge from the actual clamp.
 export const INDEX_MAX_BYTES = MEMORY_INDEX_MAX;
 
 export interface ReconcileResult {
@@ -97,7 +84,6 @@ export interface ReconcileResult {
 	rewrote: boolean;
 }
 
-/** Build the MEMORY.md body from entries (single-line rows). */
 export function buildIndexBody(entries: MemoryEntry[]): string {
 	return entries
 		.slice(0, INDEX_MAX_LINES)
@@ -105,14 +91,6 @@ export function buildIndexBody(entries: MemoryEntry[]): string {
 		.join("\n");
 }
 
-/** Reconcile MEMORY.md. mtime short-circuit BEFORE any content read
- *  (review #18): stat the index and the .md files first; only when the
- *  index is stale (or the previous scan had skips) do we read contents.
- *  The cache is keyed by memoryDir and validated against the file-name
- *  list, so deletions/renames (which don't bump any mtime) still
- *  invalidate it — no permanently dead index rows. A FAILED index write
- *  keeps the old MEMORY.md and reports rewrote:false (never cached as a
- *  successful write). */
 interface DirCache {
 	skip: number;
 	entries: MemoryEntry[] | null;
@@ -121,12 +99,10 @@ interface DirCache {
 const dirCache = new Map<string, DirCache>();
 
 export function reindex(memoryDir: string): ReconcileResult {
-	// cheap pass: names + mtimes only
 	let indexMtime = -1;
 	try {
 		indexMtime = statSync(join(memoryDir, "MEMORY.md")).mtimeMs;
 	} catch {
-		/* missing index → rewrite */
 	}
 	let newestMd = -1;
 	const names: string[] = [];
@@ -137,7 +113,6 @@ export function reindex(memoryDir: string): ReconcileResult {
 			try {
 				newestMd = Math.max(newestMd, statSync(join(memoryDir, f)).mtimeMs);
 			} catch {
-				/* ignore */
 			}
 		}
 	} catch {
@@ -149,14 +124,12 @@ export function reindex(memoryDir: string): ReconcileResult {
 		indexMtime >= 0 && newestMd <= indexMtime &&
 		cached && cached.skip === 0 && cached.entries !== null && cached.namesKey === namesKey
 	) {
-		// hot path: zero file-content reads — reuse the cached entry list
 		return { entries: cached.entries, skipped: 0, rewrote: false };
 	}
 
 	const { entries, skipped } = scanMemoryDir(memoryDir);
 	dirCache.set(memoryDir, { skip: skipped, entries, namesKey });
 
-	// byte-cap: drop tail rows until it fits, then append WARNING
 	let body = buildIndexBody(entries);
 	if (entries.length > INDEX_MAX_LINES || Buffer.byteLength(body, "utf-8") > INDEX_MAX_BYTES) {
 		while (Buffer.byteLength(body, "utf-8") > INDEX_MAX_BYTES && body.includes("\n")) {

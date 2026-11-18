@@ -1,24 +1,3 @@
-/**
- * goal-commands.ts — the fifteen /goal* command registrations plus their
- * handler helpers (SPEC SR E13a: split from goal.ts; registration ORDER is
- * pinned by extensions/goal/tests/goal-registration-order.test.ts).
- *
- * Spec IDs: P2-2 (lifecycle verbs only — no direct record writes), C5
- * follow-up, BH-R1 (resume resets the error streak via resetErrorStreak),
- * goal-notes (resume note / standing note), CORE-05 (draft-cancel on failed
- * draft start).
- *
- * Design decisions:
- * - createGoalCommands(pi, deps) receives session state through a narrow
- *   structural deps object (lifecycle typed as GoalLifecycle — #120
- *   encapsulation); handlers stay verbatim, so deps names mirror the old
- *   closure names.
- * - pendingResumeNote writes go through setPendingResumeNote; the BH-R1
- *   error-streak Map delete goes through resetErrorStreak — both stay
- *   owned by goal.ts.
- * - focusGoalCommand is returned because session_start reuses it for the
- *   resume focus prompt.
- */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { notify as uiNotify } from "../ui/notify.ts";
 import { oneLineSummary, truncateText } from "./goal-core.ts";
@@ -101,7 +80,6 @@ async function startGoalTweakDrafting(hint: string, ctx: ExtensionContext): Prom
 	if (!focused) return;
 	const sisyphusOn = focused.sisyphus;
 	const label = sisyphusOn ? "Sisyphus tweak drafting" : "Goal tweak drafting";
-	// Activate the tweak edit-gate so apply_goal_tweak is callable.
 	lifecycle.handle({ tag: "draft-start", kind: "tweak", goalId: focused.id });
 	syncGoalTools();
 	uiNotify(ctx, 
@@ -148,8 +126,6 @@ function startGoalDrafting(topic: string, focus: DraftingFocus, ctx: ExtensionCo
 	lifecycle.handle({ tag: "draft-start", kind: "goal", focus, topic: trimmed, startedAt: Date.now() });
 	syncGoalTools();
 	try {
-		// Custom message keeps the full drafting prompt as LLM-visible user
-		// content while the TUI renders a compact "Goal <topic>" line.
 		pi.sendMessage<GoalEventDetails>(
 			{
 				customType: GOAL_EVENT_ENTRY,
@@ -166,10 +142,6 @@ function startGoalDrafting(topic: string, focus: DraftingFocus, ctx: ExtensionCo
 			{ triggerTurn: true, deliverAs: ctx.isIdle() ? "followUp" : "steer" },
 		);
 	} catch (err) {
-		// CORE-05 (spec 2026-10-07 P0-2): a failed draft start must reset
-		// the drafting gate — same shape as the tweak path's catch — or the
-		// tool set stays in drafting form and accounting/turn handlers
-		// keep early-returning for a draft that never started.
 		lifecycle.handle({ tag: "draft-cancel", kind: "goal" });
 		syncGoalTools();
 		uiNotify(ctx, `Could not start ${label.toLowerCase()}: ${(err as Error).message}`, "error");
@@ -240,8 +212,6 @@ async function handleGoalCommandTopic(rawTopic: string, ctx: ExtensionContext, f
 	if (opts.replace) {
 		const replacementTarget = await chooseOpenGoal(ctx, "Replace which open goal?");
 		if (openGoals().length > 0 && !replacementTarget) return;
-		// C5 follow-up: the archive+clear combo (no goal_aborted ledger —
-		// historical boundary #119⑤) is the retireForReplacement verb.
 		lifecycle.retireForReplacement(ctx);
 	}
 	startGoalDrafting(topic, focus, ctx);
@@ -315,12 +285,7 @@ async function handleGoalResume(ctx: ExtensionContext, rawNote?: string): Promis
 	}
 	const resumeTarget = lifecycle.focused();
 	if (!resumeTarget) throw new Error("Goal disappeared during resume validation.");
-	// BH-R1: a deliberate resume starts a fresh failure streak — the
-	// pre-pause error count must not pause the very next erroring run.
 	resetErrorStreak(resumeTarget.id);
-	// C5 follow-up: stamp active + setGoal + clock + nudge + ledger is the
-	// resume verb (reads the owned record internally); the resume note and
-	// continuation queue stay here.
 	lifecycle.resume(ctx);
 	const note = rawNote?.trim() || null;
 	setPendingResumeNote(note);
@@ -340,12 +305,8 @@ async function handleGoalClear(ctx: ExtensionContext, rawNote?: string): Promise
 		const selected = await chooseOpenGoal(ctx, "Clear which open goal?");
 		if (!selected) return;
 	}
-	// P2-2 Step 2: archive + user-termination ledger + nudge reset +
-	// unfocus persist as ONE lifecycle verb (the old inline sequence).
 	const report = lifecycle.terminate("clear", ctx, { note: rawNote });
 	const didArchive = !!report.record;
-	// Phase 5 D: also abort any in-flight drafting so the agent's next turn
-	// doesn't try to propose into a cleared slot.
 	const wasDrafting = lifecycle.confirmationIntent !== null;
 	lifecycle.handle({ tag: "draft-applied", kind: "goal" });
 	syncGoalTools();
@@ -375,15 +336,12 @@ async function handleGoalAbort(ctx: ExtensionContext, rawNote?: string): Promise
 	uiNotify(ctx, msg, didArchive || wasDrafting ? "info" : "warning");
 }
 
-// /goal and /goal-status: read-only status display.
 const statusCommand = {
 	description: "Show the current goal: objective, status, sisyphus mode, usage.",
 	handler: async (_rawArgs: string, ctx: ExtensionContext) => {
 		await showGoalStatus(ctx);
 	},
 };
-// /goal — Codex-style single entry: bare = status, reserved words manage,
-// any other text starts the drafting discussion (same as /goals).
 pi.registerCommand("goal", {
 	description: "Discuss a new goal: /goal <topic> (same as /goals). Bare /goal shows focused goal status; /goal pause|resume|clear manage it. Direct-start with /goals-set; more via /goal-list, /goal-focus, /goal-settings, /goal-tweak, /goal-abort.",
 	handler: async (rawArgs, ctx) => {
@@ -430,7 +388,6 @@ pi.registerCommand("goal-settings", {
 	},
 });
 
-// /goals <topic>: discussion/research/grilling -> confirmed normal goal draft.
 pi.registerCommand("goals", {
 	description: "Discuss a new goal. The agent clarifies, researches, or grills assumptions, then proposes a draft for confirmation.",
 	handler: async (rawArgs, ctx) => {
@@ -438,7 +395,6 @@ pi.registerCommand("goals", {
 	},
 });
 
-// /sisyphus <topic>: discussion/grilling -> confirmed Sisyphus goal draft.
 pi.registerCommand("sisyphus", {
 	description: "Discuss a Sisyphus goal. The agent grills ordered steps, done criteria, blockers, and boundaries before proposing a draft.",
 	handler: async (rawArgs: string, ctx: ExtensionContext) => {
@@ -446,7 +402,6 @@ pi.registerCommand("sisyphus", {
 	},
 });
 
-// /goals-set <objective> and /sisyphus-set <objective>: direct creation, no drafting discussion.
 pi.registerCommand("goals-set", {
 	description: "Immediately create and start a normal goal from the supplied objective. No draft discussion.",
 	handler: async (rawArgs, ctx) => {
@@ -460,7 +415,6 @@ pi.registerCommand("sisyphus-set", {
 	},
 });
 
-// /goal-tweak [hint]: drafting on top of the current goal -> edits the active goal file.
 pi.registerCommand("goal-tweak", {
 	description: "Refine the current goal via a drafting interview. The agent asks what to change, then edits the active goal file with the revised objective.",
 	handler: async (rawArgs, ctx) => {
@@ -468,7 +422,6 @@ pi.registerCommand("goal-tweak", {
 	},
 });
 
-// /goal-clear: archive the current goal.
 pi.registerCommand("goal-clear", {
 	description: "Archive the current goal.",
 	handler: async (rawArgs, ctx) => {
@@ -476,7 +429,6 @@ pi.registerCommand("goal-clear", {
 	},
 });
 
-// /goal-abort: abandon and archive the current goal, or cancel drafting.
 pi.registerCommand("goal-abort", {
 	description: "Abort the current goal and archive it, or cancel an in-progress drafting flow.",
 	handler: async (rawArgs, ctx) => {
@@ -484,7 +436,6 @@ pi.registerCommand("goal-abort", {
 	},
 });
 
-// /goal-pause: pause the currently running goal.
 pi.registerCommand("goal-pause", {
 	description: "Pause the currently running goal. Esc also pauses while a goal is running.",
 	handler: async (rawArgs, ctx) => {
@@ -492,7 +443,6 @@ pi.registerCommand("goal-pause", {
 	},
 });
 
-// /goal-resume: resume a paused goal.
 pi.registerCommand("goal-resume", {
 	description: "Resume a paused goal.",
 	handler: async (rawArgs, ctx) => {
@@ -500,12 +450,7 @@ pi.registerCommand("goal-resume", {
 	},
 });
 
-// goal-notes: audit trail for USER-initiated termination lived here; the
-// append moved into the lifecycle terminate verb (P2-2 Step 2).
 
-// /goal-note: attach or clear a STANDING user note that rides every goal
-// and checkpoint prompt (goal-notes; consumed by prompts, never written
-// by the agent). `/goal-note clear` (or empty on an existing note) clears.
 pi.registerCommand("goal-note", {
 	description: "Attach a standing user note to the active goal (/goal-note <text>) or clear it (/goal-note clear).",
 	handler: async (rawArgs, ctx) => {

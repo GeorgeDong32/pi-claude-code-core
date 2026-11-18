@@ -24,7 +24,6 @@ export const THEN_RUN_SUCCEEDED = "[then_run:succeeded]";
 export const THEN_RUN_FAILED = "[then_run:failed]";
 export const THEN_RUN_SKIPPED = "[then_run:skipped]";
 
-/** BH-R5: the default timeout (seconds) for a then_run command that gives none. Named constant, deliberately not configurable. */
 export const THEN_RUN_DEFAULT_TIMEOUT_SECONDS = 600;
 
 /** pi's bash surfaces a timeout as "Command timed out after N seconds" (its own `timeout:<seconds>` exec error, reformatted). */
@@ -98,10 +97,6 @@ export async function assertUnchangedBeforeCommand(
  */
 export type FileQueueFn = <T>(filePath: string, work: () => Promise<T>) => Promise<T>;
 
-/**
- * Apply a file mutation and, when the model asked for one, run its follow-up
- * command before returning a single observation.
- */
 export async function executeMutationThenRun<TDetails>({
 	toolCallId,
 	absolutePath,
@@ -121,7 +116,6 @@ export async function executeMutationThenRun<TDetails>({
 	signal: AbortSignal | undefined;
 	ctx: ExtensionContext;
 	queue: FileQueueFn;
-	/** Test seam: runs between the post-mutation hash reads (default: one macrotask). */
 	yieldForInterference?: () => Promise<void>;
 }): Promise<AgentToolResult<TDetails>> {
 	return queue(absolutePath, async () => {
@@ -142,9 +136,6 @@ export async function executeMutationThenRun<TDetails>({
 		await assertUnchangedBeforeCommand(absolutePath, yieldForInterference);
 		const bash = createBashToolDefinition(ctx.cwd, bashOptions);
 		try {
-			// BH-R5: a then_run command without an explicit timeout gets the 600 s
-			// default — a hanging command used to block the whole turn and this
-			// file's fusion queue forever.
 			const bashParams: ThenRunInput = { ...thenRun, timeout: thenRun.timeout ?? THEN_RUN_DEFAULT_TIMEOUT_SECONDS };
 			// 0.99 types the execute ctx as ExtensionToolContext (superset with
 			// tools/executeTool); runtime provides it. 0.87 accepts ExtensionContext.
@@ -156,9 +147,6 @@ export async function executeMutationThenRun<TDetails>({
 			if ((bashResult as { isError?: boolean }).isError || /Command exited with code \d+/u.test(output)) {
 				throw new Error(output || "then_run command failed");
 			}
-			// B6: structured outcome on the merged details — callers count fused
-			// calls from this field instead of sniffing the THEN_RUN_SUCCEEDED
-			// protocol token (the token text itself is frozen, FUS-04).
 			const mergedDetails =
 				mutationResult.details === undefined
 					? { thenRun: "succeeded" }
@@ -174,9 +162,6 @@ export async function executeMutationThenRun<TDetails>({
 		} catch (error) {
 			const mutationOutput = resultText(mutationResult);
 			const detail = errorText(error);
-			// BH-R5: a timed-out command gets the background-bash hint, so the
-			// model moves long-running work out of the fusion queue instead of
-			// retrying it here.
 			const message = TIMED_OUT_PATTERN.test(detail) ? `${detail}\n\n${TIMEOUT_HINT}` : detail;
 			throw new Error([mutationOutput, THEN_RUN_FAILED, message].filter(Boolean).join("\n\n"));
 		}

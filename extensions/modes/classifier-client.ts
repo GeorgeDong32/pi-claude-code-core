@@ -46,12 +46,10 @@ export type ClassifierVerdict = {
 	unavailable?: boolean
 }
 
-/** Real auth shape from the host registry (ok branch carries baseUrl). */
 export type ResolvedAuth = Awaited<
 	ReturnType<ModelRegistry["getApiKeyAndHeaders"]>
 >
 
-/** Options the host registry accepts for complete() (per-API option union). */
 export type ClassifierCompleteOptions = NonNullable<
 	Parameters<ModelRegistry["complete"]>[2]
 >
@@ -85,7 +83,6 @@ export function parseModelRef(
 	let modelId = modelRef.slice(slash + 1)
 	if (!provider || !modelId) return null
 
-	// Strip profile-style suffixes: provider/model:thinking, provider/model:high
 	const colon = modelId.lastIndexOf(":")
 	if (colon > 0) {
 		const suffix = modelId.slice(colon + 1).toLowerCase()
@@ -138,8 +135,6 @@ export function resolveClassifierStage(
 	)
 }
 
-// (path, mtimeMs) cache: the classifier probes AGENTS.md on every tier-3
-// call and the file rarely changes — re-read only when mtime moves (plan A3).
 const agentsMdCache = new Map<string, { mtimeMs: number; text: string }>()
 
 export function readAgentsMdForClassifier(cwd: string): string | null {
@@ -156,7 +151,6 @@ export function readAgentsMdForClassifier(cwd: string): string | null {
 				return text
 			}
 		} catch {
-			// ignore
 		}
 	}
 	return null
@@ -384,9 +378,6 @@ export function parseClassifierVerdict(text: string): ClassifierVerdict | null {
 	const trimmed = text.trim()
 	if (!trimmed) return null
 
-	// C4 (2026-10-03): fence handling, string-aware spans, candidate order
-	// and BOM/trailing-comma repair live in lib/json-lift; only the verdict
-	// payload shape is validated here.
 	const verdict = liftJson(trimmed, (value) => {
 		if (typeof value !== "object" || value === null || Array.isArray(value)) return null
 		return verdictFromParsedObject(value as Record<string, unknown>)
@@ -436,9 +427,6 @@ function buildClassifierCompletionOptions(
 	base: {
 		signal: AbortSignal
 		maxTokens: number
-		/** Hard per-attempt bound: the visible retry layer lives in index.ts
-		 *  (MAX_CLASSIFIER_FAILURES), so SDK-level retries are disabled here —
-		 *  total classifier wait ≤ timeoutMs × attempts. */
 		timeoutMs: number
 	},
 ): Record<string, unknown> {
@@ -452,7 +440,6 @@ function buildClassifierCompletionOptions(
 
 	if (stage !== "tool") return options
 
-	// CC auto-mode: no API extended thinking; force classify_result tool.
 	if (model.api === "anthropic-messages") {
 		options.thinkingEnabled = false
 		options.toolChoice = { type: "tool", name: CLASSIFIER_TOOL_NAME }
@@ -640,7 +627,6 @@ async function classifyWithStagePipeline(opts: {
 		return runXmlStage(512, "")
 	}
 
-	// fast or both: stage 1
 	const stage1 = await runXmlStage(
 		stage === "fast" ? 256 : 64,
 		XML_S1_SUFFIX,
@@ -649,21 +635,14 @@ async function classifyWithStagePipeline(opts: {
 		return stage1
 	}
 
-	// both: stage 2 CoT review on block
 	return runXmlStage(512, "\nRe-evaluate carefully before your final <block>.")
 }
 
-// Short-TTL verdict memo for identical retries (plan A5): an unchanged
-// denied/approved call re-classifies for free. Guardrails: wholesale
-// invalidation when permission rules reload (verdicts depend on autoMode
-// rules), a 60s TTL so a new turn's transcript is never served stale, and
-// a 64-entry bound.
 const verdictCache = new Map<string, { verdict: ClassifierVerdict; at: number }>()
 const VERDICT_CACHE_TTL_MS = 60_000
 const VERDICT_CACHE_MAX = 64
 let verdictCacheVersion = 0
 
-/** Drop all memoized verdicts (called when permission rules reload). */
 export function invalidateClassifierVerdictCache(): void {
 	verdictCacheVersion++
 	verdictCache.clear()
@@ -700,8 +679,6 @@ export async function classifyToolCall(opts: {
 	stage?: ClassifierStage
 	includeAgentsMd?: boolean
 	debug?: boolean
-	/** P2-1 Step 3: injectable clock — the per-attempt timeout, the verdict
-	 *  cache timestamps and the abort envelope all run on it. Default: real. */
 	clock?: ClassifierClock
 }): Promise<ClassifierVerdict> {
 	const clock = opts.clock ?? realClassifierClock;
@@ -743,8 +720,6 @@ export async function classifyToolCall(opts: {
 	}
 
 	try {
-		// Pre-flight: surface unconfigured auth with the same clean error as
-		// before. The credentials themselves are applied by registry.complete.
 		const auth = await opts.registry.getApiKeyAndHeaders(model)
 		if (!auth.ok) throw new Error(auth.error)
 
@@ -793,7 +768,6 @@ export async function classifyToolCall(opts: {
 			)
 		}
 		if (verdictCache.size >= VERDICT_CACHE_MAX) {
-			// Map preserves insertion order: drop the oldest entry.
 			verdictCache.delete(verdictCache.keys().next().value as string)
 		}
 		verdictCache.set(cacheKey, { verdict, at: clock.now() })

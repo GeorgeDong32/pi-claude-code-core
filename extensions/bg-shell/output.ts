@@ -1,14 +1,4 @@
 // Vendored from gvanderclay/pi-bg-bash v0.2.1 (MIT). Copyright (c) 2026 Gage Vander Clay.
-// The log reader behind `TaskOutput`: pages forward from a task's read
-// position, never returns the exit marker (the log is read through `logview`,
-// which cuts it out wherever it sits), and moves the position only past what it
-// returned. A running task's half-written last line is withheld until
-// its newline arrives.
-//
-// E4 (SPEC SR, 2026-11-15): the reader no longer claims the completion itself
-// (`notified = true` on a terminal read). The claim — the status row and the
-// gzip included, per BG-ENTRY-03 — moved to `claimCompletion` in `registry.ts`,
-// called by TaskOutput's execute after the read; see that function.
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncateTail } from "@earendil-works/pi-coding-agent";
 
 import { openView, type View } from "./logview.ts";
@@ -20,19 +10,17 @@ const NEWLINE = 0x0a;
 
 export type OutputOptions = { latest?: boolean; filter?: string };
 
-/** Drop bytes from the end so the buffer does not finish inside a multi-byte character. */
 function wholeCharacters(buffer: Buffer): Buffer {
 	let end = buffer.length;
 	let i = end;
-	while (i > 0 && end - i < 3 && (buffer[i - 1] & 0xc0) === 0x80) i--; // continuation bytes
+	while (i > 0 && end - i < 3 && (buffer[i - 1] & 0xc0) === 0x80) i--;
 	if (i > 0 && buffer[i - 1] >= 0xc0) {
 		const need = buffer[i - 1] >= 0xf0 ? 4 : buffer[i - 1] >= 0xe0 ? 3 : 2;
-		if (end - (i - 1) < need) end = i - 1; // the last character is cut
+		if (end - (i - 1) < need) end = i - 1;
 	}
 	return buffer.subarray(0, end);
 }
 
-/** Keep the lines of `text` that match `filter`; reports how many were kept of how many. */
 function applyFilter(text: string, filter: RegExp | undefined): { text: string; note?: string } {
 	if (filter === undefined || text === "") return { text };
 	const all = text.split("\n");
@@ -40,7 +28,6 @@ function applyFilter(text: string, filter: RegExp | undefined): { text: string; 
 	return { text: kept.join("\n"), note: `[filter: ${kept.length} of ${all.length} lines matched]` };
 }
 
-/** One `TaskOutput` call: the text to return, with `task.readPosition` already advanced. */
 export function readOutput(task: Task, options: OutputOptions): string {
 	let filter: RegExp | undefined;
 	try {
@@ -52,20 +39,12 @@ export function readOutput(task: Task, options: OutputOptions): string {
 	let body = "";
 	let note: string | undefined;
 	const code = view.marker?.code;
-	// CC-parity suppression (markTaskNotified): when the agent reads the task
-	// through TaskOutput and it is already over — the marker is in the log, or
-	// the registry has settled a non-running state — the tool result itself
-	// carries the output and the exit state, so the poller's completion message
-	// would be redundant. The reader only detects terminality for its paging;
-	// the claim itself (message suppression + status row + gzip) is the caller's
-	// job since E4, via `claimCompletion` in `registry.ts`.
 	const terminal = view.marker !== undefined || task.state !== "running";
 	try {
 		const end = view.size;
 		const finished = terminal;
 		const position = Math.min(task.readPosition, end);
 		const page = options.latest ? newest(view, position, end, finished) : oldest(view, position, end, finished);
-		// Positions count raw log bytes; the agent reads, and `filter` matches, the stripped text.
 		body = sanitize(page.text);
 		note = page.note;
 		task.readPosition = page.next;
@@ -81,12 +60,6 @@ export function readOutput(task: Task, options: OutputOptions): string {
 
 type Page = { text: string; next: number; note?: string };
 
-/**
- * Whole lines from the start of `buffer`, at most `DEFAULT_MAX_LINES` of them and
- * `DEFAULT_MAX_BYTES` once decoded. `used` counts raw bytes: a byte that is not
- * valid UTF-8 decodes to three, so the text's length says nothing about how far
- * the read position may advance. A first line over the cap is cut at a character.
- */
 function takeLines(buffer: Buffer): { text: string; used: number } {
 	let used = 0;
 	let lines = 0;
@@ -107,7 +80,6 @@ function takeLines(buffer: Buffer): { text: string; used: number } {
 	return { text: text.endsWith("\n") ? text.slice(0, -1) : text, used };
 }
 
-/** The longest whole-character prefix of `line` that decodes to at most `DEFAULT_MAX_BYTES`. */
 function fitPrefix(line: Buffer): number {
 	let length = Math.min(line.length, DEFAULT_MAX_BYTES);
 	for (;;) {
@@ -118,13 +90,11 @@ function fitPrefix(line: Buffer): number {
 	}
 }
 
-/** The oldest unread output: whole lines from `position`, capped by Pi's limits. */
 function oldest(view: View, position: number, end: number, finished: boolean): Page {
 	const windowEnd = Math.min(end, position + DEFAULT_MAX_BYTES + 1);
 	const windowCut = windowEnd < end;
 	let buffer = view.read(position, windowEnd);
 	if (!(finished && !windowCut)) {
-		// Only complete lines, unless a single line is longer than the cap.
 		const lastNewline = buffer.lastIndexOf(NEWLINE);
 		if (lastNewline >= 0) buffer = buffer.subarray(0, lastNewline + 1);
 		else if (windowCut) buffer = wholeCharacters(buffer.subarray(0, DEFAULT_MAX_BYTES));
@@ -140,22 +110,17 @@ function oldest(view: View, position: number, end: number, finished: boolean): P
 	};
 }
 
-/** The newest unread output: the last lines before `end`, never before `position`; the position moves to the end. */
 function newest(view: View, position: number, end: number, finished: boolean): Page {
 	const start = Math.max(position, end - DEFAULT_MAX_BYTES - 1);
 	let buffer = view.read(start, end);
 	let offset = start;
-	// A window with no newline at all (a progress meter, a blob) has no whole line to
-	// keep: cut it at a character boundary instead, like the oldest path.
 	let blob = false;
 	if (start > position) {
-		// The first line may be cut: drop it.
 		const firstNewline = buffer.indexOf(NEWLINE);
-		// A newline only at the very end leaves no whole line either.
 		if (firstNewline < 0 || firstNewline === buffer.length - 1) {
 			blob = true;
 			let skip = 0;
-			while (skip < buffer.length && skip < 3 && (buffer[skip] & 0xc0) === 0x80) skip++; // start of a cut character
+			while (skip < buffer.length && skip < 3 && (buffer[skip] & 0xc0) === 0x80) skip++;
 			offset += skip;
 			buffer = buffer.subarray(skip);
 		} else {

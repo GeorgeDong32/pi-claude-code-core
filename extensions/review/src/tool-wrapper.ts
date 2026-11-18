@@ -16,7 +16,6 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { coreBus } from "../../bus.js";
 import { runReportTool, type ReportToolSuccess } from "./report-tool.js";
 
-/** Build the tool result text: summary anchor + verbatim-output instruction + full markdown. */
 export function buildReportReply(result: ReportToolSuccess): string {
 	const t = result.report.totals.bySeverity;
 	const summary = `pi-review result: ${result.verdict} · ${t.blocker} blocker · ${t.major} major · ${t.minor} minor · ${t.nit} nit`;
@@ -60,14 +59,10 @@ export function registerReviewReportTool(pi: ExtensionAPI): void {
 					details: { error: result.error },
 				};
 			}
-			// P2-BUS-01: the report landed — publish done on the bus.
 			try {
 				coreBus().publish({ review: { status: "done", lastRunAt: Date.now() } });
 			} catch {
-				/* bus publish is best-effort */
 			}
-			// Persist a session entry so `/review-show` can re-render the report
-			// later and old sessions replay their cards.
 			try {
 				pi.appendEntry("pi-review", {
 					runId: result.runId,
@@ -77,7 +72,6 @@ export function registerReviewReportTool(pi: ExtensionAPI): void {
 					createdAt: Date.now(),
 				});
 			} catch {
-				// appendEntry is best-effort; the agent still has the markdown.
 			}
 			return {
 				content: [{ type: "text", text: buildReportReply(result) }],

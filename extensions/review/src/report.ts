@@ -33,7 +33,6 @@ export interface WorkflowReturnValue {
 	gate?: { ok: boolean; error?: string; output?: string; structuredOutput?: unknown } | null;
 }
 
-/** Normalize a reviewer's Markdown-report outcome (v0.8: no structuredOutput). */
 export function coerceReviewerOutput(r: ReviewerWorkflowResult): {
 	status: "ok" | "limited" | "skipped" | "failed";
 	issues: Issue[];
@@ -49,7 +48,6 @@ export function coerceReviewerOutput(r: ReviewerWorkflowResult): {
 		};
 	}
 	const md = r.output ?? "";
-	// Reviewers signal a non-applicable lane with a SKIPPED summary line.
 	const skipped = /^\s*##\s*Summary\s*\n+\s*SKIPPED:/im.test(md) || /^\s*SKIPPED:/m.test(md);
 	return {
 		status: skipped ? "skipped" : "ok",
@@ -99,7 +97,6 @@ export function coerceGateOutput(gate: WorkflowReturnValue["gate"]): {
 	};
 }
 
-/** Build a normalized reviewer row for the report, regardless of input shape. */
 export function reviewerRow(
 	id: string,
 	label: string,
@@ -123,7 +120,6 @@ export function reviewerRow(
 	};
 }
 
-/** Compute totals for the verdict line. */
 export function computeTotals(issues: Issue[]): {
 	issues: number;
 	bySeverity: Record<IssueSeverity, number>;
@@ -133,7 +129,6 @@ export function computeTotals(issues: Issue[]): {
 	return { issues: issues.length, bySeverity };
 }
 
-/** Decide the report verdict. */
 export function reportVerdict(
 	reviewers: ReviewerWorkflowResult[],
 	gate: { ok: boolean; structuredOutput?: unknown; error?: string } | null | undefined,
@@ -143,8 +138,6 @@ export function reportVerdict(
 	if (!gate || !gate.ok) return "no-gate";
 	const so = gate.structuredOutput as { status?: string } | null;
 	if (so?.status && so.status !== "ok") return "partial";
-	// Every reviewer skipped (lane inapplicable across the board) with a
-	// clean enforce — still not a full-coverage APPROVE.
 	if (reviewers.length > 0 && reviewers.every((r) => coerceReviewerOutput(r).status === "skipped")) {
 		return enforcedVerdict === "approve" ? "comment" : enforcedVerdict ?? "comment";
 	}
@@ -348,8 +341,6 @@ export function renderReviewerSection(r: ReviewerRunResult): string {
 	if (!r.ok) {
 		return [head, "", `- ${r.error ?? "unknown error"}`, ""].join("\n");
 	}
-	// v0.8: reviewers return Markdown reports — render them verbatim under
-	// the status header (the gate already arbitrated them; see dispositions).
 	const md = r.output?.summary ?? "";
 	const body: string[] = [head, ""];
 	if (md.trim()) {

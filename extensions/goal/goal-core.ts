@@ -1,7 +1,6 @@
 export interface GoalUsageLike {
 	tokensUsed: number;
 	activeSeconds: number;
-	/** USD spent (fractional, never floored). Missing on pre-cost records → 0. */
 	costUsed: number;
 }
 
@@ -35,10 +34,6 @@ export function displayObjectiveTitle(objective: string): string {
 	return truncateText(objective);
 }
 
-/** USD rendering for goal usage: two decimals at $1 and above, THREE below
- * (flash-tier subagent rounds cost $0.023 — two decimals would read $0.02
- * and drift 9%). Tier is decided on the ROUNDED value so 0.9995 reads
- * $1.00 (not "$1.000") and 0.0004 reads $0 (not "$0.000"). */
 export function formatCostValue(value: number): string {
 	const safe = typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : 0;
 	const rounded = Math.round(safe * 1000) / 1000;
@@ -73,7 +68,6 @@ export function formatDuration(seconds: number): string {
 	return `${secs}s`;
 }
 
-/** Spoken-style duration for summary lines: "1 hour 2 minutes". */
 export function formatDurationWords(seconds: number): string {
 	const total = Math.max(0, Math.floor(seconds));
 	const days = Math.floor(total / 86400);
@@ -103,10 +97,6 @@ export function footerStatus(goal: GoalDisplayRecordLike): string {
 	return `${prefix}: ${statusLabel(goal)}${usage} - ${truncateText(goal.objective, 60)}`;
 }
 
-/** goal-notes: pause reasons are prefixed "user: " when set via /goal-pause
- * (agent pause_goal reasons are unprefixed; BH-R1 automatic provider-error
- * pauses are prefixed "provider error: "). One labeling authority for the
- * summary line and the paused system prompt. */
 export function pauseReasonLabel(pauseReason: string): { label: string; text: string } {
 	if (pauseReason.startsWith("user: ")) {
 		return { label: "User pause note", text: pauseReason.slice("user: ".length) };
@@ -117,9 +107,6 @@ export function pauseReasonLabel(pauseReason: string): { label: string; text: st
 	return { label: "Agent pause reason", text: pauseReason };
 }
 
-/** C6 (arch review 2026-10-03): moved from goal.ts — shared by the wiring's
- * uiNotify calls and renderers.ts. Structural type: any goal record shape
- * with status/objective/usage satisfies it. */
 export function oneLineSummary(goal: GoalDisplayRecordLike | null): string {
 	if (!goal) return "No goal is set.";
 	const bits: string[] = [];

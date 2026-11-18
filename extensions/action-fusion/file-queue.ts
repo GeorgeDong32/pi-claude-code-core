@@ -37,12 +37,6 @@ async function canonicalQueueKey(filePath: string): Promise<string> {
 	}
 }
 
-/**
- * Concurrent calls for the same unresolved path share ONE key computation, so
- * their synchronous read-and-set of the tail map resumes in call order.
- * Without this, two racing realpath() resolutions can settle out of order and
- * the queue stops serializing (found by the FUS-10 concurrency test).
- */
 const inflightKeys = new Map<string, Promise<string>>();
 function canonicalQueueKeyShared(filePath: string): Promise<string> {
 	const pending = inflightKeys.get(filePath);
@@ -54,7 +48,6 @@ function canonicalQueueKeyShared(filePath: string): Promise<string> {
 	return computed;
 }
 
-/** Serialize fused operations for one canonical file path. */
 export async function withFusedFileQueue<T>(filePath: string, work: () => Promise<T>): Promise<T> {
 	const key = await canonicalQueueKeyShared(filePath);
 	const previous = queueTails.get(key) ?? Promise.resolve();

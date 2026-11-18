@@ -2,12 +2,6 @@ import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import type { Model, ThinkingLevel } from "@earendil-works/pi-ai";
 import { readJson, readJsonCached, writeJsonAtomic } from "../../lib/settings.js";
 
-/**
- * All levels the extension knows about, including "off" (Pi's internal state)
- * and "max" (a native ThinkingLevel tier some models expose — without it
- * here, getAvailableThinkingLevels would filter the tier away).
- * The slash-command surface intentionally exposes only model reasoning options.
- */
 export const ALL_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export const ALL_LEVELS_WITHOUT_XHIGH = ["off", "minimal", "low", "medium", "high"] as const;
 
@@ -24,12 +18,11 @@ export function clampToSupported(
   model: EffortModel | null | undefined,
 ): { level: EffortLevel; clamped: boolean } | undefined {
   if (level === "off") return { level, clamped: false };
-  if (!model) return undefined; // no model → no nearest tier → caller rejects
+  if (!model) return undefined;
   const available = getAvailableThinkingLevels(model);
   if (available.includes(level)) return { level, clamped: false };
   const ranks = ALL_LEVELS as readonly EffortLevel[];
   const requested = ranks.indexOf(level);
-  // pick the nearest supported tier (equidistant → lower)
   let best: EffortLevel | undefined;
   let bestDist = Number.POSITIVE_INFINITY;
   for (const candidate of available) {
@@ -39,27 +32,20 @@ export function clampToSupported(
       bestDist = dist;
     }
   }
-  if (best === undefined) return { level: "off", clamped: true }; // only "off" available
+  if (best === undefined) return { level: "off", clamped: true };
   return { level: best, clamped: true };
 }
 
-/** Levels shown to users in usage and tab completion. */
 export const USER_LEVELS = ["minimal", "low", "medium", "high", "xhigh"] as const satisfies readonly ThinkingLevel[];
 
-/** Semantic aliases that resolve per-model. */
 export const SEMANTIC_ALIASES = ["min", "max"] as const;
 
-/** Fast mode subcommands. */
 export const FAST_MODE_ACTIONS = ["on", "off"] as const;
 
 export type EffortLevel = (typeof ALL_LEVELS)[number];
 export type EffortAlias = (typeof SEMANTIC_ALIASES)[number];
 export type FastModeAction = (typeof FAST_MODE_ACTIONS)[number];
 
-/**
- * Resolve the Pi ThinkingLevel from our EffortLevel.
- * "off" is not in ThinkingLevel but is valid in Pi's internal state.
- */
 export function toThinkingLevel(level: EffortLevel): ThinkingLevel | "off" {
   return level;
 }
@@ -82,7 +68,6 @@ export type FastCommand = { kind: "fast-set"; enabled: boolean } | { kind: "fast
 
 export type EffortModel = Pick<Model<any>, "id" | "reasoning" | "thinkingLevelMap">;
 
-// ─── Suggestion helpers ─────────────────────────────────────────────
 
 function levenshteinDistance(a: string, b: string): number {
   const m = a.length;
@@ -122,10 +107,8 @@ function suggestClosest(input: string, candidates: readonly string[]): string | 
   return best;
 }
 
-/** All tokens valid as the first argument to /effort. */
 const EFFORT_TOKEN_CANDIDATES = [...USER_LEVELS, ...SEMANTIC_ALIASES];
 
-// ─── Parser ─────────────────────────────────────────────────────────
 
 export function parseEffortCommand(args: string): EffortCommand {
   const tokens = args.trim().split(/\s+/).filter(Boolean);
@@ -163,45 +146,27 @@ export function parseFastCommand(args: string): FastCommand {
   throw new Error(`Unknown fast mode "${first}".${hint}\n${FAST_USAGE}`);
 }
 
-// ─── Model capability resolution ────────────────────────────────────
 
-/** Levels available for the given model, including "off". */
 export function getAvailableThinkingLevels(model: EffortModel | null | undefined): EffortLevel[] {
   if (!model) return ["off"];
   return getSupportedThinkingLevels(model as Model<any>).filter(isEffortLevel);
 }
 
-/** Levels shown to the user for the given model (excludes "off"). */
 export function getUserFacingLevels(model: EffortModel | null | undefined): EffortLevel[] {
   return getAvailableThinkingLevels(model).filter((l) => l !== "off");
 }
 
-/**
- * Resolve "min" to the lowest reasoning level for the model.
- * Returns undefined for non-reasoning models (thinking unavailable).
- */
 export function resolveMinLevel(model: EffortModel | null | undefined): EffortLevel | undefined {
   if (!model?.reasoning) return undefined;
-  // Pick the lowest available level for the model. Sparse reasoning maps
-  // (e.g. minimal/low/medium mapped to null) mean "minimal" may be
-  // unavailable, so resolve against the actual supported set rather than
-  // assuming "minimal" always exists.
   return getUserFacingLevels(model)[0];
 }
 
-/**
- * Resolve "max" to the highest available level for the model.
- * Returns undefined for non-reasoning models (thinking unavailable).
- */
 export function resolveMaxLevel(model: EffortModel | null | undefined): EffortLevel | undefined {
   if (!model?.reasoning) return undefined;
-  // Pick the highest available level. Using the last supported entry makes
-  // this robust to sparse reasoning maps regardless of which top tier exists.
   const levels = getUserFacingLevels(model);
   return levels[levels.length - 1];
 }
 
-/** Resolve a user-facing level or semantic alias against the active model. */
 export function resolveEffortLevel(
   value: EffortLevel | EffortAlias,
   model: EffortModel | null | undefined
@@ -211,7 +176,6 @@ export function resolveEffortLevel(
   return value;
 }
 
-/** Cycle to the next effort level for the given model. Wraps around. */
 export function cycleLevel(current: string, model: EffortModel | null | undefined): EffortLevel | undefined {
   const levels = getUserFacingLevels(model);
   if (levels.length === 0) return undefined;
@@ -220,8 +184,6 @@ export function cycleLevel(current: string, model: EffortModel | null | undefine
   return levels[(idx + 1) % levels.length];
 }
 
-/** Cycle including "off" (alt+t semantics — the modes module's old
- * hardcoded six-step table, now model-aware). Wraps around. */
 export function cycleLevelWithOff(current: string, model: EffortModel | null | undefined): EffortLevel | undefined {
 	const levels = getUserFacingLevels(model);
 	if (levels.length === 0) return undefined;
@@ -252,17 +214,9 @@ export function decideCycleShortcut(
 	return { kind: "write", next };
 }
 
-// ─── Settings persistence ───────────────────────────────────────────
 
-// Thin adapters over lib/settings (P0-LB-01/P0-LB-04: the per-package JSON
-// primitives are converged; the fast-mode read-modify-write stays here).
-// A corrupted settings.json must throw so writeFastMode cannot silently
-// overwrite it (same guard as pm's permissions-loader, DEVIATIONS #19).
 
 export function readSettingsObject(settingsPath: string): Record<string, unknown> {
-  // C1 (arch review 2026-10-18): cached read — syncEffortUi fires on every
-  // effort-relevant event and this was a full readFileSync each time. The
-  // throwing guard still re-reports on every call (throws are never cached).
   return readJsonCached<Record<string, unknown>>(settingsPath, {}, (reason) => {
     if (reason === "malformed" || reason === "non-object") {
       throw new Error("settings.json is not a JSON object");
@@ -297,7 +251,6 @@ export function writeFastMode(settingsPath: string, enabled: boolean): void {
   writeSettingsObject(settingsPath, settings);
 }
 
-// ─── Help text ──────────────────────────────────────────────────────
 
 export const USAGE = "Usage: /effort {min|minimal|low|medium|high|xhigh|max}";
 export const FAST_USAGE = "Usage: /fast [on|off]";

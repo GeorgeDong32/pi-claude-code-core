@@ -11,13 +11,9 @@ import { dirname, join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { TextContent, ToolResultMessage } from "@earendil-works/pi-ai";
 
-/** Only tool results larger than this participate. */
 export const THRESHOLD_BYTES = 10 * 1024;
-/** Provider requests that still carry the full payload before the placeholder takes over. */
 export const FULL_SENDS = 2;
-/** Placeholder excerpt budget, split evenly between head and tail, whole lines only. */
 export const PLACEHOLDER_EXCERPT_BYTES = 1024;
-/** The recall tool's name (BH-E3a): its results are themselves recall excerpts and are exempt from projection. */
 export const RECALL_TOOL_NAME = "obs_recall";
 
 const CHARS_PER_TOKEN = 4;
@@ -25,11 +21,6 @@ const OBSERVATION_ID_PATTERN = /^obs_[a-f0-9]{24}$/u;
 const READ_OBJECT_FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW;
 const CREATE_OBJECT_FLAGS = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW;
 
-/**
- * Receipts from the evidence-preserving reducer are already a reduction of a
- * long log. Packing them again would replace verified evidence with an excerpt.
- * Upstream semantics: an EXACT full-line match, not a prefix.
- */
 const EVIDENCE_REDUCER_RECEIPT_PREFIX = "sol_pi_evidence_receipt_v1";
 
 export interface Observation {
@@ -47,20 +38,10 @@ export function hash(value: string | Buffer): string {
 	return createHash("sha256").update(value).digest("hex");
 }
 
-/**
- * CH E11 (2026-11-15): ASCII code points count /4, every non-ASCII code
- * point counts 1 — the upstream `length/4` estimate under-counted CJK text
- * by ~4x (each CJK char reads as ~0.25 tokens), skewing `estimated_tokens:`,
- * the projection's removedTokens, and the bus's tokensAvoided. Deliberate
- * deviation from the SoL-Pi original, whose shape (return value semantics:
- * a pure estimate) is unchanged.
- */
 export function estimateTokens(text: string): number {
 	let ascii = 0;
 	let nonAscii = 0;
 	for (const character of text) {
-		// for..of walks CODE POINTS: an astral char is one non-ASCII unit,
-		// not two UTF-16 surrogates.
 		if (character.codePointAt(0)! < 0x80) ascii += 1;
 		else nonAscii += 1;
 	}
@@ -102,7 +83,6 @@ function containsReducerReceipt(text: string): boolean {
 	return text.split("\n").some((line) => line === EVIDENCE_REDUCER_RECEIPT_PREFIX);
 }
 
-/** Content-addressed object path inside the per-session observation root. */
 export function observationPath(runtimeRoot: string, id: string): string {
 	return join(runtimeRoot, "objects", `${id}.txt`);
 }
@@ -132,10 +112,6 @@ export function createObservation(message: ToolResultMessage, runtimeRoot: strin
 	};
 }
 
-/**
- * Write the payload to its content-addressed path, refusing symlinks and
- * verifying an existing object byte for byte before reusing it.
- */
 export async function ensureStored(observation: Observation): Promise<void> {
 	const directoryPath = dirname(observation.filePath);
 	await mkdir(directoryPath, { recursive: true, mode: 0o700 });

@@ -1,4 +1,3 @@
-/** Plan todos widget (DECOUPLE-PLAN DC3, moved verbatim from index.ts). */
 import type { TodoItem } from "../plan.ts";
 
 interface WidgetCtx {

@@ -43,28 +43,21 @@ export interface ActivatableRule {
 }
 
 export interface ActivationResult {
-	/** Rules whose full text or pointer went out this call. */
 	sent: number;
-	/** Rules left for a later turn (no budget room even for the short pointer). */
 	deferred: number;
-	/** Sends that threw (rule stays unactivated, retried later). */
 	failed: number;
 }
 
 export interface RuleActivation {
 	onSessionStart(): void;
 	onTurnStart(): void;
-	/** Attempt activation for the given first-hit rules, in order. */
 	activate(rules: readonly ActivatableRule[]): ActivationResult;
-	/** Session-activated count (the /rules diagnostics line). */
 	sessionActivatedCount(): number;
-	/** Remaining budget in the current turn (diagnostics/tests). */
 	remainingTurnBudget(): number;
 }
 
 export function createRuleActivation(deps: {
 	send: (content: string) => void;
-	/** Test seam; defaults to DYNAMIC_STEER_MAX. */
 	budgetChars?: number;
 }): RuleActivation {
 	const budget = deps.budgetChars ?? DYNAMIC_STEER_MAX;
@@ -87,15 +80,13 @@ export function createRuleActivation(deps: {
 		activate(rules) {
 			const result: ActivationResult = { sent: 0, deferred: 0, failed: 0 };
 			for (const rule of rules) {
-				if (sessionActivated.has(rule.name)) continue; // once per session (P3-RU-07)
+				if (sessionActivated.has(rule.name)) continue;
 				const remaining = budget - turnUsed;
 				const candidates = [fullText(rule), pointerText(rule), shortPointerText(rule)];
 				let sent = false;
 				let failed = false;
 				for (const content of candidates) {
 					if (content.length > remaining) continue;
-					// Reserve BEFORE the send (a synchronously re-entrant adapter
-					// must observe the deducted budget), roll back on throw.
 					turnUsed += content.length;
 					sessionActivated.add(rule.name);
 					try {
@@ -108,7 +99,7 @@ export function createRuleActivation(deps: {
 						failed = true;
 						result.failed++;
 					}
-					break; // first fitting candidate decides this rule's fate
+					break;
 				}
 				if (!sent && !failed) result.deferred++;
 			}

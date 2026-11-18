@@ -7,11 +7,9 @@
  * this port so the shape has one owner and one test surface.
  */
 
-/** Structural mirror of pi-ai AgentMessage (subset the extension consumes). */
 export interface BranchAgentMessage {
 	role: "user" | "assistant" | "toolResult"
 	content?: unknown
-	/** Assistant messages only: cumulative usage for the turn. */
 	usage?: {
 		input?: number
 		output?: number
@@ -19,19 +17,16 @@ export interface BranchAgentMessage {
 		cacheWrite?: number
 		cost?: { total?: number }
 	}
-	/** toolResult messages only. */
 	toolName?: string
 	toolCallId?: string
 }
 
-/** pi SessionMessageEntry (vendored typings 0.80+ shape). */
 export interface BranchMessageEntry {
 	type: "message"
 	id?: string
 	message: BranchAgentMessage
 }
 
-/** pi CustomEntry subset used for mode-state persistence. */
 export interface BranchCustomEntry {
 	type: "custom"
 	customType?: string
@@ -49,9 +44,6 @@ type SessionManagerLike = {
 	buildSessionProjection?: () => { messages?: unknown[] } | undefined
 }
 
-/** Current leaf entry id — the cheap branch identity for cache keys
- *  (AR1005-ST-02). undefined = getter unsupported or read failed
- *  (uncacheable); null = the LEGAL empty branch (cacheable). */
 export function readLeafId(sessionManager: unknown): string | null | undefined {
 	try {
 		const sm = sessionManager as SessionManagerLike | undefined
@@ -64,7 +56,6 @@ export function readLeafId(sessionManager: unknown): string | null | undefined {
 	}
 }
 
-/** Raw wrapped entries from getBranch(), for transcript builders. */
 export function readBranchEntries(sessionManager: unknown): BranchEntry[] {
 	try {
 		const raw = (sessionManager as SessionManagerLike | undefined)?.getBranch?.()
@@ -87,11 +78,6 @@ export function readBranchEntriesStrict(sessionManager: unknown): BranchEntry[] 
 	}
 }
 
-/** Unwrapped agent messages (message entries only), in branch order.
- *  `tail` limits materialization to the last N messages (plan2 A1a: the only
- *  consumer needs the trailing 12 for the injection scan, but the branch can
- *  hold the whole session) — `readBranchMessages(sm, n)` is exactly
- *  `readBranchMessages(sm).slice(-n)`. */
 export function readBranchMessages(
 	sessionManager: unknown,
 	tail?: number,
@@ -110,7 +96,6 @@ export function readBranchMessages(
 	return messages
 }
 
-/** Data payloads of custom entries with the given customType, oldest first. */
 export function readCustomEntryData(
 	sessionManager: unknown,
 	customType: string,
@@ -132,7 +117,6 @@ export function readCustomEntryData(
 	return payloads
 }
 
-/** Current git branch name, or undefined when unavailable. */
 export function readGitBranch(sessionManager: unknown): string | undefined {
 	try {
 		const raw = (sessionManager as SessionManagerLike | undefined)?.getGitBranch?.()
@@ -142,9 +126,6 @@ export function readGitBranch(sessionManager: unknown): string | undefined {
 	}
 }
 
-/** Projection messages when available (quickwin-4, arch review: ONE
- * defensive reader for the sessionManager shape — memory's recall wiring
- * previously hand-rolled its own cast). */
 export function readSessionProjection(sessionManager: unknown): readonly unknown[] {
 	try {
 		const raw = (sessionManager as SessionManagerLike | undefined)?.buildSessionProjection?.()
@@ -154,7 +135,6 @@ export function readSessionProjection(sessionManager: unknown): readonly unknown
 	}
 }
 
-/** Session id when available (used by permission-request forwarding). */
 export function readSessionId(sessionManager: unknown): string | undefined {
 	try {
 		const raw = (sessionManager as SessionManagerLike | undefined)?.getSessionId?.()

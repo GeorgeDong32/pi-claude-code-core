@@ -68,37 +68,22 @@ export function appendGoalEvent(ctx: GoalLedgerContext, event: GoalLedgerEvent):
     fs.appendFileSync(filePath, fs.readFileSync(tempPath, "utf8"), "utf8");
     appended = true;
   } catch {
-    // If temp write fails, try direct append as fallback.
-    // Skip fallback only if the primary append already succeeded.
     if (!appended) {
       try {
         fs.appendFileSync(filePath, line, "utf8");
         appended = true;
       } catch {
-        // Ledger append failure should not crash the transaction.
-        // Callers that need strict durability can check the return.
       }
     }
   } finally {
     try {
       fs.unlinkSync(tempPath);
     } catch {
-      // Temp file may not exist; ignore cleanup failure.
     }
   }
-  // C1: the append changed the file — drop the read cache for this ledger
-  // (same-millisecond appends would otherwise still hit the old mtimeMs).
   if (appended) ledgerReadCache.delete(filePath);
 }
 
-// C1 (arch review 2026-10-18): mtime-keyed cache for the read side. The
-// before_agent_start prompt hook reads the whole ledger up to three times in
-// one turn (paused audit block, active audit block, post-compaction resync)
-// and every read was a full readFileSync + per-line JSON.parse — O(events)
-// each. Same shape as modes' configCache: the result is shared and callers
-// treat events as read-only (they all do — they only feed projections).
-// appendGoalEvent drops the entry explicitly, so same-millisecond appends
-// can never serve stale history.
 const ledgerReadCache = new Map<string, { mtimeMs: number; result: GoalLedgerReadResult }>();
 
 export function readGoalLedger(ctx: GoalLedgerContext): GoalLedgerReadResult {
@@ -114,8 +99,6 @@ export function readGoalLedger(ctx: GoalLedgerContext): GoalLedgerReadResult {
   if (cached && cached.mtimeMs === mtimeMs) return cached.result;
   const result = parseGoalLedgerFile(filePath);
   if (result === null) {
-    // read error (vanished/symlink/shrunk/oversized/unstable): fail open,
-    // and never memoize the empty fallback — the next read retries.
     ledgerReadCache.delete(filePath);
     return { events: [], malformed: 0 };
   }
@@ -124,12 +107,6 @@ export function readGoalLedger(ctx: GoalLedgerContext): GoalLedgerReadResult {
 }
 
 function parseGoalLedgerFile(filePath: string): GoalLedgerReadResult | null {
-  // B2 (cherry-batch1): the live JSONL read kernel — committed-prefix with
-  // O_NOFOLLOW / inode-dev recheck / bytes double-read (prefix-compare) /
-  // torn-tail accounting (another pi process on the same project can append
-  // while we read). A LiveReadError returns NULL so the caller does NOT
-  // cache the empty fallback (an error result is never memoized); every
-  // other shape maps to a result. The ledger read path never throws.
   let committed: ReturnType<typeof readCommittedLines>;
   try {
     committed = readCommittedLines(filePath);
@@ -266,11 +243,9 @@ export function reconstructGoalLedger(events: GoalLedgerEvent[]): ReconstructedL
         break;
       }
       case "completion_requested": {
-        // No status change until audit_result or goal_completed
         break;
       }
       case "audit_started": {
-        // No state change
         break;
       }
       case "audit_result": {
@@ -303,7 +278,6 @@ export function reconstructGoalLedger(events: GoalLedgerEvent[]): ReconstructedL
     }
   }
 
-  // If the focused goal was moved to terminal (e.g., aborted/completed), clear focus.
   if (focusedGoalId && !goals.has(focusedGoalId)) {
     focusedGoalId = null;
   }

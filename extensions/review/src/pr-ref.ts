@@ -1,19 +1,10 @@
-/**
- * Extract a GitHub PR reference from freeform user input (CC-style).
- */
 
-/** Normalize punctuation that often appears when typing PR URLs in CJK IME. */
 export function normalizeUserInput(text: string): string {
 	return text.replace(/[，,;]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
-/** Regex matching `github.com/<owner>/<repo>/pull/<number>` (used for full parsing). */
 export const PR_REF_REGEX = /github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/i;
 
-/**
- * Return a `gh pr diff` ref: full PR URL, or PR number string.
- * Returns null when no PR reference is detected.
- */
 export function extractPrRef(text: string): string | null {
 	const normalized = normalizeUserInput(text);
 	if (!normalized) return null;

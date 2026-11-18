@@ -16,7 +16,6 @@ function normalizeToolPath(filePath: string): string {
 
 export function resolveToolPath(cwd: string, filePath: string): string {
 	const stripped = normalizeToolPath(filePath);
-	// Pi accepts file URLs; the queue and hash guard must use the same target.
 	const expanded = stripped.startsWith("file://") ? fileURLToPath(stripped) : stripped;
 	if (expanded === "~") return homedir();
 	if (expanded.startsWith("~/")) return resolve(homedir(), expanded.slice(2));

@@ -21,13 +21,10 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { listMemoryFiles } from "./memdir.ts";
 
-/** Rotation cap — named constant per the spec's hard constraint ⑥. */
 export const SNAPSHOT_KEEP = 10;
 
 export interface SnapshotManifest {
-	/** ISO time the snapshot was taken. */
 	at: string;
-	/** sha256 over every file's name+content, in name order. */
 	contentHash: string;
 	files: Array<{ file: string; bytes: number }>;
 	totalBytes: number;
@@ -38,12 +35,10 @@ export interface SnapshotDir {
 	manifest: SnapshotManifest;
 }
 
-/** The sidecar root for one layer's snapshots. */
 export function snapshotRoot(home: string, layerKey: string): string {
 	return join(home, ".pi", "agent", "cc-core", "memory-snapshots", layerKey);
 }
 
-/** List this layer's snapshots, OLDEST FIRST (by manifest.at, then name). */
 export function listSnapshots(root: string): SnapshotDir[] {
 	const out: SnapshotDir[] = [];
 	let names: string[];
@@ -66,7 +61,6 @@ export function listSnapshots(root: string): SnapshotDir[] {
 	return out.sort((a, b) => (a.manifest.at === b.manifest.at ? (a.dir < b.dir ? -1 : 1) : a.manifest.at < b.manifest.at ? -1 : 1));
 }
 
-/** The newest snapshot, or null when the layer has none. */
 export function newestSnapshot(root: string): SnapshotDir | null {
 	const all = listSnapshots(root);
 	return all.length > 0 ? all[all.length - 1]! : null;
@@ -81,7 +75,7 @@ function hashLayer(memoryDir: string, files: string[]): { hash: string; totalByt
 		try {
 			content = readFileSync(join(memoryDir, file));
 		} catch {
-			continue; // vanished mid-scan; next snapshot catches the delta
+			continue;
 		}
 		h.update(file);
 		h.update(content);
@@ -98,13 +92,12 @@ function hashLayer(memoryDir: string, files: string[]): { hash: string; totalByt
 export function snapshotLayer(memoryDir: string, root: string, now = () => new Date()): SnapshotDir | null {
 	try {
 		const files = listMemoryFiles(memoryDir);
-		// include the derived index so a restore is complete on disk
 		const indexFile = join(memoryDir, "MEMORY.md");
 		const allFiles = existsSync(indexFile) ? [...files, "MEMORY.md"] : files;
 		const { hash, totalBytes, entries } = hashLayer(memoryDir, allFiles);
 
 		const newest = newestSnapshot(root);
-		if (newest && newest.manifest.contentHash === hash) return null; // unchanged since the last snapshot
+		if (newest && newest.manifest.contentHash === hash) return null;
 
 		const ts = now();
 		const stamp = `${ts.getFullYear()}${String(ts.getMonth() + 1).padStart(2, "0")}${String(ts.getDate()).padStart(2, "0")}-${String(ts.getHours()).padStart(2, "0")}${String(ts.getMinutes()).padStart(2, "0")}${String(ts.getSeconds()).padStart(2, "0")}`;
@@ -114,15 +107,9 @@ export function snapshotLayer(memoryDir: string, root: string, now = () => new D
 			try {
 				cpSync(join(memoryDir, file), join(dir, file));
 			} catch {
-				/* vanished mid-copy; manifest records what actually landed */
 			}
 		}
 		const landed = allFiles.filter((f) => existsSync(join(dir, f)));
-		// Hash-vs-landed caveat: contentHash covers the pre-copy view (hashLayer
-		// above); files[] records what actually landed. A file vanishing mid-copy
-		// leaves the manifest self-inconsistent on that entry — accepted under
-		// the fail-open design; the restore hint treats missing files as
-		// best-effort omissions, never as corruption.
 		const manifest: SnapshotManifest = {
 			at: ts.toISOString(),
 			contentHash: hash,
@@ -137,14 +124,12 @@ export function snapshotLayer(memoryDir: string, root: string, now = () => new D
 		};
 		writeFileSync(join(dir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 
-		// rotate: keep the newest SNAPSHOT_KEEP
 		const all = listSnapshots(root);
 		const excess = all.length - SNAPSHOT_KEEP;
 		for (let i = 0; i < excess; i++) {
 			try {
 				rmSync(all[i]!.dir, { recursive: true, force: true });
 			} catch {
-				/* eviction is best-effort; the next rotation retries */
 			}
 		}
 		return { dir, manifest };
@@ -153,7 +138,6 @@ export function snapshotLayer(memoryDir: string, root: string, now = () => new D
 	}
 }
 
-/** The restore view [C15 docs]: list a snapshot's files (for `cp` commands). */
 export function snapshotFiles(snapshot: SnapshotDir): string[] {
 	return snapshot.manifest.files.map((f) => f.file);
 }

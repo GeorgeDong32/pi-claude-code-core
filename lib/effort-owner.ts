@@ -1,101 +1,26 @@
-/**
- * thinking-level ownership chain (P1-EF-05, D5).
- *
- * Single owner arbitrating every thinking-level writer in core:
- *
- *   ① PI_CORE_EFFORT env pin (setFromEnv, read once at startup) — hard pin;
- *     explicit writes are refused while set
- *   ② explicit session choice (setExplicit from /effort command, picker or
- *     alt+t shortcut) — manual intent beats profile
- *   ③ mode profile `:effort` (setFromProfile)
- *   ④ model default (no slot set → owner never writes; pi keeps its default)
- *
- * Priority ① > ② > ③ > ④. The effective value is pushed down through
- * `pi.setThinkingLevel` — this module is the ONLY place in core allowed to
- * call it (P1-EF-07 source scan enforces that for extensions/).
- *
- * Host model switches (BH-E5 + FX-2, 2026-11-14): AgentSession.setModel
- * resets the level to the model's switch default from INSIDE the switch and
- * emits model_select only afterwards. Profile-driven switches are bracketed
- * by the modes module (beginModelSwitch/endModelSwitch); manual switches
- * (/model, ctrl+p) are identified by a model-key baseline in the effort
- * module and recovered through afterHostModelSwitch() once the confirming
- * model_select arrives. Either way the reset is bookkeeping — it never
- * becomes an explicit choice.
- */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-/** pi's thinking-level union (includes "off"); alt+t must be able to set it. */
 export type OwnerEffortLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
 
-/** Where the currently-effective value comes from (bus `effort.source`). */
 export type EffortSource = "env" | "session" | "profile" | "model-default";
 
 export type ExplicitSource = "command" | "picker" | "shortcut";
 
 export interface EffortOwner {
-	/** ① PI_CORE_EFFORT, startup read. Unknown tokens are ignored. */
 	setFromEnv(v: string): void;
-	/**
-	 * ② explicit write. Refused (no state change) while ① is set — callers
-	 * use envPin() to decide whether to notify "pinned by env".
-	 */
 	setExplicit(v: OwnerEffortLevel, src: ExplicitSource): "applied" | "pinned-by-env";
-	/** ③ mode profile `:effort`. */
 	setFromProfile(v: OwnerEffortLevel, profile: string): void;
-	/** `/effort reset` → clear ②. */
 	resetExplicit(): void;
-	/** The ① value, or null when env does not pin. */
 	envPin(): OwnerEffortLevel | null;
-	/**
-	 * BH-E5: bracket a host model switch. AgentSession.setModel resets the
-	 * thinking level to the model's switch default and emits
-	 * thinking_level_select from INSIDE the setModel call, so the effort
-	 * listener's external-adoption path must know the change is
-	 * model-switch-caused, not user intent. The listener records such events
-	 * via {@link noteModelSwitchLevel} and never promotes them to ②.
-	 */
 	beginModelSwitch(): void;
 	endModelSwitch(): void;
-	/** True between beginModelSwitch and endModelSwitch. */
 	inModelSwitch(): boolean;
-	/**
-	 * Record a model-switch-caused level change: echo bookkeeping only
-	 * (`lastApplied` stays truthful) and the stale profile slot is cleared —
-	 * the profile's previous effort belonged to the previous model
-	 * application, and the new mode's profile re-asserts it right after.
-	 * The explicit slot (②) and the env pin (①) are NEVER touched by a
-	 * model switch — that is the priority-chain guarantee this fix restores.
-	 */
 	noteModelSwitchLevel(v: OwnerEffortLevel): void;
-	/**
-	 * FX-2 (spec 2026-11-14-followup-small-fixes): recover the chain after a
-	 * host-initiated model switch that bypassed the profile bracket (manual
-	 * /model or ctrl+p — the host emits model_select only AFTER its reset,
-	 * so the effort listener calls this once the new model is confirmed).
-	 * Clears the profile slot (BH-E5 semantics: the previous profile
-	 * `:effort` belonged to the previous model application; the next mode
-	 * switch re-asserts it), then re-applies the ① env pin or ② explicit
-	 * choice on the new model through apply() — still the only
-	 * setThinkingLevel write in core (P1-EF-07); the host clamps values the
-	 * new model does not support. Pure owner state operation: no slot is
-	 * written on behalf of the switch itself.
-	 */
 	afterHostModelSwitch(): void;
-	/**
-	 * The level this owner last wrote through pi.setThinkingLevel (null before
-	 * the first apply). The thinking_level_select listener uses it to tell its
-	 * own echoes (skip) from external changes (adopt) — pi updates state and
-	 * emits the event atomically, so comparing against pi.getThinkingLevel()
-	 * would false-skip exactly the no-slot case external changes target.
-	 */
 	lastApplied(): OwnerEffortLevel | null;
-	/** ① > ② > ③ > ④ (falls through to pi's current level at ④). */
 	effective(): OwnerEffortLevel;
-	/** Source of the effective value (bus `effort.source`). */
 	currentSource(): EffortSource;
-	/** Register a listener fired after every state change. */
 	changed(handler: (v: OwnerEffortLevel) => void): void;
 }
 
@@ -109,8 +34,6 @@ const KNOWN_LEVELS: ReadonlySet<string> = new Set([
 	"max",
 ]);
 
-// One owner per pi instance: modes and effort resolve the same shared owner
-// for the same ExtensionAPI, while fresh fakes (tests) get fresh state.
 const sharedOwners = new WeakMap<object, EffortOwner>();
 
 function createEffortOwner(pi: ExtensionAPI): EffortOwner {
@@ -135,11 +58,7 @@ function createEffortOwner(pi: ExtensionAPI): EffortOwner {
 
 	function apply(): void {
 		const r = resolved();
-		if (!r) return; // ④ model default: never write
-		// Record BEFORE writing: setThinkingLevel emits its event
-		// synchronously, and the listener's echo guard compares against
-		// lastApplied() — writing afterwards leaves the guard one write
-		// behind and re-adopts the owner's own change.
+		if (!r) return;
 		applied = r.v;
 		if (pi.getThinkingLevel() !== r.v) {
 			pi.setThinkingLevel(r.v);
@@ -180,12 +99,10 @@ function createEffortOwner(pi: ExtensionAPI): EffortOwner {
 		},
 		inModelSwitch: () => modelSwitchDepth > 0,
 		noteModelSwitchLevel(v) {
-			// echo bookkeeping + stale-profile cleanup only — never a slot write
 			applied = v;
 			profile = null;
 		},
 		afterHostModelSwitch() {
-			// FX-2: stale profile slot out, ①/② back in — never a ② write
 			profile = null;
 			apply();
 		},
@@ -203,15 +120,10 @@ function createEffortOwner(pi: ExtensionAPI): EffortOwner {
 	};
 }
 
-/** Create a fresh owner bound to `pi` (unit tests, isolated setups). */
 export function newEffortOwner(pi: ExtensionAPI): EffortOwner {
 	return createEffortOwner(pi);
 }
 
-/**
- * Shared owner for a running pi process: modes (profile application, alt+t)
- * and effort (commands, picker) must arbitrate through the SAME instance.
- */
 export function getSharedEffortOwner(pi: ExtensionAPI): EffortOwner {
 	let owner = sharedOwners.get(pi);
 	if (!owner) {

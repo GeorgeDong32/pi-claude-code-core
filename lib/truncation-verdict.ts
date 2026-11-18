@@ -18,9 +18,7 @@ export type LengthStopVerdict = "context-clamp" | "output-limit" | "not-length";
 
 export interface LengthStopInput {
 	stopReason: string | undefined;
-	/** Partial usage view — only `output` is needed. */
 	usage?: { output?: number } | undefined;
-	/** The model's configured max output tokens, when resolvable. */
 	modelMaxOutputTokens?: number | undefined;
 }
 
@@ -33,15 +31,11 @@ export function classifyLengthStop(input: LengthStopInput): LengthStopVerdict {
 			return "output-limit";
 		}
 	}
-	// Unknown cap (or output under it): the conservative verdict. The copy
-	// carries the hedge so a mis-verdict still guides the user right.
 	return "context-clamp";
 }
 
 export interface BoundedRecoveryPolicy {
-	/** Notice copy for the shared bus notification queue; null when not-length. */
 	userNotice: string | null;
-	/** true when the cause is the model's configured quota (config-side fix). */
 	isQuota: boolean;
 }
 

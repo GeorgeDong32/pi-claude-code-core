@@ -29,7 +29,6 @@
  * duplicates and same-parent loops (non-bypass) block.
  */
 
-/** Byte-identical duplicate key: tool name + canonical (key-sorted) JSON. */
 export function duplicateKey(toolName: string, input: unknown): string {
 	const sorted = canonicalize(input);
 	return `${toolName}\u0000${JSON.stringify(sorted)}`;
@@ -46,11 +45,8 @@ function canonicalize(value: unknown): unknown {
 	return value;
 }
 
-// ---------------------------------------------------------------------------
-// D1 — same-batch duplicate index
 
 export interface BatchDupIndex {
-	/** toolCallId → its group key + whether it is a follower (not first). */
 	readonly byId: ReadonlyMap<string, { key: string; isDupFollow: boolean; firstId: string }>;
 }
 
@@ -61,12 +57,6 @@ interface ToolCallPartLike {
 	arguments?: unknown;
 }
 
-/**
- * Index the toolCalls of ONE finalized assistant message. Returns null for
- * non-assistant messages or shapes without toolCall parts (the caller
- * replaces its held index per message_end — the load-bearing role filter
- * is documented in the spec §3).
- */
 export function indexBatchDupes(message: { role?: string; content?: unknown }): BatchDupIndex | null {
 	if (message.role !== "assistant") return null;
 	const content = message.content;
@@ -89,7 +79,6 @@ export function indexBatchDupes(message: { role?: string; content?: unknown }): 
 	return { byId };
 }
 
-/** The D1 block reason (self-healing copy from the spec). */
 export function batchDupReason(firstIdHint: string): string {
 	return (
 		`This call is a byte-identical duplicate of call ${firstIdHint} in the same response — ` +
@@ -109,8 +98,6 @@ export function checkBatchDup(index: BatchDupIndex | undefined, toolCallId: stri
 	return batchDupReason(entry.firstId);
 }
 
-// ---------------------------------------------------------------------------
-// D1b — per-parent identical-call circuit breaker
 
 export interface ParentLoopBreaker {
 	check(parentToolCallId: string, key: string): string | undefined;
@@ -123,8 +110,6 @@ export function createParentLoopBreaker(maxIdentical = 20, maxParents = 256, max
 			let counts = parents.get(parentToolCallId);
 			if (!counts) {
 				if (parents.size >= maxParents) {
-					// FIFO eviction (insertion order) — defense state is not
-					// precious; losing the oldest parent's counters is harmless.
 					const oldest = parents.keys().next().value;
 					if (oldest !== undefined) parents.delete(oldest);
 				}
@@ -140,7 +125,6 @@ export function createParentLoopBreaker(maxIdentical = 20, maxParents = 256, max
 				);
 			}
 			if (counts.size >= maxKeysPerParent && !counts.has(key)) {
-				// Parent is at its key budget with a NEW key: pass unrecorded.
 				return undefined;
 			}
 			counts.set(key, count + 1);
@@ -149,7 +133,6 @@ export function createParentLoopBreaker(maxIdentical = 20, maxParents = 256, max
 	};
 }
 
-/** Shared key builder so the gate feeds D1b the same canonical key as D1. */
 export function parentLoopKey(toolName: string, input: unknown): string {
 	return duplicateKey(toolName, input);
 }

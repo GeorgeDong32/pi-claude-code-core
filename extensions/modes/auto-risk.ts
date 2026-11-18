@@ -1,11 +1,5 @@
-/**
- * modes/auto-risk.ts — auto-mode risk heuristics (bash pattern categories,
- * outside-cwd write detection for edit/write). Carved out of the old
- * modes/utils.ts grab-bag (arch review C3, 2026-10-03); behavior unchanged.
- */
 import { isOutsideCwd } from "./path-safety.ts"
 
-// ---- Auto risk patterns (v2.0.0) ----------------------------------------
 
 const AUTO_RISK_PATTERNS: Array<{ category: string; pattern: RegExp }> = [
 	{ category: "delete", pattern: /\brm\b/i },

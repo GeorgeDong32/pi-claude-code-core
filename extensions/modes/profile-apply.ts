@@ -39,42 +39,30 @@ import {
 	type ModelProfilesConfig,
 } from "./profiles.ts";
 
-/** Effort / thinking levels accepted in model-profiles.json. */
 export const PROFILE_EFFORT_LEVELS = new Set([
 	"off",
 	"low",
 	"medium",
 	"high",
-	// 0.99 host: xhigh/max exist on some models (pi exposes them); /effort
-	// already accepts them — profiles must too.
 	"xhigh",
 	"max",
 ]);
 
 export interface ProfileWiring {
-	/** current permission mode (the profile resolves per-mode mappings) */
 	getMode: () => PermissionMode;
-	/** called after an explicit activation: clear status + persist state */
 	onStateChanged: (ctx: ExtensionContext) => void;
-	/** /model-profile list output channel (custom message) */
 	sendList: (text: string) => void;
 }
 
 export interface ProfileController {
-	/** active profile name (undefined = none); persisted by the wiring. */
 	readonly active: string | undefined;
-	/** current in-memory config (skill-filter resolution reads this). */
 	readonly config: ModelProfilesConfig;
 	/** mode-switch application: lazy activation + reload re-stamp + model
 	 * + optional effort. Never throws; failures notify and keep the model. */
 	applyForMode(mode: PermissionMode, ctx: ExtensionContext): Promise<void>;
-	/** explicit activation (/model-profile name, alt+i, flag validation). */
 	setActive(name: string, ctx: ExtensionContext): Promise<void>;
-	/** alt+i: cycle to the next profile (wraps; falls back to first). */
 	cycle(ctx: ExtensionContext): Promise<void>;
-	/** session_start: ensure the config file + --model-profile pre-activation. */
 	initSession(ctx: ExtensionContext): void;
-	/** session entry restore — overrides the flag (call after initSession). */
 	restoreFromEntry(name: string | undefined): void;
 }
 
@@ -87,9 +75,6 @@ export function createProfileController(pi: ExtensionAPI, wiring: ProfileWiring)
 	}
 
 	async function applyForMode(mode: PermissionMode, ctx: ExtensionContext): Promise<void> {
-		// Lazy first-time activation: if nothing has been activated but a
-		// config file exists on disk, try to pick up the user's `active`
-		// profile (or the `default` profile) so mode switches "just work".
 		if (activeProfile === undefined) {
 			const cfg = loadModelProfiles();
 			if (Object.keys(cfg).length === 0) return;
@@ -99,11 +84,6 @@ export function createProfileController(pi: ExtensionAPI, wiring: ProfileWiring)
 			modelProfileConfig = cfg;
 		}
 
-		// Re-load lazily to pick up external edits between mode switches.
-		// Then re-stamp `active` with the in-memory `activeProfile` so the
-		// shared `resolveModelForMode()` helper (which reads `config.active`)
-		// honors any in-memory profile switches done via `/model-profile` or
-		// Alt+I — the on-disk file is NOT modified here.
 		const reloaded = loadModelProfiles();
 		modelProfileConfig =
 			activeProfile !== undefined && reloaded.active !== activeProfile
@@ -111,7 +91,7 @@ export function createProfileController(pi: ExtensionAPI, wiring: ProfileWiring)
 				: reloaded;
 
 		const modelId = resolveModelForMode(modelProfileConfig, mode);
-		if (!modelId) return; // profile has no mapping for this mode — keep current model
+		if (!modelId) return;
 
 		const parsed = parseModelId(modelId);
 		if (!parsed) {
@@ -125,14 +105,6 @@ export function createProfileController(pi: ExtensionAPI, wiring: ProfileWiring)
 			return;
 		}
 
-		// BH-E4 (spec 2026-11-14-backtest-hardening): skip the setModel
-		// round-trip when the profile resolves to the model that is already
-		// active — every mode switch re-applies the profile, and a redundant
-		// setModel also makes the host reset the thinking level (BH-E5).
-		// S6: the identity comparison goes through the shared
-		// modelIdentityKey — the key is built from the profile's parsed
-		// provider/model fields (the profile stores a "provider/model" id,
-		// not a model object).
 		const currentModel = ctx.model as { provider?: string; id?: string } | undefined;
 		const sameModel =
 			!!currentModel &&
@@ -140,10 +112,6 @@ export function createProfileController(pi: ExtensionAPI, wiring: ProfileWiring)
 				modelIdentityKey({ provider: parsed.provider, id: parsed.model });
 
 		if (!sameModel) {
-			// BH-E5: the host resets the thinking level INSIDE setModel
-			// (AgentSession.setModel → setThinkingLevel → thinking_level_select);
-			// bracket the switch so the effort owner records that reset as
-			// model-switch-caused instead of an explicit user choice.
 			const owner = getSharedEffortOwner(pi);
 			owner.beginModelSwitch();
 			let success: boolean;
@@ -158,8 +126,6 @@ export function createProfileController(pi: ExtensionAPI, wiring: ProfileWiring)
 			}
 		}
 
-		// undefined = the profile maps a model but expresses no effort → the
-		// mode switch must leave the thinking level alone (PLAN §3.3, P1-EF-06 d)
 		const effort = resolveEffortForMode(modelProfileConfig, mode);
 		if (!effort) return;
 		if (!PROFILE_EFFORT_LEVELS.has(effort)) {
@@ -170,10 +136,6 @@ export function createProfileController(pi: ExtensionAPI, wiring: ProfileWiring)
 			);
 			return;
 		}
-		// B5 (cherry-batch2): clamp the profile's level to the model's
-		// supported set BEFORE writing — profile switches are routine, so an
-		// info notice (not error); an unresolvable model writes as-is (the
-		// profile expresses intent; no nearest tier exists without a model).
 		const clamp = clampToSupported(effort as EffortLevel, ctx.model ?? null);
 		if (clamp && clamp.clamped) {
 			notify(
@@ -182,8 +144,6 @@ export function createProfileController(pi: ExtensionAPI, wiring: ProfileWiring)
 				"info",
 			);
 		}
-		// membership in PROFILE_EFFORT_LEVELS checked just above; the owner
-		// arbitrates against explicit manual levels (D5, P1-EF-05)
 		getSharedEffortOwner(pi).setFromProfile((clamp ? clamp.level : effort) as OwnerEffortLevel, activeProfile);
 	}
 
@@ -207,23 +167,16 @@ export function createProfileController(pi: ExtensionAPI, wiring: ProfileWiring)
 			notify(ctx, "No profiles found in ~/.pi/agent/model-profiles.json", "warning");
 			return;
 		}
-		// If no profile is active yet, treat the current `config.active` (or
-		// "default") as the implicit one so cycling always advances.
 		const currentName = activeProfile ?? getActiveProfileName(config) ?? names[0]!;
 		let i = names.indexOf(currentName);
-		if (i < 0) i = -1; // unknown current → start before the first
+		if (i < 0) i = -1;
 		const next = names[(i + 1) % names.length]!;
 		await setActive(next, ctx);
 	}
 
 	function initSession(ctx: ExtensionContext): void {
-		// Ensure the config exists (creates ~/.pi/agent if missing and writes
-		// a default file with the user's default model detected from
-		// settings.json). Re-runs on /reload so a user-deleted file is recreated.
 		modelProfileConfig = ensureModelProfilesConfig();
 
-		// --model-profile <name>: validate and pre-activate (the session entry
-		// restore may still override this — fidelity point 3).
 		const profileFlag = pi.getFlag("model-profile");
 		if (typeof profileFlag === "string" && profileFlag) {
 			const config = loadModelProfiles();
@@ -259,11 +212,7 @@ export function createProfileController(pi: ExtensionAPI, wiring: ProfileWiring)
 	};
 }
 
-/** Register the profile surfaces: /model-profile, alt+i, --model-profile.
- * `wiring.sendList` is the list-output channel (custom message). */
 export function registerProfileSurfaces(pi: ExtensionAPI, controller: ProfileController, wiring: ProfileWiring): void {
-	// ---- /model-profile command -------------------------------------------
-	// Show, list, or activate a model profile from `~/.pi/agent/model-profiles.json`.
 	pi.registerCommand("model-profile", {
 		description:
 			"Show or set model profile (named set of per-mode models from ~/.pi/agent/model-profiles.json)",
@@ -271,7 +220,6 @@ export function registerProfileSurfaces(pi: ExtensionAPI, controller: ProfileCon
 			const arg = (args ?? "").trim();
 
 			if (!arg) {
-				// No args → show interactive selector
 				const config = loadModelProfiles();
 				const names = listProfiles(config);
 				if (!names.length) {
@@ -311,9 +259,6 @@ export function registerProfileSurfaces(pi: ExtensionAPI, controller: ProfileCon
 		},
 	});
 
-	// Alt+I: cycle through model profiles. Mirrors Shift+Tab's cycle-by-one
-	// behavior: starts at the profile after the currently active one and
-	// wraps; always re-applies the model so the footer updates immediately.
 	pi.registerShortcut("alt+i", {
 		description: "Cycle model profile (next profile from ~/.pi/agent/model-profiles.json)",
 		handler: async (ctx) => controller.cycle(ctx),

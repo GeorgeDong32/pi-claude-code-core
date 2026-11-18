@@ -9,7 +9,6 @@
 
 import type { CompressedRegionView, FileActivity, VerificationData } from "./types.ts";
 
-/** Test-command regexes (Appendix C; configurable at the W8 signal level). */
 const DEFAULT_TEST_COMMAND = /\b(pnpm run test|npm (run )?test|vitest|node --test|pytest|go test|cargo test|bun (run )?test)\b/;
 
 function textBlocks(content: unknown): string[] {
@@ -19,13 +18,12 @@ function textBlocks(content: unknown): string[] {
 		.filter((block) => typeof block === "object" && block !== null)
 		.map((block) => {
 			if (typeof block.text === "string") return block.text;
-			if (typeof block.output === "string") return block.output; // toolResult blocks carry `output`
+			if (typeof block.output === "string") return block.output;
 			return "";
 		})
 		.filter((text) => text.length > 0);
 }
 
-/** LED-04: last test command + verdict; last commit subject. */
 export function scanVerification(region: CompressedRegionView): VerificationData {
 	let lastTest: VerificationData["lastTest"];
 	let lastCommit: VerificationData["lastCommit"];
@@ -38,7 +36,6 @@ export function scanVerification(region: CompressedRegionView): VerificationData
 					if (block?.type !== "toolCall" || block.name !== "bash") continue;
 					const command = typeof block.arguments?.command === "string" ? block.arguments.command : "";
 					if (DEFAULT_TEST_COMMAND.test(command)) {
-						// Verdict comes from the following toolResult (paired below).
 						lastTest = { command: command.trim().slice(0, 80), result: "unknown" };
 					}
 					if (/\bgit commit\b/.test(command)) {
@@ -60,7 +57,6 @@ export function scanVerification(region: CompressedRegionView): VerificationData
 	return out;
 }
 
-/** File activity from toolCalls (read/write/edit + nested calls), capped. */
 export function scanFileActivity(region: CompressedRegionView, cap = 12): FileActivity {
 	const read = new Set<string>();
 	const modified = new Set<string>();

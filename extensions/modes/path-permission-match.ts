@@ -1,14 +1,3 @@
-/**
- * Read / Edit / Write path permission matching (CC filesystem rules subset).
- *
- * Glob semantics (BH-S1, spec 2026-11-14-backtest-hardening): a single `*`
- * is a WITHIN-segment glob (`[^/]*` — `./.env.*` matches `./.env.local` but
- * not `./a/.env.local`), `**` keeps its cross-segment `.*` semantics, and
- * every other regex metacharacter in the literal pattern stays escaped.
- * deny / ask / allow rules share this matcher (permissions.ts
- * ruleMatchesToolCall), as does the W4 bash deny reuse (bash-path-check.ts
- * matchRules) — one conversion, four consumers.
- */
 
 import path from "node:path"
 import { homedir } from "node:os"
@@ -20,7 +9,6 @@ function expandUserPath(p: string): string {
 	return p
 }
 
-/** Resolve a rule path pattern relative to project cwd. */
 export function resolveRulePath(pattern: string, cwd: string): string {
 	const p = expandUserPath(pattern.trim())
 	if (p.startsWith("//")) {
@@ -35,25 +23,18 @@ export function resolveRulePath(pattern: string, cwd: string): string {
 	if (p.startsWith("~/")) {
 		return path.resolve(expandUserPath(p))
 	}
-	// Relative to project root (no prefix)
 	return path.resolve(cwd, p)
 }
 
-// BH-S1 (spec 2026-11-14-backtest-hardening): `*` must be escaped here too —
-// globToRegex relies on the `\\\*` → `[^/]*` replacement below, which never
-// fired while `*` stayed literal (single-star rules silently never matched).
 function escapeRegex(s: string): string {
 	return s.replace(/[.+*?^${}()|[\]\\]/g, "\\$&")
 }
 
-/** Convert CC-style path glob to regex (supports * and **). */
 function globToRegex(globPattern: string): RegExp {
 	let g = globPattern.replace(/\\/g, "/")
 	g = g.replace(/\*\*/g, "\x00GLOBSTAR\x00")
 	g = escapeRegex(g)
 	g = g.replace(/\x00GLOBSTAR\x00/g, ".*")
-	// single `*` → within-segment glob; `**` already replaced above (cross-
-	// segment `.*` semantics unchanged)
 	g = g.replace(/\\\*/g, "[^/]*")
 	return new RegExp(`^${g}$`)
 }
@@ -66,9 +47,6 @@ export function pathMatchesRulePattern(
 ): boolean {
 	if (!rulePattern || rulePattern === "*") return true
 
-	// E1 (spec 2026-11-15-cleanup-hardening): the target resolves against
-	// `targetCwd` (the shell's cd-tracked directory); the RULE stays
-	// anchored to the session `cwd`. Defaults keep both at cwd.
 	const resolvedTarget = path.resolve(
 		path.isAbsolute(expandUserPath(targetPath))
 			? expandUserPath(targetPath)
@@ -95,7 +73,6 @@ export function pathMatchesRulePattern(
 		return globToRegex(ruleForGlob).test(normalizedTarget)
 	}
 
-	// Exact path or directory prefix
 	if (normalizedTarget === normalizedRule) return true
 	if (normalizedRule.endsWith("/")) {
 		return normalizedTarget.startsWith(normalizedRule)

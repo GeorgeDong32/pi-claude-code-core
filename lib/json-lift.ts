@@ -53,16 +53,8 @@
  * extensions).
  */
 
-/**
- * Private lazy candidate generator (AR1005-JS-02). Yields candidates in the
- * canonical order, deduped (same Set semantics as the eager baseline); the
- * balanced-span stage is not entered until the generator is pulled past
- * stages 1–2.
- */
 function* iterateCandidates(trimmed: string): Generator<string> {
 	const seen = new Set<string>();
-	// Stage 1: fenced blocks, document-last first. The fence scan itself is a
-	// single regex pass — allowed eagerly to determine ordering.
 	const fenced = [...trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)].map((m) => m[1]!.trim());
 	for (let i = fenced.length - 1; i >= 0; i--) {
 		const f = fenced[i]!;
@@ -71,21 +63,17 @@ function* iterateCandidates(trimmed: string): Generator<string> {
 			yield f;
 		}
 	}
-	// Stage 2: the whole trimmed text.
 	if (!seen.has(trimmed)) {
 		seen.add(trimmed);
 		yield trimmed;
 	}
-	// Stage 3: balanced spans — only reached when stages 1–2 did not satisfy
-	// the consumer (liftJson returns early; jsonCandidates collects all).
-	spanScanCount++; // test-only observation seam (see header), not an API
+	spanScanCount++;
 	for (const span of balancedObjectSpans(trimmed)) {
 		if (!seen.has(span)) {
 			seen.add(span);
 			yield span;
 		}
 	}
-	// Stage 4: outermost { … } slice.
 	const start = trimmed.indexOf("{");
 	const end = trimmed.lastIndexOf("}");
 	if (start !== -1 && end > start) {
@@ -94,7 +82,6 @@ function* iterateCandidates(trimmed: string): Generator<string> {
 	}
 }
 
-/** Candidate texts, best-first (see header for the canonical order). */
 export function jsonCandidates(text: string): string[] {
 	return [...iterateCandidates(text.trim())];
 }
@@ -121,18 +108,12 @@ export function liftJson<T>(
 				const mapped = map(parsed);
 				if (mapped !== null && mapped !== undefined) return mapped;
 			} catch {
-				/* keep scanning */
 			}
 		}
 	}
 	return null;
 }
 
-// Test-only observation seam (AR1005-JS-02 / JS-T07): counts how many times
-// the lazy pipeline entered the stage-3 span scan. NOT part of the module's
-// interface or any cross-module candidate protocol; used exclusively by
-// unit tests to assert "stage 1/2 success never starts span enumeration"
-// without machine-specific time thresholds.
 let spanScanCount = 0;
 export function _spanScanCountForTests(): number {
 	return spanScanCount;
@@ -141,14 +122,6 @@ export function _resetSpanScanCountForTests(): void {
 	spanScanCount = 0;
 }
 
-/**
- * BOM strip + string-faithful trailing-comma repair (AR1005-JS-01). A
- * character-state scan tracks double-quoted strings and backslash escapes;
- * only OUTSIDE a string does a comma followed by (JSON whitespace, then) `}`
- * or `]` get removed — together with the whitespace between it and the
- * closer. String bodies pass through byte-identical. No single quotes, no
- * bracket balancing, no new lenient syntax.
- */
 export function repairJsonCandidate(raw: string): string {
 	let s = raw.replace(/^\uFEFF/, "");
 	let out = "";
@@ -172,7 +145,7 @@ export function repairJsonCandidate(raw: string): string {
 			let j = i + 1;
 			while (j < s.length && (s[j] === " " || s[j] === "\t" || s[j] === "\n" || s[j] === "\r")) j++;
 			if (j < s.length && (s[j] === "}" || s[j] === "]")) {
-				i = j - 1; // drop the comma and the whitespace; the closer is emitted next
+				i = j - 1;
 				continue;
 			}
 		}
@@ -181,11 +154,6 @@ export function repairJsonCandidate(raw: string): string {
 	return out;
 }
 
-/**
- * String- and escape-aware balanced {...} spans, in document order (every
- * `{` start opens a span; outer before inner). The shared fix for the old
- * selector copy, whose depth counter did not track string state.
- */
 export function balancedObjectSpans(text: string): string[] {
 	const results: string[] = [];
 	for (let i = 0; i < text.length; i++) {

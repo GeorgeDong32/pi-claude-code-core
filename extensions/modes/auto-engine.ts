@@ -51,13 +51,11 @@ import { shortenPath } from "./ui/footer.ts";
 
 type Block = { block: true; reason: string } | undefined;
 
-/** Narrow cross-domain seam for the auto-mode engine. */
 export interface AutoEngineDeps {
 	getClassifierConfig(): { enabled: boolean; model: string; timeoutMs: number; jsonlTranscript?: boolean; stage?: ClassifierStage; includeAgentsMd?: boolean; failClosed?: boolean };
 	getAutoModeConfig(): { allow?: string[]; soft_deny?: string[] } | undefined;
 	getMode(): string;
 	getFusionSchemaHint(toolName: string): string;
-	/** The approval-prompt path (approval-flow.ts) the engine falls back to. */
 	promptWithPermissionOptions(ctx: ExtensionContext, tool: string, input: Record<string, unknown>, label: string, category: string): Promise<Block>;
 	uiNotify(ctx: ExtensionContext, msg: string, level: "info" | "warning" | "error"): void;
 	trackOutsideWrite(cwd: string, record: { timestamp: string; originalPath: string; toolName: string; backupContent: string | null }): void;
@@ -104,8 +102,6 @@ export function createAutoEngine(deps: AutoEngineDeps) {
       return { allow: false, reason: risk.reason, category: risk.category };
     }
 
-    // powershell runs the bash tier ladder under bash semantics (conservative
-    // approximation for PowerShell verbs — plan2 B1).
     const isKnownTier3 =
       tool === "bash" ||
       tool === "powershell" ||
@@ -159,12 +155,6 @@ export function createAutoEngine(deps: AutoEngineDeps) {
     const reviewHint = describeTier3Review(tool, input, ctx.cwd);
 
     if (deps.getClassifierConfig().enabled) {
-      // Single visible retry layer (plan2 B2): the classifier call disables
-      // SDK-level retries (maxRetries: 0) and enforces timeoutMs per attempt,
-      // so the worst-case wait here is timeoutMs × MAX_CLASSIFIER_FAILURES.
-      // P2-1 Step 3: the retry mechanism lives in classifier-retry.ts; only
-      // the verdict business (denial accounting / fallback / fail-closed)
-      // stays in this gate.
       const outcome = await runClassifierAttempts({
         attempts: MAX_CLASSIFIER_FAILURES,
         onRetry: (n, err) => {
@@ -213,10 +203,6 @@ export function createAutoEngine(deps: AutoEngineDeps) {
       }
       logClassifierUnavailable(outcome.error, outcome.attempts);
       if (deps.getClassifierConfig().failClosed !== false) {
-        // E3 (spec 2026-11-15-cleanup-hardening): the unavailable message
-        // goes out VERBATIM — the former buildYoloRejectionMessage wrapper
-        // added a "Permission … denied" framing and an "add a permission
-        // rule" hint that make no sense when the classifier itself is down.
         return {
           block: true,
           reason: buildClassifierUnavailableMessage(tool, deps.getClassifierConfig().model),
@@ -299,7 +285,6 @@ export function createAutoEngine(deps: AutoEngineDeps) {
     try {
       branch = readBranchEntries(ctx.sessionManager);
     } catch {
-      // classifier still runs with pending action only
     }
     const includeAgentsMd = deps.getClassifierConfig().includeAgentsMd !== false;
     return {
@@ -318,13 +303,11 @@ export function createAutoEngine(deps: AutoEngineDeps) {
 		trackOutsideWriteIfNeeded,
 		describeTier3Review,
 		collectClassifierSessionContext,
-		/** The gate's allow-path effect: record success on the denial tracker. */
 		noteAllowed(): void {
 			if (deps.getMode() === "auto") {
 				classifierDenialState.current = recordClassifierSuccess(classifierDenialState.current);
 			}
 		},
-		/** setMode / session_start reset (was: createDenialTrackingState() reassign). */
 		resetDenialState(): void {
 			classifierDenialState.current = createDenialTrackingState();
 		},

@@ -59,9 +59,6 @@ function headingMeta(goal: GoalWidgetRecord, otherOpenGoalCount = 0): string {
 	if (goal.status === "active" && goal.autoContinue) bits.push("auto");
 	if (goal.usage.activeSeconds > 0) bits.push(formatDuration(goal.usage.activeSeconds));
 	if (goal.usage.tokensUsed > 0) bits.push(formatTokenValue(goal.usage.tokensUsed));
-	// cost bit (review r1 MINOR-1): tokens are cross-model incomparable — the
-	// persistent widget line needs the USD figure next to them. Hidden at 0
-	// so pre-cost records render exactly as before.
 	if (goal.usage.costUsed > 0) bits.push(formatCostValue(goal.usage.costUsed));
 	if (otherOpenGoalCount > 0) bits.push(`+${otherOpenGoalCount} open`);
 	return bits.join(" · ");
@@ -83,7 +80,6 @@ export function renderGoalWidgetLines(goal: GoalWidgetRecord | null, theme: Them
 	const mode = goal.sisyphus ? "Sisyphus" : "Goal";
 	const otherOpenGoalCount = Math.max(0, (options.openGoalCount ?? (goal ? 1 : 0)) - 1);
 	const meta = headingMeta(goal, otherOpenGoalCount);
-	// One left-aligned line: "● Goal running · auto · 21s · 122K tokens".
 	const headingLeft = `${theme.fg(color, icon)} ${theme.fg(color, theme.bold(mode))} ${theme.fg("muted", label.replace(/^sisyphus |^goal /, ""))}${meta ? `${theme.fg("dim", " · ")}${theme.fg("muted", meta)}` : ""}`;
 	const lines: string[] = [heading(theme, safeWidth, headingLeft)];
 	const body: string[] = [];
@@ -130,8 +126,6 @@ export class GoalWidgetComponent implements Component {
 
 	render(width: number): string[] {
 		const lines = renderGoalWidgetLines(this.getGoal(), this.theme, width, { openGoalCount: this.getOpenGoalCount() });
-		// Breathing room between the goal block and the cc-status spinner row
-		// below it; stays zero-height when goal-less.
 		if (lines.length > 0) lines.push("");
 		return lines;
 	}

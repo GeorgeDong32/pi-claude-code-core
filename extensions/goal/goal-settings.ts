@@ -1,15 +1,3 @@
-/**
- * goal-settings.ts — the /goal-settings dialog (SPEC SR E13a: split from
- * goal.ts; uses only uiNotify + the goal-auditor config helpers).
- *
- * Spec IDs: goal-auditor config (pi-review-adjacent auditor settings),
- * D-Economy settings surface.
- *
- * Design decisions:
- * - No closure state: the dialog reads/writes the auditor config file
- *   through loadGoalAuditorFileConfig/saveGoalAuditorFileConfig only.
- * - Headless sessions get the config path instead of the dialog.
- */
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { notify as uiNotify } from "../ui/notify.ts";
 import {

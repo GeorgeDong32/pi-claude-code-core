@@ -23,9 +23,6 @@
  * still not walked.
  */
 
-/** Fields whose values are treated as embedded shell commands (user adjudication
- *  2026-09-13: SoL-Pi uses then_run; `script` is deliberately excluded until
- *  measured against real tool schemas — it has false-positive risk). */
 const COMMAND_FIELDS = ["then_run", "run", "command", "cmd"] as const;
 
 export interface EmbeddedCommandInput {
@@ -36,17 +33,9 @@ export interface EmbeddedCommandInput {
 const PRIMARY_SHELL_TOOLS = new Set(["bash", "powershell"])
 
 function isCommandFieldExcluded(toolName: string, field: string): boolean {
-	// The shell tool's own `command` input IS the primary command — the mode
-	// dispatch already runs it through isSafeCommand/classifyBashTiers.
 	return field === "command" && PRIMARY_SHELL_TOOLS.has(toolName)
 }
 
-/** Whitelist fields of the top-level input object, in whitelist order, then
- *  input-key order. Values may be a string, a string[], or (top-level
- *  `then_run` only, FUS-SHAPE 2026-10-07) an object carrying a `.command`
- *  string — the real shape action-fusion registers. Empty strings are
- *  skipped. Nested objects under OTHER keys are NOT scanned (fields inside
- *  child objects are not commands any real fusion tool ships today). */
 export function extractEmbeddedCommandInputs(
 	toolName: string,
 	input: Record<string, unknown> | null | undefined,
@@ -57,10 +46,6 @@ export function extractEmbeddedCommandInputs(
 		if (isCommandFieldExcluded(toolName, field)) continue
 		if (!(field in input)) continue
 		const value = input[field]
-		// FUS-SHAPE: action-fusion's real override registers
-		// `then_run: { command, ... }` — surface its .command string. Object
-		// forms under the other whitelist fields stay unscanned (no evidence
-		// any tool ships them) and `script` remains out of the whitelist.
 		if (field === "then_run" && value && typeof value === "object" && !Array.isArray(value)) {
 			const cmd = (value as { command?: unknown }).command
 			if (typeof cmd === "string" && cmd.trim()) {
@@ -79,9 +64,6 @@ export function extractEmbeddedCommandInputs(
 	return found
 }
 
-/** Whitelist fields declared in a tool's parameter schema (TypeBox object
- *  shape) — used by the session_start annotation to flag fusion-capable
- *  tools from their getAllTools() metadata. */
 export function declaredCommandFields(parameters: unknown): string[] {
 	const props = (parameters as { properties?: Record<string, unknown> } | null | undefined)
 		?.properties

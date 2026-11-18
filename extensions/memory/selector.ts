@@ -1,25 +1,3 @@
-/**
- * memory/selector.ts — the LLM manifest judge for recall v2
- * (spec 2026-10-02-memory-recall-v2, RV-12/13, D3/D6).
- *
- * A TRUE external seam: the machine (recall.ts) only ever talks to the
- * Selector interface, so tests substitute a fake and the real llmSelector
- * stays unexercised except in its own suite. The selector reads ONE
- * manifest (key + age + description per candidate, newest first), knows
- * the recently-used tool list, and answers with keys — it never sees file
- * bodies (bodies are the machine's business, so prompt size stays flat in
- * corpus size).
- *
- * Model policy (D3): the wiring resolves `memory.recallModel` BEFORE the
- * machine runs; no model = no recall at all. Resolution is exact
- * `provider/id` first, then a unique bare id — ambiguity and misses both
- * mean "off", never a fallback to the session model (a fallback would
- * silently spend the user's main-model budget on recall).
- *
- * Prompt wording is written for this repo (mechanism-aligned with the CC
- * selector study, no proprietary text). Timeout discipline rides the
- * shared llm.ts lane (completeText).
- */
 
 import type { Api, Model } from "@earendil-works/pi-ai";
 
@@ -28,12 +6,9 @@ import { liftJson } from "../../lib/json-lift.ts";
 import { completeText, resolveModelRef, type LlmComplete, type RegistryLike } from "./llm.ts";
 import { effectiveAgeMs } from "./memdir.ts";
 
-/** Selector-side hard timeout — longer than any configured waitMs so a
- * deferred (timed-out) selection can still land before run end. */
 export const RECALL_SELECT_TIMEOUT_MS = 20_000;
 
 export interface SelectionCandidate {
-	/** Canonical block key: `user-memory/<file>` | `memory/<file>`. */
 	key: string;
 	file: string;
 	title: string;
@@ -41,14 +16,7 @@ export interface SelectionCandidate {
 	type: string;
 	layer: "user" | "project";
 	mtimeMs: number;
-	/** Absolute path on disk (truncation notes point here). */
 	absPath: string;
-	/**
-	 * File body. Optional at this interface level: pre-selection pipelines
-	 * (candidate scanning) build candidates without bodies; the selector's
-	 * manifest row is the authority that needs one — manifestRow falls back
-	 * to mtime when absent (C13 age semantics).
-	 */
 	body?: string;
 }
 
@@ -68,9 +36,6 @@ export interface Selector {
 	select(req: SelectorRequest): Promise<SelectorOutcome>;
 }
 
-/** Resolve `memory.recallModel` per D3: exact provider/id, then unique
- * bare id; undefined/ambiguous/missing → undefined (recall OFF).
- * Delegates to the single authority in llm.ts (spec 2026-10-03). */
 export function resolveRecallModel(
 	ref: string | undefined,
 	registry: { getAll?: () => unknown[] } | undefined,
@@ -78,10 +43,6 @@ export function resolveRecallModel(
 	return resolveModelRef(ref, registry);
 }
 
-/** One manifest row (RV-12): `- [layer][type] key (age): description`.
- * G2-C13: age follows the ONE rule (effectiveAgeMs) — a consolidated file
- * shows its created-based age here too, matching the freshness hint, instead
- * of resetting to "new" whenever a merge rewrote it. */
 export function manifestRow(c: SelectionCandidate, now = Date.now(), content?: string): string {
 	const ageMs = content === undefined ? now - c.mtimeMs : effectiveAgeMs(content, c.mtimeMs, now);
 	const ageDays = Math.floor(ageMs / 86_400_000);
@@ -89,8 +50,6 @@ export function manifestRow(c: SelectionCandidate, now = Date.now(), content?: s
 	return `- [${c.layer}][${c.type}] ${c.key} (${age}): ${c.description}`;
 }
 
-/** Selector system prompt — precision-first posture, empty list is a good
- * answer (D6), recentTools anti-noise rule (RV-13). */
 export const SELECT_SYSTEM = `You are choosing which memory files to surface for a coding assistant's next turn. You will see the user's message and a manifest of memory files. Each manifest row has a key, an age, and a one-line description.
 
 Reply with only a JSON object: {"selected": ["<key>", ...]}
@@ -102,12 +61,7 @@ Rules:
 - At most 5 keys, each copied verbatim from the manifest.
 - If a "Recently used tools" list is given, do not select usage-reference or API-documentation memories for those tools (the assistant is already exercising them) — but DO select memories warning about their gotchas or known issues.`;
 
-/** Parse the selector's reply into known keys; null = unparsable. */
 export function parseSelection(text: string, valid: ReadonlySet<string>): string[] | null {
-	// C4 (2026-10-03): extraction shared through lib/json-lift. This fixes the
-	// old local span scanner, which was NOT string-aware — a `}` inside a
-	// string value broke the span and silently counted a selector failure.
-	// Payload validation (selected array + key filtering) stays here.
 	return liftJson(text, (value) => {
 		if (typeof value !== "object" || value === null) return null;
 		const selected = (value as { selected?: unknown }).selected;
@@ -120,7 +74,6 @@ export function parseSelection(text: string, valid: ReadonlySet<string>): string
 	});
 }
 
-/** Build the real selector over the shared side-channel lane. */
 export function llmSelector(deps: {
 	model: () => Model<Api> | undefined;
 	registry: () => RegistryLike | undefined;

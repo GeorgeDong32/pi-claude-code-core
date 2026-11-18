@@ -31,15 +31,10 @@ import { extractEmbeddedCommandInputs } from "./fusion-tools.ts";
 import { shortenPath } from "./ui/footer.ts";
 
 export interface PlanGateFacts {
-	/** Absolute plan file path for the current cwd (error text only). */
 	planFilePath: string;
-	/** Adapter-side isPlanFilePath probe for THIS call's path. */
 	isPlanFile: boolean;
-	/** Authoritative MCP-shape verdict (lib/mcp-shape, collected by adapter). */
 	mcpShaped: boolean;
-	/** Whether a registered rule family claims this call. */
 	familyClaimed: boolean;
-	/** Display hint from the fusion schema annotation (may be ""). */
 	fusionSchemaHint: string;
 }
 
@@ -58,7 +53,6 @@ export function planHardBlock(
 	input: Record<string, unknown>,
 	facts: PlanGateFacts,
 ): PlanGateBlock | undefined {
-	// Built-in names: hard limits apply regardless of family claims.
 	if (tool === "codemode") {
 		return {
 			block: true,
@@ -83,19 +77,14 @@ export function planHardBlock(
 		}
 	} else if (facts.mcpShaped) {
 		if (!facts.familyClaimed) {
-			// D2c: no family governs it — fail closed (independent modes load).
 			return {
 				block: true,
 				reason: `Plan mode: MCP tool ${tool} is not available (plan is read-only).`,
 			};
 		}
-		// Family-governed MCP: skip the generic embedded-command scan; the
-		// family's deny/ask/allow (verdict execution in the handler) decides.
 		return undefined;
 	}
 
-	// Generic embedded-command scan: built-ins and unknown non-MCP tools.
-	// (Family-governed MCP returned above; unclaimed MCP blocked above.)
 	const embedded = extractEmbeddedCommandInputs(tool, input);
 	const offender = embedded.find((c) => !classifyBashTiers(c.command).safe);
 	if (offender) {

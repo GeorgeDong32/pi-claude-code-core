@@ -1,27 +1,6 @@
-/**
- * modes/auto-rule-match.ts — BH-R6 (spec 2026-11-14-backtest-hardening):
- * auto-mode allow / soft_deny matching per SHELL SEGMENT.
- *
- * The legacy gate matched the WHOLE command by substring/prefix, so a
- * compound like `git reset HEAD~1 && npm test` fast-allowed on the strength
- * of one allowed fragment and never reached the soft_deny tier. Semantics:
- *
- * - soft_deny wins: ANY segment matching a soft_deny rule marks the command.
- * - fast-allow is all-or-nothing: EVERY segment must match an allow rule.
- * - splitting hazards refuse the fast-allow: when the command carries
- *   command substitution (backticks, $(), ${}, process substitution) or
- *   splits into no segments, allowMatched stays false and the command falls
- *   through to the later tiers (soft_deny still reports — the conservative
- *   direction).
- *
- * Single-segment parity: splitShellSegments returns [command.trim()] for a
- * separator-free command, so the legacy whole-command verdicts are
- * reproduced exactly (pinned by the parity matrix in auto-rule-match.test.ts).
- */
 
 import { splitShellSegments } from "./bash-analysis.ts"
 
-/** Does one command string match one autoMode pattern (CC-ish)? */
 export function matchAutoModePattern(command: string, pattern: string): boolean {
 	const trimmed = command.trim()
 	const p = pattern.trim()
@@ -33,7 +12,6 @@ export function matchAutoModePattern(command: string, pattern: string): boolean 
 	return trimmed.includes(p)
 }
 
-/** Command substitution / nested-shell markers — the fast-allow refuses. */
 const NESTED_SHELL_PATTERNS: RegExp[] = [/`/, /\$\(/, /\$\{/, /<\(/, />\(/]
 
 export interface AutoRuleMatch {

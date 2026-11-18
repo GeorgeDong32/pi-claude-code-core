@@ -1,11 +1,3 @@
-/**
- * modes/outside-writes-commands.ts — the /outside-writes and
- * /undo-outside-writes command layer, extracted verbatim from the modes
- * extension factory (index.ts) in SPEC SR W-M (pure relocation, zero
- * behavior change). Lists and restores outside-cwd writes tracked by the
- * auto-mode engine; the snapshot engine itself (track/list/restore/pop)
- * lives in outside-writes.ts — this module only formats and commands.
- */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { notify as uiNotify } from "../ui/notify.ts";
@@ -16,8 +8,6 @@ import {
 	restoreOutsideWrite,
 } from "./outside-writes.ts";
 
-// ---- /outside-writes + /undo-outside-writes (NEW v1.1.3) --------------
-// Format a snapshot for display in lists/selectors.
 function formatSnapshotForDisplay(
 	snap: OutsideWriteSnapshot,
 	externallyModified = false,
@@ -28,10 +18,6 @@ function formatSnapshotForDisplay(
 	return `${ts} \u00b7 ${snap.toolName} \u00b7 ${snap.originalPath} (${action})${flag}`;
 }
 
-// Detect if a file has been externally modified since its snapshot was taken.
-// Heuristic: if multiple snapshots exist for the same path, OR the current
-// file content differs from the snapshot's backupContent, the file is
-// considered externally modified.
 function isExternallyModified(
 	snap: OutsideWriteSnapshot,
 	allSnaps: OutsideWriteSnapshot[],
@@ -61,7 +47,6 @@ export function registerOutsideWritesCommands(pi: ExtensionAPI): void {
 				{
 					customType: "outside-writes-list",
 					content: `Tracked outside-cwd writes (${snaps.length}):\n${lines.join("\n")}`,
-					// display metadata for the CC panel renderer (content untouched)
 					details: { command: "/outside-writes" },
 					display: true,
 				},
@@ -76,7 +61,6 @@ export function registerOutsideWritesCommands(pi: ExtensionAPI): void {
 		handler: async (args, ctx) => {
 			const arg = (args ?? "").trim();
 
-			// --list: alias for /outside-writes
 			if (arg === "--list" || arg === "list") {
 				const snaps = listTrackedOutsideWrites(ctx.cwd);
 				if (!snaps.length) {
@@ -88,7 +72,6 @@ export function registerOutsideWritesCommands(pi: ExtensionAPI): void {
 					{
 						customType: "outside-writes-list",
 						content: `Tracked outside-cwd writes (${snaps.length}):\n${lines.join("\n")}`,
-						// display metadata for the CC panel renderer (content untouched)
 						details: { command: "/undo-outside-writes --list" },
 						display: true,
 					},
@@ -105,7 +88,6 @@ export function registerOutsideWritesCommands(pi: ExtensionAPI): void {
 			}
 
 			if (arg === "all") {
-				// Restore all without prompting
 				let restored = 0;
 				let deleted = 0;
 				let warned = 0;
@@ -134,8 +116,7 @@ export function registerOutsideWritesCommands(pi: ExtensionAPI): void {
 				return;
 			}
 
-			// No args: interactive selector (newest first)
-			if (!ctx.hasUI) return; // (S6: the inner hasUI check was unreachable)
+			if (!ctx.hasUI) return;
 			const ordered = [...allSnaps].reverse();
 			const choice = await ctx.ui.select(
 				"Restore which tracked outside-cwd write? (newest first)",

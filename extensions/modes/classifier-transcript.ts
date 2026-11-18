@@ -1,7 +1,3 @@
-/**
- * CC-style classifier transcript: user text + assistant tool calls only.
- * Assistant free-text is excluded to prevent prompt injection into the classifier.
- */
 
 import { redactForClassifier } from "./classifier-redact.ts"
 import { toClassifierInput } from "./classifier-tool-projection.ts"
@@ -50,7 +46,6 @@ function extractAssistantToolCalls(content: unknown): TranscriptBlock[] {
 				input: block.arguments ?? {},
 			})
 		}
-		// CC uses tool_use; some paths may still emit tool_use in stored sessions
 		if (block?.type === "tool_use" && typeof block.name === "string") {
 			blocks.push({
 				type: "tool_use",
@@ -62,7 +57,6 @@ function extractAssistantToolCalls(content: unknown): TranscriptBlock[] {
 	return blocks
 }
 
-/** Build transcript from pi session branch entries (getBranch()). */
 export function buildTranscriptEntriesFromBranch(
 	branch: PiMessageEntry[],
 ): TranscriptEntry[] {

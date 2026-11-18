@@ -40,50 +40,23 @@ import {
 } from "./lean-agents.js";
 import type { ReviewerSpec, ReviewTarget } from "./types.js";
 
-/**
- * E12 (2026-11-15): hard ceiling on the generated all-reviewer directive,
- * measured POST-dedup (11363 chars with the default roster + fixed sample
- * paths) plus ~10% headroom for longer real-world paths. The main agent
- * copies the entire directive into its context — the workflowScript is the
- * bulk of it, and shared reviewer prompt lines are emitted once (see
- * buildWorkflowScript). Pinned by a test; raise the constant consciously
- * when the prompt grows.
- */
 export const REVIEW_DIRECTIVE_MAX_CHARS = 12_500;
-// Single authority for the hidden directive customType (sent via sendMessage
-// and matched on message_start for R11 arming — CH-8b).
 export const REVIEW_DIRECTIVE_CUSTOM_TYPE = "pi-review-directive";
 
 export interface ReviewDirectiveInput {
 	target: ReviewTarget;
 	reviewers: ReviewerSpec[];
-	/** Resolved gate model id (from config.gate.model or --gate-model). */
 	gateModel: string;
-	/** Optional gate thinking from config (appended as model:thinking). */
 	gateThinking?: string;
 	threshold: number;
-	/** Verdict policy passed to the gate task (code-side authoritative). */
 	verdictPolicy?: "strict" | "legacy";
 	lite: boolean;
-	/** Set false to skip the gate while keeping the full reviewer roster. */
 	gateEnabled?: boolean;
 	cwd: string;
-	/** Absolute path to the plugin-prepared target workspace (reviewer cwd). */
 	workspacePath: string;
-	/** Absolute path to the run manifest.json. */
 	manifestPath: string;
-	/** Absolute path to the captured change.diff. */
 	diffPath: string;
-	/**
-	 * Absolute path to write the raw workflowScript text. When set, the raw
-	 * script is persisted here and the directive points the main agent at it
-	 * (retry path) instead of asking it to re-derive the script from a
-	 * double-escaped JSON string — see the 2026-08-25 PR 19395 incident where
-	 * the main agent's copy/unescape of the script produced a syntax error
-	 * three times and then drifted into hand-debugging.
-	 */
 	workflowPath?: string;
-	/** Optional turnBudget override from config.budgets. */
 	budgets?: LeanBudgetSpec;
 }
 
@@ -172,7 +145,6 @@ export function buildReviewDirective(input: ReviewDirectiveInput): string {
 	blocks.push("If any check fails, stop and notify the user. Otherwise continue.");
 	blocks.push("");
 
-	// Step 2 — single workflowScript call.
 	const script = buildWorkflowScript({
 		reviewers,
 		gateModelWithThinking,
@@ -190,11 +162,6 @@ export function buildReviewDirective(input: ReviewDirectiveInput): string {
 		diffPath,
 	});
 
-	// Parse guard (P0 regression): make sure the generated script is valid JS
-	// BEFORE it reaches the main agent. If the template ever regresses — or,
-	// critically, if it ever grows a backtick or `${` (which would break the
-	// template-literal presentation the main agent copies) — fail here instead
-	// of at subagent() time.
 	if (/[`$]/.test(script)) {
 		throw new Error(
 			"pi-review: generated workflowScript contains a backtick or `$` (template-literal conflict) — the directive presents it inside backticks, so this would corrupt the main agent's copy. This is a plugin bug; please report it.",
@@ -230,12 +197,8 @@ export function buildReviewDirective(input: ReviewDirectiveInput): string {
 	blocks.push("");
 	blocks.push("```js");
 	blocks.push("subagent({");
-	// CC parity (AgentTool description param): a short model-facing label for
-	// the call-row headline — the fleet roster and tool rows render it.
 	blocks.push(`  label: "Code review",`);
 	blocks.push("  workflowScript: `");
-	// The raw script, verbatim (no escaping). The script contains no
-	// backticks and no ${, so the template literal is lossless.
 	blocks.push(script);
 	blocks.push("`,");
 	blocks.push(`  async: false,`);
@@ -250,7 +213,6 @@ export function buildReviewDirective(input: ReviewDirectiveInput): string {
 	);
 	blocks.push("");
 
-	// Step 3 — tool call + verbatim chat echo.
 	blocks.push("## Step 3 — Render the report (call `pi_review_report`, then echo it verbatim)");
 	blocks.push("");
 	blocks.push(
@@ -262,39 +224,24 @@ export function buildReviewDirective(input: ReviewDirectiveInput): string {
 	);
 	blocks.push("");
 
-	// R6: the second, duplicate `new Function` parse guard that used to sit
-	// here was deleted — it ran on the SAME already-validated `script` and
-	// could never fail (the first guard above owns the parse check).
 
 	return blocks.join("\n");
 }
 
-/**
- * Build the inline workflowScript string. Single-wave: one `runs.all([...])`
- * for reviewers, one `runs.run(\"gate\")`. Every child carries `cwd`,
- * `outputSchema`, `toolBudget`/`turnBudget`; explicit model overrides flow
- * through only when the reviewer config is not `inherit`.
- */
 export function buildWorkflowScript(input: {
 	reviewers: ReviewerSpec[];
 	gateModelWithThinking: string;
-	/** Raw gate thinking level (fallback branch passes it as a child param). */
 	gateThinking?: string;
 	gateModel: string;
 	budgets: LeanBudgetSpec;
 	lite: boolean;
-	/** Mirror of the directive-level gate switch (false when lite OR disabled). */
 	gateEnabled?: boolean;
 	threshold: number;
-	/** Verdict policy for the gate task text (strict is code-side default). */
 	verdictPolicy?: "strict" | "legacy";
 	targetLabel: string;
 	userContext?: string;
-	/** Absolute target workspace path (reviewer + gate cwd). */
 	workspacePath: string;
-	/** Absolute run manifest path. */
 	manifestPath: string;
-	/** Absolute change.diff path. */
 	diffPath: string;
 }): string {
 	const {
@@ -315,28 +262,12 @@ export function buildWorkflowScript(input: {
 	} = input;
 	const gateOn = !lite && gateEnabled;
 
-	// Blanket read-only declaration. pi-subagents classifies each task text for
-	// mutation intent: with a generic-object prohibition ("do not write any
-	// files") plus "review only"/"return findings only", the task is
-	// unambiguously read-only, so a read-only agent (gate: tools read) is never
-	// rejected by the implementation-tool contract, and acceptance stays at the
-	// lightweight attested level instead of "risky write-capable".
 	const READ_ONLY_PREFIX =
 		"READ-ONLY task — review only. Do not write any files. Do not edit files. Return findings only.";
 
 	const lines: string[] = [];
-	// v0.8: no outputSchema on any child — the structured-output tool
-	// contract was too fragile in the field ("Missing structured_output
-	// call" after budget wrap-ups). Reviewers return Markdown reports; the
-	// gate ends with a fenced JSON verdict block that the report tool
-	// extracts. See agents/*.md "Output format" sections.
 	lines.push("");
 
-	// E12 (2026-11-15): the prompt lines every reviewer shares are emitted
-	// ONCE as script-level consts; each reviewer's `task` array references
-	// them. The runtime join is byte-identical to the old inline repetition
-	// (pinned by tests/workflow-task-golden.json) — this shrinks the
-	// directive the main agent must copy, not the prompts reviewers see.
 	const baseTaskParts = [
 		READ_ONLY_PREFIX,
 		`Read ${JSON.stringify(diffPath)} as the change — the diff is the authoritative change record; workspace files are context only. When a workspace file disagrees with the diff, trust the diff and note the discrepancy in coverage.limitations.`,
@@ -358,16 +289,8 @@ export function buildWorkflowScript(input: {
 		lines.push(`const userTask = ${JSON.stringify(`User request: ${userContext.trim()}`)};`);
 	}
 	lines.push("");
-	// Bind the reviewer array to a local FIRST: the gate IIFE and
-	// `reviewersShaped` below both reference `reviewers`, and a bare object
-	// property (`return { reviewers: ... }`) does NOT create a variable
-	// binding — that produced `ReferenceError: reviewers is not defined` at
-	// runtime (silently surfaced as a null workflow return).
 	lines.push("const reviewers = await runs.all([");
 	for (const r of reviewers) {
-		// R10: lean-agents is the single source of per-reviewer tool budgets —
-		// the inline history-context special case is gone. Output is
-		// byte-identical (toolBudgetForReviewer maps the same way).
 		const tbForId = toolBudgetForReviewer(r.id);
 		const taskParts: string[] = ["baseTask"];
 		if (r.id === "rulesheriff") {
@@ -399,13 +322,8 @@ export function buildWorkflowScript(input: {
 		lines.push("    {");
 		lines.push(`      key: ${JSON.stringify(r.id)},`);
 		lines.push(`      agent: ${JSON.stringify(leanAgentName(r.id))},`);
-		// Task as an array joined at runtime — shared consts first, then the
-		// per-lane lines. A single JSON.stringify of the whole task produced
-		// 900+ char lines, the other fragile copy point.
 		lines.push(`      task: [`);
 		for (const part of taskParts) {
-			// Shared consts are referenced by name; lane-specific lines stay
-			// JSON-quoted literals.
 			lines.push(part === "baseTask" || part === "diffOnlyExtra" || part === "userTask"
 				? `        ${part},`
 				: `        ${JSON.stringify(part)},`);
@@ -424,7 +342,6 @@ export function buildWorkflowScript(input: {
 	lines.push("]);");
 	lines.push("");
 
-	// ---- gate ----------------------------------------------------------
 	// Top-level statements ONLY: pi-subagents' workflowScript AST walker
 	// rejects nested async functions ("Use top-level await, plain helper
 	// functions, or explicit Promise chains"). The pre-0.7.4 form
@@ -450,14 +367,10 @@ export function buildWorkflowScript(input: {
 			`End your report with exactly one fenced json block containing { status, verdict, issues[], dispositions[], reason } — the parent machine-reads that block.`,
 		];
 
-		// Inline the reviewers' Markdown reports for the gate to arbitrate.
-		// (Sync arrow — allowed; only async functions are rejected upstream.)
 		lines.push("const reviewerSections = reviewers.map((r) => {");
 		lines.push("  const head = '## Reviewer: ' + r.key + (r.ok ? '' : ' (FAILED: ' + String(r.error || 'run failed').slice(0, 120) + ')');");
 		lines.push("  return head + '\\n\\n' + String(r.output || '(no output)').slice(0, 6000);");
 		lines.push("});");
-		// Gate task as an array join (short lines) — same copy-safety rule as
-		// the reviewer tasks above.
 		lines.push("const gateTask = [");
 		for (const part of gateTaskParts) {
 			lines.push(`  ${JSON.stringify(part)},`);
@@ -509,7 +422,6 @@ export function buildWorkflowScript(input: {
 		lines.push("  gate: null,");
 	}
 
-	// ---- reviewer summary shape ----------------------------------------
 	lines.push("  reviewersShaped: reviewers.map((r) => ({");
 	lines.push("    key: r.key,");
 	lines.push("    ok: r.ok,");
@@ -520,7 +432,6 @@ export function buildWorkflowScript(input: {
 	return lines.join("\n");
 }
 
-/** Map the workflow return value into a normalized `ReviewWorkflowReturn` for the tool. */
 export function buildWorkflowReturnShape() {
 	return "{ reviewers, reviewersShaped, gate }";
 }

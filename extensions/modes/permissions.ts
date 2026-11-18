@@ -108,8 +108,6 @@ function ruleMatchesToolCall(
 			cmd,
 			rule.ruleValue.ruleContent,
 			rule.behavior,
-			// cwd feeds the P0-1 sensitive-redirection check; allowHardening
-		// single-sources the switch read (review fix 2026-11-08 P3#10)
 			{ cwd, ...(opts?.allowHardening !== undefined ? { allowHardening: opts.allowHardening } : {}) },
 		)
 	}
@@ -156,15 +154,10 @@ export function evaluateToolPermission(
 ): PermissionVerdict {
 	const ccTool = mapPiToolToCcTool(toolName)
 	if (!ccTool) {
-		// P4-FAM-01: unknown tools go through registered rule families before
-		// passthrough. Verdicts fold into the same behavior contract, so
-		// step-2 consumption (deny/allow/ask) is unchanged machinery.
 		const familyResult = familyVerdictFor(toolName, input, rules)
 		if (familyResult) {
 			const { family, canonicalId } = familyResult.match;
 			if (familyResult.verdict === "deny") {
-				// show the real deny rule (text + source) when one exists —
-				// never the allow suggestion
 				const matched = familyRuleMentions(rules, family, canonicalId, "deny");
 				return {
 					behavior: "deny",
@@ -204,7 +197,6 @@ export function suggestAllowRuleForToolCall(
 	input: Record<string, unknown>,
 	cwd: string,
 ): string {
-	// P4-FAM-03: families suggest their own persistent rules for unknown tools
 	const match = matchFamily(toolName, input)
 	if (match) return match.family.suggestAllowRule(match.canonicalId)
 	const ccTool = mapPiToolToCcTool(toolName)

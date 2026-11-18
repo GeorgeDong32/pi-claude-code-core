@@ -98,11 +98,9 @@ export function writeJsonAtomic(
 			...(opts?.mode !== undefined ? { mode: opts.mode } : {}),
 		});
 		if (opts?.mode === undefined) {
-			// CH E10: preserve the existing file's permission bits across the rename.
 			try {
 				chmodSync(tmpPath, statSync(path).mode & 0o777);
 			} catch {
-				// target unreadable/vanished → keep umask behavior; never fail the write
 			}
 		}
 		renameSync(tmpPath, path);
@@ -110,12 +108,9 @@ export function writeJsonAtomic(
 		try {
 			unlinkSync(tmpPath);
 		} catch {
-			// Best effort: the original write failure is the useful error.
 		}
 		throw error;
 	}
-	// Arch review 2026-10-18 C1: the write side of readJsonCached — a write is
-	// the one event every mtime window could miss, so drop the entry by hand.
 	cachedReads.delete(path);
 }
 
@@ -124,7 +119,6 @@ function basename(path: string): string {
 	return idx === -1 ? path : path.slice(idx + 1);
 }
 
-// ─── Cached reads (arch review 2026-10-18 C1) ─────────────────────────────
 
 /**
  * mtime-keyed cache behind `readJson` for hot paths that re-read the same
@@ -168,7 +162,6 @@ export function readJsonCached<T extends object>(
 	return value;
 }
 
-/** Test seam: drop every cached read (the write side is automatic). */
 export function clearCachedReads(): void {
 	cachedReads.clear();
 }

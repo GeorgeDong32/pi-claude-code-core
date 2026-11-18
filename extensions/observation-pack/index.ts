@@ -59,11 +59,9 @@ const RECALL_LIMITS = {
 };
 
 export interface ObservationRoots {
-	/** Per-session observation root; empty string = no persistent session. */
 	readonly root: string;
 }
 
-/** OBS-03: core storage topology (sessionManager public API, no SoL-Pi runtime module). */
 export function observationRootsFor(ctx: ExtensionContext): ObservationRoots {
 	const sessionDir = ctx.sessionManager.getSessionDir();
 	if (!sessionDir) return { root: "" };
@@ -76,11 +74,7 @@ export function createObservationPackExtension(hostExports: {
 	version?: string;
 } = {}): ExtensionFactory {
 	return (pi: ExtensionAPI) => {
-		// CMP-02 version gate: degrade, never block the session. B4: the tail
-		// is the shared helper — version-only probing stays noise-free.
 		const compat = probePiCompat({ version: hostExports.version ?? VERSION });
-		// P1-1 §4.4 (F2): pure assessment — warn at LOAD time, publish the
-		// footer line from the FIRST session_start (bus invariant 3).
 		const assessment = assessEconomyModule(compat, "observation-pack");
 		if (!assessment.enabled) {
 			console.warn(assessment.warning);
@@ -91,8 +85,6 @@ export function createObservationPackExtension(hostExports: {
 		}
 
 		const ledgers = new Map<string, Ledger>();
-		// B5: ALL mutable mechanism state lives in one object owned by this
-		// factory instance (was module-global — leaked across tests).
 		const projectionState = createProjectionState();
 		let noSessionWarned = false;
 
@@ -123,9 +115,6 @@ export function createObservationPackExtension(hostExports: {
 				const { root } = observationRootsFor(ctx);
 				try {
 					const chunk = await readRecallChunk(observationPath(root, id), offset, RECALL_LIMITS);
-					// Upstream protocol: the paging header must live in the model-visible
-					// text — details never reach the provider request, and the placeholder
-					// promises "continue with returned next_offset".
 					const header = [
 						`[obs_recall id=${id} offset=${offset} next_offset=${chunk.nextOffset} eof=${chunk.eof}]`,
 						`[chunk_bytes=${chunk.bytes} chunk_lines=${chunk.lines}; use next_offset to continue]`,
@@ -143,24 +132,12 @@ export function createObservationPackExtension(hostExports: {
 					return { content: [{ type: "text", text: `Unknown observation id: ${id} (${reason})` }], details: { id } };
 				}
 			},
-			// TR A: human-shaped rows — the model protocol (paging header,
-			// retrieve instruction) is stripped from what the user sees; the
-			// preview budget goes to the CONTENT. Read-only over details+text.
 			renderCall: (args, theme) => renderRecallCall(args as RecallCallArgs, theme as never),
 			renderResult: (result, options, theme, context) =>
 				renderRecallResult(result, options as { isError?: boolean; isPartial?: boolean; expanded?: boolean }, theme as never, (context as { lastComponent?: unknown }).lastComponent),
 		});
 
 		pi.on("context", async (event, ctx) => {
-			// B5: thin adapter — the projection itself is a pure step over
-			// injected ports (projection.ts); this handler only resolves the
-			// session root, wires the ports, and emits the outcome's side
-			// effects (console / bus). CON-03 pins the fail-open contract,
-			// CON-04 pins the final-slot registration order.
-			// BH-E3c / invariant 8: the WHOLE body sits in a fail-open try — a
-			// throw anywhere here (session-root resolution, ledger wiring, the
-			// bus publish) must leave the provider request unmodified, never
-			// block the turn.
 			try {
 				const { root } = observationRootsFor(ctx);
 				if (!root) {
@@ -185,9 +162,6 @@ export function createObservationPackExtension(hostExports: {
 				}
 				if (outcome.sentinelWarning !== null) console.warn(outcome.sentinelWarning);
 				if (outcome.counters !== null) {
-					// OBS-09: cumulative avoided tokens on the capability bus.
-					// OBS-09-SITES: per-site display-only savings for the
-					// first-replacement requests (never in the projection itself).
 					coreBus().publish({
 						observation: {
 							tokensAvoided: outcome.counters.tokensAvoided,
@@ -201,7 +175,6 @@ export function createObservationPackExtension(hostExports: {
 				try {
 					console.error(`[observation-pack] context projection failed open: ${error instanceof Error ? error.message : String(error)}`);
 				} catch {
-					// even the console failed; the context still stays unmodified
 				}
 				return undefined;
 			}

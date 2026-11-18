@@ -1,11 +1,3 @@
-/**
- * Implementation of the `pi_review_report` tool. Loaded by index.ts and
- * registered as a real Pi tool — the main agent calls it once after the
- * workflowScript returns.
- *
- * Pure logic — does not touch pi. The wrapper in `src/tool-wrapper.ts`
- * adapts it to `pi.registerTool`.
- */
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -26,9 +18,6 @@ export interface ReportToolInput {
 	workflowReturn: unknown;
 	threshold?: number;
 	verdictPolicy?: VerdictPolicy;
-	/** Root of the prepared run; defaults to process.cwd(). Callers with a
-	 *  tool/command context should pass ctx.cwd so the manifest is found
-	 *  regardless of the hosting process's cwd. */
 	cwd?: string;
 }
 
@@ -53,7 +42,6 @@ function isIssueLike(v: unknown): v is Issue {
 	return !!v && typeof v === "object" && typeof (v as { file?: unknown }).file === "string";
 }
 
-/** Clamp / default an issue's confidence so downstream filters never see NaN. */
 function normalizeIssue(issue: Issue): Issue {
 	if (typeof issue.confidence === "number" && Number.isFinite(issue.confidence)) {
 		return { ...issue, confidence: Math.max(1, Math.min(10, Math.round(issue.confidence))) };
@@ -61,7 +49,6 @@ function normalizeIssue(issue: Issue): Issue {
 	return { ...issue, confidence: 5 };
 }
 
-/** Clamp an externally supplied score (gate re-scores bypass schema paths). */
 function clampConfidence(value: unknown): number {
 	const n = typeof value === "number" && Number.isFinite(value) ? value : 5;
 	return Math.max(1, Math.min(10, Math.round(n)));
@@ -93,7 +80,6 @@ export function runReportTool(input: ReportToolInput): ReportToolResult {
 		try {
 			workflowReturn = JSON.parse(workflowReturn);
 		} catch {
-			// not JSON after all — fall through to the shape check below
 		}
 	}
 	if (!workflowReturn || typeof workflowReturn !== "object") {
@@ -112,7 +98,6 @@ export function runReportTool(input: ReportToolInput): ReportToolResult {
 		return { ok: false, error: "workflowReturn.reviewers must be an array" };
 	}
 
-	// Locate the manifest so the report has authoritative metadata.
 	const manifest = loadManifestSafe(input.runId, input.cwd);
 	const threshold = input.threshold ?? 8;
 	const policy = input.verdictPolicy ?? "strict";
@@ -124,10 +109,6 @@ export function runReportTool(input: ReportToolInput): ReportToolResult {
 		structuredOutput?: unknown;
 		output?: string;
 	}>;
-	// Stale-artifact guard: findings may only come from reviewers THIS run
-	// fanned out (manifest.reviewerIds). Anything else — e.g. a main agent
-	// that reconstructed a workflowReturn from old .pi-subagents artifacts
-	// after a failed workflow — is dropped and surfaced, never reported.
 	const roster = new Set(manifest?.reviewerIds ?? []);
 	const knownReviewers = roster.size === 0
 		? reviewersRaw
@@ -136,10 +117,6 @@ export function runReportTool(input: ReportToolInput): ReportToolResult {
 		.filter((r) => roster.size > 0 && !roster.has(r.key))
 		.map((r) => r.key);
 	if (unknownKeys.length > 0 && knownReviewers.length === 0) {
-		// Every finding came from outside this run's roster — almost certainly
-		// a workflowReturn reconstructed from stale artifacts after a failed
-		// workflow. Rendering a report here would fabricate a clean APPROVE
-		// over zero real reviewers; refuse instead.
 		return {
 			ok: false,
 			error: `workflowReturn contains no reviewer from this run's roster (got: ${unknownKeys.join(", ")}; roster: ${[...roster].join(", ")}). Findings appear to come from stale artifacts — re-run the review instead of reconstructing its return value.`,
@@ -158,10 +135,6 @@ export function runReportTool(input: ReportToolInput): ReportToolResult {
 		output?: string;
 	} | null;
 
-	// v0.8 data source: the gate (or, in lite mode, the lite-reviewer) ends
-	// its Markdown report with one fenced ```json verdict block. That block
-	// is the ONLY structured data we machine-read; reviewer Markdown is
-	// rendered verbatim for humans and was already arbitrated by the gate.
 	const gateMd = gateRaw?.ok ? gateRaw.output : undefined;
 	const gateSo = extractVerdictBlock(gateMd);
 	const liteSo = gateRaw
@@ -171,10 +144,6 @@ export function runReportTool(input: ReportToolInput): ReportToolResult {
 	const verdictSource = gateSo ?? liteSo;
 	const sourceLabel = gateSo ? "gate" : liteSo ? "lite-reviewer" : null;
 
-	// 1) Candidates come from the verdict block's issues (the gate already
-	//    re-scored + verified them). "unverified:" blocker/major dispositions
-	//    are exempt from the threshold floor — the verification duty says
-	//    those must stay visible instead of dying in a numeric filter.
 	const dispoByFp = new Map<string, GateDisposition>();
 	for (const d of verdictSource?.dispositions ?? []) dispoByFp.set(d.fingerprint, d);
 
@@ -234,9 +203,6 @@ export function runReportTool(input: ReportToolInput): ReportToolResult {
 		};
 	}
 
-	// Effective gate for the report layer: a gate that ran but produced no
-	// parseable verdict block counts as no-gate; in lite mode the
-	// lite-reviewer's verdict block stands in for the gate.
 	const effectiveGate = gateRaw
 		? gateSo
 			? { ok: true, output: gateMd, structuredOutput: { status: gateSo.status ?? "ok" } }
@@ -278,12 +244,6 @@ export function runReportTool(input: ReportToolInput): ReportToolResult {
 	});
 
 	const markdown = renderReport(built);
-	// End-of-run reclamation: the report is rendered and persisted, so the
-	// plugin-owned scratch clone has no further reader. Only cloned
-	// workspaces are touched (never the user's cwd), and each run owns a
-	// unique tmpdir root, so concurrent reviews never collide. Runs that
-	// never reach this tool (failed workflow) are still caught by the 24h
-	// TTL pruner on the next prepareRun.
 	if (manifest.workspaceCloned) {
 		removeWorkspaceRoot(dirname(manifest.workspacePath));
 	}
@@ -296,18 +256,6 @@ export function runReportTool(input: ReportToolInput): ReportToolResult {
 	};
 }
 
-/**
- * Extract the verdict JSON block from a gate / lite-reviewer Markdown
- * report (v0.8). The report ends with exactly one fenced ```json block.
- * C4 (2026-10-03): extraction (fences / string-aware spans / outermost
- * lift / repair) is shared through lib/json-lift — candidates come
- * best-first with fences LAST-first, so the first well-shaped object is
- * the trailing verdict block. Unlike the old copy, the brace-lift
- * fallback now also applies when fenced blocks parse but are not
- * verdict-shaped (previously it only fired when no fence parsed at all).
- * Returns undefined when nothing shaped like { verdict?, issues[] } is
- * found — callers treat that as "no verdict data" (no-gate path).
- */
 export function extractVerdictBlock(md?: string):
 	| {
 			status?: string;
@@ -339,8 +287,6 @@ export function extractVerdictBlock(md?: string):
 }
 
 function loadManifestSafe(runId: string, cwd?: string): RunManifest | null {
-	// Prefer the explicit run root (tool ctx.cwd); the manifest lives under
-	// the same .pi/pi-review/runs/<runId> that prepareRun created.
 	const root = cwd?.trim() ? cwd : process.cwd();
 	const path = join(root, ".pi", "pi-review", "runs", runId, "manifest.json");
 	try {

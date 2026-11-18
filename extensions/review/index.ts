@@ -56,10 +56,6 @@ export default function (pi: ExtensionAPI) {
 	registerReviewReportTool(pi);
 	registerPiReviewRenderer(pi);
 
-	// P2-REV-03 degradation path: /review needs pi-subagents' `subagent`
-	// tool. Probe at session_start (one-time notice) and re-check live at
-	// every command call (getAllTools is the source of truth — pi-subagents
-	// may register after us).
 	let degradedNoticeShown = false;
 	function subagentToolAvailable(): boolean {
 		try {
@@ -75,19 +71,6 @@ export default function (pi: ExtensionAPI) {
 		return subagentToolAvailable();
 	}
 
-	// R11 (D-CH-2): reconcile the bus review channel so `review.status` can
-	// no longer get stuck at "running" when a run fails, aborts, or never
-	// lands a report. THREE reconcile points, only the three existing
-	// statuses, no new bus fields:
-	//   1. agent_end — a live run whose agent turn ended WITHOUT a report
-	//      resets to idle. The live run is armed only after the running
-	//      publish AND the directive message itself (message_start with
-	//      customType "pi-review-directive", CH-8b), so neither a queued
-	//      directive nor an unrelated agent run (user prompt, goal
-	//      continuation, retry) clobbers the fresh running status.
-	//   2. session_start — a running status carried across sessions is stale.
-	//   3. a new /review invocation with no live run tracked resets residual
-	//      running before preparing.
 	let liveRun: { runId: string } | null = null;
 	let liveRunArmed = false;
 	function busReviewStatus(): string {
@@ -101,33 +84,20 @@ export default function (pi: ExtensionAPI) {
 		try {
 			coreBus().publish({ review: { status: "idle", lastRunAt: null } });
 		} catch {
-			/* bus publish is best-effort */
 		}
 	}
 	pi.on("session_start", () => {
 		// R11 ②: stale running from a previous session/process must not leak in.
 		if (busReviewStatus() === "running") reconcileIdle();
-		// one-time probe so a headless/console user learns about the missing
-		// peer early; degradedNoticeShown is reserved for the first
-		// user-visible notice on the command path
 		if (!subagentToolAvailable() && !degradedNoticeShown) {
 			console.log(`pi-review: ${degradationNotice()}`);
 		}
 	});
 	pi.on("message_start", (event) => {
-		// CH-8b: arm on the directive message itself — NOT on agent_start.
-		// Any agent run starting after the running publish (user prompt,
-		// goal continuation, retry) used to arm the flag and its agent_end
-		// reset running → idle before the directive was even delivered.
-		// Only the review directive message (role "custom", customType
-		// REVIEW_DIRECTIVE_CUSTOM_TYPE — the constant sent below) arms the run.
 		const m = event?.message as { role?: string; customType?: string } | undefined;
 		if (liveRun && m?.role === "custom" && m.customType === REVIEW_DIRECTIVE_CUSTOM_TYPE) liveRunArmed = true;
 	});
 	pi.on("agent_end", () => {
-		// R11 ①: an armed live run whose turn ended without the report tool
-		// landing (status still "running") failed/aborted/never-reported —
-		// reset to idle. A landed report ("done") is left untouched.
 		if (!liveRun || !liveRunArmed) return;
 		liveRun = null;
 		liveRunArmed = false;
@@ -148,18 +118,11 @@ export default function (pi: ExtensionAPI) {
 			return null;
 		},
 		handler: async (args, ctx) => {
-			// C2: UI-visible notices go through the shared entry (bus publish +
-			// cctui negotiation) instead of a bare host notify; the headless
-			// console fallback stays review's own — /review must stay readable
-			// when driven from a terminal without any TUI.
 			const notify = (msg: string, level: "info" | "warning" | "error" = "info") => {
 				if (ctx.hasUI) sharedNotify(ctx, msg, level);
 				else console.log(`pi-review: ${msg}`);
 			};
 
-			// P2-REV-03: missing peer → clear error, everything else keeps
-			// working. The install hint is a once-per-session warning; the
-			// per-command error states the command was skipped.
 			if (!checkSubagentAvailability()) {
 				if (!degradedNoticeShown) {
 					degradedNoticeShown = true;
@@ -174,22 +137,14 @@ export default function (pi: ExtensionAPI) {
 				const { config, legacyWarnings } = loadConfig();
 				for (const w of legacyWarnings) notify(`pi-review: ${w}`, "warning");
 
-				// R11 ③: stale residual — the bus says running but this module
-				// tracks no live run (e.g. a previous run never reconciled).
-				// Reset before preparing; a live run is never touched here.
 				if (!liveRun && busReviewStatus() === "running") reconcileIdle();
 
-				// Visible echo of the command — sent IMMEDIATELY, before the
-				// (potentially minutes-long) diff/clone preparation, so the
-				// user sees the command registered instead of a long silent
-				// gap.
 				pi.sendMessage({
 					customType: "pi-review",
 					content: parsed.input ? `/review ${parsed.input}` : "/review",
 					display: true,
 				});
 
-				// Dry-run: print the prepared run summary without injecting the directive.
 				if (parsed.noSpawn) {
 					const dryRunText = await renderDryRun(ctx, parsed, config);
 					pi.sendMessage({ customType: "pi-review", content: dryRunText, display: true });
@@ -202,15 +157,10 @@ export default function (pi: ExtensionAPI) {
 					return;
 				}
 
-				// P2-BUS-01: review run is live — publish running (done comes
-				// from the pi_review_report tool landing the report). R11:
-				// track the live run for the agent_end reconciliation; it is
-				// armed by the directive message's message_start (CH-8b).
 				coreBus().publish({ review: { status: "running", lastRunAt: null } });
 				liveRun = { runId: prepared.runId };
 				liveRunArmed = false;
 
-				// Hidden directive → main agent executes as a turn.
 				pi.sendMessage(
 					{
 						customType: REVIEW_DIRECTIVE_CUSTOM_TYPE,
@@ -292,7 +242,6 @@ export default function (pi: ExtensionAPI) {
 			pi.sendMessage({
 				customType: "pi-review-agents",
 				content: body,
-				// display metadata for the CC panel renderer (content untouched)
 				details: { command: "/review-agents" },
 				display: true,
 			});
@@ -321,9 +270,6 @@ export default function (pi: ExtensionAPI) {
 	});
 }
 
-/** Cheap human summary for `--no-spawn`. R12: a PR dry run is metadata-only
- *  (`gh pr view` + `gh pr diff`, no clone) — the workspace/rules/history
- *  lines say so. */
 async function renderDryRun(
 	ctx: ExtensionCommandContext,
 	parsed: ReturnType<typeof parseReviewArgs>,
@@ -334,9 +280,6 @@ async function renderDryRun(
 		input: parsed.input,
 		lite: parsed.lite,
 		gateModel: parsed.gateModel,
-		// Dry runs skip pruning; the run dir itself IS written (manifest +
-		// diff) and is reclaimed by the 24h pruner — this is not
-		// side-effect free, and R12 says so honestly.
 		cleanup: false,
 		dryRun: true,
 	});

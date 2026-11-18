@@ -1,12 +1,3 @@
-/*
- * Ledger file-activity rendering (SPEC SC §5.6, task W6).
- *
- * The verification scan (verification.ts#scanFileActivity) collects the
- * raw lists; this module renders them into the ledger's compact forms used
- * by the Closed section annotation and the narrative prompt context:
- * modified files (most relevant for continuation) capped, then read-only
- * files capped, with an overflow count.
- */
 
 import type { FileActivity } from "./types.ts";
 

@@ -1,9 +1,3 @@
-/**
- * modes/mode-prompt.ts — mode prompt surgery: anchored injection of the
- * per-mode reminder block plus skill-block filtering. Carved out of the old
- * modes/utils.ts grab-bag (arch review C3, 2026-10-03); behavior unchanged.
- */
-// ---- Mode prompt anchor injection (v2.0.0) ------------------------------
 
 export const MODE_PROMPT_BEGIN = "<!-- permission-modes:context -->"
 export const MODE_PROMPT_END = "<!-- /permission-modes:context -->"
@@ -72,7 +66,6 @@ export function resolveModePrompt(opts: ResolveModePromptOpts): string {
 		return "[Bypass] All tool calls are auto-approved with no permission checks. You are responsible for security: avoid exfiltrating secrets, running untrusted downloads, or destructive commands outside the user's intent. Prefer isolated environments."
 	}
 
-	// auto and default: zero routine injection
 	return ""
 }
 
@@ -114,7 +107,6 @@ export function filterSkillsFromPrompt(
 	prompt: string,
 	allowedSkills: string[],
 ): string {
-	// Fast-path: allow all
 	if (
 		!allowedSkills ||
 		allowedSkills.length === 0 ||
@@ -123,7 +115,6 @@ export function filterSkillsFromPrompt(
 		return prompt
 	}
 
-	// Fast-path: no skill blocks at all
 	if (!prompt.includes("<skill")) return prompt
 
 	// Remove `<skill>...</skill>` blocks whose child `<name>` element is NOT in

@@ -1,9 +1,4 @@
 // Vendored from gvanderclay/pi-bg-bash v0.2.1 (MIT). Copyright (c) 2026 Gage Vander Clay.
-// Log housekeeping: the size limit that stops a runaway task, gzipping a
-// finished log once the agent has been told, and removing old logs at session
-// start. The size check runs on its own fast timer in the registry (about four
-// times a second) and again in the 2 s poller, so it records the kill reason
-// and sends the completion message through the same path as a deadline kill.
 import {
 	appendFileSync,
 	createReadStream,
@@ -26,36 +21,24 @@ import type { Task } from "./registry.ts";
 
 const MIB = 1024 * 1024;
 const DAY = 24 * 60 * 60 * 1000;
-/** A running task is killed once its log passes this many bytes. */
 const LOG_LIMIT_BYTES = 100 * MIB;
-/** Logs and emptied session directories older than this many days are removed at session start. */
 const CLEANUP_DAYS = 7;
-/** The extension's own log names: `<id>.log` and `<id>.log.gz`. */
 const LOG_NAME = /^bg-\d+\.log(\.gz)?$/;
 
-/** The log limit; the contract test lowers it with `CC_CORE_BG_LOG_LIMIT_BYTES`. */
 export function logLimitBytes(): number {
 	const set = Number(process.env.CC_CORE_BG_LOG_LIMIT_BYTES);
 	return Number.isFinite(set) && set > 0 ? set : LOG_LIMIT_BYTES;
 }
 
-/** Whether a running task's plain log has passed the size limit. */
 export function overLogLimit(task: Task): boolean {
 	try {
 		return statSync(task.logPath).size > logLimitBytes();
 	} catch (error) {
-		// Checked four times a second: a missing log is settled by the poller, not worth a line each time.
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") debugError("log-limit-stat", error, { log: task.logPath });
-		return false; // a log that cannot be read cannot be over the limit
+		return false;
 	}
 }
 
-/**
- * Append the `__CC_BG_LIMIT__:<nonce>` marker and remember where it sits, so the
- * view cuts it out like the exit marker. The caller has already stopped the
- * group; a group that survived SIGKILL (`stuck`) can still write after it, but
- * the cut is a region, so the view stays correct.
- */
 export function appendLimitMarker(task: Task): void {
 	const line = `\n__CC_BG_LIMIT__:${task.nonce}\n`;
 	const before = statSync(task.logPath).size;
@@ -63,12 +46,6 @@ export function appendLimitMarker(task: Task): void {
 	task.limitMarker = { start: before, end: before + Buffer.byteLength(line) };
 }
 
-/**
- * Compress the task's finished log to `<id>.log.gz` (0600), delete the plain
- * file, and point the task at the gzipped one. The gzip is streamed, so a large
- * log neither blocks the event loop nor hits the 2 GiB read ceiling. A missing
- * log (an exit that could no longer be known) is left as it is.
- */
 export async function gzipLog(task: Task): Promise<void> {
 	if (task.logPath.endsWith(".gz")) return;
 	const plain = task.logPath;
@@ -89,7 +66,6 @@ export async function gzipLog(task: Task): Promise<void> {
 	unlinkSync(plain);
 }
 
-/** A path's modification time, or `undefined` when it cannot be read. */
 function mtimeMs(path: string): number | undefined {
 	try {
 		return lstatSync(path).mtimeMs;
@@ -99,15 +75,6 @@ function mtimeMs(path: string): number | undefined {
 	}
 }
 
-/**
- * Remove logs and emptied session directories under the state root that are
- * older than the retention. It only ever deletes regular files whose name is
- * the extension's own (`bg-<n>.log` or `.gz`), never a registered task's log,
- * and it never follows symlinks (a symlinked directory or log is left alone).
- * A session directory whose owner marker names a live process is skipped whole:
- * another Pi may still be writing there. `tasks` is the registry's current task
- * list, for the "never a running task's log" rule.
- */
 export function cleanupOldLogs(tasks: Iterable<Task>): void {
 	const cutoff = Date.now() - CLEANUP_DAYS * DAY;
 	const keep = new Set<string>();
@@ -123,10 +90,8 @@ export function cleanupOldLogs(tasks: Iterable<Task>): void {
 		throw error;
 	}
 	for (const session of sessions) {
-		if (!session.isDirectory()) continue; // a symlinked directory is not descended into
+		if (!session.isDirectory()) continue;
 		const dir = join(stateRoot(), session.name);
-		// Another live Pi process owns this directory: its tasks may still be writing.
-		// A liveness check that throws cannot name a live owner (the pid is bounded in `ownerPid`).
 		const owner = ownerPid(dir);
 		let ownerAlive = false;
 		if (owner !== undefined) {
@@ -138,17 +103,16 @@ export function cleanupOldLogs(tasks: Iterable<Task>): void {
 			}
 		}
 		if (ownerAlive) continue;
-		// Captured before any unlink: removing a file updates the directory's mtime.
 		const dirMt = mtimeMs(dir);
 		let entries;
 		try {
 			entries = readdirSync(dir, { withFileTypes: true });
 		} catch (error) {
 			debugError("cleanup-readdir", error, { dir });
-			continue; // unreadable: leave it
+			continue;
 		}
 		for (const entry of entries) {
-			if (!entry.isFile() || !LOG_NAME.test(entry.name)) continue; // symlinks and foreign files stay
+			if (!entry.isFile() || !LOG_NAME.test(entry.name)) continue;
 			const path = join(dir, entry.name);
 			if (keep.has(path)) continue;
 			const mt = mtimeMs(path);
@@ -157,17 +121,13 @@ export function cleanupOldLogs(tasks: Iterable<Task>): void {
 					unlinkSync(path);
 				} catch (error) {
 					debugError("cleanup-unlink", error, { path });
-					// housekeeping is best-effort: one unreadable file never fails session start
 				}
 			}
 		}
-		// No live owner (the marker missing, malformed, or naming a dead pid): drop it so the directory can empty and be removed.
 		try {
 			unlinkSync(join(dir, OWNER_FILE));
 		} catch (error) {
-			// A directory without a marker is the ordinary case, not worth a line.
 			if ((error as NodeJS.ErrnoException).code !== "ENOENT") debugError("cleanup-owner-unlink", error, { dir });
-			// already gone, or not removable: leave it
 		}
 		if (dirMt !== undefined && dirMt < cutoff) {
 			try {

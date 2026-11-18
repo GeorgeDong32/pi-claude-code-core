@@ -1,10 +1,3 @@
-/**
- * mcp-gov/index.ts — MCP governance module assembly (P4-MC).
- *
- * Registers the MCP rule family into the modes engine, starts the broker
- * mirror against the probed adapter port (absent → idle, zero side
- * effects), and adds the /core panel command (P4-MC-06).
- */
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -31,8 +24,6 @@ import { createDeclarationMeter } from "./declaration-meter.ts";
 import { readJson, writeJsonAtomic } from "../../lib/settings.ts";
 
 export default function mcpGovExtension(pi: ExtensionAPI): void {
-	// direct tool naming (exa_search) only claims when the server id is on
-	// this list — configure via env, e.g. PI_CORE_MCP_DIRECT_SERVERS=exa,github
 	createMcpRuleFamily({ knownServers: directKnownServersFromEnv() });
 
 	let mirror = createBrokerMirror({ present: false } as McpEventPort, {
@@ -43,16 +34,10 @@ export default function mcpGovExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_start", async (_event, ctx: ExtensionContext) => {
-		// stop the previous session's mirror FIRST (even before the probe —
-		// a throwing probe must not leave the old subscription alive)
 		mirror.stop();
 		try {
 			const port = await probeMcpAdapterPort();
-			// overwriting the reference without stop() leaks its subscription
-			// (duplicate handlers → double deny counting) on multi-session
-			// processes
 			mirror = createBrokerMirror(port, {
-				// live rule view over the same merged rules the gate used
 				hasAllowRule: (canonicalId) =>
 					resolveHasAllow(loadMergedPermissionRules(ctx.cwd), canonicalId),
 				bypassActive: isBypassActive,
@@ -61,7 +46,6 @@ export default function mcpGovExtension(pi: ExtensionAPI): void {
 			});
 			mirror.start();
 		} catch {
-			/* mirror is best-effort */
 		}
 	});
 
@@ -69,8 +53,6 @@ export default function mcpGovExtension(pi: ExtensionAPI): void {
 		mirror.stop();
 	});
 
-	// B4-F1 (cherry-batch3): declaration volume meter — reads every provider
-	// request's tool payload (fail-open; never mutates it).
 	const declarationMeter = createDeclarationMeter();
 	pi.on("before_provider_request", async (event) => {
 		declarationMeter.observe((event as { payload?: unknown }).payload);
@@ -80,15 +62,12 @@ export default function mcpGovExtension(pi: ExtensionAPI): void {
 		description: "Core status panel: MCP governance section; `/core exposure <server> <tier>` switches a server's declaration tier",
 		handler: async (args, ctx) => {
 			const commandCtx = ctx as ExtensionContext;
-			// B4-F2 subcommand: /core exposure <server> <tier>
 			const tokens = (args ?? "").trim().split(/\s+/).filter(Boolean);
 			if (tokens[0] === "exposure") {
 				const result = switchExposure(tokens, commandCtx);
 				pi.sendMessage({
 					customType: "pi-core-status",
 					content: `# /core — mcp-gov\n\n- ${result}`,
-					// display metadata for the CC panel renderer (model-visible
-					// content is untouched) — the typed command, args included
 					details: { command: `/core ${(args ?? "").trim()}`.trim() },
 					display: true,
 				});
@@ -110,7 +89,6 @@ export default function mcpGovExtension(pi: ExtensionAPI): void {
 			pi.sendMessage({
 				customType: "pi-core-status",
 				content: `# /core — mcp-gov [${section.status}]\n\n${section.lines.map((l) => `- ${l}`).join("\n")}`,
-				// display metadata for the CC panel renderer (content untouched)
 				details: { command: "/core" },
 				display: true,
 			});
@@ -128,10 +106,6 @@ function getAdjudicationFor(id: string): { outcome: string } | undefined {
 	return getAdjudication(id);
 }
 
-/** B4-F2: `/core exposure <server> <tier>` — writes the global mcp.json's
- *  exposure field (4 tiers; the codemode-deferred alias normalizes to
- *  codemode). Refuses when a project-level override owns the server. */
-/** Exported for tests (the /core command is the only production caller). */
 export function switchExposure(tokens: string[], ctx: ExtensionContext): string {
 	const [, serverArg, tierArg] = tokens;
 	const TIERS = new Set(["codemode", "deferred", "direct", "hidden"]);
@@ -145,8 +119,6 @@ export function switchExposure(tokens: string[], ctx: ExtensionContext): string 
 	if (!cfg.mcpServers || !(serverArg in cfg.mcpServers)) {
 		return `server "${serverArg}" not found in the global mcp.json (or the file is unreadable)`;
 	}
-	// project-level override check (R1 P2-5): if a project mcp.json owns the
-	// server's exposure, writing the global file would silently do nothing.
 	const projectOverride = join(ctx.cwd ?? process.cwd(), ".pi", "mcp.json");
 	const proj = readJson<{ mcpServers?: Record<string, { exposure?: string }> }>(projectOverride, {});
 	if (proj.mcpServers && serverArg in proj.mcpServers && proj.mcpServers[serverArg]?.exposure !== undefined) {
@@ -159,7 +131,5 @@ export function switchExposure(tokens: string[], ctx: ExtensionContext): string 
 }
 
 function formatTok(bytes: number): string {
-	// spec R1 P3-6: panel uses pi-ai's estimator (same anchor family as the B3
-	// contract); the ÷4 shorthand lives only in the recon report.
 	return `≈${estimateTextTokens("a".repeat(bytes))} tok`;
 }

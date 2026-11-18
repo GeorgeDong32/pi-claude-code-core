@@ -29,14 +29,12 @@ import type {
 import { estimateMessages } from "./policy.ts";
 import type { CutSelection } from "./types.ts";
 
-/** pi's internal FileOperations shape (H2): three sets in, two lists out. */
 export interface FileOpSets {
 	read: Set<string>;
 	written: Set<string>;
 	edited: Set<string>;
 }
 
-/** The public CompactionPreparation structure compact() accepts (H2). */
 export interface BuiltPreparation {
 	firstKeptEntryId: string;
 	messagesToSummarize: AgentMessage[];
@@ -52,7 +50,6 @@ function createFileOps(): FileOpSets {
 	return { read: new Set(), written: new Set(), edited: new Set() };
 }
 
-/** addFileOp replica: only read/write/edit with a string `path` count. */
 function addFileOp(toolName: unknown, args: unknown, fileOps: FileOpSets): void {
 	const path = (args as { path?: unknown } | undefined)?.path;
 	if (typeof path !== "string" || path.length === 0) return;
@@ -61,7 +58,6 @@ function addFileOp(toolName: unknown, args: unknown, fileOps: FileOpSets): void 
 	else if (toolName === "edit") fileOps.edited.add(path);
 }
 
-/** extractFileOpsFromMessage replica (assistant toolCalls + toolResult nestedCalls). */
 export function extractFileOpsFromMessage(message: AgentMessage, fileOps: FileOpSets): void {
 	const record = message as {
 		role?: string;
@@ -78,14 +74,12 @@ export function extractFileOpsFromMessage(message: AgentMessage, fileOps: FileOp
 	}
 }
 
-/** computeFileLists replica: modified = written ∪ edited; reads minus modified. */
 export function computeFileLists(fileOps: FileOpSets): { readFiles: string[]; modifiedFiles: string[] } {
 	const modified = new Set([...fileOps.edited, ...fileOps.written]);
 	const readOnly = [...fileOps.read].filter((f) => !modified.has(f)).sort();
 	return { readFiles: readOnly, modifiedFiles: [...modified].sort() };
 }
 
-/** flattenProjected replica: compaction entries contribute nothing; system is prompt state. */
 function messagesOf(entries: { sourceEntry: SessionEntry; messages: AgentMessage[] }[]): AgentMessage[] {
 	const out: AgentMessage[] = [];
 	for (const entry of entries) {
@@ -98,27 +92,18 @@ function messagesOf(entries: { sourceEntry: SessionEntry; messages: AgentMessage
 }
 
 export interface BuildPreparationInput {
-	/** Current projection (context edits already applied — H15). */
 	projection: SessionProjection;
-	/** The chosen cut (indices are into projection.entries). */
 	cut: CutSelection;
-	/** Effective host compaction settings. */
 	settings: PiCompactionSettings;
-	/** Narrative part of the previous compaction's summary (ledger stripped). */
 	previousSummaryNarrative?: string;
 }
 
-/** Index of the newest compaction entry that still projects messages. */
 function prevCompactionIndex(projection: SessionProjection): number {
 	return projection.entries.findIndex(
 		(entry) => entry.sourceEntry.type === "compaction" && entry.messages.length > 0,
 	);
 }
 
-/**
- * Build the preparation for OUR cut. Returns undefined when there is nothing
- * to summarize (mirrors prepareCompaction's empty-message undefined).
- */
 export function buildPreparation(input: BuildPreparationInput): BuiltPreparation | undefined {
 	const { projection, cut, settings } = input;
 	const entries = projection.entries;
@@ -130,9 +115,6 @@ export function buildPreparation(input: BuildPreparationInput): BuiltPreparation
 	const turnPrefixMessages = cut.isSplitTurn ? messagesOf(entries.slice(cut.turnStartIndex, cut.firstKeptEntryIndex)) : [];
 	if (messagesToSummarize.length === 0 && turnPrefixMessages.length === 0) return undefined;
 
-	// SUM-02 fileOps: seed from a previous PI-generated compaction's details
-	// (ours carry their own ledger/state, not reusable file lists), then the
-	// edited model-visible messages, then the turn prefix on split.
 	const fileOps = createFileOps();
 	if (prevIndex >= 0) {
 		const prev = entries[prevIndex].sourceEntry as {

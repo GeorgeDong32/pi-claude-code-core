@@ -1,26 +1,9 @@
-/**
- * Effort presentation wrapper (DECOUPLE-PLAN DC2).
- *
- * Owns every ctx.ui touchpoint for the effort module: status slots, the
- * working-message loader line, notifications, and the effort picker
- * overlay (with the non-TUI select fallback). Business code in
- * extensions/effort/index.ts calls this small interface and stays fakeable.
- *
- * Until DC3 swaps the internals, notify() forwards straight to
- * ctx.ui.notify; since DC5b it delegates to the shared presenter-facing
- * notify (extensions/ui/notify.ts) — queue publish + legacy-cctui direct
- * forward — so each message displays exactly once in every wiring.
- */
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { EffortModel } from "../effort.js";
 import { createEffortPickerComponent, type EffortPickerResult } from "../effort-picker.js";
 import { showComponentOverlay, type CustomOverlayContext } from "../../../lib/overlay.js";
 import { notify as notifyOnce, type NotificationLevel } from "../../ui/notify.js";
 
-/**
- * Minimum context shape the wrapper touches (duck-typed so unit tests can
- * pass a plain object — no pi runtime needed).
- */
 export interface EffortCtxLike {
 	hasUI: boolean;
 	model: unknown;
@@ -32,9 +15,6 @@ export interface EffortCtxLike {
 	};
 }
 
-/** Internal fan-out surface (kept private; fakes build EffortCtxLike).
- * No notify member since DC5b completed: display negotiation lives in the
- * shared ui/notify entry, not the host fan-out. */
 interface EffortHost {
 	hasUI: boolean;
 	model: EffortModel | null | undefined;
@@ -57,18 +37,14 @@ function toHost(ctx: EffortCtxLike): EffortHost {
 
 export type NotifyLevel = "info" | "warning" | "error";
 
-/** Picker outcome: overlay confirm, fallback select, or nothing. */
 export type EffortPickResult =
 	| EffortPickerResult
 	| { action: "select"; level: string }
 	| null;
 
 export interface EffortUi {
-	/** Status slots + loader line (was updateEffortUi). */
 	sync(ctx: EffortCtxLike, current: string, fastMode: boolean, updateWorkingMessage: boolean): void;
-	/** Single-display notification (shared ui/notify entry; DC5b). */
 	notify(ctx: EffortCtxLike, message: string, level: NotifyLevel): void;
-	/** TUI overlay picker; non-TUI falls back to select. Null = cancelled. */
 	pickEffort(
 		ctx: EffortCtxLike,
 		levels: readonly string[],
@@ -84,8 +60,6 @@ export function createEffortUi(): EffortUi {
 	return {
 		sync(ctx, current, fastMode, updateWorkingMessage) {
 			const host = toHost(ctx);
-			// Clear older pi-effort aggregate status lines. Dedicated powerline
-			// custom items read pi-effort-thinking / pi-effort-fast instead.
 			host.setStatus("effort", undefined);
 			host.setStatus("pi-effort-thinking", `think:${current}`);
 			const fastApplicable =
@@ -96,17 +70,11 @@ export function createEffortUi(): EffortUi {
 			}
 		},
 		notify(ctx, message, level) {
-			// DC5b end state: delegate to the shared presenter-facing notify —
-			// queue publish + the version-negotiated direct forward (legacy
-			// cctui only). Effort must not keep a second, unconditional write
-			// leg: that dual-wrote every warning to the screen twice in both
-			// the core-only and the modern-TUI wiring.
 			notifyOnce(ctx, message, level);
 		},
 		async pickEffort(ctx, levels, currentLevel) {
 			const host = toHost(ctx);
 			if (!host.select) return null;
-			// Non-TUI (RPC/print): plain select fallback.
 			if (!host.overlayCtx) {
 				const picked = await host.select("Effort", levels);
 				if (picked && (levels as readonly string[]).includes(picked)) {
@@ -123,9 +91,6 @@ export function createEffortUi(): EffortUi {
 						done,
 					}),
 				overlayOptions: {
-					// Pi's main region can be as narrow as ~50 columns when a
-					// side panel is open; a fixed minWidth beyond that keeps
-					// the overlay from being squeezed into the main region.
 					width: 78,
 					minWidth: 72,
 					maxHeight: "40%",

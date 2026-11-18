@@ -1,12 +1,3 @@
-/**
- * Subagent → parent-session permission ask forwarding (filesystem inbox).
- *
- * Namespace (isolated from gotgenes):
- *   ~/.pi/agent/sessions/permission-modes-forwarding/sessions/<sessionId>/{requests,responses}/
- *
- * Child keeps `challenge` only in memory and requires it echoed on the response,
- * so a forged response that did not read the matching request cannot approve.
- */
 
 import { randomUUID } from "node:crypto";
 import {
@@ -36,7 +27,6 @@ export type ForwardedDecision =
 
 export interface ForwardedPermissionRequest {
 	id: string;
-	/** Secret echoed by parent; child validates against in-memory value. */
 	challenge: string;
 	createdAt: string;
 	requesterSessionId: string;
@@ -62,7 +52,6 @@ export interface ForwardedPermissionResponse {
 
 let agentDirOverrideForTests: string | undefined;
 
-/** Test-only: redirect forwarding root under a temp agent dir. */
 export function setAgentDirForTests(dir: string | undefined): void {
 	agentDirOverrideForTests = dir;
 }
@@ -106,11 +95,9 @@ function ensureDir(dir: string): void {
 	try {
 		chmodSync(dir, 0o700);
 	} catch {
-		/* ignore */
 	}
 }
 
-// converged on lib/settings writeJsonAtomic (P0-LB-01); 0o600 preserved
 function atomicWriteJson(filePath: string, data: unknown): void {
 	writeJsonAtomic(filePath, data, { mode: 0o600 });
 }
@@ -235,16 +222,12 @@ export async function pollForwardedResponse(
 				try {
 					unlinkSync(path);
 				} catch {
-					/* ignore */
 				}
 				return resp;
 			}
-			// Corrupt / forged / partial write: remove and keep waiting for a
-			// legitimate parent response until timeout (fail-closed).
 			try {
 				unlinkSync(path);
 			} catch {
-				/* ignore */
 			}
 		}
 		await sleep(pollIntervalMs);
@@ -285,7 +268,6 @@ export async function writeForwardedResponse(
 	try {
 		unlinkSync(reqPath);
 	} catch {
-		/* ignore */
 	}
 }
 
@@ -296,14 +278,12 @@ export interface ForwardingPollerOptions {
 	isChild: boolean;
 	onRequest: (request: ForwardedPermissionRequest) => Promise<void>;
 	pollIntervalMs?: number;
-	/** Shared across poller restarts so the same request is not handled twice. */
 	claimedIds?: Set<string>;
 }
 
 export interface ForwardingPoller {
 	start(): void;
 	stop(): void;
-	/** plan2 A1d test surface: full scans performed (mtime short-circuits excluded). */
 	readonly scanCount: number;
 }
 
@@ -324,17 +304,11 @@ export function createForwardingPoller(
 		if (!sessionId) return;
 		processing = true;
 		try {
-			// plan2 A1d: mtime short-circuit — skip the readdir + per-file
-			// reads while the requests dir is untouched since the last scan
-			// that found nothing pending. New requests land via atomic rename,
-			// which bumps the dir mtime; handled requests unlink, likewise.
 			const dir = requestsDir(opts.agentDir, sessionId);
 			if (lastDirStat && !lastDirStat.hadPending) {
 				try {
 					if (statSync(dir).mtimeMs === lastDirStat.mtimeMs) return;
 				} catch {
-					// requests dirs are created lazily: "still absent" is a
-					// stable state worth short-circuiting too (mtimeMs < 0).
 					if (lastDirStat.mtimeMs < 0) return;
 					lastDirStat = undefined;
 				}
@@ -361,7 +335,6 @@ export function createForwardingPoller(
 				lastDirStat = { mtimeMs: -1, hadPending: false };
 			}
 		} catch {
-			/* swallow — next tick retries */
 		} finally {
 			processing = false;
 		}

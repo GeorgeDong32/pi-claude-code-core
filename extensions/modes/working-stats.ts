@@ -64,7 +64,6 @@ export interface WorkingStatsCache {
 	snapshot(host: WorkingStatsHost, opts?: { force?: boolean; forceUsage?: boolean }): WorkingStatsEntry;
 }
 
-/** Per-instance identity (ctx objects are recreated per event; the manager is not). */
 const instanceIds = new WeakMap<object, number>();
 let nextInstanceId = 1;
 
@@ -78,7 +77,7 @@ export function createWorkingStats(): WorkingStatsCache {
 		if (!sessionManager || typeof sessionManager !== "object") return undefined;
 		try {
 			const leaf = readLeafId(sessionManager);
-			if (leaf === undefined) return undefined; // unsupported getter → uncacheable
+			if (leaf === undefined) return undefined;
 			let inst = instanceIds.get(sessionManager);
 			if (inst === undefined) {
 				inst = nextInstanceId++;
@@ -86,7 +85,7 @@ export function createWorkingStats(): WorkingStatsCache {
 			}
 			return `${inst}|${readSessionId(sessionManager) ?? ""}|${leaf ?? ""}`;
 		} catch {
-			return undefined; // read failure → uncacheable (NOT an empty leaf)
+			return undefined;
 		}
 	}
 
@@ -139,18 +138,13 @@ export function createWorkingStats(): WorkingStatsCache {
 			if (keyHit && !opts.force) {
 				const hit = cachedEntry!;
 				if (usageFresh && !opts.forceUsage) {
-					return hit; // key hit: ZERO getBranch / getContextUsage calls
+					return hit;
 				}
-				// Only the usage is stale (model_select / provider request):
-				// refresh the usage, reuse the committed branch totals.
 				const entry: WorkingStatsEntry = { stats: hit.stats, usage: readUsage(host) };
 				cachedEntry = entry;
 				return entry;
 			}
 
-			// Full read. A throwing/missing getBranch is NOT cached as a
-			// successful empty snapshot — fall back to the last totals and
-			// leave the cache empty so the next event retries.
 			const branch = readBranchEntriesStrict(host.sessionManager);
 			const branchFailed = branch === null;
 			if (branch !== null) {

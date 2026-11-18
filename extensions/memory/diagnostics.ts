@@ -1,9 +1,3 @@
-/**
- * memory/diagnostics.ts — the /memory status rendering (arch B8, moved out
- * of the index.ts wiring closure). Pure data-in/text-out: the wiring
- * collects scans and state, this module formats. USER_INDEX_MAX /
- * MEMORY_INDEX_MAX come from the budget authorities (no second encoding).
- */
 import { MEMORY_INDEX_MAX } from "../../lib/context-budget.ts";
 import { USER_INDEX_MAX } from "./policy.ts";
 import { QUEUE_DIR_MAX_BYTES } from "./queue.ts";
@@ -29,11 +23,7 @@ export interface MemoryDiagnosticsInput {
 	readonly consolidation: { inFlight: boolean; attempts: number; lastReason?: string | null };
 	readonly yielded: { yielded: boolean; detectedBy?: string | null };
 	readonly hermesDataFound: boolean;
-	/** RV-16: user-layer files that mention a known project key and carry no
-	 * `paths:` scoping — misplaced candidates for R0 migration. */
 	readonly misplaced: Array<{ file: string; key: string }>;
-	/** RV: recall lane status — off when memory.recallModel is unset or
-	 * unresolvable (D3); session counts derive from the projection history. */
 	readonly recall: {
 		status: "on" | "off";
 		reason?: string;
@@ -43,8 +33,6 @@ export interface MemoryDiagnosticsInput {
 		sessionBytes: number;
 		stats: { selections: number; empties: number; failures: number; lastReason: string | null; deliveries: number };
 	};
-	/** Spec 2026-10-03: pending-extraction queue inventory (the plaintext
-	 * second copy of session tails — disclosed here per B6). Null = empty. */
 	readonly queue: { records: number; bytes: number; oldestSavedAt?: number } | null;
 }
 

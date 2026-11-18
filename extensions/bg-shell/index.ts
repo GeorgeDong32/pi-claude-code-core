@@ -1,33 +1,9 @@
-// `bg-shell` (BG): the model's `bash` tool with a `background: true` flag.
-//
 // Vendored from gvanderclay/pi-bg-bash v0.2.1 (MIT), Copyright (c) 2026 Gage
 // Vander Clay, and adapted for pi-claude-code-core (BG-D1): the cc-core log
-// namespace `~/.pi/agent/cc-core/logs/bg-shell/<session-id>/` (BG-P1),
-// CC-parity tool names TaskOutput/TaskStop/TaskList, and the `/tasks` panel.
 // BH-R4 (2026-11-14, D-BH-2): a deliberate vendored deviation — an explicit
 // `timeout` no longer disables auto-promotion; it becomes the promoted task's
 // deadline. Upstream 0.5.0+ instead removed auto-promotion entirely (opposite
 // direction); do not port that.
-//
-// E4 (SPEC SR, 2026-11-15): TaskOutput gained optional `block`/`timeout`
-// parameters (seconds, above 0 and finite, default 30, cap 600 — out-of-range
-// values throw, never clamp; SR-1b). A blocking call waits via `awaitTaskEnd`
-// and claims the completion
-// via `claimCompletion`, so no followUp message follows; a plain read of a
-// finished task also claims through `claimCompletion`, which — unlike the old
-// inline flag in `readOutput` — appends the status row and gzips the log
-// (BG-ENTRY-03). A user message typed while waiting (steer or follow-up) ends
-// the wait early with the output so far, no error (pi-subagents bg_wait
-// parity).
-//
-// A background call starts the command detached, logs it under the session's
-// log directory, and returns a task id at once. When the command exits the
-// agent gets one completion message, which starts a turn if the agent is idle.
-// The footer shows `bg: N` while N tasks run. A call without `background` is
-// Pi's own `bash` over the same wrapper (`foreground.ts`), and moves to the
-// background if it outlasts 120 s. Task ids continue across processes within
-// one session: session_start seeds the counter past the ids the session's
-// status entries already recorded (CH E6).
 import { createBashToolDefinition, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
@@ -40,7 +16,6 @@ import { stateText, taskLine } from "./notify.ts";
 import { readOutput } from "./output.ts";
 import { attach, awaitTaskEnd, claimCompletion, endSession, getRegistry, killTask, seedNextIdFromBranch, setContext, startTask } from "./registry.ts";
 
-/** TaskOutput's blocking wait: default budget and hard cap, in seconds (E4). */
 const BLOCK_DEFAULT_SECONDS = 30;
 const BLOCK_MAX_SECONDS = 600;
 
@@ -56,22 +31,15 @@ const BACKGROUND_DESCRIPTION =
 
 export default function (pi: ExtensionAPI): void {
 	attach(pi);
-	// E4: a message typed while the agent waits (steer or follow-up) ends open
-	// TaskOutput waits so it reaches the model (pi-subagents bg_wait parity).
-	// Extension-sourced input is the agent's own doing and must not interrupt.
 	const userInputWaits = new Set<AbortController>();
 	pi.on("input", (event) => {
 		if (event.source === "extension" || !event.streamingBehavior) return;
 		for (const controller of userInputWaits) controller.abort();
 	});
-	// The user can move the running foreground command to the background at once.
 	pi.registerShortcut("ctrl+shift+b", {
 		description: "Move the running foreground command to the background",
 		handler: (ctx) => {
 			setContext(ctx);
-			// One press promotes every foreground call in flight: with parallel tool
-			// calls the turn stays blocked until all finish, so several can be running
-			// at once.
 			for (const run of foregroundRuns()) run.promote("shortcut");
 		},
 	});
@@ -81,9 +49,6 @@ export default function (pi: ExtensionAPI): void {
 		description: `${builtin.description} ${BACKGROUND_DESCRIPTION}`,
 		parameters: Type.Object({
 			...builtin.parameters.properties,
-			// D2 (loop-guard spec) + BH-R4: the timeout never disables auto-
-			// backgrounding — past PROMOTE_MS the command still moves to the
-			// background and the timeout becomes that task's deadline.
 			timeout: Type.Optional(
 				Type.Number({
 					description: `Seconds (not ms). Still running after ${PROMOTE_MS / 1000} s → background; timeout becomes its deadline.`,
@@ -152,40 +117,25 @@ export default function (pi: ExtensionAPI): void {
 		async execute(_toolCallId, params, signal) {
 			const task = getRegistry().tasks.get(params.id);
 			if (task === undefined) throw new Error(`Unknown task id: ${params.id}. TaskList lists this session's tasks.`);
-			// Before the cap check, so Infinity gets the finite message, not 600's.
 			if (params.timeout !== undefined && (!Number.isFinite(params.timeout) || params.timeout <= 0))
 				throw new Error("timeout is in seconds (not ms); must be a finite number above 0");
 			if (params.timeout !== undefined && params.timeout > BLOCK_MAX_SECONDS)
 				throw new Error("timeout is in seconds (not ms); maximum is 600");
 			if (params.timeout !== undefined && !params.block) throw new Error("timeout applies only with block: true");
 			if (!params.block) {
-				// A plain read claims a finished task's completion itself (CC
-				// markTaskNotified parity): the result carries the output and the exit
-				// state, so no completion message follows — but the status row and the
-				// gzip still happen (BG-ENTRY-03; E4 moved the claim out of
-				// `readOutput` into `claimCompletion`). A no-op while still running.
 				const out = readOutput(task, params);
 				claimCompletion(task);
 				return { content: [{ type: "text", text: out }], details: undefined };
 			}
 			const seconds = params.timeout ?? BLOCK_DEFAULT_SECONDS;
-			// While this waiter holds the task, no kill path can send the completion
-			// message (the `waiting` guard in `notifyOnce`): the waiter claims it.
 			task.waiting = (task.waiting ?? 0) + 1;
-			// A user message ends the wait early (bg_wait parity): it aborts the
-			// wait, not the tool call — the read after it is a normal one.
 			const userInput = new AbortController();
 			userInputWaits.add(userInput);
 			const wait = new AbortController();
 			const abortWait = () => wait.abort();
-			// Pi always passes a tool signal; a caller that omits it simply never
-			// aborts the wait.
 			signal?.addEventListener("abort", abortWait);
 			userInput.signal.addEventListener("abort", abortWait);
 			let ended = false;
-			// The wait rejects on abort — the tool's own signal (the call is being
-			// cancelled: rethrow without reading) or the user's message (return the
-			// output so far). The `waiting` release and listener cleanup run either way.
 			let waitError: unknown;
 			try {
 				ended = await awaitTaskEnd(task, seconds * 1000, wait.signal);
@@ -198,9 +148,6 @@ export default function (pi: ExtensionAPI): void {
 				userInput.signal.removeEventListener("abort", abortWait);
 			}
 			if (signal?.aborted) throw waitError ?? new Error("aborted");
-			// Read first, claim second: both synchronous, so no poller tick can slip
-			// a message in between, and the gzip inside the claim cannot replace the
-			// plain log under a read still in flight.
 			const out = readOutput(task, params);
 			claimCompletion(task);
 			if (!ended && !userInput.signal.aborted)
@@ -258,9 +205,6 @@ export default function (pi: ExtensionAPI): void {
 	});
 	pi.on("session_start", (_event, ctx) => {
 		setContext(ctx);
-		// CH E6: continue the session's task-id numbering instead of restarting
-		// at bg-1 — the ids the transcript's status entries recorded are the
-		// floor. Fail-open: a seeding problem must never break session start.
 		try {
 			const branch = (ctx.sessionManager as { getBranch?: () => unknown }).getBranch?.();
 			if (Array.isArray(branch)) seedNextIdFromBranch(branch);
@@ -270,7 +214,6 @@ export default function (pi: ExtensionAPI): void {
 		rotateDebugLog();
 		cleanupOldLogs(getRegistry().tasks.values());
 	});
-	// Tasks belong to the session: a reload keeps them (the new load takes them over), every other end kills them.
 	pi.on("session_shutdown", async (event) => {
 		if (event.reason !== "reload") await endSession();
 	});

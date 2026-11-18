@@ -1,32 +1,3 @@
-/**
- * High-level orchestration for `/review` v0.7:
- *   1. Resolve the ReviewTarget (PR URL / local-git / --diff).
- *   2. Acquire an accurate diff + SHA-256 + changed-files via the plugin's
- *      own `gh`/`git` calls (never re-fetched by reviewers).
- *   3. Prepare a target workspace (clone for PRs, user's cwd for local).
- *   4. Write the run manifest so reviewers + the report tool can read it.
- *   5. Build + emit the directive (now: single `subagent` call followed by
- *      the `pi_review_report` tool).
- *
- * This replaces the old "main agent obtains the diff itself" pattern that
- * silently failed on cross-repo PRs.
- *
- * D-FX-1 (2026-11-14): the local base fetch (`git fetch origin <base>` in
- * acquireLocalDiff) carries a hard 15s ceiling + GIT_TERMINAL_PROMPT=0 and
- * fails non-fatally into the existing stale-base warning, with distinct
- * "timed out" / "failed" text.
- * FX-5 (2026-11-14): the PR-path gh calls (`gh pr view` metadata, `gh pr
- * diff` authority) carry the same hang protection — PR_GH_TIMEOUT_MS = 60s
- * ceiling; the diff timeout surfaces through the existing hard-error throw.
- * R3 (2026-11-15): untracked files are stat'd first; anything over
- * UNTRACKED_FILE_MAX_BYTES (1 MB) gets a size-only placeholder hunk (no
- * content read) and a counted note in diffWarning — the binary probe only
- * ever reads within-cap files.
- * R12 (D-CH-3, 2026-11-15): `dryRun` on a PR target runs ONLY `gh pr view`
- * + `gh pr diff` — no prepareWorkspace (no clone/fetch/checkout); rules and
- * history are marked not computed. Local targets are unchanged. The dry run
- * still writes its run dir (the 24h pruner reclaims it).
- */
 import { existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -59,17 +30,10 @@ import type { ReviewTarget } from "./types.js";
 export interface PrepareRunInput {
 	cwd: string;
 	input?: string;
-	/** Support `--lite` single-agent mode. */
 	lite?: boolean;
-	/** Optional per-run gate model override. */
 	gateModel?: string;
 	/** Set false for dry-runs — pruning is a side effect a dry run must not have. */
 	cleanup?: boolean;
-	/** R12 (D-CH-3): PR dry run — run only `gh pr view` + `gh pr diff`
-	 *  (metadata + diff authority); never `prepareWorkspace` (no clone, no
-	 *  fetch). rules/history are marked not computed. Local targets are
-	 *  unchanged. The dry run still writes its run dir (manifest + diff) —
-	 *  the 24h pruner reclaims it. */
 	dryRun?: boolean;
 }
 
@@ -77,13 +41,10 @@ export interface PreparedRun {
 	runId: string;
 	manifest: RunManifest;
 	directive: string;
-	/** Path the main agent will receive as the directive message. */
 	directiveText: string;
-	/** R12: true when this run was prepared in PR dry-run mode. */
 	dryRun?: boolean;
 }
 
-/** Public entrypoint for `index.ts` — prepare a run synchronously. */
 export async function prepareRun(input: PrepareRunInput): Promise<PreparedRun | null> {
 	const cwd = input.cwd;
 	const { config } = loadConfig();
@@ -101,29 +62,18 @@ export async function prepareRun(input: PrepareRunInput): Promise<PreparedRun | 
 
 	const diffResult = await acquireDiff(cwd, target, runDir);
 	if (target.kind === "local-git") {
-		// S5: label derives from the ONE dirty sample inside acquireLocalDiff
 		target.label = diffResult.mode === "local-uncommitted"
 			? "uncommitted changes"
 			: `vs ${target.probeNote ?? "main"}`;
 	}
 	const changedFiles = parseChangedFilesFromDiff(diffResult.diff);
-	// Empty-diff guard BEFORE prepareWorkspace: the guard depends only on the
-	// diff's derived counts and the run dir, so checking first saves a full
-	// depth-50 clone for empty diffs (deviations ledger #61 ③). Drop the
-	// orphan run dir (only change.diff was written so far) instead of leaving
-	// it for the 24h pruner.
 	if (changedFiles.additions + changedFiles.deletions === 0) {
 		try {
 			rmSync(runDir, { recursive: true, force: true });
 		} catch {
-			/* best effort */
 		}
 		return null;
 	}
-	// Pass the diff's head SHA so the workspace checkout can verify it landed
-	// on the same commit (guards the force-push-between-calls TOCTOU window).
-	// R12 (D-CH-3): a PR dry run stops at the metadata — gh pr view + gh pr
-	// diff already ran; no clone, no fetch, no checkout.
 	let workspaceResult: WorkspaceResult;
 	if (input.dryRun && target.kind === "pr") {
 		workspaceResult = {
@@ -139,8 +89,6 @@ export async function prepareRun(input: PrepareRunInput): Promise<PreparedRun | 
 		});
 		if (workspaceResult.cloned && diffResult.headSha && workspaceResult.workspaceHeadSha &&
 			workspaceResult.workspaceHeadSha !== diffResult.headSha) {
-			// The first clone's scratch root is garbage now — drop it before
-			// retrying so a moving PR does not litter tmpdir with depth-50 clones.
 			removeWorkspaceRoot(dirname(workspaceResult.workspacePath));
 			workspaceResult = await prepareWorkspace({
 				cwd,
@@ -154,17 +102,6 @@ export async function prepareRun(input: PrepareRunInput): Promise<PreparedRun | 
 		}
 	}
 
-	// AR1005-RV-01 (spec 2026-10-05 §11): rule discovery runs AFTER the
-	// workspace retries/HEAD checks settle, against the FINAL workspacePath —
-	// the TARGET repo owns "which rules apply to this change" (AGENTS.md,
-	// .pi/rules/… of the reviewed code). Config loading, run artifacts and
-	// manifest/diff/workflow writes stay anchored on the CALLER's cwd; the
-	// relative paths in rulePaths resolve against the workspace (the frozen
-	// manifest field shape is unchanged). manifest.rulePaths,
-	// ChangeProfile.rulePaths, rulesheriff routing and the directive all
-	// consume this ONE prepared value — nothing re-derives from the caller.
-	// R12: a PR dry run never materialized the target workspace, so rule
-	// discovery cannot run — rules are marked not computed (empty).
 	const rulePaths = input.dryRun && target.kind === "pr"
 		? []
 		: discoverRulePathsLocal(workspaceResult.workspacePath);
@@ -203,20 +140,11 @@ export async function prepareRun(input: PrepareRunInput): Promise<PreparedRun | 
 		? [{ id: "lite-review", label: "Lite Review", enabled: true, model: "inherit" }]
 		: reviewersForRouting(target, config, profile);
 	const skippedReasons = adaptiveSkips(profile);
-	// The report tool uses this to reject findings that did not come from this
-	// run's roster (stale-artifact contamination guard).
 	manifest.reviewerIds = reviewers.map((r) => r.id);
 	const workspacePath = manifest.workspacePath;
 	const manifestPath = join(runDir, "manifest.json");
 	const diffPath = manifest.diffPath;
-	// Raw workflowScript text — the directive embeds it as a template literal
-	// and points failed-copy retries at this file (no double-escaping, which
-	// used to make the main agent's copy/unescape step error-prone).
 	const workflowPath = join(runDir, "workflow.js");
-	// Build the directive with real paths inlined (JSON.stringify'd into the
-	// workflowScript) — no placeholder + replaceAll substitutions. The old
-	// replaceAll injected unquoted paths into the JS template, producing
-	// invalid JS (`cwd: /var/folders/...` → SyntaxError).
 	const directive = buildReviewDirective({
 		target,
 		reviewers,
@@ -233,8 +161,6 @@ export async function prepareRun(input: PrepareRunInput): Promise<PreparedRun | 
 		workflowPath,
 		budgets: resolveLeanBudgets(config.budgets),
 	});
-	// Remember which lanes adaptive routing dropped so the report can surface
-	// them as coverage rather than letting users wonder where a reviewer went.
 	if (!input.lite && config.routing.mode === "adaptive" && skippedReasons.length > 0) {
 		const skippedByRouting: Array<{ id: string; reason: string }> = [];
 		for (const [id, reason] of skippedReasons) {
@@ -249,15 +175,11 @@ export async function prepareRun(input: PrepareRunInput): Promise<PreparedRun | 
 	return { runId, manifest, directive, directiveText, dryRun: input.dryRun === true || undefined };
 }
 
-/** Read a previously-prepared manifest from disk. */
 export function loadManifestFor(cwd: string, runId: string): RunManifest {
 	const runDir = join(cwd, ".pi", "pi-review", "runs", runId);
 	return readManifest(runDir);
 }
 
-/* ------------------------------------------------------------------ */
-/* Diff acquisition — replaces `src/obtain-diff.ts`'s bash block.     */
-/* ------------------------------------------------------------------ */
 
 interface DiffAcquisitionResult {
 	path: string;
@@ -277,10 +199,6 @@ async function acquireDiff(
 	if (target.kind === "pr" && target.prRef) {
 		return acquirePrDiff(cwd, target.prRef, runDir);
 	}
-	// P3-1 S5: the diff-file kind is deleted — `--diff` has been a silently
-	// skipped flag since cli-args listed it as removed, so this branch was
-	// unreachable from any live entry point (old manifests still READ fine —
-	// only the construction path is gone).
 	return acquireLocalDiff(cwd, runDir);
 }
 
@@ -289,9 +207,6 @@ async function acquirePrDiff(
 	prRef: string,
 	runDir: string,
 ): Promise<DiffAcquisitionResult> {
-	// Metadata first (base/head SHAs feed the manifest + workspace checkout
-	// reconciliation). A failed view is non-fatal — the diff below is the
-	// authority, not the metadata.
 	const gh = await runCmd(
 		"gh",
 		["pr", "view", prRef, "--json", "number,baseRefName,baseRefOid,headRefOid,headRepository,headRepositoryOwner"],
@@ -339,38 +254,18 @@ async function acquirePrDiff(
 	};
 }
 
-// D-FX-1: the base fetch is best-effort — a hung network or a git
-// credential prompt must never stall /review indefinitely. Hard ceiling,
-// deliberately not configurable (no new env/settings key, INV-10); the
-// PR-path commands are untouched.
 const LOCAL_BASE_FETCH_TIMEOUT_MS = 15_000;
 
-// FX-5 (2026-11-14): the PR-path gh calls get the same hang protection as
-// the local base fetch — `gh pr view` is non-fatal metadata (failure keeps
-// the diff authority), while `gh pr diff` failure stays the documented hard
-// error, now also bounded when the GitHub API stalls. gh reads
-// GIT_TERMINAL_PROMPT through its inner git invocations; it does not prompt
-// for auth non-interactively, so the env is belt-and-braces.
 const PR_GH_TIMEOUT_MS = 60_000;
 
-// R3 (2026-11-15): untracked files are read whole; a stray dump/bundle over
-// this cap would flood the diff (and the reviewers' context). Over-cap files
-// get a placeholder hunk stating the size (no content) and are counted in
-// diffWarning. Deliberately not configurable (no new env/settings key, INV-10).
 const UNTRACKED_FILE_MAX_BYTES = 1_000_000;
 
 async function acquireLocalDiff(cwd: string, runDir: string): Promise<DiffAcquisitionResult> {
 	const status = await runCmd("git", ["status", "--porcelain"], { cwd });
 	if (status.stdout.trim().length > 0) {
-		// Mixed trees (modified + untracked files) must review BOTH parts —
-		// new files are exactly what needs eyes. Combine the tracked diff
-		// with synthesized new-file diffs instead of returning early on the
-		// first non-empty piece.
 		const tracked = (await runCmd("git", ["diff", "HEAD"], { cwd })).stdout;
 		const untracked = (await runCmd("git", ["ls-files", "--others", "--exclude-standard"], { cwd })).stdout;
 		const untrackedParts: string[] = [];
-		// R3: statSync FIRST — only files within the cap are ever read; the
-		// rest get a size-only placeholder hunk and a diffWarning count.
 		let skippedOversize = 0;
 		for (const f of untracked.trim() ? untracked.trim().split("\n") : []) {
 			try {
@@ -383,8 +278,6 @@ async function acquireLocalDiff(cwd: string, runDir: string): Promise<DiffAcquis
 					continue;
 				}
 				const buf = readFileSync(join(cwd, f));
-				// NUL in the leading bytes marks a binary file — utf-8 coercion
-				// would turn it into megabytes of U+FFFD noise.
 				if (buf.subarray(0, 8000).includes(0)) {
 					untrackedParts.push(`diff --git a/${f} b/${f}\nnew file mode 100644\nBinary file ${f} added (contents not shown)\n`);
 					continue;
@@ -394,7 +287,6 @@ async function acquireLocalDiff(cwd: string, runDir: string): Promise<DiffAcquis
 					`diff --git a/${f} b/${f}\nnew file mode 100644\n--- /dev/null\n+++ b/${f}\n@@ -0,0 +1,${lines.length} @@\n${lines.map((l) => `+${l}`).join("\n")}\n`,
 				);
 			} catch {
-				/* unreadable (permission / deleted race) — skip */
 			}
 		}
 		const text = [tracked.trim(), ...untrackedParts].filter(Boolean).join("\n");
@@ -421,18 +313,8 @@ async function acquireLocalDiff(cwd: string, runDir: string): Promise<DiffAcquis
 	const baseFetch = await runCmd("git", ["fetch", "origin", base, "--quiet"], {
 		cwd,
 		timeoutMs: LOCAL_BASE_FETCH_TIMEOUT_MS,
-		// Never let git sit on a credential prompt — fail fast into the
-		// non-fatal fallback below instead.
 		env: { GIT_TERMINAL_PROMPT: "0" },
 	});
-	// A failed (or timed-out) fetch with an existing remote-tracking ref
-	// silently diffs against a stale base — surface it instead (the local
-	// twin of the PR stale-ref incident; kept non-fatal because offline
-	// local review is a legitimate mode and the manifest records whichever
-	// base was used). D-FX-1: a timed-out fetch takes the same non-fatal
-	// path with distinct "timed out" text. T4/S5: the branch reads the
-	// structured `timedOut` field on CmdResult — the stderr note stays for
-	// humans, it is no longer the machine signal.
 	let diffWarning: string | undefined;
 	if (baseFetch.exitCode !== 0) {
 		const timedOut = baseFetch.timedOut === true;
@@ -482,9 +364,6 @@ async function detectDefaultBranch(cwd: string): Promise<string | null> {
 }
 
 
-/* ------------------------------------------------------------------ */
-/* Reviewer roster — adaptive routing based on target / change-kind.  */
-/* ------------------------------------------------------------------ */
 
 import type { PiReviewConfig, ReviewerSpec } from "./types.js";
 
@@ -494,18 +373,6 @@ export interface ChangeProfile {
 	historyAvailable: boolean;
 }
 
-/**
- * Select enabled reviewers, then — in `adaptive` mode — drop lanes that
- * cannot add signal for THIS change:
- *  - no rule files          → skip rulesheriff
- *  - docs-only diff         → skip bugbot / security-review (no code to scan)
- *  - no git history         → skip history-context
- *  - docs-only              → skip code-comments (nothing but prose touched)
- *
- * The directive still tells reviewer children to return `status: skipped`
- * for these conditions when running in `routing.mode = "all"`, so coverage
- * stays honest even when the lane cannot run.
- */
 export function reviewersForRouting(
 	target: ReviewTarget,
 	config: PiReviewConfig,
@@ -521,7 +388,6 @@ export function reviewersForRouting(
 	return all.filter((r) => !reasons.has(r.id));
 }
 
-/** Return reviewer-id → reason for every lane that adaptive mode should drop. */
 export function adaptiveSkips(profile: ChangeProfile): Array<[string, string]> {
 	const out: Array<[string, string]> = [];
 	if (profile.rulePaths.length === 0) {
@@ -542,12 +408,6 @@ function safeRead(path: string): string {
 	return existsSync(path) ? readFileSync(path, "utf-8") : "";
 }
 
-/**
- * One-time-per-run回收 of the v0.5/0.6 flat layout (`.pi/pi-review/*.txt`
- * + `change.diff` at the root). Those leftovers were repeatedly misread as
- * the current run's inputs by later sessions; only known legacy filenames
- * directly under `.pi/pi-review/` are touched — `runs/` is never scanned.
- */
 export function pruneLegacyFlatArtifacts(cwd: string): string[] {
 	const root = join(cwd, ".pi", "pi-review");
 	const legacyNames = ["change.diff", "changed-files.txt", "change-kind.txt", "diff-meta.txt"];
@@ -560,13 +420,11 @@ export function pruneLegacyFlatArtifacts(cwd: string): string[] {
 				removed.push(p);
 			}
 		} catch {
-			/* best effort */
 		}
 	}
 	return removed;
 }
 
-/** Prune scratch workspace clones older than WORKSPACE_TTL_MS from the tmpdir. */
 export function pruneStaleWorkspaces(now = Date.now()): string[] {
 	const removed: string[] = [];
 	let entries: string[];
@@ -585,13 +443,11 @@ export function pruneStaleWorkspaces(now = Date.now()): string[] {
 				removed.push(path);
 			}
 		} catch {
-			/* already gone or unreadable */
 		}
 	}
 	return removed;
 }
 
-/** Resolve a ReviewTarget locally (mirrors src/git-input.ts without the `gh pr diff` call). */
 async function resolveReviewTarget(
 	cwd: string,
 	opts: { input?: string },
@@ -609,13 +465,10 @@ async function resolveReviewTarget(
 	}
 	const git = await runCmd("git", ["rev-parse", "--git-dir"], { cwd }).then((r) => r.exitCode === 0);
 	if (!git) return null;
-	// P3-1 S5: NO git status here — the dirty verdict now comes from the ONE
-	// acquireLocalDiff sample on the final cwd (this resolve step may await
-	// workspace choices; reusing an early status would miss fresh user edits).
 	const base = await detectDefaultBranch(cwd);
 	return {
 		kind: "local-git",
-		label: "", // filled after acquireDiff from the single sample
+		label: "",
 		userContext,
 		probeNote: base ?? "main",
 	};
@@ -626,4 +479,3 @@ function prLabel(prRef: string): string {
 	return `PR ${n}`;
 }
 
-// Re-exports for tests

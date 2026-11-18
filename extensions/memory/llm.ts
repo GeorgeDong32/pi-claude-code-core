@@ -54,11 +54,6 @@ export type RegistryLike = {
 	>;
 };
 
-/** Single authority for model-ref resolution (spec 2026-10-03 — shared by
- * the recall selector's D3 gate and the ops side-channel chain, so a third
- * copy of the matching logic can never drift in): canonical "provider/id"
- * single exact match, then a unique bare-id match. Empty / ambiguous /
- * unmatched → undefined. */
 export function resolveModelRef(
 	ref: string | undefined,
 	registry: { getAll?: () => unknown[] } | undefined,
@@ -85,8 +80,6 @@ function textFromContent(content: unknown): string {
 	return texts.join("\n");
 }
 
-/** Raw-text side-channel outcome (RV: the recall selector rides the same
- * lane — same failure vocabulary as the ops engine). */
 export interface TextCompletion {
 	ok: boolean;
 	text: string;
@@ -94,10 +87,6 @@ export interface TextCompletion {
 	error?: string;
 }
 
-/** One side-channel completion returning raw TEXT (RV — extracted from
- * completeMemoryOps: same auth resolution, credential-rotation retry,
- * timeout and abort discipline; completeMemoryOps now delegates here so
- * both consumers cannot drift). */
 export async function completeText(
 	model: Model<Api> | undefined,
 	registry: RegistryLike | undefined,
@@ -114,10 +103,6 @@ export async function completeText(
 
 	const controller = new AbortController();
 	const timeoutMs = request.timeoutMs ?? OPS_TIMEOUT_MS;
-	// CH E7: the lane's own timer and an externally supplied abort both go
-	// through `controller.abort()`, so the resulting outcome records WHICH one
-	// fired: the internal timer reports `timeout`, an external signal still
-	// reports `aborted` (external behavior unchanged).
 	let internalTimeout = false;
 	const timer = setTimeout(() => {
 		internalTimeout = true;
@@ -145,7 +130,6 @@ export async function completeText(
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			if (!controller.signal.aborted && AUTH_REJECTION.test(message)) {
-				// credentials may have rotated — re-resolve once, retry only if changed
 				const rotated = await registry.getApiKeyAndHeaders(model).catch(() => undefined);
 				if (rotated?.ok) {
 					const next = { apiKey: rotated.apiKey, headers: rotated.headers, env: rotated.env };
@@ -158,8 +142,6 @@ export async function completeText(
 			if (!response) throw err;
 		}
 
-		// CH E7: an external abort wins the labeling (the caller asked to stop);
-		// a controller aborted with no external signal is this lane's own timer.
 		if (request.signal?.aborted) return { ok: false, text: "", reason: "aborted" };
 		if (controller.signal.aborted) return { ok: false, text: "", reason: internalTimeout ? "timeout" : "aborted" };
 		if (response.stopReason === "error") {
@@ -179,7 +161,6 @@ export async function completeText(
 	}
 }
 
-/** Run one side-channel completion and parse it into memory ops. */
 export async function completeMemoryOps(
 	model: Model<Api> | undefined,
 	registry: RegistryLike | undefined,
@@ -194,20 +175,15 @@ export async function completeMemoryOps(
 	return { ok: true, ops };
 }
 
-// ─── strict-JSON extraction (no thinking-channel recovery) ───
-// C4 (2026-10-03): candidate extraction (fences / string-aware balanced
-// spans / repair) is shared through lib/json-lift; this module owns only
-// the memory-ops payload shape (opsFromPayload).
 
 const VALID_ACTIONS = new Set(["add", "replace", "remove"]);
 const VALID_LAYERS = new Set(["user", "project"]);
 
-/** Normalize one raw item into a MemoryOp; null when malformed. */
 function normalizeOp(raw: unknown): MemoryOp | null {
 	if (typeof raw !== "object" || raw === null) return null;
 	const r = raw as Record<string, unknown>;
 	const action = r.action;
-	const layer = r.layer ?? r.target; // hermes-style "target" tolerated on import
+	const layer = r.layer ?? r.target;
 	if (typeof action !== "string" || !VALID_ACTIONS.has(action)) return null;
 	if (typeof layer !== "string" || !VALID_LAYERS.has(layer)) return null;
 	const op: MemoryOp = { action: action as MemoryOp["action"], layer: layer as MemoryOp["layer"] };
@@ -218,8 +194,6 @@ function normalizeOp(raw: unknown): MemoryOp | null {
 	return op;
 }
 
-/** Parse model text into ops. null = unparsable (parse_error); [] = parsed,
- * nothing to do (a normal outcome, not an error). */
 export function parseOperations(text: string): MemoryOp[] | null {
 	return liftJson(text, opsFromPayload);
 }

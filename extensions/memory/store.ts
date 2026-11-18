@@ -1,28 +1,3 @@
-/**
- * memory/store.ts — structured memory operations engine (V2-D2/V2-C).
- *
- * NOT an LLM tool: this is the shared validation + persistence core used by
- * (a) the side-channel automation (review / correction / flush, P3) and
- * (b) the memory_consolidate tool (P2). One validation truth for every
- * writer, interactive or automatic.
- *
- * Semantics:
- *   - per-op preflight: invalid ops are skipped (reason recorded) while
- *     valid ops in the same batch still apply (AR1005-CL 2026-10-05: the
- *     per-op dead directory read is gone — batch-start counts and the real
- *     existence/safety checks remain) — one hallucinated op must
- *     not discard a whole LLM capture batch (skip-invalid, hermes-equivalent
- *     semantics). Two gates ARE batch-fatal (nothing written): >200 ops and
- *     a layer file-count cap breach.
- *   - per-file writes are tmp+rename; a mid-batch IO failure leaves the
- *     already-written files in place and the index converges on the next
- *     reconcile
- *   - frontmatter / type / secret / size / count caps enforced here
- *   - replace/remove take an optional `old_text` anchor inside the current
- *     file: when provided and absent, the op is skipped as stale (the model
- *     or a sibling session changed the file since it was read)
- *   - every mutation ends with writer.reindex so MEMORY.md converges
- */
 
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -31,13 +6,8 @@ import { isValidMemoryType, listMemoryFiles, slugify, splitFrontmatter } from ".
 import { removeDocument, reindex, serializeMemoryDocument, writeDocument } from "./writer.ts";
 import { findSecret } from "./guard.ts";
 
-/** Per-file body cap enforced by the write engine (S3: lives with its only enforcer). */
 export const MEMORY_FILE_BODY_MAX = 8 * 1024;
-/** Whole-file cap = body cap + frontmatter/created-marker allowance. The ONE
- * size limit for memory files — applyMemoryOps and runConsolidation share it
- * (was two encodings of the same number that could drift). */
 export const MEMORY_FILE_TOTAL_MAX = MEMORY_FILE_BODY_MAX + 2048;
-/** Per-layer file count cap (consolidation trigger co-signal). */
 export const MEMORY_FILES_MAX = 80;
 
 export type MemoryLayer = "user" | "project";
@@ -45,32 +15,24 @@ export type MemoryLayer = "user" | "project";
 export interface MemoryOp {
 	action: "add" | "replace" | "remove";
 	layer: MemoryLayer;
-	/** target file name within the layer (basename, .md); for `add` derived from name when omitted */
 	file?: string;
-	/** add: frontmatter fields */
 	name?: string;
 	description?: string;
 	type?: string;
-	/** add/replace: the new body (below the frontmatter block) */
 	body?: string;
-	/** optional stale-anchor: must appear in the CURRENT file body or the op is skipped */
 	old_text?: string;
 }
 
 export interface OpsOutcome {
 	applied: number;
 	skipped: Array<{ file?: string; action?: string; reason: string }>;
-	/** fatal validation error — nothing was written */
 	error?: string;
 }
 
-/** Basename safety for memory writes (S2: exported — consolidation shares it). */
 export function safeMemoryFileName(file: string): boolean {
 	return /^[A-Za-z0-9][A-Za-z0-9._-]*\.md$/.test(file) && !file.startsWith(".") && file !== "MEMORY.md";
 }
 
-/** W2: the ONE serializer lives in writer.ts (serializeMemoryDocument) —
- * store only layers its layer-default type on top. */
 function renderFile(op: MemoryOp): string {
 	return serializeMemoryDocument(op.body ?? "", {
 		name: op.name ?? "",
@@ -79,14 +41,6 @@ function renderFile(op: MemoryOp): string {
 	});
 }
 
-/** 附记 A.1 ③ (spec 2026-10-02-memory-recall-v2): LLM ops sometimes return
- * a FULL file (frontmatter + body) in op.body. renderFile would then wrap
- * the model's own frontmatter inside a fresh one — splitFrontmatter only
- * ever parses the OUTER block, so a correction's new description never
- * reaches the index (observed live: pi-memory-recall-reinject-symptom
- * carried two stacked frontmatter blocks, 2026-10-02). Hoist the leading
- * block's fields (they are the freshest statement of intent) and use its
- * body-part; unparseable leading blocks fall through unchanged. */
 function hoistLeadingFrontmatter(op: MemoryOp): MemoryOp {
 	if (!op.body || !op.body.startsWith("---\n")) return op;
 	const parsed = splitFrontmatter(`${op.body}\n`);
@@ -100,7 +54,6 @@ function hoistLeadingFrontmatter(op: MemoryOp): MemoryOp {
 	};
 }
 
-/** File size in bytes (total: missing → 0). */
 export function fileBytes(path: string): number {
 	try {
 		return statSync(path).size;
@@ -117,7 +70,6 @@ export function atomicWriteFile(dir: string, file: string, content: string): voi
 	writeDocument(dir, file, { kind: "raw", text: content });
 }
 
-/** Split a memory file into frontmatter fields + body; null when invalid. */
 function splitContent(content: string): { name: string; description: string; type: string; body: string } | null {
 	const split = splitFrontmatter(content);
 	if (!split) return null;
@@ -137,10 +89,6 @@ export function applyMemoryOps(
 
 	const dirFor = (layer: MemoryLayer): string => (layer === "user" ? dirs.user : dirs.project);
 
-	// RV-15: user-layer writes that are anchored to the CURRENT project and
-	// carry no `paths:` scoping are routed to the project layer (write-side
-	// guard against cross-project leakage — the R0 archaeology found 12/17
-	// user-layer files were project-anchored).
 	const routeLayer = (op: MemoryOp): MemoryLayer => {
 		const key = opts.projectKey;
 		if (!key || op.layer !== "user") return op.layer;
@@ -153,13 +101,9 @@ export function applyMemoryOps(
 		return op.layer;
 	};
 
-	// ---- preflight: validate every op, collect planned writes/deletes ----
 	type Planned = { kind: "write"; file: string; dir: string; content: string } | { kind: "delete"; file: string; dir: string };
 	const planned: Planned[] = [];
 	const postFileCount = new Map<string, number>();
-	// B4 (OPT-3): disk existence alone cannot see this batch's own planned
-	// writes — without the set, two same-name adds both "pass" preflight and
-	// the second silently last-wins the first
 	const plannedAdds = new Map<string, Set<string>>();
 	for (const d of [dirs.user, dirs.project]) {
 		postFileCount.set(d, listMemoryFiles(d).length);
@@ -169,12 +113,6 @@ export function applyMemoryOps(
 	for (const rawOp of ops) {
 		const op = hoistLeadingFrontmatter(rawOp);
 		const dir = dirFor(routeLayer(op));
-		// AR1005-CL (spec 2026-10-05 §12): the per-op `existing =
-		// listMemoryFiles(dir)` preflight read had NO consumer (verified:
-		// single occurrence in the file) — deleted. The batch-start
-		// postFileCount reads above and the real existence/safety checks
-		// below stay; op planning, limits, routing, disk order and error
-		// semantics are unchanged.
 
 		if (op.action === "add") {
 			if (!op.name || !op.description) {
@@ -279,12 +217,11 @@ export function applyMemoryOps(
 		}
 	}
 
-	// ---- apply: per-file tmp+rename (atomic), deletes plain unlink ----
 	const touched = new Set<string>();
 	for (const step of planned) {
 		try {
 			if (step.kind === "write") atomicWriteFile(step.dir, step.file, step.content);
-			else removeDocument(step.dir, step.file); // W1: ENOENT-idempotent, cache dropped
+			else removeDocument(step.dir, step.file);
 			outcome.applied++;
 			touched.add(step.dir);
 		} catch (err) {
@@ -295,13 +232,11 @@ export function applyMemoryOps(
 		try {
 			reindex(dir);
 		} catch {
-			/* index converges on next session_start */
 		}
 	}
 	return outcome;
 }
 
-// ─── cross-process consolidation lock (V2-C) ───
 
 export const LOCK_TTL_MS = 10 * 60_000;
 
@@ -317,7 +252,6 @@ export function acquireLayerLock(dir: string, ttlMs = LOCK_TTL_MS, now = Date.no
 	try {
 		mkdirSync(lockPath, { recursive: false });
 	} catch {
-		// exists: stale?
 		try {
 			const age = now - statSync(lockPath).mtimeMs;
 			if (age <= ttlMs) return null;
@@ -330,7 +264,6 @@ export function acquireLayerLock(dir: string, ttlMs = LOCK_TTL_MS, now = Date.no
 	try {
 		writeFileSync(join(lockPath, "info"), `${process.pid} ${new Date(now).toISOString()}`, "utf-8");
 	} catch {
-		/* lock metadata is diagnostic only */
 	}
 	return {
 		dir,
@@ -338,13 +271,11 @@ export function acquireLayerLock(dir: string, ttlMs = LOCK_TTL_MS, now = Date.no
 			try {
 				rmSync(lockPath, { recursive: true, force: true });
 			} catch {
-				/* best effort */
 			}
 		},
 	};
 }
 
-/** Layer stats for consolidation decisions and /memory diagnostics. */
 export interface LayerStats {
 	dir: string;
 	files: number;
@@ -364,7 +295,6 @@ export function layerStats(dir: string): LayerStats {
 		indexBytes = Buffer.byteLength(index, "utf-8");
 		indexTruncated = index.includes("WARNING: memory index exceeded");
 	} catch {
-		/* no index yet */
 	}
 	return { dir, files: files.length, totalBytes, indexBytes, indexTruncated };
 }

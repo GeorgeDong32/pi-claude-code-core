@@ -22,14 +22,13 @@
 export interface GuardVerdict {
 	block: boolean;
 	reason?: string;
-	/** G1-C3: non-blocking, once-per-session advisory surfaced by the caller. */
 	warn?: string;
 }
 
 import { readFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { homedir } from "node:os";
-import { isInsideDir } from "../../lib/rule-text.ts";
+import { isInsideDir as isLexicallyInsideDir } from "../../lib/rule-text.ts";
 import { diagnoseFrontmatter, isMemoryFile, splitFrontmatter } from "./memdir.ts";
 
 /**
@@ -42,21 +41,13 @@ export function sessionHome(): string {
 	return process.env.HOME !== undefined && process.env.HOME !== "" ? process.env.HOME : homedir();
 }
 
-/** Everything the entropy-control checks need about the write's environment. */
 export interface MemoryGuardEnv {
 	projectDir: string;
 	userDir: string;
-	/** Current git worktree root, when the cwd has one (G1-C3 misfiling check). */
 	gitRoot?: string;
-	/** PI_SUBAGENT_CHILD=1 — child sessions relay facts to the parent (G1-C6). */
 	childSession: boolean;
 }
 
-/**
- * G1-C1/C2/C3/C6 + the secret probe, over BOTH layers with cross-layer
- * context. Returns the first blocking verdict, or a warn-only verdict for
- * the C3 short-repo-name case.
- */
 export function guardMemoryToolCall(
 	toolName: string,
 	input: Record<string, unknown>,
@@ -66,14 +57,10 @@ export function guardMemoryToolCall(
 	const path = typeof input.path === "string" ? input.path : "";
 	if (!path) return { block: false };
 
-	// B8 (cherry-batch2 audit): lexical here is the CONSERVATIVE direction —
-	// inside means MORE checks; a symlink-shaped path reads as outside and
-	// takes the stricter branch. Deliberately NOT realpath-upgraded.
-	const inProject = isInsideDir(path, env.projectDir);
-	const inUser = isInsideDir(path, env.userDir);
+	const inProject = isLexicallyInsideDir(path, env.projectDir);
+	const inUser = isLexicallyInsideDir(path, env.userDir);
 	const inMemory = inProject || inUser;
 
-	// G1-C6: child sessions never write either layer — relay to the parent.
 	if (env.childSession && inMemory) {
 		return {
 			block: true,
@@ -82,12 +69,8 @@ export function guardMemoryToolCall(
 		};
 	}
 
-	// The post-write content: write's content as-is; edit's simulated result.
 	const resulting = resultingContent(toolName, input, path);
 
-	// G1-C1: the index's own judgment, at write time. Only for files the
-	// index would actually scan (isMemoryFile — MEMORY.md and dotfiles are
-	// out of scope by design).
 	if (inMemory && isMemoryFile(basename(path)) && resulting !== undefined) {
 		const problem = diagnoseFrontmatter(resulting);
 		if (problem !== null) {
@@ -98,8 +81,6 @@ export function guardMemoryToolCall(
 		}
 	}
 
-	// G1-C2: a memory-shaped file landing outside both layers (the 10-03
-	// incident: repo-root memory/x.md, silently never indexed).
 	if (!inMemory && looksLikeMemoryPath(path) && carriesMemoryFrontmatter(resulting)) {
 		return {
 			block: true,
@@ -107,18 +88,11 @@ export function guardMemoryToolCall(
 		};
 	}
 
-	// G1-C3: single-repo facts misfiled into the USER layer.
 	if (inUser && env.gitRoot !== undefined && resulting !== undefined) {
 		const misfile = userLayerMisfileVerdict(resulting, env.gitRoot, env.userDir, env.projectDir);
 		if (misfile !== undefined) return misfile;
 	}
 
-	// P3-ME-05 secret probe (BH-R2): ONLY for memory-layer targets — the
-	// 1618f89 G1 rewrite had dropped that limit, probing every write/edit
-	// anywhere (12 backtest false blocks; models bypassed via bash). Edits
-	// scan ONLY the incoming edits[].newText: a memory file whose EXISTING
-	// content carries a secret-looking line must not block a clean edit of
-	// it (the whole resulting file stays C1/C3's business).
 	if (inMemory) {
 		for (const text of probeTexts(toolName, input)) {
 			const secret = findSecret(text);
@@ -130,7 +104,6 @@ export function guardMemoryToolCall(
 	return { block: false };
 }
 
-/** The file's content after this tool call: write's content; edit's original + each edits[] replacement (each matched against the ORIGINAL, per pi's edit semantics). Unreadable → undefined. */
 function resultingContent(toolName: string, input: Record<string, unknown>, path: string): string | undefined {
 	if (toolName === "write") {
 		return typeof input.content === "string" ? input.content : undefined;
@@ -141,7 +114,7 @@ function resultingContent(toolName: string, input: Record<string, unknown>, path
 	try {
 		original = readFileSync(path, "utf8");
 	} catch {
-		return undefined; // edit itself will fail; nothing to guard
+		return undefined;
 	}
 	let result = original;
 	for (const edit of edits) {
@@ -168,24 +141,17 @@ function probeTexts(toolName: string, input: Record<string, unknown>): string[] 
 	return texts;
 }
 
-/** G1-C2 shape test: a .md directly inside some `memory/` directory. */
 function looksLikeMemoryPath(path: string): boolean {
 	if (!path.endsWith(".md")) return false;
 	return basename(dirname(path)) === "memory";
 }
 
-/** G1-C2: carries memory frontmatter in the loose sense — name: and description: lines near the top (the 10-03 file was a complete memory doc). */
 function carriesMemoryFrontmatter(content: string | undefined): boolean {
 	if (content === undefined || !content.startsWith("---")) return false;
 	const head = content.slice(0, 2000);
 	return /^name:\s*\S/m.test(head) && /^description:\s*\S/m.test(head);
 }
 
-/**
- * G1-C3: USER-layer entry that names THIS repo's absolute path (or its ~/
- * form) without a paths: scope. Block; a bare short repo name only warns
- * once (too easy to false-positive on prose).
- */
 function userLayerMisfileVerdict(
 	content: string,
 	gitRoot: string,
@@ -193,13 +159,12 @@ function userLayerMisfileVerdict(
 	projectDir: string,
 ): GuardVerdict | undefined {
 	const split = splitFrontmatter(content);
-	if (split === null) return undefined; // unindexable shape is C1's business
-	if (split.paths !== undefined && split.paths.length > 0) return undefined; // explicitly scoped — legal
+	if (split === null) return undefined;
+	if (split.paths !== undefined && split.paths.length > 0) return undefined;
 	const home = sessionHome();
 	const tildeForm = `~${gitRoot.slice(home.length)}`;
 	const namesRoot = gitRoot.startsWith(home) && content.includes(tildeForm);
 	if (!content.includes(gitRoot) && !namesRoot) {
-		// Short repo name only → warn once, no block.
 		const repoName = basename(gitRoot);
 		if (new RegExp(`\\b${escapeRegExp(repoName)}\\b`).test(content)) {
 			return {
@@ -219,7 +184,6 @@ function escapeRegExp(text: string): string {
 	return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Patterns strong enough to block on; deliberate over-blocking is fine. */
 const SECRET_PATTERNS: Array<[RegExp, string]> = [
 	[/\b(?:sk|pk)[-_:][A-Za-z0-9]{20,}\b/, "API key literal"],
 	[/\bAKIA[0-9A-Z]{16}\b/, "AWS access key id"],
@@ -230,8 +194,6 @@ const SECRET_PATTERNS: Array<[RegExp, string]> = [
 	[/(?:api[_-]?key|secret|token|password)\s*[:=]\s*["']?[A-Za-z0-9/_+=-]{16,}["']?/i, "key=value secret"],
 ];
 
-/** Shared secret probe (guard + ops engine + memory_consolidate — one truth).
- * Returns the pattern label on a hit, null when clean. */
 export function findSecret(text: string): string | null {
 	for (const [pattern, label] of SECRET_PATTERNS) {
 		if (pattern.test(text)) return label;
@@ -239,7 +201,6 @@ export function findSecret(text: string): string | null {
 	return null;
 }
 
-/** Inspect a write/edit targeting the memory dir; block on secret shapes. */
 export function guardMemoryWrites(
 	toolName: string,
 	input: Record<string, unknown>,
@@ -247,10 +208,7 @@ export function guardMemoryWrites(
 ): GuardVerdict {
 	if (toolName !== "write" && toolName !== "edit") return { block: false };
 	const path = typeof input.path === "string" ? input.path : "";
-	// separator-aware boundary check shared with the modes carve-out
-	// (review Standards #6: the bare startsWith here mis-flagged sibling
-	// dirs like `memory-x`)
-	if (!path || !isInsideDir(path, memoryDir)) return { block: false };
+	if (!path || !isLexicallyInsideDir(path, memoryDir)) return { block: false };
 
 	const contents: string[] = [];
 	const content = input.content ?? input.new_string;

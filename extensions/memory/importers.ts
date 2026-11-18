@@ -1,7 +1,3 @@
-/**
- * memory/importers — one-shot imports into the canonical memory dir
- * (P3-ME-08). Both are idempotent: re-running produces zero duplicates.
- */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -16,7 +12,6 @@ export interface ImportReport {
 	notes: string[];
 }
 
-/** /memory-import-claude: copy ~/.claude/projects/<root>/memory/*.md. */
 export function importFromClaude(projectMemoryDir: string, targetDir: string): ImportReport {
 	const report: ImportReport = { copied: 0, skipped: 0, notes: [] };
 	if (!existsSync(projectMemoryDir)) {
@@ -24,11 +19,7 @@ export function importFromClaude(projectMemoryDir: string, targetDir: string): I
 		return report;
 	}
 	const files = readdirSync(projectMemoryDir).filter((f) => f.endsWith(".md"));
-	// The target project may never have been opened in pi — create the layer
-	// dir before the first write (found live: migrating a CC project that has
-	// no pi-side dir yet failed with ENOENT on the first file).
 	mkdirSync(targetDir, { recursive: true });
-	// Do NOT trust the source MEMORY.md — rebuild from files.
 	for (const file of files) {
 		if (file === "MEMORY.md") continue;
 		let content: string;
@@ -38,12 +29,8 @@ export function importFromClaude(projectMemoryDir: string, targetDir: string): I
 			report.skipped++;
 			continue;
 		}
-		// validity is re-derived by the reconciler at index rebuild — the
-		// file is copied as-is either way
 		const target = join(targetDir, file);
 		if (existsSync(target)) {
-			// idempotent for identical content; local edits win — a re-import
-			// must never silently clobber what the user changed since
 			if (readFileSync(target, "utf-8") !== content) {
 				report.notes.push(`${file}: kept local (differs from source; delete to re-import)`);
 			}
@@ -53,16 +40,10 @@ export function importFromClaude(projectMemoryDir: string, targetDir: string): I
 		writeDocument(targetDir, file, { kind: "raw", text: content }); // W1: atomic + cache-invalidated
 		report.copied++;
 	}
-	reindex(targetDir); // rebuild index from files, never from source MEMORY.md
+	reindex(targetDir);
 	return report;
 }
 
-/**
- * /memory-import-hermes: split a hermes §-delimited store into per-fact
- * frontmatter files. Section shape: a line containing only `§` separates
- * facts; the first line of a fact is its de-facto title; trailing HTML
- * comments carry created/last/project64 metadata.
- */
 export function importFromHermes(hermesFile: string, targetDir: string): ImportReport {
 	const report: ImportReport = { copied: 0, skipped: 0, notes: [] };
 	if (!existsSync(hermesFile)) {
@@ -90,10 +71,6 @@ export function importFromHermes(hermesFile: string, targetDir: string): ImportR
 }
 
 
-/** B6 (OPT-3): read a still-live hermes source safely — if its mtime moves
- * across the read (hermes flushing on message_end), the content may be a
- * torn section; the migration is idempotent so a flagged re-run heals it.
- * The read function is injectable for tests. */
 export function readSourceStable(path: string, read: (p: string) => string = (p) => readFileSync(p, "utf-8")): { raw: string; torn: boolean } {
 	const mtime = (p: string): number => {
 		try {
@@ -107,19 +84,12 @@ export function readSourceStable(path: string, read: (p: string) => string = (p)
 	return { raw, torn: mtime(path) !== before };
 }
 
-// ─── V2-M: full hermes migration (DESIGN-MEMORY-V2 §7) ───
 
 export interface HermesMigrationReport extends ImportReport {
-	/** sections routed to each core layer */
 	routed: { user: number; project: number };
-	/** hermes projects-memory projects that do NOT match the current cwd */
 	otherProjects: string[];
 }
 
-/** Split a hermes store on §-prefixed separator lines. Both on-disk shapes
- * are supported: a line containing ONLY `§` (real hermes data) and the
- * `§ Title` prefix form (v1 fixture shape); the v1 `/^§ /m`-only split
- * never matched actual hermes data. */
 export function splitHermesSections(raw: string): string[] {
 	return raw
 		.split(/^§(?:[ \t]+|[ \t]*$)/m)
@@ -134,9 +104,6 @@ export interface HermesSection {
 	project64?: string;
 }
 
-/** Parse one section: first line = title, body = rest. Trailing hermes
- * metadata comments (`<!-- created=…, project64=… -->`, sometimes stacked)
- * are stripped from the body and merged into the metadata. */
 export function parseHermesSection(section: string): HermesSection {
 	const attrRe = /<!--\s*(created=[^>]*?)\s*-->/g;
 	let created = "";
@@ -160,7 +127,6 @@ function typeHeuristic(body: string): string {
 			: "reference";
 }
 
-/** Import one section into a layer dir. Returns "copied" | "skipped" | "dup". */
 function importSection(
 	section: HermesSection,
 	targetDir: string,
@@ -169,8 +135,6 @@ function importSection(
 	seen?: Set<string>,
 	fileNamePrefix = "hermes-",
 ): "copied" | "skipped" | "dup" | "collision" {
-	// cross-source dedupe: same leading 120 chars = same fact (MEMORY.md and
-	// failures.md overlap by design in hermes)
 	const fp = section.body.replace(/\s+/g, " ").slice(0, 120).toLowerCase();
 	if (seen) {
 		if (seen.has(fp)) return "dup";
@@ -180,10 +144,6 @@ function importSection(
 	const base = slugify(`${descriptionPrefix}${title}`) || "memory";
 	const description = `${descriptionPrefix}${section.firstLine.replace(/^#+\s*/, "").trim().slice(0, 90)}`;
 	const created = section.created ? `\n\n<!-- hermes: ${section.created} -->` : "";
-	// D1: distinct facts whose titles collapse to the same slug (pure-CJK
-	// titles all strip to "memory") must not silently drop the second one —
-	// disambiguate with a body-fingerprint suffix; content match on either
-	// slot keeps re-runs idempotent
 	for (const candidate of [base, `${base}-${Buffer.from(fp).toString("hex").slice(0, 6)}`]) {
 		const fileName = `${fileNamePrefix}${candidate}.md`;
 		const target = join(targetDir, fileName);
@@ -195,12 +155,11 @@ function importSection(
 			});
 			return "copied";
 		}
-		if (readFileSync(target, "utf-8").includes(section.body)) return "skipped"; // same fact — idempotent
+		if (readFileSync(target, "utf-8").includes(section.body)) return "skipped";
 	}
-	return "collision"; // both slots held by different facts — caller surfaces a note
+	return "collision";
 }
 
-/** Decode a hermes project64 tag ("Q2hlcnJ5UJI" → "CherryPR"); null on failure. */
 export function decodeProject64(b64: string): string | null {
 	try {
 		const decoded = Buffer.from(b64, "base64").toString("utf-8");
@@ -210,32 +169,17 @@ export function decodeProject64(b64: string): string | null {
 	}
 }
 
-/** The core project key for a memory dir (.../projects/<key>/memory).
- * W4: delegates to paths.fullProjectKey (same semantics: the FULL sanitized
- * key, never the truncated hint). */
 export function projectKeyOf(memoryDir: string): string {
 	return fullProjectKey(memoryDir);
 }
 
-/** Does a hermes project name refer to the current project? Rule: the core
- * sanitized project key equals the name or ends with "-<name>". */
 export function projectMatchesCurrent(hermesName: string, memoryDir: string): boolean {
 	const key = projectKeyOf(memoryDir);
 	return key === hermesName || key.endsWith(`-${hermesName}`);
 }
 
-/**
- * /memory-import-hermes (no args) — full migration:
- *   USER.md                    → user layer (type user)
- *   MEMORY.md untagged         → user layer
- *   MEMORY.md project64=this   → project layer; other tags → user layer + [tag]
- *   failures.md                → type feedback, same routing, category prefix
- *   projects-memory/<n>/MEMORY.md matching this cwd → project layer
- * Copy-not-move; idempotent; cross-source dedupe; other projects listed.
- */
 export function importHermesFull(args: {
 	agentDir: string;
-	/** the CURRENT project's memory dir (routing target for matching sections) */
 	projectMemoryDir: string;
 	userMemoryDir: string;
 }): HermesMigrationReport {
@@ -258,12 +202,6 @@ export function importHermesFull(args: {
 		} else if (outcome === "skipped") report.skipped++;
 	};
 
-	// route a tagged/untagged section from a global store
-	// RV-15 (spec 2026-10-02-memory-recall-v2): sections tagged with ANOTHER
-	// project go to THAT project's layer under ~/.pi/agent/projects/*-<name>/
-	// memory — never the user layer (the old [name]-prefix routing was the
-	// measured cross-project leakage source, RC-4). No matching project dir →
-	// skipped and noted (re-run import after opening that project once).
 	const foreignProjectDir = (name: string): string | null => {
 		const projectsRoot = join(args.agentDir, "projects");
 		if (!existsSync(projectsRoot)) return null;
@@ -314,7 +252,6 @@ export function importHermesFull(args: {
 		}
 	}
 
-	// per-project stores: only the current project's; others are listed
 	const projectsMemoryDir = join(args.agentDir, "projects-memory");
 	if (existsSync(projectsMemoryDir)) {
 		for (const name of readdirSync(projectsMemoryDir).sort()) {
@@ -349,7 +286,6 @@ export function importHermesFull(args: {
 		try {
 			reindex(d);
 		} catch {
-			/* foreign index converges when that project next opens */
 		}
 	}
 	return report;

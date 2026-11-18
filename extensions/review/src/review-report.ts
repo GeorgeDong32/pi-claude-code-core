@@ -1,14 +1,4 @@
-/**
- * Target workspace + run manifest prep.
- *
- * The extension owns diff acquisition + target repo checkout so the
- * main-agent directive stays a single `subagent` call. Reviewer children
- * share the prepared workspace as their cwd; git history, file lookups, and
- * `gh pr diff` all work without the LLM re-fetching anything.
- */
 import { createHash } from "node:crypto";
-// R7: the unused `spawn` / `runCmd` / `RunCmd` imports are gone — this file
-// no longer runs commands itself; it keeps the injector re-export only.
 export { setRunCmd, resetRunCmd } from "./run-cmd.js";
 import {
 	existsSync,
@@ -25,52 +15,31 @@ import { join } from "node:path";
 import { PR_REF_REGEX } from "./pr-ref.js";
 import type { ReviewTarget } from "./types.js";
 
-/** Hard cap on prepared workspace age before pruning (ms). */
 export const WORKSPACE_TTL_MS = 24 * 60 * 60 * 1000;
 
 export interface RunManifest {
-	/** Stable id used in filenames, log lines, and the report entry. */
 	runId: string;
-	/** Target label (e.g. "PR 18689 (agent-fetch)"). */
 	targetLabel: string;
 	targetKind: ReviewTarget["kind"];
 	prRef?: string;
-	/** Absolute path to the reviewer-facing diff (already captured). */
 	diffPath: string;
-	/** SHA-256 of `diffPath` contents (lowercase hex). */
 	diffSha256: string;
-	/** Repo-relative changed paths (parsed from `diffPath`, not from cwd). */
 	changedFiles: string[];
-	/** Whether the diff is exclusively docs/markdown. */
 	docsOnly: boolean;
-	/** Repo-relative rule file paths (AGENTS.md / CLAUDE.md / .pi/rules/*). */
 	rulePaths: string[];
-	/** True when reviewer `git log`/`blame` will work in the workspace. */
 	historyAvailable: boolean;
-	/** Detection mode: which path produced the diff. `git-pr-fallback` is
-	 *  legacy-only (pre-0.7.1) — PR diffs now come exclusively from gh. */
 	mode: "gh-pr-diff" | "git-pr-fallback" | "local-uncommitted" | "local-vs-default";
-	/** Base + head SHA when known (PR mode or local-vs-default). */
 	baseSha?: string;
 	headSha?: string;
 	mergeBase?: string;
-	/** Absolute path to the prepared target workspace. */
 	workspacePath: string;
-	/** HEAD SHA actually checked out in the workspace, when determinable. */
 	workspaceHeadSha?: string;
-	/** Non-fatal workspace prep note surfaced in the report. */
 	workspaceWarning?: string;
-	/** True when the workspace is a plugin-owned tmpdir clone (safe to
-	 *  reclaim after the report renders); false = the user's cwd. */
 	workspaceCloned?: boolean;
-	/** Absolute path to the run directory (manifest + diff + history live here). */
 	runDir: string;
 	createdAt: number;
-	/** Lanes adaptive routing dropped up front (id + reason), for report coverage. */
 	skippedReviewers?: Array<{ id: string; reason: string }>;
-	/** Reviewer ids fanned out by THIS run — the report tool rejects findings from anything else. */
 	reviewerIds?: string[];
-	/** Non-fatal note about the acquired diff (e.g. stale-base fallback). */
 	diffWarning?: string;
 }
 
@@ -80,19 +49,16 @@ export interface PrepInput {
 	prRepo?: { owner: string; repo: string };
 }
 
-/** Per-reviewer path inside `.pi/pi-review/runs/<runId>/`. */
 export function runDirFor(cwd: string, runId: string): string {
 	return join(cwd, ".pi", "pi-review", "runs", runId);
 }
 
-/** Create the prepared run dir + workspace. */
 export function ensureRunDir(cwd: string, runId: string): string {
 	const runDir = runDirFor(cwd, runId);
 	mkdirSync(runDir, { recursive: true });
 	return runDir;
 }
 
-/** Prune run dirs older than `WORKSPACE_TTL_MS`. */
 export function pruneStaleRuns(cwd: string, now = Date.now()): string[] {
 	const runsRoot = join(cwd, ".pi", "pi-review", "runs");
 	if (!existsSync(runsRoot)) return [];
@@ -106,7 +72,6 @@ export function pruneStaleRuns(cwd: string, now = Date.now()): string[] {
 				rmSync(path, { recursive: true, force: true });
 				removed.push(path);
 			} catch {
-				/* ignore */
 			}
 		}
 	}
@@ -129,7 +94,6 @@ function safeStat(p: string): { mtimeMs: number } | null {
 	}
 }
 
-/** Stable, URL-safe run id (timestamp + 6 random hex chars). */
 export function generateRunId(now = Date.now()): string {
 	const rand = Math.random().toString(16).slice(2, 8).padEnd(6, "0");
 	return `${now.toString(36)}-${rand}`;
@@ -140,7 +104,6 @@ export function sha256Hex(buf: string | Buffer): string {
 	return createHash("sha256").update(buf).digest("hex");
 }
 
-/** Parse changed paths + docsOnly flag from a captured diff. */
 export function parseChangedFilesFromDiff(diff: string): {
 	files: string[];
 	docsOnly: boolean;
@@ -196,13 +159,11 @@ export function discoverRulePathsLocal(cwd: string): string[] {
 				}
 			}
 		} catch {
-			/* ignore */
 		}
 	}
 	return [...new Set(found)];
 }
 
-/** Parse a GitHub PR URL or "owner/repo#number" into structured pieces. */
 export function parsePrRepo(prRef: string): { owner: string; repo: string; number: string } | null {
 	const m = prRef.match(PR_REF_REGEX);
 	if (!m) return null;
@@ -227,7 +188,6 @@ export function writeDiff(runDir: string, diff: string): string {
 	return path;
 }
 
-/** Cheap scratch path under tmp/ — never used by reviewers. */
 export function localScratchDir(prefix: string): string {
 	const dir = join(tmpdir(), `pi-review-${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
 	mkdirSync(dir, { recursive: true });

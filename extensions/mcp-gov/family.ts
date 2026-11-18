@@ -20,8 +20,6 @@ import { ruleMatchesId, ruleValueText } from "../../lib/rule-text.js";
 import type { PermissionRule } from "../modes/permissions.ts";
 import { registerRuleFamily, type RuleFamily } from "../modes/rule-families.ts";
 
-// B1: the pure core + env parse moved to lib/mcp-shape.ts; re-exported
-// here so existing consumers (web-gov) keep their import surface.
 export { directKnownServersFromEnv } from "../../lib/mcp-shape.js";
 
 export function canonicalizeMcpTool(
@@ -36,12 +34,6 @@ function ruleMatchesCanonicalId(ruleText: string, canonicalId: string): boolean 
 	return ruleMatchesId(ruleText, canonicalId);
 }
 
-/**
- * How specifically a rule text governs the canonicalId (P4-MC-01):
- * 3 = exact name, 2 = `mcp_<server>_*` prefix, 1 = bare `mcp_*`,
- * 0 = no match. A more specific rule beats a broader one across
- * behaviors (deny `mcp_*` + allow `mcp_exa_search` → allow).
- */
 function matchTier(ruleText: string, canonicalId: string): number {
 	if (ruleText === canonicalId) return 3;
 	if (ruleText.endsWith("*") && canonicalId.startsWith(ruleText.slice(0, -1))) {
@@ -53,9 +45,6 @@ function matchTier(ruleText: string, canonicalId: string): number {
 const BEHAVIOR_ORDER = { deny: 0, ask: 1, allow: 2 } as const;
 
 export function resolveMcpVerdict(canonicalId: string, rules: PermissionRule[]): "deny" | "allow" | "ask" {
-	// specificity first (exact > server-prefix > bare mcp_*), then
-	// deny > ask > allow within a tier (spec P4-MC-01; an explicit ask must
-	// not be silently swallowed by a broader allow prefix)
 	let best: { tier: number; behavior: "deny" | "ask" | "allow" } | null = null;
 	for (const rule of rules) {
 		if (rule.behavior !== "deny" && rule.behavior !== "ask" && rule.behavior !== "allow") continue;
@@ -68,7 +57,6 @@ export function resolveMcpVerdict(canonicalId: string, rules: PermissionRule[]):
 	return best?.behavior ?? "ask";
 }
 
-/** Create and register the family. Returns it for tests. */
 export function createMcpRuleFamily(options?: { knownServers?: string[] }): RuleFamily {
 	const knownServers = new Set((options?.knownServers ?? []).map((s) => s.toLowerCase()));
 	const family: RuleFamily = {
@@ -80,7 +68,6 @@ export function createMcpRuleFamily(options?: { knownServers?: string[] }): Rule
 			return resolveMcpVerdict(canonicalId, rules);
 		},
 		suggestAllowRule(canonicalId) {
-			// mcp_exa_search → mcp_exa_* (server-wide allow; P4-MC-02)
 			const m = /^mcp_([A-Za-z0-9_-]+)_/.exec(canonicalId);
 			return m ? `mcp_${m[1]}_*` : canonicalId;
 		},

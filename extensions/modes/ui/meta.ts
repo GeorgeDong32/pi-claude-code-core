@@ -1,11 +1,3 @@
-/**
- * Mode presentation material (DECOUPLE-PLAN DC1/DC3).
- *
- * Single source for icon/label/role per mode — published on the bus
- * snapshot's modes channel and consumed by every UI (cctui, fallback
- * footer). Moved here from index.ts at DC3: presentation material lives
- * with the presentation layer.
- */
 import type { PermissionMode } from "../mode-prompt.ts";
 
 export const MODE_META: Record<PermissionMode, { icon: string; label: string; role: string }> = {

@@ -1,26 +1,10 @@
 #!/usr/bin/env node
-/**
- * recall-aggregate.mjs — entropy-control G3 [C22]: offline recall latency
- * report from existing session transcripts (docs/zh/entropy-control-spec.md).
- *
- * Reads session jsonl files, extracts pi-memory-recall details v1 records
- * (delivery/model/files/bytes/elapsedMs — shape pinned by P0-CT-08), and
- * emits a Markdown report: delivery distribution, elapsedMs p50/p90,
- * delivered-turn distance distribution, sample counts (stated when
- * insufficient), and a data-backed waitMs recommendation. Read-only; the
- * waitMs default is NOT modified by running this.
- *
- * Usage:
- *   node scripts/recall-aggregate.mjs [sessionsRoot]     # default ~/.pi/agent/sessions
- *   node scripts/recall-aggregate.mjs <dir> > report.md
- */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
 const root = process.argv[2] ?? join(homedir(), ".pi/agent", "sessions");
 
-/** Recursively collect .jsonl files (bounded depth for mount safety). */
 function jsonlFiles(dir, depth = 0, out = []) {
 	if (depth > 6) return out;
 	let entries;
@@ -45,7 +29,7 @@ function percentile(sorted, p) {
 
 const files = jsonlFiles(root);
 const records = [];
-const turnDistances = []; // landing positions: which user-turn index each delivered block landed on (G3-C22)
+const turnDistances = [];
 let scanned = 0;
 for (const file of files) {
 	let text;
@@ -55,17 +39,7 @@ for (const file of files) {
 	} catch {
 		continue;
 	}
-	// Walk the transcript in line order and record each delivered
-	// pi-memory-recall block's LANDING POSITION: the index of the last user
-	// message started before the block landed (0-based). Both immediate and
-	// deferred deliveries land before the NEXT user message (immediate blocks
-	// persist right after their user message; deferred ones flush at the same
-	// run's turn_end), so this measures where in the session the block landed
-	// — NOT how many turns after its trigger. It grows with session length by
-	// construction; treat it as a position gauge, not a delivery-delay gauge.
-	// (A true trigger→landing distance would need the trigger turn recorded in
-	// details v1 — a frozen surface (P0-CT-08); would take a v2 contract.)
-	let userMessagesSeen = -1; // -1 until the first user message
+	let userMessagesSeen = -1;
 	for (const line of text.split("\n")) {
 		let entry;
 		try {
@@ -110,9 +84,6 @@ console.log(`- selector elapsedMs: p50 ${p50} / p90 ${p90} (n=${elapsed.length})
 console.log(`- bytes per delivered block: median ${percentile(records.map((r) => r.bytes).sort((a, b) => a - b), 50)}`);
 console.log();
 
-// landing-position distribution (G3-C22): at which user-turn index each
-// recall block landed (0 = session's first user turn). Position gauge only —
-// see the note above the collector for why this is not a delivery delay.
 const distances = turnDistances.slice().sort((a, b) => a - b);
 if (distances.length === 0) {
 	console.log(`- landing position: **insufficient samples** (no delivered block with a preceding user message found — the metric needs transcripted deliveries)`);
@@ -125,7 +96,6 @@ if (distances.length === 0) {
 }
 console.log();
 
-// waitMs recommendation logic — data-backed, explicit
 console.log(`## waitMs recommendation`);
 if (deferred === 0 && deliveries === 0) {
 	console.log(`- no delivered samples — cannot recommend.`);

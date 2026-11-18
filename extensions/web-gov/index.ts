@@ -28,13 +28,8 @@ import { join } from "node:path";
 import { ruleValueText } from "../../lib/rule-text.js";
 import type { PermissionRule } from "../modes/permissions.ts";
 import { registerRuleFamily, type RuleFamily } from "../modes/rule-families.ts";
-// canonicalizeMcpTool is the single authority on "is this an MCP-shaped
-// tool" (native/proxy/direct+knownServers) — reuse, don't reimplement;
-// its pure shape core lives in lib/mcp-shape.ts, shared with the modes
-// plan gate (arch B1)
 import { canonicalizeMcpTool, directKnownServersFromEnv } from "../mcp-gov/family.ts";
 
-/** CC-style preapproved documentation/reference domains (P4-WB-02). */
 export const BUILTIN_PREAPPROVED = [
 	"developer.mozilla.org",
 	"github.com",
@@ -52,12 +47,6 @@ export const BUILTIN_PREAPPROVED = [
 	"stackoverflow.com",
 ];
 
-// P3-1 S4 (SPEC 2026-10-07): the override read goes through lib/settings'
-// readJson (invariant 10 — malformed input never throws) with a stat-
-// fingerprint cache (absPath + mtimeMs + size + ino). A hit skips the
-// read/parse entirely; missing falls back to the builtin list silently.
-// Limit (disclosed): mtime-preserving in-place edits of the SAME length are
-// invisible until the next stat-visible change.
 const preapprovedCache = new Map<string, { fingerprint: string; value: string[] }>();
 
 function overrideFingerprint(path: string): string | null {
@@ -65,7 +54,7 @@ function overrideFingerprint(path: string): string | null {
 		const st = statSync(path);
 		return `${st.mtimeMs}:${st.size}:${st.ino}`;
 	} catch {
-		return null; // missing → builtin, silently
+		return null;
 	}
 }
 
@@ -87,13 +76,10 @@ export function loadPreapprovedDomains(home = homedir()): string[] {
 	return value;
 }
 
-/** Exact host or any subdomain of it (`docs.github.com` ⊆ `github.com`). */
 export function isPreapproved(domains: string[], host: string): boolean {
 	return domains.some((d) => host === d || host.endsWith(`.${d}`));
 }
 
-// BH-S2 canonical-id markers. `@` and `?` can never occur in a WHATWG
-// hostname, so a marked id cannot collide with a real parsed host.
 const USERINFO_MARK = "@";
 const UNPARSABLE_MARK = "?";
 
@@ -102,7 +88,6 @@ interface ParsedTarget {
 	userinfo: boolean;
 }
 
-/** Parse one URL field. Null when it is not an absolute URL with a host. */
 function parseUrlTarget(raw: string): ParsedTarget | null {
 	let url: URL;
 	try {
@@ -113,7 +98,7 @@ function parseUrlTarget(raw: string): ParsedTarget | null {
 	// WHATWG already case-folds the host; the trailing dot(s) are kept by
 	// the parser and must be stripped here (`GitHub.com.` ⊆ `github.com`).
 	const host = url.hostname.toLowerCase().replace(/\.+$/, "");
-	if (host === "") return null; // non-hierarchical (mailto:) — no fetch host to govern
+	if (host === "") return null;
 	return { host, userinfo: url.username !== "" || url.password !== "" };
 }
 
@@ -145,12 +130,10 @@ export function canonicalTarget(input: Record<string, unknown>): string | null {
 	return unparsable !== undefined ? `${UNPARSABLE_MARK}${unparsable}` : null;
 }
 
-/** The plain host view of a canonical id (null for unparsable fields). */
 function targetHost(id: string): string {
 	return id.startsWith(USERINFO_MARK) ? id.slice(USERINFO_MARK.length) : id;
 }
 
-/** IPv4-shaped (digits+dots) or IPv6 (brackets or any `:`). */
 function isIpLiteral(host: string): boolean {
 	return host.includes(":") || /^[\d.]+$/.test(host);
 }
@@ -175,25 +158,13 @@ export function createWebRuleFamily(home = homedir()): RuleFamily {
 	const family: RuleFamily = {
 		id: "web",
 		match(toolName, input) {
-			// proxy shape: the real tool name sits in input.tool
 			const proxyTarget = typeof input?.tool === "string" ? input.tool : "";
 			const effectiveName = toolName === "mcp" && proxyTarget ? proxyTarget : toolName;
 			if (!URL_TOOL_HINT.test(effectiveName)) return null;
-			// P4-WB-01 + FAM-02④: only MCP-shaped tools are governed. A
-			// non-mcp extension tool that merely has a url-ish param must
-			// stay a passthrough, not become a first-seen prompt.
 			if (canonicalizeMcpTool(toolName, input ?? {}, knownServers) === null) return null;
-			// registered BEFORE the mcp family (extensions/index.ts): a
-			// URL-carrying call is governed by its HOST here, taking
-			// precedence over mcp-prefix rules (P4-WB-01); URL-less calls
-			// return null and fall through to the mcp family
 			return canonicalTarget(input ?? {});
 		},
 		resolve(id, rules) {
-			// deny > ask > allow (pm engine order); explicit rules beat the
-			// preapproved list. Userinfo ids sweep rules by their REAL host
-			// (`@evil.example` ↔ domain:evil.example); an unparsable `?raw`
-			// id can only match a grant of the identical raw string.
 			const host = targetHost(id);
 			for (const behavior of ["deny", "ask", "allow"] as const) {
 				for (const rule of rules) {
@@ -202,19 +173,12 @@ export function createWebRuleFamily(home = homedir()): RuleFamily {
 					if (m && m[1].toLowerCase() === host) return behavior;
 				}
 			}
-			// preapproved → allow without any rule (P4-WB-02). Subdomains of a
-			// preapproved root (docs.github.com for github.com) count too —
-			// but NEVER for a userinfo URL, an unparsable id, or an IP
-			// literal (BH-S2: the preapproved list is a DOMAIN list).
 			const preapprovedEligible =
 				!id.startsWith(USERINFO_MARK) && !id.startsWith(UNPARSABLE_MARK) && !isIpLiteral(host);
 			if (preapprovedEligible && isPreapproved(loadPreapprovedDomains(home), host)) return "allow";
 			return "ask";
 		},
 		suggestAllowRule(id) {
-			// userinfo ids suggest the real host's rule (the marker is not
-			// user-writable grammar); an unparsable id suggests its exact
-			// raw string so a grant re-matches only identical input
 			return `webfetch(domain:${targetHost(id)})`;
 		},
 		matchesRule(rule, canonicalId) {

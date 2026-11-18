@@ -1,23 +1,3 @@
-/**
- * goal-tools.ts — the eight goal tool registrations (SPEC SR E13a: split
- * from goal.ts; registration ORDER is pinned by
- * extensions/goal/tests/goal-registration-order.test.ts).
- *
- * Spec IDs: P2-2 (lifecycle verbs), G3-C20/G3-C21 (criteria notice, third
- * attempt), B7 step 3 + 2026-10-04-goal-audit-hang-fix (bounded audit),
- * BH-E1 (accountProgress at pause/abort/complete), #120 encapsulation.
- *
- * Design decisions:
- * - registerGoalTools(pi, deps) receives session state through a narrow
- *   structural deps object; handler bodies stay verbatim, so deps names
- *   mirror the old closure names.
- * - getRunningGoalId is a LIVE GETTER: goal.ts owns runningGoalId and
- *   mutates it per run; the tools must always read the current value.
- * - process.env.PI_GOAL_AUTO_CONFIRM is read at call time (not factory
- *   time) — tests toggle it between factory and tool execution.
- * - The pi-ai 1.5.0 StringEnum shim and COMPLETE_STATUS live here (their
- *   only consumer is update_goal).
- */
 import { Type } from "typebox";
 import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -51,9 +31,6 @@ import {
 import type { GoalLifecycle } from "./goal-lifecycle.ts";
 import { createPendingAchievementSlot, runCompletionAudit } from "./goal-audit-flow.ts";
 
-// pi-ai 1.5.0 StringEnum returns a pi-schema `Schema`, which no longer unifies with
-// the typebox `TSchema` that defineTool's params generic expects — recreate it as a
-// typebox TUnsafe with the identical `{ type: "string", enum: [...] }` wire shape.
 function StringEnum<T extends readonly string[]>(values: T, options?: { description?: string; default?: T[number] }) {
 	return Type.Unsafe<T[number]>({ type: "string", enum: [...values], ...(options?.description !== undefined ? { description: options.description } : {}), ...(options?.default !== undefined ? { default: options.default } : {}) });
 }
@@ -164,12 +141,6 @@ pi.registerTool(defineTool({
 	},
 }));
 
-// Agent's goal-confirmation entry point. Shows the user a full plain-text
-// draft report with two choices: [Confirm] (creates the goal) or
-// [Continue Chatting] (returns control to the agent for more clarification).
-// Schema gates enforce focus-vs-sisyphus consistency; draftId is ignored for
-// one-release compatibility with older prompt residue.
-// In headless mode (no UI), auto-confirms — harness-friendly.
 pi.registerTool(defineTool({
 	name: PROPOSE_DRAFT_TOOL_NAME,
 	label: "Propose Goal Draft",
@@ -212,7 +183,6 @@ pi.registerTool(defineTool({
 		const activeIntent = lifecycle.confirmationIntent;
 		if (!activeIntent) throw new Error("Goal confirmation intent disappeared during proposal validation.");
 
-		// All schema gates passed. Decide how to confirm.
 		const objective = validation.objective;
 		const autoContinueFlag = params.autoContinue ?? true;
 		const sisyphusFlag = validation.expectedSisyphus;
@@ -227,10 +197,8 @@ pi.registerTool(defineTool({
 
 		let decision: "confirm" | "continue";
 		if (headless) {
-			// Headless: auto-confirm (tests and non-TUI sessions).
 			decision = "confirm";
 		} else {
-			// TUI: show overlay dialog.
 			try {
 				decision = await showProposalDialog(ctx, draftSummary, activeIntent.focus);
 			} catch (err) {
@@ -258,7 +226,6 @@ pi.registerTool(defineTool({
 				terminate: true,
 			};
 		}
-		// "continue" — user wants to keep chatting. Drafting state stays armed.
 		return {
 			content: [{
 				type: "text",
@@ -306,16 +273,10 @@ pi.registerTool(defineTool({
 		}
 		const auditSource = lifecycle.focused();
 		if (!auditSource) throw new Error("Goal disappeared during completion validation.");
-		// Which audit attempt this is (1 = first try) — persisted up front
-		// so the count survives a rejected audit and process restarts.
 		const auditAttemptNo = (auditSource.auditAttempts ?? 0) + 1;
-		// G3-C21: surface the 3rd audit attempt once (named constant, spec ⑥).
 		if (auditAttemptNo === AUDIT_ATTEMPT_NOTICE) {
 			uiNotify(ctx, `Goal ${auditSource.id}: third completion attempt — the auditor has rejected this goal twice already. Consider whether the objective is actually achievable as written.`, "warning");
 		}
-		// G3-C20 (non-blocking): when the objective carries numbered
-		// criteria ([C1]…[Cn]), a completion summary missing some of the
-		// [Cn] lines gets ONE followUp reminder; the audit starts anyway.
 		const missingCriteria = missingCriteriaLines(auditSource.objective, params.completionSummary ?? "");
 		if (missingCriteria.length > 0) {
 			try {
@@ -332,9 +293,6 @@ pi.registerTool(defineTool({
 			}
 		}
 		const auditTarget = { ...mergeGoalPromptFromDisk(ctx, auditSource), auditAttempts: auditAttemptNo };
-		// C5 follow-up: stamp auditAttempts + persist is the
-		// recordAuditAttempt verb (the adopted record keeps the in-memory
-		// values; the disk write carries the merged objective).
 		lifecycle.recordAuditAttempt(ctx, auditAttemptNo);
 		const outcome = await runCompletionAudit({
 			ctx,
@@ -342,23 +300,13 @@ pi.registerTool(defineTool({
 			completionSummary: params.completionSummary,
 			detailedSummaryText: detailedSummary(auditTarget),
 			signal,
-			// Test seam (same parameter the audit flow already exposes):
-			// production leaves deps.auditor undefined and runs the real
-			// subagent auditor; tests inject a deterministic verdict.
 			auditor: deps.auditor,
-			// Bounded audit (spec 2026-10-04-goal-audit-hang-fix): update_goal
-			// must always return; on expiry the flow returns a rejected outcome
-			// and the goal stays active.
 			timeoutMs: loadGoalAuditorFileConfig(ctx.cwd).auditTimeoutMs,
 			sendAuditEvent: ({ content, phase, goalId, auditor }) => {
 				pi.sendMessage<GoalAuditEventDetails>({
 					customType: GOAL_AUDIT_ENTRY,
 					content,
 					display: true,
-					// view-only: the conclusion travels in the update_goal tool
-					// result; the context handler drops this from model requests
-					// (otherwise the auditor report is injected twice and can
-					// bait the model into answering it again).
 					details: { phase, goalId, auditor, viewOnly: true },
 				});
 			},
@@ -369,35 +317,22 @@ pi.registerTool(defineTool({
 				details: goalDetails(lifecycle.focused(), "rejected"),
 			};
 		}
-		// Account for any remaining elapsed time first so the compact
-			// "goal achieved" line carries the final usage numbers.
 		accountProgress(ctx);
 		const finalUsage = lifecycle.focused() ? { ...lifecycle.focused()!.usage } : null;
-		// In-place audit verdict marker was emitted by the flow; the summary
-			// line below is deferred to the end of this finishing turn so the
-			// model's closing summary renders first and "Goal achieved" last.
 		pendingAchievement.hold({
 			content: outcome.approvalText,
 			details: {
 				phase: "approved",
 				goalId: outcome.goalId,
 				auditor: outcome.auditorModel,
-				// view-only: display marker; the model already saw the conclusion
-				// in the update_goal tool result this same turn.
 				viewOnly: true,
 				...(finalUsage
 					? { achievedAt: Date.now(), activeSeconds: finalUsage.activeSeconds, tokensUsed: finalUsage.tokensUsed, costUsed: finalUsage.costUsed, auditAttempts: auditAttemptNo }
 					: {}),
 			},
 		});
-		// C5 follow-up: the terminal transition (adopt the audited target
-		// → merge → stamp complete → archive via persist → pool removal →
-		// focus entry → ledger) is the lifecycle complete verb. The
-		// audited target is passed explicitly — a post-await refocus
-		// never replaces the audit's subject.
 		const report = lifecycle.complete(auditTarget, ctx);
 		const completedGoal = report.record ?? null;
-		// C9 fix: mark turn-stopped so subsequent in-turn tool calls are blocked.
 		lifecycle.handle({ tag: "turn-stopped", goalId: completedGoal?.id ?? null });
 		return {
 			content: [{
@@ -451,11 +386,7 @@ pi.registerTool(defineTool({
 		if (!lifecycle.focused()) throw new Error("Goal disappeared during pause validation.");
 		const suggested = params.suggestedAction?.trim() || undefined;
 
-		// Account for any remaining elapsed time before stopping the run.
 		accountProgress(ctx);
-		// C5 follow-up: the tool path's policy builder + setGoal + nudge
-		// reset + turn-stopped (never emitted the pause ledger — pinned
-		// behavioral parity) is the pauseByAgent verb.
 		lifecycle.pauseByAgent(ctx, { reason, suggestedAction: suggested });
 
 		const suggestionLine = suggested ? `\nSuggested: ${truncateText(suggested, 160)}` : "";
@@ -510,11 +441,7 @@ pi.registerTool(defineTool({
 		if (!abortSource) throw new Error("Goal disappeared during abort validation.");
 		const abortedGoalId = abortSource.id;
 
-		// Account for any remaining elapsed time before abandoning the run.
 		accountProgress(ctx);
-		// P2-2 Step 2: merge → buildAbortedByAgentGoal → archive → ledger
-		// (raw agent reason) → nudge reset → unfocus persist = the
-		// terminate verb's by:"agent" variant.
 		const report = lifecycle.terminate("abort", ctx, { by: "agent", reason });
 		const archived = report.record ?? null;
 		lifecycle.handle({ tag: "turn-stopped", goalId: abortedGoalId });
@@ -618,17 +545,9 @@ pi.registerTool(defineTool({
 		if (!newObjective) throw new Error("apply_goal_tweak requires a non-empty newObjective.");
 		const changeSummary = params.changeSummary.trim();
 		if (!changeSummary) throw new Error("apply_goal_tweak requires a non-empty changeSummary.");
-		// C5 follow-up: the authoritative write (build → write disk →
-		// adopt canonical → state entry → clear tweak gate → fresh nudge
-		// chain → turn-stopped → tool-sync → UI) is the applyTweak verb.
-		// It deliberately bypasses the persist sequence — persist would
-		// re-read the stale disk objective and clobber the new one (the
-		// tweak write is upstream of the disk).
 		lifecycle.applyTweak(ctx, newObjective);
-		// Reset autoContinue counter — plan changed, agent gets a fresh chain.
 		const tweakedGoal = lifecycle.focused();
 		uiNotify(ctx, `Goal tweaked: ${truncateText(changeSummary, 160)}`, "info");
-		// Append ledger event for tweak
 		try {
 			appendGoalEvent(ctx, {
 				type: "goal_tweaked",

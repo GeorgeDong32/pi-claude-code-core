@@ -22,9 +22,6 @@ import {
   writeFastMode,
 } from "./effort.js";
 import { getSharedEffortOwner, type ExplicitSource } from "../../lib/effort-owner.js";
-// FX-2 / S6: model identity for switch detection — the shared key from
-// lib/model-id (the same provider+id pair the host's modelsAreEqual
-// compares). Single source for effort and modes/profile-apply.
 import { modelIdentityKey } from "../../lib/model-id.js";
 import { coreBus } from "../bus.js";
 import { createEffortUi, type EffortUi } from "./ui/index.js";
@@ -47,9 +44,6 @@ function formatAvailableLevels(model: EffortModel | null | undefined): string {
 const SERVICE_TIER_APIS: ReadonlySet<string> = new Set(["openai-responses", "openai-codex-responses"]);
 
 function isFastModelId(modelId: string): boolean {
-  // Substring, not prefix: provider-prefixed ids like "CherryCodex/gpt-5.5"
-  // must still match. gpt-6 carries the same Responses-API service_tier
-  // semantics as gpt-5 (air machine registers codex/gpt-6-* ids).
   return modelId.includes("gpt-5") || modelId.includes("gpt-6");
 }
 
@@ -72,15 +66,12 @@ function applySessionLevel(
   owner: ReturnType<typeof getSharedEffortOwner>,
   ui: EffortUi
 ): void {
-  // ① env pin refuses explicit writes (P1-EF-06 c)
   const pin = owner.envPin();
   if (pin !== null) {
     ui.notify(ctx, `Effort is pinned by PI_CORE_EFFORT=${pin}; ${level} was not applied`, "warning");
     return;
   }
 
-  // B5 (cherry-batch2): clamp-style — write the nearest supported tier.
-  // A null model keeps the status-quo reject (no nearest tier to compute).
   const clamp = clampToSupported(level, ctx.model);
   if (clamp === undefined) {
     ui.notify(ctx, `No model resolved; ${level} was not applied`, "error");
@@ -105,26 +96,14 @@ function applySessionLevel(
 }
 
 export default function effortExtension(pi: ExtensionAPI): void {
-  const settingsPath = join(getAgentDir(), "settings.json"); // host file → host root (env-redirectable by design)
-  // thinking-level ownership chain (P1-EF-05): every write below arbitrates
-  // through this owner; modes' profile application shares the same instance.
+  const settingsPath = join(getAgentDir(), "settings.json");
   const owner = getSharedEffortOwner(pi);
-  // DC2: single presentation wrapper — business code below never touches
-  // ctx.ui directly (fakeable via EffortCtxLike).
   const ui = createEffortUi();
 
-  // ─── Closure: track current model for tab completion ─────────────
   let currentModel: EffortModel | null = null;
   let activeRunEffort: string | undefined;
   let fastMode = getFastMode(settingsPath);
-  // Last seen context, so owner.changed() can refresh status slots even when
-  // the change originated in the modes module (profile application, D5).
   let lastCtx: ExtensionContext | undefined;
-  // FX-2: model key remembered at session_start / model_select / agent_start
-  // / turn_start. A thinking_level_select whose live ctx.model differs from
-  // this baseline was emitted from inside a host model switch (the host
-  // assigns agent.state.model BEFORE setThinkingLevel emits), which the
-  // BH-E5 span cannot see for manual /model or ctrl+p switches.
   let switchBaselineKey: string | undefined;
 
   function rememberModel(model: { provider?: string; id?: string } | null | undefined): void {
@@ -137,17 +116,11 @@ export default function effortExtension(pi: ExtensionAPI): void {
     return fastMode;
   }
 
-  // Cross-module integration (D5): a profile-driven write from the modes
-  // module refreshes effort's status slots through the same path.
   owner.changed(() => {
     if (lastCtx) syncEffortUi(lastCtx);
   });
 
   function syncEffortUi(ctx: ExtensionContext, current: string = pi.getThinkingLevel(), appliesNow?: boolean): string {
-    // C6: honor the caller's appliesNow; default to the idle probe so a
-    // changed() callback during a run no longer refreshes the working
-    // message as if it applied immediately. Fake hosts without isIdle
-    // (contract tests) fall back to the old true behavior.
     const applies = appliesNow ?? (typeof ctx.isIdle === "function" ? ctx.isIdle() : true);
     ui.sync(ctx, current, refreshFastMode(), applies);
     coreBus().publish({
@@ -156,19 +129,14 @@ export default function effortExtension(pi: ExtensionAPI): void {
     return current;
   }
 
-  // ─── CLI flag ────────────────────────────────────────────────────
   pi.registerFlag("effort", {
     description: "Initial thinking effort level (min|max|minimal|low|medium|high|xhigh)",
     type: "string",
   });
 
-  // ─── Provider hook: fast mode maps to OpenAI/Codex priority tier ──
   pi.on("before_provider_request", (event, ctx) => {
     if (!fastMode) return undefined;
 
-    // Dialect gate first: ctx.model is the session model; the payload model
-    // check below still guards side-channel requests (compaction overrides)
-    // whose model differs from the session's.
     if (!fastAppliesToModel(ctx?.model)) return undefined;
 
     const payload = event.payload;
@@ -188,12 +156,6 @@ export default function effortExtension(pi: ExtensionAPI): void {
     };
   });
 
-  // ─── Keyboard shortcuts: Ctrl+Shift+E / Alt+T to cycle effort ──────
-  // C5 (arch review): ONE shared handler. alt+t moved here from the modes
-  // module (its old hardcoded table + write-probe loop pinned clamped values
-  // into the explicit slot on single-level models); ctrl+shift+e gains the
-  // same zero-write guard. Decision logic is pure in effort.ts
-  // (decideCycleShortcut) — "noop" notifies and never calls setExplicit.
   const cycleShortcut = (ctx: ExtensionContext, opts: { includeOff: boolean }): void => {
     const pin = owner.envPin();
     if (pin !== null) {
@@ -228,25 +190,6 @@ export default function effortExtension(pi: ExtensionAPI): void {
     handler: (ctx) => cycleShortcut(ctx, { includeOff: true }),
   });
 
-  // ─── External thinking changes: adopt pi's thinking_level_select (EFF-01)
-  // Covers pi's own thinking.cycle keybinding (shift+tab by default, alt+e on
-  // this machine) and any other writer calling setThinkingLevel outside core.
-  // Guard on owner.lastApplied(): the owner's own writes also emit this event,
-  // and pi updates state before emitting, so comparing against
-  // pi.getThinkingLevel() would false-skip exactly the no-slot case.
-  // BH-E5 (2026-11-14): a change emitted from INSIDE a host model switch
-  // (AgentSession.setModel → setThinkingLevel) is the model's switch
-  // default, not user intent — record it without promoting it to an
-  // explicit choice; the priority chain env > explicit > profile > model
-  // default stays intact.
-  // FX-2 (2026-11-14): the BH-E5 span only covers the profile-driven path.
-  // Manual switches (/model, ctrl+p) run unbracketed, but the host assigns
-  // agent.state.model BEFORE the emission, so the live ctx.model differs
-  // from the remembered baseline — same model-switch-caused classification,
-  // never an explicit write. Degradation: if an external extension registers
-  // its tls handler ahead of core's (a stalled dispatch lets model_select
-  // arrive first), the baseline is already updated when the late event lands
-  // and the reset is adopted as today — pinned by test FX-2⑥.
   pi.on("thinking_level_select", (event, ctx) => {
     if (event.level === owner.lastApplied()) return;
     const liveKey = modelIdentityKey(ctx?.model);
@@ -260,23 +203,16 @@ export default function effortExtension(pi: ExtensionAPI): void {
     }
     const outcome = owner.setExplicit(event.level, "shortcut");
     if (outcome === "pinned-by-env") return;
-    // Bus sync only; the footer chip reads pi.getThinkingLevel().
     coreBus().publish({ effort: { level: pi.getThinkingLevel(), source: owner.currentSource() } });
   });
 
-  // ─── session_start: env pin + sync UI + apply --effort flag ──────
   pi.on("session_start", (_event, ctx) => {
-    // Track model for tab completion
     currentModel = ctx.model ?? null;
-    // FX-2: seed the host-switch baseline with the session's model
     rememberModel(ctx.model);
     lastCtx = ctx;
-    // ① PI_CORE_EFFORT is read once at startup (P1-EF-05)
     owner.setFromEnv(process.env.PI_CORE_EFFORT ?? "");
-    // Sync current effort labels
     syncEffortUi(ctx);
 
-    // Apply --effort CLI flag if present
     const flagValue = pi.getFlag("effort");
     if (typeof flagValue === "string" && flagValue) {
       const requested = flagValue.trim();
@@ -292,18 +228,13 @@ export default function effortExtension(pi: ExtensionAPI): void {
         return;
       }
 
-      // B5: clamp-style; null model keeps the reject.
       const clamp = clampToSupported(resolved, ctx.model);
       if (clamp === undefined) {
         ui.notify(ctx, `--effort ${flagValue}: no model resolved; not applied`, "warning");
         return;
       }
       const clampedResolved = clamp.level;
-      // clamp notice fires AFTER the write outcome below is known (R1 P3-1):
-      // under an env pin the "pinned; not applied" message must not be
-      // preceded by a contradictory "set to X" — the notice moved to post-write.
 
-      // --effort flag = manual intent at startup (② via "command")
       const outcome = owner.setExplicit(toThinkingLevel(clampedResolved), "command");
       if (clamp.clamped && outcome !== "pinned-by-env") {
         ui.notify(
@@ -313,8 +244,6 @@ export default function effortExtension(pi: ExtensionAPI): void {
         );
       }
       if (outcome === "pinned-by-env") {
-        // P1-EF-06 c) parity with the command/picker paths: being silently
-        // swallowed under an env pin is the one UX gap they don't have
         ui.notify(ctx, 
           `Effort is pinned by PI_CORE_EFFORT=${owner.envPin()}; --effort ${flagValue} was not applied`,
           "warning"
@@ -324,20 +253,10 @@ export default function effortExtension(pi: ExtensionAPI): void {
     }
   });
 
-  // ─── model_select: host-switch recovery + sync visible effort UI ──
   pi.on("model_select", (event, ctx) => {
     const previousKey = switchBaselineKey;
     const nextKey = modelIdentityKey(event.model);
     currentModel = event.model;
-    // FX-2: a model_select OUTSIDE the BH-E5 span with a model change is a
-    // host-initiated switch (manual /model, ctrl+p). The reset already
-    // happened (tls fired from inside setThinkingLevel), so restore the
-    // chain: clear the stale profile slot and re-apply ① env / ② explicit.
-    // The baseline still names the previous model here on purpose — a
-    // clamped restore write re-entering thinking_level_select below must
-    // classify as switch-caused, not user intent. Inside the profile bracket
-    // the modes module re-asserts the profile effort itself right after, so
-    // restoring here would be a double application (BH-E5 semantics).
     if (!owner.inModelSwitch() && previousKey !== undefined && nextKey !== undefined && nextKey !== previousKey) {
       owner.afterHostModelSwitch();
     }
@@ -346,12 +265,8 @@ export default function effortExtension(pi: ExtensionAPI): void {
     syncEffortUi(ctx, visibleEffort);
   });
 
-  // Keep labels fresh if the user changes thinking through Pi's native UI.
-  // During an active run, keep the loader tied to the run-start effort so a
-  // mid-stream change is not misrepresented as affecting in-flight requests.
   pi.on("agent_start", (_event, ctx) => {
     currentModel = ctx.model ?? currentModel;
-    // FX-2: keep the host-switch baseline truthful across runs
     rememberModel(ctx.model);
     activeRunEffort = pi.getThinkingLevel();
     syncEffortUi(ctx, activeRunEffort);
@@ -359,7 +274,6 @@ export default function effortExtension(pi: ExtensionAPI): void {
 
   pi.on("turn_start", (_event, ctx) => {
     currentModel = ctx.model ?? currentModel;
-    // FX-2: keep the host-switch baseline truthful across turns
     rememberModel(ctx.model);
     activeRunEffort ??= pi.getThinkingLevel();
     syncEffortUi(ctx, activeRunEffort);
@@ -379,20 +293,12 @@ export default function effortExtension(pi: ExtensionAPI): void {
     }
     fastMode = enabled;
     syncEffortUi(ctx);
-    // Honest no-op note: the setting persists globally, but the current
-    // model's wire dialect can never carry it (see SERVICE_TIER_APIS).
     const noOp = enabled && ctx.model && !fastAppliesToModel(ctx.model);
     const note = noOp ? ` (no effect on ${modelName(ctx.model)}: priority tier needs a GPT-5 model on an OpenAI Responses/Codex API)` : "";
     ui.notify(ctx, `Fast mode ${fastMode ? "enabled" : "disabled"}.${note}`, "info");
   }
 
-  // ─── Picker overlay for bare /effort ──────────────────────────────
-  // Business half stays here (level curation + seeding + apply); the
-  // presentation half (overlay vs select fallback) lives in effort/ui.
   async function showEffortPicker(ctx: ExtensionCommandContext): Promise<void> {
-    // Picker surfaces a curated subset: low/medium/high plus xhigh when the
-    // model supports it. "minimal" stays available via /effort minimal for
-    // power users but is hidden in the picker to keep the slider compact.
     const allLevels = getUserFacingLevels(ctx.model);
     const levels = allLevels.filter((l) => l !== "minimal");
     if (levels.length === 0) {
@@ -401,10 +307,6 @@ export default function effortExtension(pi: ExtensionAPI): void {
     }
 
     const currentLevel = pi.getThinkingLevel();
-    // Map a current level that isn't in the picker (e.g. "minimal") to the
-    // nearest visible level so the initial cursor lands somewhere sensible.
-    // Cast through string to bridge Pi's ThinkingLevel (includes "minimal")
-    // and our narrower EffortLevel used by the picker list.
     const current: string = currentLevel;
     const seededCurrent: string | undefined = (() => {
       if ((levels as string[]).includes(current)) return current;
@@ -421,7 +323,6 @@ export default function effortExtension(pi: ExtensionAPI): void {
     }
   }
 
-  // ─── /effort command ─────────────────────────────────────────────
   pi.registerCommand("effort", {
     description: "Set thinking effort (min/max adapt per model)",
     getArgumentCompletions: (prefix) => {
@@ -445,8 +346,6 @@ export default function effortExtension(pi: ExtensionAPI): void {
       return null;
     },
     handler: async (args, ctx) => {
-      // Bare /effort → open the interactive picker. Keep the parameter path
-      // for fast/known-value entry; only the no-arg form pops the overlay.
       if (args.trim().length === 0) {
         await showEffortPicker(ctx);
         return;
@@ -465,9 +364,6 @@ export default function effortExtension(pi: ExtensionAPI): void {
         case "reset":
           owner.resetExplicit();
           ui.notify(ctx, 
-            // no env/profile applies afterwards: the pi level stays at its
-            // last value until the next profile/model event — say that
-            // instead of naming a source that isn't actively driving it
             `Effort reset (control returns to profile/model default; currently ${pi.getThinkingLevel()})`,
             "info"
           );

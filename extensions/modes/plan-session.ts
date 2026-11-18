@@ -61,21 +61,11 @@ import {
 } from "./plan.ts";
 import type { PermissionMode, PlanPhase } from "./mode-prompt.ts";
 
-/** Tools available in plan mode (edit/write only for plan.md via tool_call gate). */
 const PLAN_TOOLS = ["read", "bash", "grep", "find", "ls", "edit", "write", "plan_ready"];
-/**
- * Gate-side classification for pi 0.99's meta tools (SPEC META-01..03):
- * `tool_search` only loads tool declarations (retrieval), `codemode` runs
- * model-written scripts that call other tools (execution surface). MCP
- * tools are detected via the shared lib/mcp-shape.ts predicate (native /
- * proxy / direct-named / bare `mcp_*` — declaring != executing, but every
- * MCP tool is a potential mutation, so plan denies them outright).
- */
 const PLAN_DISABLED = new Set<string>();
 
 const PLAN_OFFER_COOLDOWN_MS = 60_000;
 
-/** The plan-owned slice of the persisted `modes` entry (fixed key order). */
 export interface PlanEntryFields {
 	planPhase: PlanPhase;
 	planExecuting: boolean;
@@ -83,7 +73,6 @@ export interface PlanEntryFields {
 	lastExtractedPlanHash: string;
 }
 
-/** Overlay subset of a restored `modes` entry that this session consumes. */
 export interface PlanEntryOverlay {
 	planPhase?: unknown;
 	planExecuting?: unknown;
@@ -97,48 +86,30 @@ export interface PlanSessionDeps {
 		"getActiveTools" | "setActiveTools" | "sendMessage" | "sendUserMessage"
 	>;
 	getMode(): PermissionMode;
-	/** The historical raw write into the factory's currentMode (no side effects). */
 	setModeRaw(mode: PermissionMode): void;
 	persistState(): void;
 	applyProfileForMode(mode: PermissionMode, ctx: ExtensionContext): Promise<void>;
 }
 
 export interface PlanSession {
-	/** Current plan phase (capability-channel fallback consumer). */
 	readonly phase: PlanPhase;
-	/** The persisted slice — SAME planTodos reference, fixed key order. */
 	entryFields(): PlanEntryFields;
-	/** Overlay-only restore of the plan fields from the last `modes` entry. */
 	restoreFromEntry(last: PlanEntryOverlay | undefined): void;
 	applyToolRestrictions(): void;
-	/** setMode sync part: executing flag, phase/hash reset, todos, widget clear. */
 	resetOnModeSwitch(mode: PermissionMode, ctx: ExtensionContext): void;
-	/** plan.md is created only when plan mode SETTLES (BH-E4). */
 	onPlanModeSettled(prev: PermissionMode, cwd: string): void;
-	/**
-	 * The before_agent_start executing block. Returns the mode block when an
-	 * execution is running (and marks phase="executing"), else undefined.
-	 */
 	executingPromptBlock(complianceBlock: string): string | undefined;
 	onTurnEnd(text: string, ctx: ExtensionContext): void;
-	/**
-	 * agent_end plan flow: completion announcement while executing, else the
-	 * plan-mode offer. Returns true when it handled the event so the caller
-	 * can early-return.
-	 */
 	onAgentEnd(event: { messages: unknown[] }, ctx: ExtensionContext): Promise<boolean>;
 	onSessionStartUi(ctx: ExtensionContext): void;
-	/** Registers /plan-execute + plan_ready (call at the historical position). */
 	registerSurfaces(pi: ExtensionAPI): void;
 }
 
 export function createPlanSession(deps: PlanSessionDeps): PlanSession {
-	// ---- plan state (moved verbatim from index.ts) --------------------------
 	let planExecuting = false;
 	let planPhase: PlanPhase = "exploring";
 	let lastExtractedPlanHash = "";
 	let lastPlanOfferAt = 0;
-	/** Suppress agent_end re-offer after the user dismisses plan approval (Stay/Esc/Refine). */
 	let suppressPlanOfferUntil = 0;
 	let toolsBeforePlanMode: string[] | undefined;
 	let planTodos: TodoItem[] = [];
@@ -162,17 +133,10 @@ export function createPlanSession(deps: PlanSessionDeps): PlanSession {
 		}
 	}
 
-	/** P3-1 S2 (SPEC 2026-10-07): the ONE plan→auto execution transition.
-	 *  Order follows /plan-execute: state → tool restrictions → status clear →
-	 *  plan widget sync → persist → model profile → the modes-execute send.
-	 *  The plan_ready path previously missed the widget update after the mode
-	 *  flip — unified here (visible widget-sync fix, CHANGELOG'd). */
 	async function startExecution(ctx: ExtensionContext, todos: TodoItem[]): Promise<void> {
 		planExecuting = true;
 		planPhase = "executing";
 		planTodos = todos;
-		// RAW mode write (historical): skips the setMode generation tail,
-		// the auto permission strip and the capability publish on purpose.
 		deps.setModeRaw("auto");
 		applyToolRestrictions();
 		clearModesStatus(ctx);
@@ -190,10 +154,8 @@ export function createPlanSession(deps: PlanSessionDeps): PlanSession {
 		);
 	}
 
-	// ---- plan approval helpers ---------------------------------------------
 	function markPlanOfferHandled(planContent: string): void {
 		lastPlanOfferAt = Date.now();
-		// Keep agent_end from immediately re-opening the same plan dialog after Stay/Esc.
 		suppressPlanOfferUntil = Date.now() + PLAN_OFFER_COOLDOWN_MS;
 		if (planContent) {
 			lastExtractedPlanHash = hashPlan(planContent);
@@ -226,7 +188,6 @@ export function createPlanSession(deps: PlanSessionDeps): PlanSession {
 		event: { messages: unknown[] },
 		ctx: ExtensionContext,
 	): Promise<boolean> {
-		// Plan execution in progress: announce completion when all steps are done.
 		if (planExecuting && planTodos.length) {
 			if (planTodos.every((t) => t.completed)) {
 				if (ctx.hasUI) {
@@ -247,7 +208,6 @@ export function createPlanSession(deps: PlanSessionDeps): PlanSession {
 			return true;
 		}
 
-		// In plan mode: sync plan.md and offer next action (throttled).
 		if (deps.getMode() !== "plan" || !ctx.hasUI || planExecuting) return false;
 
 		const planContent = readPlanFile(ctx.cwd);
@@ -277,7 +237,6 @@ export function createPlanSession(deps: PlanSessionDeps): PlanSession {
 
 		if (!extracted.length) return true;
 
-		// Cooldown / Stay dismiss: don't re-offer within 60s of the last offer.
 		if (Date.now() - lastPlanOfferAt < PLAN_OFFER_COOLDOWN_MS) return true;
 		if (Date.now() < suppressPlanOfferUntil) return true;
 
@@ -292,7 +251,6 @@ export function createPlanSession(deps: PlanSessionDeps): PlanSession {
 		planTodos = extracted;
 		deps.persistState();
 
-		// Mark before await so a concurrent agent_end cannot open a second dialog.
 		markPlanOfferHandled(syncedContent || JSON.stringify(extracted));
 		const choice = await runPlanApprovalDialog(ctx, {
 			planContent: syncedContent,
@@ -305,7 +263,6 @@ export function createPlanSession(deps: PlanSessionDeps): PlanSession {
 		} else if (choice === "refine") {
 			await promptPlanRefinement(ctx);
 		}
-		// stay | cancel (Esc): dialog already closed; return silently to the input prompt.
 		return true;
 	}
 
@@ -314,8 +271,6 @@ export function createPlanSession(deps: PlanSessionDeps): PlanSession {
 			return planPhase;
 		},
 		entryFields() {
-			// Key order is FIXED (spread-compatible with the persisted entry);
-			// planTodos is the SAME reference — no cloning.
 			return {
 				planPhase,
 				planExecuting,
@@ -325,8 +280,6 @@ export function createPlanSession(deps: PlanSessionDeps): PlanSession {
 		},
 		restoreFromEntry(last) {
 			if (!last) return;
-			// Overlay-ONLY: typeof-guarded fields; missing fields keep the
-			// in-memory values. Cooldown timestamps are never persisted.
 			if (typeof last.planPhase === "string")
 				planPhase = last.planPhase as PlanPhase;
 			if (typeof last.planExecuting === "boolean")
@@ -347,7 +300,6 @@ export function createPlanSession(deps: PlanSessionDeps): PlanSession {
 			if (ctx.hasUI) clearPlanWidget(ctx);
 		},
 		onPlanModeSettled(prev, cwd) {
-			// plan.md is created only when plan mode SETTLES (BH-E4)
 			ensurePlanFile(cwd);
 			if (prev !== "plan") planPhase = "exploring";
 		},
@@ -373,7 +325,6 @@ export function createPlanSession(deps: PlanSessionDeps): PlanSession {
 			if (planExecuting && planTodos.length) updatePlanWidgetUi(ctx, planTodos);
 		},
 		registerSurfaces(pi) {
-			// ---- /plan-execute ----------------------------------------------
 			pi.registerCommand("plan-execute", {
 				description:
 					"Execute the current plan immediately (switches to auto mode with step tracking)",
@@ -394,7 +345,6 @@ export function createPlanSession(deps: PlanSessionDeps): PlanSession {
 				},
 			});
 
-			// ---- plan_ready tool (model-initiated plan submission) -----------
 			const PLAN_READY_TOOL_NAME = "plan_ready";
 
 			pi.registerTool(defineTool({
@@ -442,7 +392,6 @@ export function createPlanSession(deps: PlanSessionDeps): PlanSession {
 					const stepsPreview = extracted.map((t) => `${t.step}. ${t.text}`).join("\n");
 
 					if (!ctx.hasUI) {
-						// Headless: auto-execute
 						const summaryLine = summary ? `${summary}\n\n` : "";
 						return {
 							content: [{ type: "text", text: `Plan submitted (headless auto-execute).\n${summaryLine}${stepsPreview}` }],
@@ -450,7 +399,6 @@ export function createPlanSession(deps: PlanSessionDeps): PlanSession {
 						};
 					}
 
-					// Suppress agent_end re-offer while this dialog is open and after dismiss.
 					markPlanOfferHandled(planContent ?? "");
 					const choice = await runPlanApprovalDialog(ctx, {
 						summary,
@@ -473,7 +421,6 @@ export function createPlanSession(deps: PlanSessionDeps): PlanSession {
 						return planReviewClosedToolResult();
 					}
 
-					// stay | cancel (Esc): one dismiss returns to the input prompt.
 					return planReviewClosedToolResult();
 				},
 				renderCall(args, theme) {
@@ -495,8 +442,6 @@ export function createPlanSession(deps: PlanSessionDeps): PlanSession {
 	return session;
 }
 
-/** Exported wrapper: registers /plan-execute + plan_ready at the historical
- *  position (between /mode and /outside-writes in the factory body). */
 export function registerPlanSurfaces(pi: ExtensionAPI, session: PlanSession): void {
 	session.registerSurfaces(pi);
 }

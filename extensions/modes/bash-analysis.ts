@@ -1,20 +1,3 @@
-/**
- * modes/bash-analysis.ts — bash command risk analysis (tiered adjudication).
- * Carved out of the old modes/utils.ts grab-bag (arch review C3, 2026-10-03);
- * behavior unchanged. Owns: fd-redirect stripping, shell segment splitting,
- * the safe/destructive/auto-fallback/auto-approvable pattern tables and the
- * tier classifier. Pure string/regex layer — no fs, no path resolution.
- *
- * E1 (D-CH-4, spec 2026-11-15-cleanup-hardening): plan-mode read-only
- * widening of the SAFE tier-1 face — redirects to exactly /dev/null write
- * nothing (stripped before destructive/safe matching), `git -C <literal>`
- * only relocates the repository (stripped before the SAFE match; the
- * destructive table still sees both views), and a literal `cd <dir>`
- * segment joined by `&&` is safe (splitShellChain now records the connector
- * following each segment; splitShellSegments is the segment-only view).
- * The path-check counterpart (relative paths resolving against the cd'ed
- * directory) lives in bash-path-check.ts walkCdChain.
- */
 const DESTRUCTIVE_PATTERNS: RegExp[] = [
 	/\brm\b/i,
 	/\brmdir\b/i,
@@ -30,9 +13,8 @@ const DESTRUCTIVE_PATTERNS: RegExp[] = [
 	/\btruncate\b/i,
 	/\bdd\b/i,
 	/\bshred\b/i,
-	// File redirects only — fd-to-fd (2>&1 / >&2) is stripped before matching.
 	/(^|[^<])>(?!>)/,
-	/>>/, // append redirect
+	/>>/,
 	/\bnpm\s+(install|uninstall|update|ci|link|publish)/i,
 	/\byarn\s+(add|remove|install|publish)/i,
 	/\bpnpm\s+(add|remove|install|publish)/i,
@@ -54,13 +36,10 @@ const DESTRUCTIVE_PATTERNS: RegExp[] = [
 	/\bsystemctl\s+(start|stop|restart|enable|disable)/i,
 	/\bservice\s+\S+\s+(start|stop|restart)/i,
 	/\b(vim?|nano|emacs|code|subl)\b/i,
-	// Network fetch primitives are never tier-1 read-only (defense in depth;
-	// adjudication ⑤) — data exfiltration and |sh execution vectors.
 	/\bcurl\b/i,
 	/\bwget\b/i,
 ];
 
-// Read-only commands allowed without confirmation.
 const SAFE_PATTERNS: RegExp[] = [
 	/^\s*cat\b/,
 	/^\s*head\b/,
@@ -85,8 +64,6 @@ const SAFE_PATTERNS: RegExp[] = [
 	/^\s*which\b/,
 	/^\s*whereis\b/,
 	/^\s*type\b/,
-	// No bare `env` here: `env VAR=x <cmd>` is an execution prefix, and the
-	// SAFE patterns only anchor the start of the command (adjudication ⑤).
 	/^\s*printenv\b/,
 	/^\s*uname\b/,
 	/^\s*whoami\b/,
@@ -106,21 +83,13 @@ const SAFE_PATTERNS: RegExp[] = [
 	/^\s*node\s+-v\b/i,
 	/^\s*python\s+--version/i,
 	/^\s*jq\b/,
-	// `sed -n` is read-only except the `w` command, which writes a file
-	// (`1w /path` or the `s///w path` suffix — the w hugs digits/delimiters,
-	// so \b never fires there).
 	/^\s*sed\s+-n(?![^\n]*(?:["',;/0-9}]|\s)w\s*["']?\s*[/~])/i,
-	// No `awk` here: it is an interpreter with system()/redirect execution
-	// vectors that the SAFE match cannot inspect (adjudication ⑤).
 	/^\s*rg\b/,
 	/^\s*fd\b/,
 	/^\s*bat\b/,
 	/^\s*eza\b/,
 ];
 
-// Build/test commands allowed in auto-mode classifier fallback (after blacklist).
-// Also gates tier-2 run-scripts (adjudication ③): offline conservative face
-// must never be looser than the online auto-approve face.
 const AUTO_FALLBACK_SCRIPT_NAMES =
 	"test|build|lint|check|typecheck|verify|coverage|unit|ci|dev|start|preview|serve|watch"
 const AUTO_FALLBACK_SCRIPT_TAIL = "(?:\\s|$)"
@@ -144,7 +113,6 @@ const AUTO_FALLBACK_BASH_PATTERNS: RegExp[] = [
 	new RegExp(`^\\s*jest${AUTO_FALLBACK_SCRIPT_TAIL}`, "i"),
 ];
 
-// Flags that turn routine test/build commands into arbitrary execution vectors.
 const AUTO_FALLBACK_UNSAFE_ARG_PATTERNS: RegExp[] = [
 	/(?:^|\s)-exec(?:=|\s|$)/i,
 	/(?:^|\s)-toolexec(?:=|\s)/i,
@@ -164,7 +132,6 @@ const AUTO_FALLBACK_UNSAFE_ARG_PATTERNS: RegExp[] = [
 	/\bcmake\s+--build\b\s+(?:\/|~|\.\.)/i,
 ];
 
-// Paths outside cwd in otherwise-routine test/build commands.
 const AUTO_FALLBACK_OUTSIDE_PATH_PATTERNS: RegExp[] = [
 	/(?:^|\s)-o(?:=|\s+)(?:(?:\/|~|\.\.)|["'](?:\/|~|\.\.))/i,
 	/(?:^|\s)--manifest-path(?:=|\s+)(?:(?:\/|~|\.\.)|["'](?:\/|~|\.\.))/i,
@@ -319,15 +286,6 @@ function stripNullRedirects(command: string): string {
 const GIT_DASH_C_PATTERN =
 	/(^|[;&|\s])git\s+-C\s+([^\s'"`&|;<>()$*?[\]\\]+)/
 
-/**
- * E1 (D-CH-4): `git -C <literal-path>` only relocates the repository — the
- * SAFE read-only match runs on a view with those flags removed (repeatedly,
- * for `git -C a -C b log`). A non-literal path (variable, backtick, glob,
- * quote, metacharacter) never matches, so `git -C $x log` stays unsafe, and
- * the lowercase config form `git -c k=v log` is untouched. Applied ONLY to
- * the SAFE match — see isSafeSingleCommand for why the destructive table
- * sees both views.
- */
 function stripGitDashC(command: string): string {
 	let out = command
 	for (;;) {
@@ -337,14 +295,6 @@ function stripGitDashC(command: string): string {
 	}
 }
 
-/**
- * E1 (D-CH-4): a literal `cd <dir>` segment is read-only. The target must
- * be a bare path token — no quotes, no expansion/substitution (`$`,
- * backtick), no `~` (resolves outside the analysis), no globs or shell
- * metacharacters, not an option (`-`, `-L`, `-P`, `--`), and the segment
- * must carry nothing else (no redirects, no extra arguments). Callers only
- * widen when the segment's connector is `&&`.
- */
 function isSafeLiteralCdSegment(segment: string): boolean {
 	const m = /^cd\s+(\S+)$/.exec(segment)
 	if (!m) return false

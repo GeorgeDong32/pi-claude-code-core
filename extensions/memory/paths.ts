@@ -17,36 +17,21 @@ import { lstatSync, realpathSync } from "node:fs";
 import { dirname } from "node:path";
 import { isInsideDir } from "../../lib/rule-text.ts";
 
-/** Sanitize a path exactly like pi's sessions directory naming. */
 export function sanitizePath(p: string): string {
 	return p.replace(/[/\\]/g, "-");
 }
 
-// ─── project identity (SPEC 2026-10-07 P2-3 W4) ───
-// TWO deliberately different derivations — never merge them into one return
-// value: the FULL sanitized key is the routing/matching authority (Hermes
-// project64 matching, queue projectsDir comparisons), the FRIENDLY HINT is
-// the display/anchoring tail segment. Truncating the full key to the hint
-// would break Hermes matching and cross-project routing.
 
-/** The FULL sanitized project key from a projects-dir or memory-dir path
- *  (…/projects/<key>/memory → <key>). Length thresholds stay with callers. */
 export function fullProjectKey(dir: string): string {
 	const parts = dir.replace(/\\/g, "/").replace(/\/memory$/, "").split("/");
 	return parts[parts.length - 1] ?? "";
 }
 
-/** The friendly display hint: the FINAL dash-segment of the project dir
- *  (leading dashes stripped). Callers apply their own ≥3/≥4 thresholds. */
 export function friendlyProjectHint(projectDir: string): string {
 	const base = projectDir.replace(/\/memory$/, "").split("/").pop() ?? "";
 	return base.replace(/^-+/, "").split("-").pop() ?? "";
 }
 
-/** git rev-parse --git-common-directory; null outside a work tree.
- * Result is memoized per cwd — the canonical root of a working directory
- * effectively never changes mid-process, and the sync subprocess ran on
- * every memoryDir() call (several times per turn) before this cache. */
 const gitRootCache = new Map<string, string | null>();
 
 export function gitCanonicalRoot(cwd: string): string | null {
@@ -64,10 +49,6 @@ function gitCanonicalRootUncached(cwd: string): string | null {
 	// because pi usually starts at the repo root, where the cwd fallback
 	// coincides). `--show-toplevel` is the universally supported form and
 	// returns the worktree root directly; the old form stays as a fallback.
-	// Disk-layout note (P0-CT-09): when cwd IS the root the sanitized
-	// project key is unchanged; only sessions started INSIDE a subdirectory
-	// now key the project layer by the repo root (the original design
-	// intent) — recorded in DEVIATIONS.
 	try {
 		const toplevel = execSync("git rev-parse --show-toplevel", {
 			cwd,
@@ -76,7 +57,6 @@ function gitCanonicalRootUncached(cwd: string): string | null {
 		}).trim();
 		if (toplevel && !toplevel.startsWith("--") && existsSync(toplevel)) return toplevel;
 	} catch {
-		/* fall through to the legacy probe */
 	}
 	try {
 		const out = execSync("git rev-parse --git-common-directory", {
@@ -84,7 +64,7 @@ function gitCanonicalRootUncached(cwd: string): string | null {
 			encoding: "utf-8",
 			stdio: ["ignore", "pipe", "pipe"],
 		}).trim();
-		if (!out || out.startsWith("--")) return null; // echoed arg = unsupported here
+		if (!out || out.startsWith("--")) return null;
 		const resolved = out === ".git" ? cwd : (out.match(/^(.*)\/\.git$/) ?? [])[1];
 		return resolved && existsSync(resolved) ? resolved : null;
 	} catch {
@@ -93,17 +73,11 @@ function gitCanonicalRootUncached(cwd: string): string | null {
 }
 
 export interface MemoryPaths {
-	/** <home>/.pi/agent */
 	agentDir: string;
-	/** .../projects/<sanitized>/ */
 	projectsDir: string;
-	/** .../projects/<sanitized>/memory */
 	memoryDir: string;
-	/** the memory index file */
 	indexFile: string;
-	/** <agentDir>/memory — user-level layer (V2-D1) */
 	userMemoryDir: string;
-	/** user layer index file */
 	userIndexFile: string;
 }
 
@@ -116,7 +90,6 @@ export function resolveMemoryPaths(cwd: string, home = process.env.HOME ?? homed
 	return { agentDir, projectsDir, memoryDir, indexFile: join(memoryDir, "MEMORY.md"), userMemoryDir, userIndexFile: join(userMemoryDir, "MEMORY.md") };
 }
 
-/** Both write-guarded memory roots (project layer + user layer, V2-D2). */
 export function memoryWriteRoots(cwd: string, home = process.env.HOME ?? homedir()): string[] {
 	const p = resolveMemoryPaths(cwd, home);
 	return [p.memoryDir, p.userMemoryDir];
@@ -144,29 +117,19 @@ export function isMemoryWritePath(path: string, cwd: string, home = process.env.
 	const roots = memoryWriteRoots(cwd, home);
 	const lexical = roots.some((root) => isInsideDir(path, root));
 	if (!lexical) return false;
-	// realpath tightening: resolve both sides; miss → NOT a memory write.
-	// A not-yet-existing WRITE TARGET (a new memory file) resolves via its
-	// nearest existing ancestor — the new file lands inside the root iff
-	// that ancestor does.
-	// A DANGLING symlink (the link itself exists via lstat but its target
-	// does not) means the write would land outside (or fail) — fail-closed
-	// before any ancestor walk. existsSync would FOLLOW the link and miss it.
 	try {
 		lstatSync(path);
 		try {
 			realpathSync(path);
 		} catch {
-			return false; // lstat ok + realpath throws = dangling
+			return false;
 		}
 	} catch {
-		/* path itself does not exist yet — the ancestor walk handles it */
 	}
 	try {
 		const realPath = realpathOfNearestExisting(path);
 		return roots.some((root) => {
 			try {
-				// both sides resolve via nearest-existing ancestors: a brand-new
-				// project's memory root may not exist yet either
 				return isInsideDir(realPath, realpathOfNearestExisting(root));
 			} catch {
 				return false;
@@ -177,9 +140,6 @@ export function isMemoryWritePath(path: string, cwd: string, home = process.env.
 	}
 }
 
-/** realpath of the path itself, or (for not-yet-existing write targets) of
- *  its nearest existing ancestor. Dangling symlinks are rejected by the
- *  caller BEFORE this walk. */
 function realpathOfNearestExisting(p: string): string {
 	let probe = p;
 	for (;;) {
@@ -187,7 +147,7 @@ function realpathOfNearestExisting(p: string): string {
 			return realpathSync(probe);
 		} catch {
 			const parent = dirname(probe);
-			if (parent === probe) return probe; // filesystem root reached
+			if (parent === probe) return probe;
 			probe = parent;
 		}
 	}

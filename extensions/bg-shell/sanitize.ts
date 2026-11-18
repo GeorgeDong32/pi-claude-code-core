@@ -15,18 +15,15 @@ const OSC = `(?:\\u001B\\][\\s\\S]*?${ST})`;
 const CSI = "[\\u001B\\u009B][[\\]()#;?]*(?:\\d{1,4}(?:[;:]\\d{0,4})*)?[\\dA-PR-TZcf-nq-uy=><~]";
 const ANSI = new RegExp(`${OSC}|${CSI}`, "g");
 
-/** Pi's `stripAnsi`. */
 function stripAnsi(value: string): string {
 	if (!value.includes("\u001B") && !value.includes("\u009B")) return value;
 	return value.replace(ANSI, "");
 }
 
-/** Pi's `sanitizeBinaryOutput`: C0 controls except tab, newline and carriage return, and U+FFF9–U+FFFB. */
 function sanitizeBinaryOutput(value: string): string {
 	return value.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\uFFF9-\uFFFB]/g, "");
 }
 
-/** Output as the agent should read it: escape codes, control characters and carriage returns removed. */
 export function sanitize(text: string): string {
 	return sanitizeBinaryOutput(stripAnsi(text)).replace(/\r/g, "");
 }

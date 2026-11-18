@@ -28,39 +28,22 @@ export interface ProtectedPathMatch {
 	path: string;
 }
 
-/** One protected boundary. `dir: true` protects the whole subtree. */
 interface ProtectedEntry {
 	kind: string;
 	path: string;
 	dir: boolean;
 }
 
-// B8 audit note: the matcher is LEXICAL; an alias symlink can bypass a
-// protected entry (miss = allowance). Kept lexical this batch — see
-// DEVIATIONS #127 for the revisit condition (G1 evidence).
-/** The frozen list (order per spec [C4]; see header for why it is code). */
 function protectedEntries(opts: ProtectedPathsInput): ProtectedEntry[] {
 	return [
-		// modes frozen permissions config — extensions/modes/config.ts:58
 		{ kind: "modes-permissions-file", path: join(opts.home, ".pi", "agent", "permission-modes.json"), dir: false },
-		// global rules dir — extensions/rules/index.ts:62
 		{ kind: "global-rules-dir", path: join(opts.home, ".pi", "agent", "rules"), dir: true },
-		// project rules dir — extensions/rules/index.ts:64
 		{ kind: "project-rules-dir", path: join(opts.cwd, ".pi", "rules"), dir: true },
-		// compat rules dir — extensions/rules/index.ts:63
 		{ kind: "compat-rules-dir", path: join(opts.cwd, ".claude", "rules"), dir: true },
-		// host settings — written by extensions/memory/automation.ts:93,
-		// read by extensions/modes/profiles.ts:134
 		{ kind: "host-settings-file", path: join(opts.home, ".pi", "agent", "settings.json"), dir: false },
 	];
 }
 
-/**
- * [C5] The concrete protected FILES to baseline: the two single-file entries
- * plus every file currently inside the three rule directories. Missing
- * files are simply absent from the list (no baseline for what does not
- * exist yet).
- */
 export function protectedPathFiles(opts: ProtectedPathsInput): string[] {
 	const files: string[] = [];
 	for (const entry of protectedEntries(opts)) {
@@ -74,25 +57,11 @@ export function protectedPathFiles(opts: ProtectedPathsInput): string[] {
 				if (statSync(full).isFile()) files.push(full);
 			}
 		} catch {
-			/* dir absent — nothing to baseline */
 		}
 	}
 	return files;
 }
 
-/**
- * Match an absolute write/edit target against the protected list. Returns
- * the hit's kind plus the protected boundary that matched (the directory
- * itself for dir entries), or null when the target is not protected.
- *
- * `absPath` is ASSUMED to already be absolute — callers resolve relative
- * tool paths first. A relative input simply matches nothing (pinned by
- * tests) instead of being silently resolved against the wrong base.
- *
- * Directory entries are separator-aware via lib/rule-text.ts isInsideDir:
- * the dir itself and its subtree match, sibling prefixes
- * (`rules-evil/`, `permission-modes.json.bak`) do not.
- */
 export function matchProtectedPath(absPath: string, opts: ProtectedPathsInput): ProtectedPathMatch | null {
 	for (const entry of protectedEntries(opts)) {
 		const hit = entry.dir ? isInsideDir(absPath, entry.path) : absPath === entry.path;
@@ -101,7 +70,6 @@ export function matchProtectedPath(absPath: string, opts: ProtectedPathsInput): 
 	return null;
 }
 
-/** English block copy for the tool_call guard (spec [C4] wording). */
 export function protectedPathBlockReason(match: { kind: string; path: string }): string {
 	return (
 		`blocked: ${match.path} is a protected ${match.kind} — an agent self-modification boundary file ` +

@@ -80,7 +80,6 @@ import { matchProtectedPath } from "../memory/protected-paths.ts"
 import { homedir } from "node:os"
 import path from "node:path"
 
-// ---- W5 switch -----------------------------------------------------------
 
 export type BashPathCheckMode = "all" | "safety" | "deny" | "off"
 
@@ -103,22 +102,12 @@ export function resolveBashPathChecks(config: PermissionModesConfig): BashPathCh
 		?? "all"
 }
 
-// ---- shared tokenizer ----------------------------------------------------
 
 export interface BashPathTarget {
-	/** Candidate path as written in the command (post-unquote). */
 	path: string
-	/** How the target was identified ("mv-cp-flag-form": BH-R3 unrecognized flag). */
 	kind: "redirect" | "argument" | "mv-cp-flag-form"
 }
 
-/**
- * P0-2/3 (2026-11-08): unquote a token that is ENTIRELY one single- or
- * double-quoted literal. The inside must be free of $, backtick and
- * backslash (no expansion/escaping tricks) — otherwise null (caller treats
- * the token as opaque). Mirrors CC validatePath's leading/trailing quote
- * strip, restricted to the provably-literal case.
- */
 function unquoteLiteral(token: string): string | null {
 	if (token.length < 2) return null
 	const first = token[0]!
@@ -127,20 +116,13 @@ function unquoteLiteral(token: string): string | null {
 	const inner = token.slice(1, -1)
 	if (inner.length === 0) return null
 	if (inner.includes("$") || inner.includes("`") || inner.includes("\\")) return null
-	// a quote character inside means it was not one whole literal
 	if (inner.includes("'") || inner.includes('"')) return null
 	return inner
 }
 
-/**
- * Resolve a token to a literal path candidate: unquoted literals are
- * unquoted, plain tokens pass through, anything uncertain is null (opaque).
- */
 function resolveToken(token: string): string | null {
 	if (token === "") return null
 	if (token.includes("'") || token.includes('"')) return unquoteLiteral(token)
-	// Variables, command substitution, globs and character classes are
-	// uncertain — fail-open (the old isOpaqueToken set).
 	if (/[`$*?\[\]]/.test(token)) return null
 	return token
 }
@@ -367,17 +349,6 @@ function literalCdTarget(segment: string): string | null {
 	return target
 }
 
-/**
- * E1 (D-CH-4): walk the `&&` chain and resolve each segment's effective
- * directory. A literal `cd <dir>` followed by `&&` updates the directory
- * for every subsequent segment, so relative paths resolve against the
- * cd'ed directory for ALL path checks (W3 segment check, W4 deny, P1-4
- * protected write, flag escalation) — mirroring what the shell would
- * actually touch. A non-literal cd (`$`, backtick, `~`, `-`, bare) or a cd
- * followed by `;` / `||` / pipe is NOT tracked: its segment is analyzed
- * as-is and resolution stays at the base cwd (known residual — shell
- * semantics would persist the cd there too; recorded in DEVIATIONS).
- */
 function walkCdChain(command: string, cwd: string): ChainNode[] {
 	let dir = cwd
 	return splitShellChain(command).map((node) => {
@@ -391,9 +362,7 @@ function walkCdChain(command: string, cwd: string): ChainNode[] {
 	})
 }
 
-// ---- W3: bypass write-target safety check --------------------------------
 
-/** Write commands whose argument slots are write targets. */
 const W3_WRITE_COMMANDS: readonly string[] = [
 	"tee",
 	"cp",
@@ -405,14 +374,6 @@ const W3_WRITE_COMMANDS: readonly string[] = [
 	"rmdir",
 ]
 
-/**
- * W3: does a bash command write to a CC-sensitive path? Returns the first
- * offending target, or null. P1-2: mv/cp check ALL positional args (CC
- * COMMAND_OPERATION_TYPE treats them as write over every operand); install
- * stays destination-only (not in CC's set — DEVIATIONS). Compound-command
- * approximation (CC parity): only fires when every non-hitting segment is
- * read-only safe.
- */
 export function checkBashWriteTargets(
 	command: string,
 	cwd: string,
@@ -422,9 +383,6 @@ export function checkBashWriteTargets(
 	let hit: BashPathTarget | null = null
 	for (const node of chain) {
 		if (hit !== null) {
-			// A non-read-only segment after a hit cancels the check (CC
-			// approximation: mixed commands are gated as a whole elsewhere).
-			// A tracked literal cd is read-only safe (E1).
 			if (!node.isCd && !isSafeCommand(node.segment)) return null
 			continue
 		}
@@ -437,9 +395,6 @@ export function checkBashWriteTargets(
 }
 
 function w3SegmentCheck(segment: string, cwd: string): BashPathTarget | null {
-	// Redirection onto a sensitive path (checked before command parsing so
-	// `echo x > ~/.bashrc` hits regardless of argv0). Quoted literal targets
-	// are unquoted first (P0-2/3).
 	const rawTokens = tokenizeSegment(segment)
 	for (let i = 0; i < rawTokens.length; i++) {
 		const t = rawTokens[i]!
@@ -452,7 +407,6 @@ function w3SegmentCheck(segment: string, cwd: string): BashPathTarget | null {
 	}
 	const parsed = parseSegment(segment)
 	if (!parsed) return null
-	// `sed -i` family: every file operand + the -f script file (P1-3).
 	if (parsed.base === "sed") {
 		const { inPlace, paths } = analyzeSed(parsed.operands, parsed.postDashStart)
 		if (!inPlace) return null
@@ -463,10 +417,6 @@ function w3SegmentCheck(segment: string, cwd: string): BashPathTarget | null {
 	}
 	if (!W3_WRITE_COMMANDS.includes(parsed.base)) return null
 	if (parsed.args.length === 0) return null
-	// BH-R3: mv/cp get the dedicated flag analysis — recognized harmless
-	// flags are stripped and the bare positional form is checked; an
-	// unrecognized flag keeps prompting (cannot path-validate). -t /
-	// --target-directory destinations are checked as the write target.
 	if (parsed.base === "mv" || parsed.base === "cp") {
 		const analysis = analyzeMoveCp(parsed)
 		for (const p of checkedPaths(analysis)) {
@@ -478,7 +428,6 @@ function w3SegmentCheck(segment: string, cwd: string): BashPathTarget | null {
 		return null
 	}
 	if (parsed.base === "install") {
-		// not in CC's COMMAND_OPERATION_TYPE — keep destination-only (DEVIATIONS)
 		const dst = parsed.args[parsed.args.length - 1]!
 		if (isCcSafetyPath(dst, cwd)) return { path: dst, kind: "argument" }
 		return null
@@ -489,12 +438,9 @@ function w3SegmentCheck(segment: string, cwd: string): BashPathTarget | null {
 	return null
 }
 
-// ---- W3.5: pi-own protected paths (P1-4, all-modes prompt) ----------------
 
 export interface BashProtectedWrite {
-	/** The write target as written (post-unquote). */
 	target: string
-	/** The protected boundary kind that matched ([C4] set). */
 	kind: string
 }
 
@@ -503,14 +449,6 @@ function resolveAbs(p: string, cwd: string): string {
 	return path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(cwd, expanded)
 }
 
-/**
- * P1-4 (2026-11-08): does a bash command WRITE to a pi-own protected path
- * (permission-modes.json, rules dirs, settings.json — the [C4] set)? Uses
- * the same write-target set as W3 (redirections + write-command args,
- * sed -i files). Read-style references do not trigger; a read-only `cp`
- * backup of a protected file DOES (accepted: the check is heuristic, the
- * outcome is a prompt the user can approve, not a hard block).
- */
 export function checkBashProtectedWrite(
 	command: string,
 	cwd: string,
@@ -520,7 +458,6 @@ export function checkBashProtectedWrite(
 	for (const node of walkCdChain(command, cwd)) {
 		if (node.isCd) continue
 		const cwdFor = node.dir
-		// redirection targets always count as writes
 		const rawTokens = tokenizeSegment(node.segment)
 		for (let i = 0; i < rawTokens.length; i++) {
 			if (!isRedirectOp(rawTokens[i]!)) continue
@@ -539,8 +476,6 @@ export function checkBashProtectedWrite(
 			const { inPlace, paths } = analyzeSed(parsed.operands, parsed.postDashStart)
 			if (inPlace) candidates = paths
 		} else if (parsed.base === "mv" || parsed.base === "cp") {
-			// BH-R3: bare-form analysis; a protected-path candidate wins over
-			// the unrecognized-flag prompt (specific beats generic)
 			const analysis = analyzeMoveCp(parsed)
 			candidates = checkedPaths(analysis)
 			moveCpUnrecognized = analysis.unrecognizedFlag
@@ -554,8 +489,6 @@ export function checkBashProtectedWrite(
 			const match = matchProtectedPath(resolveAbs(p, cwdFor), { home, cwd: cwdFor })
 			if (match) return { target: p, kind: match.kind }
 		}
-		// BH-R3: an unrecognized mv/cp flag cannot be path-validated — prompt
-		// (the flag form may hide the real destination).
 		if (moveCpUnrecognized !== null) {
 			return { target: moveCpUnrecognized, kind: "mv-cp-flag-form" }
 		}
@@ -563,9 +496,7 @@ export function checkBashProtectedWrite(
 	return null
 }
 
-// ---- W4: Read/Edit deny rules over bash path commands ---------------------
 
-/** Read-class commands (CC pathValidation set; sed without -i). */
 const W4_READ_COMMANDS: readonly string[] = [
 	"cat", "head", "tail", "sort", "uniq", "wc", "cut", "paste", "column",
 	"tr", "file", "stat", "diff", "awk", "strings", "hexdump", "od",
@@ -573,40 +504,24 @@ const W4_READ_COMMANDS: readonly string[] = [
 	"ls", "find", "sed",
 ]
 
-/** Write/create-class commands — check against Edit deny rules. */
 const W4_WRITE_COMMANDS: readonly string[] = [
 	"rm", "rmdir", "mv", "cp", "touch", "mkdir",
 ]
 
-/** First non-flag argument is a pattern/script, not a path. */
 const PATTERN_FIRST = new Set(["grep", "rg", "awk", "jq"])
 
 export interface BashDenyHit {
-	/** The path argument that matched. */
 	path: string
-	/** Formatted rule text, e.g. `Read(./.env)`. */
 	rule: string
 	source: string
 }
 
-/**
- * S3 (spec 2026-11-15-cleanup-hardening): the unrecognized mv/cp flag
- * escalation is its OWN shape — it is not a rule hit and carries no path
- * (the whole point is that the targets cannot be path-validated). The old
- * `BashDenyHit` reuse put the flag text in the `path` slot; consumers now
- * read `flag` directly.
- */
 export interface BashFlagEscalation {
-	/** The unrecognized mv/cp flag as written (e.g. `-z`). */
 	flag: string
 }
 
 function pathArgsFor(parsed: ParsedSegment): string[] {
 	if (parsed.base === "find") {
-		// only paths before the first flag — operands keep flags, so cut at
-		// the first flag-looking operand; post-`--` operands are ALL paths
-		// (review fix 2026-11-08 P2#5, CC superset semantics: `find -- -x …`
-		// must not fall out of validation entirely)
 		const out: string[] = []
 		for (let i = 0; i < parsed.operands.length; i++) {
 			const op = parsed.operands[i]!
@@ -751,18 +666,14 @@ function analyzeMoveCp(parsed: ParsedSegment): MoveCpAnalysis {
 	return { targetDir, paths, unrecognizedFlag }
 }
 
-// ---- BH-R3: remote heredoc bodies -----------------------------------------
 
 interface HeredocOpener {
 	delimiter: string
 	isDash: boolean
-	/** The opener line with quoted spans masked to spaces (classification input). */
 	prefixMaskedSource: string
-	/** Index of the `<<` operator within the masked line. */
 	opIndex: number
 }
 
-/** Length-preserving quote mask: quoted spans (quote chars included) become spaces. */
 function maskQuotedSpans(line: string): string {
 	const out = line.split("")
 	let quote: "'" | '"' | null = null
@@ -781,21 +692,12 @@ function maskQuotedSpans(line: string): string {
 	return out.join("")
 }
 
-/**
- * Best-effort heredoc opener on one line: `<<[-]DELIM`, `<<[-]'DELIM'`,
- * `<<[-]"DELIM"`. The operator must sit OUTSIDE quotes (quoted spans are
- * masked length-preservingly, so a `<<` inside quotes cannot fake an
- * opener and indices still map to the raw line), and `<<<` (here-string)
- * never matches.
- */
 function findHeredocOpener(line: string): HeredocOpener | null {
 	if (!line.includes("<<")) return null
 	const masked = maskQuotedSpans(line)
 	for (let i = 0; i < masked.length; i++) {
 		if (masked[i] !== "<" || masked[i + 1] !== "<") continue
 		if (masked[i - 1] === "<" || masked[i + 2] === "<") continue
-		// parse the delimiter from the RAW line — the operator/dash/space run
-		// is unquoted, and a quoted delimiter (`<<'EOF'`) lives only in raw
 		let j = i + 2
 		let isDash = false
 		if (line[j] === "-") {
@@ -819,9 +721,7 @@ function findHeredocOpener(line: string): HeredocOpener | null {
 	return null
 }
 
-/** Is the heredoc fed to a remote-bound command (ssh …)? Best-effort. */
 function remoteBoundHeredoc(prefix: string): boolean {
-	// the heredoc stdin attaches to the FINAL command on its line
 	const pieces = prefix.split(/&&|\|\||[|;]/)
 	const last = (pieces[pieces.length - 1] ?? "").trim()
 	const tokens = last.split(/[ \t]+/).filter(Boolean)
@@ -853,7 +753,6 @@ function stripRemoteHeredocBodies(command: string): string {
 			continue
 		}
 		out.push(line)
-		// closing line: exactly the delimiter (tab-stripped for <<-)
 		let close = -1
 		for (let j = i + 1; j < lines.length; j++) {
 			const raw = lines[j]!
@@ -875,18 +774,6 @@ function stripRemoteHeredocBodies(command: string): string {
 	return out.join("\n")
 }
 
-/**
- * W4 scan (BH-R3 rework): first Read/Edit deny-rule hit reached through a
- * bash path argument or redirection target, plus the unrecognized mv/cp
- * flag escalation channel. Read-class commands check Read rules,
- * write/create-class (and every redirection target) check Edit rules; sed
- * applies its CC extractor (files + -f script; -i routes to Edit). mv/cp
- * are analyzed by {@link analyzeMoveCp}: recognized harmless flags are
- * stripped and the bare form is rule-checked; an UNRECOGNIZED flag never
- * denies — it escalates to ask (the former 82d35c2 behavior denied any
- * flagged form outright whenever any deny rule existed). A deny hit
- * applies to the whole command (CC deniedSubresult parity).
- */
 function scanBashDeny(
 	command: string,
 	cwd: string,
@@ -917,7 +804,6 @@ function scanBashDeny(
 				if (hit) return { deny: hit, flagAsk }
 			}
 		}
-		// Redirection targets are Edit-semantic regardless of argv0.
 		const rawTokens = tokenizeSegment(node.segment)
 		for (let i = 0; i < rawTokens.length; i++) {
 			if (!isRedirectOp(rawTokens[i]!)) continue
@@ -932,15 +818,6 @@ function scanBashDeny(
 	return { deny: null, flagAsk }
 }
 
-/**
- * S2 (spec 2026-11-15-cleanup-hardening): the single-scan public entry —
- * ONE pass over the command yields both verdicts: the first Read/Edit
- * deny-rule hit (whole-command deny) and the first unrecognized mv/cp
- * flag escalation (ask). Callers that need both (modes/adjudication-facts.ts
- * collectAdjudicationFacts)
- * must scan each command once here instead of running the deny scan and a
- * second empty-rules scan (the deleted checkBashFlagEscalation hack).
- */
 export function checkBashDenyScan(
 	command: string,
 	cwd: string,
@@ -950,12 +827,6 @@ export function checkBashDenyScan(
 	return scanBashDeny(command, cwd, rules)
 }
 
-/**
- * W4: first Read/Edit deny-rule hit reached through a bash path argument or
- * redirection target, or null. The deny applies to the whole command —
- * callers must treat any hit as a full-command deny (CC deniedSubresult
- * parity).
- */
 export function checkBashDenyHit(
 	command: string,
 	cwd: string,
@@ -977,8 +848,6 @@ function matchRules(
 		if (rule.behavior !== "deny") continue
 		if (rule.ruleValue.toolName !== ccTool) continue
 		for (const p of paths) {
-			// E1: the candidate resolves against targetCwd (cd-tracked); the
-			// rule text stays anchored to the session cwd.
 			if (pathToolMatchesRuleContent(ccTool, p, rule.ruleValue.ruleContent, cwd, targetCwd)) {
 				return {
 					path: p,

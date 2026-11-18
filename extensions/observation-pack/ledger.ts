@@ -11,11 +11,6 @@ import { dirname } from "node:path";
 export type Ledger = (entry: Record<string, unknown>) => Promise<void>;
 
 export function createLedger(path: string): Ledger {
-	// C1 (arch review 2026-10-03): mkdir once per path instead of on every
-	// append — the audit trail stays per-event (upstream shape, accepted);
-	// only the redundant directory syscall is dropped. ENOENT (dir removed
-	// mid-session) re-mkdirs inline and retries the append once (the flag
-	// itself stays set — dirEnsured is never reset).
 	let dirEnsured = false;
 	return async (entry) => {
 		const line = `${JSON.stringify({ timestamp: new Date().toISOString(), ...entry })}\n`;

@@ -1,27 +1,3 @@
-/**
- * rules/index.ts — the rules module's ONLY exported symbol (DESIGN-RULES D3
- * factory shell): createRulesExtension(options). v1 is read-only
- * (/rules command); lifecycle objects (setEnabled/lint/subscribe) are
- * deliberately deferred (P3-RU-12) — the factory shell accepts future
- * commands without breaking the interface.
- *
- * No shipped rules: the builtin rule set (exa search-channel et al.) was
- * removed in 1.4.x — user preferences belong in the user's own rules
- * directories, not the package. The builtin:// scope MECHANISM stays in
- * render.ts (SCOPE_PRIORITY) for future use; no builtin dir is wired here.
- *
- * Wiring:
- *   - session_start: reset the activation set; drop the mtime fingerprint.
- *   - before_agent_start: append-only concatenation of renderRules output
- *     onto systemPrompt (never touches contextFiles, never mutates existing
- *     content — P3-RU-06). Emits contextBudget on the bus once (P3-RU-10).
- *   - tool_call: capture edit/write/read target paths; a first hit on a
- *     globs rule steers the full rule text once per session (P3-RU-07).
- *   - Cheapness promise (P3-RU-08, adjusted — DEVIATIONS #42): a
- *     file-level fingerprint (mtimeMs+size per rule file) gates rescans —
- *     an unchanged turn costs one readdir + N stats per dir and ZERO file
- *     content reads.
- */
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { statSync, readFileSync, readdirSync } from "node:fs";
@@ -33,18 +9,14 @@ import { createRuleActivation } from "./activation.ts";
 import { coreBus } from "../bus.js";
 import { collectRules, globToRegExp, renderRules, setRulesHome, type RenderedRule, type RuleDir, type RuleFs } from "./render.ts";
 
-/** In-memory glob hit for the cached-rules activation hot path. */
 function globMatches(path: string, glob: string): boolean {
 	return globToRegExp(glob).test(path);
 }
 import { extractToolPaths } from "./paths.ts";
 
 export interface RulesExtensionOptions {
-	/** Rare: extra rule directories (monorepo-shared), treated as project scope. */
 	extraDirs?: string[];
-	/** Total character budget; clamped by lib/context-budget (40K). */
 	budgetChars?: number;
-	/** Per-file inline threshold (4K default). */
 	inlineThresholdChars?: number;
 }
 
@@ -54,7 +26,6 @@ interface CtxLike {
 	isProjectTrusted?: () => boolean;
 }
 
-/** The module's single public symbol (DESIGN-RULES 定稿接口). */
 export function createRulesExtension(options?: RulesExtensionOptions) {
 	return function rulesExtension(pi: ExtensionAPI): void {
 		const home = homedir();
@@ -81,20 +52,12 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 			},
 		};
 
-		// mtime fingerprint cache (P3-RU-08): output AND the collected rules
-		// (so tool_call activation never re-scans — review #16a)
 		let fingerprint: string | null = null;
 		let cachedOutput: string | null = null;
 		let cachedRules: RenderedRule[] | null = null;
 		let budgetPublished = false;
 
 		function fingerprintOf(dirs: RuleDir[]): string {
-			// file-level fingerprint: a bare directory mtime misses in-place
-			// content edits on most filesystems (review #16b), so every rule
-			// file contributes its (mtimeMs, size). The cost is one readdir +
-			// N stats per dir per turn — still zero file-content reads while
-			// the fingerprint holds (P3-RU-08 便宜性, adjusted: see
-			// DEVIATIONS #39).
 			return dirs
 				.map((d) => {
 					try {
@@ -120,7 +83,6 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 		}
 
 		function trusted(ctx: CtxLike | undefined): boolean {
-			// pi gates untrusted projects upstream; honor an explicit signal if present
 			return ctx?.isProjectTrusted ? ctx.isProjectTrusted() === true : true;
 		}
 
@@ -129,9 +91,6 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 			const fp = fingerprintOf(dirs);
 			if (fp !== fingerprint || cachedOutput === null) {
 				fingerprint = fp;
-				// NOTE: activatedNames intentionally survives fingerprint
-				// changes — "once per session" (P3-RU-07) must not reset
-				// because a rule file was edited mid-session (review #16c)
 				const rendered = renderRules({
 					dirs,
 					cwd,
@@ -153,14 +112,8 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 			return cachedOutput;
 		}
 
-		// AR1005-RU: the activation budget module — the turn's activations
-	// cumulatively share DYNAMIC_STEER_MAX; the session set and the turn
-	// epoch live here, not in scattered wiring state.
 	const activation = createRuleActivation({
 		send: (content) => {
-			// Synchronous adapter: a synchronous throw is an activation
-			// failure (rolled back inside the module); async delivery
-			// rejections are not.
 			pi.sendMessage(
 				{ customType: "pi-rules-activate", content, display: true },
 				{ deliverAs: "steer" },
@@ -169,7 +122,7 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 	});
 
 		pi.on("session_start", () => {
-			activation.onSessionStart(); // RU-01: activation set + budget epoch
+			activation.onSessionStart();
 			fingerprint = null;
 			cachedOutput = null;
 			cachedRules = null;
@@ -180,9 +133,6 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 		});
 
 		pi.on("turn_start", () => {
-			// AR1005-RU-01: a turn spans turn_start → the next turn_start; every
-			// tool call in between shares one budget epoch. Nothing resets at
-			// before_agent_start or per tool_call.
 			activation.onTurnStart();
 		});
 
@@ -199,15 +149,11 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 
 			const dirs = dirsOf(ctx.cwd);
 			if (cachedRules !== null) {
-				// hot path: activation from the cached collected rules — pure
-				// in-memory glob matching, ZERO scans or content reads
-				// (review #16a). Falls back to a full render below when the
-				// cache is cold (first tool_call before any agent start).
 				const fresh: string[] = [];
 				for (const rule of cachedRules) {
 					if (rule.globs === undefined) continue;
 					if (paths.some((p) => rule.globs!.some((g) => globMatches(p, g)))) {
-						fresh.push(rule.name); // session-dedup happens inside activate()
+						fresh.push(rule.name);
 					}
 				}
 				if (fresh.length === 0) return undefined;
@@ -224,15 +170,13 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 				fs: realFs,
 			});
 			if (activated.length === 0) return undefined;
-			// steer from the CACHED collected rules — a matching tool call
-			// costs zero extra scans (review #16a).
 			const rules = collectRules({ dirs, cwd: ctx.cwd, projectTrusted: trusted(ctx), touchedPaths: [], fs: realFs }).rules;
 			activation.activate(
 				activated
 					.filter((ruleName) => rules.some((r) => r.name === ruleName))
 					.map((ruleName) => rules.find((r) => r.name === ruleName)!),
 			);
-			return undefined; // activation never blocks a tool call
+			return undefined;
 		});
 
 		pi.registerCommand("rules", {
@@ -256,7 +200,6 @@ export function createRulesExtension(options?: RulesExtensionOptions) {
 				pi.sendMessage({
 					customType: "pi-rules-list",
 					content: `${summary}\n\n${result.output}`,
-					// display metadata for the CC panel renderer (content untouched)
 					details: { command: "/rules" },
 					display: true,
 				});

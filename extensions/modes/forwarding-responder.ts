@@ -1,22 +1,3 @@
-/**
- * modes/forwarding-responder.ts — the parent-side approval forwarding
- * responder, extracted verbatim from the modes extension factory (index.ts)
- * in SPEC SR W-M. When an interactive parent session holds a UI and a
- * headless subagent child forwards a permission request through
- * ~/.pi/agent/sessions/permission-modes-forwarding/sessions/<id>/ (P0-CT-05),
- * this module polls the inbox, prompts the parent user, and writes the
- * response back.
- *
- * State moved with the code: the live ForwardingPoller handle and the
- * claimed-ids set (survives poller restarts so the same inbox request is
- * not double-prompted). Lifecycle: start(ctx) on session start, shutdown()
- * on session_shutdown — the shutdown order (stop → drop handle → clear
- * claimed ids) matches the historical inline sequence exactly.
- *
- * Allow-always decisions route through the shared applyApprovalDecision
- * executor (approval-flow.ts) with ruleCwd=child cwd and trackWrite=false —
- * tracking is the child's job.
- */
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	createForwardingPoller,
@@ -29,8 +10,6 @@ import {
 } from "./permission-forwarding.ts";
 import { readSessionId } from "./session-branch.ts";
 
-/** Structural mirror of approval-flow.ts's applyApprovalDecision signature
- *  (only the opts variants the responder actually passes). */
 export interface ForwardingApplyApproval {
 	(
 		ctx: ExtensionContext,
@@ -47,7 +26,6 @@ export interface ForwardingResponderDeps {
 
 export function createForwardingResponder(deps: ForwardingResponderDeps) {
 	let forwardingPoller: ForwardingPoller | undefined;
-	/** Survives poller restarts so the same inbox request is not double-prompted. */
 	const forwardingClaimedIds = new Set<string>();
 
 	async function handleForwardedPermissionRequest(
@@ -60,7 +38,6 @@ export function createForwardingResponder(deps: ForwardingResponderDeps) {
 			? `[Subagent ${name}] ${request.message}`
 			: `[Subagent] ${request.message}`;
 		const sessionId = readSessionId(ctx.sessionManager);
-		// Only the targeted parent session may answer; reject mismatched inbox drain.
 		if (sessionId && sessionId !== request.targetSessionId) {
 			forwardingClaimedIds.delete(request.id);
 			return;

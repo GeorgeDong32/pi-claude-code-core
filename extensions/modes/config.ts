@@ -31,23 +31,15 @@ export interface ClassifierConfig {
 	enabled: boolean
 	model: string
 	timeoutMs: number
-	/** CC-style JSONL transcript lines instead of "User:" / "bash cmd" format. */
 	jsonlTranscript?: boolean
-	/** When true (default), classifier errors deny the action instead of local fallback. */
 	failClosed?: boolean
-	/** Classifier pipeline — see docs/prompts/auto-mode-prompts.md. Default `tool`. */
 	stage?: ClassifierStage
-	/** Inject AGENTS.md / CLAUDE.md into classifier context. */
 	includeAgentsMd?: boolean
 }
 
 export interface PermissionModesConfig {
 	classifier?: Partial<ClassifierConfig>
-	/** CC auto-mode classifier allow / soft_deny / environment bullets. */
 	autoMode?: AutoModeRules
-	/** W5 (2026-11-07): bash path-target checks — "all" (default) | "safety"
-	 * (W3 only) | "deny" (W4 only) | "off". PI_CORE_BASH_PATH_CHECKS env
-	 * overrides. Applies without /reload (read per adjudication). */
 	bashPathChecks?: "all" | "safety" | "deny" | "off"
 	permissions?: {
 		allow?: string[]
@@ -56,13 +48,6 @@ export interface PermissionModesConfig {
 	}
 }
 
-// C2 (arch review 2026-10-18), review R1 P1-1: this file is part of the
-// FROZEN disk layout (~/.pi/agent/permission-modes.json, invariant 7 +
-// P0-CT-09), so the root must stay homedir()-based — NOT the host
-// getAgentDir(), which honors PI_CODING_AGENT_DIR and would silently
-// relocate every existing user's permissions. Lazy init keeps imports
-// side-effect free; the shape stays deliberately different from effort's
-// host-following settings.json (two legal semantics, see DEVIATIONS).
 let _configPath: string | undefined
 
 export function getConfigPath(): string {
@@ -112,18 +97,9 @@ export function resolveAutoModeConfig(
 	return rules
 }
 
-// (path, mtimeMs) cache (plan2 A1c): the config is read twice per turn
-// (classifier + autoMode resolution) and again through the global-permissions
-// loader; it changes rarely, so re-read only when the mtime moves. Since the
-// C1 hot-path batch this rides the shared readJsonCached primitive
-// (lib/settings.ts) — whose write side (writeJsonAtomic) also invalidates the
-// entry, closing the same-mtime rewrite window. Callers treat the result as
-// read-only — the cached object is shared.
 
 export function loadPermissionModesConfig(): PermissionModesConfig {
 	try {
-		// shared settings-JSON primitive (P0-LB-01): {} fallback; malformed
-		// files keep the historical console.warn diagnostic
 		return sanitizePermissionModesConfig(
 			readJsonCached<PermissionModesConfig>(getConfigPath(), {}, (reason) => {
 				if (reason === "malformed" || reason === "non-object") {
@@ -136,11 +112,6 @@ export function loadPermissionModesConfig(): PermissionModesConfig {
 	}
 }
 
-// BH-R7 (spec 2026-11-14-backtest-hardening): a non-string element inside
-// any rule array used to throw TypeError downstream (pattern.trim /
-// ruleString.trim on a number), failing CLOSED every bash call in every
-// mode. Filter at load and warn once; the sanitized view is identity-stable
-// per underlying cached object (WeakMap) so callers can keep comparing.
 const sanitizedConfigCache = new WeakMap<object, PermissionModesConfig>()
 let warnedNonStringRule = false
 

@@ -30,29 +30,23 @@
  */
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
-/** Minimum theme surface (same duck type as review's CardTheme). */
 export interface CcRowTheme {
 	fg(color: string, text: string): string;
 	bold(text: string): string;
 }
 
-/** CC userMessageBackground — mirrors review's commandEchoRow constant. */
 const BAR_BG = "\x1b[48;2;55;55;55m";
 const BAR_BG_OFF = "\x1b[49m";
 const BAR_FG = "\x1b[38;2;255;255;255m";
 const BAR_FG_OFF = "\x1b[39m";
 
-/** Gutter `  ⎿  ` is 5 visible cells; continuation rows align with spaces. */
 const GUTTER_VISIBLE_WIDTH = 5;
 const CONTINUATION = " ".repeat(GUTTER_VISIBLE_WIDTH);
 
-/** Collapsed bodies clip here (host ctrl+o expands; no per-card state). */
 export const CLIP_LINES = 12;
 
-/** One body row: plain toolOutput text, or a white lead-in + rest. */
 export type BodyLine = string | { strong: string; rest: string };
 
-/** Component contract subset CustomMessageComponent consumes. */
 export interface RowsComponent {
 	invalidate(): void;
 	render(width: number): string[];
@@ -63,7 +57,6 @@ function rawFallback(body: readonly BodyLine[]): string[] {
 	return body.map((l) => (typeof l === "string" ? l : l.strong + l.rest));
 }
 
-/** CC user command bar: dim `❯ ` + white text on the CC user-bar gray. */
 export function ccCommandBar(command: string, theme: CcRowTheme): RowsComponent {
 	return {
 		invalidate() {},
@@ -71,14 +64,12 @@ export function ccCommandBar(command: string, theme: CcRowTheme): RowsComponent 
 			const avail = Math.max(10, width - 2);
 			const clipped = truncateToWidth(command, avail, "…");
 			const content = `${theme.fg("dim", "❯ ")}${BAR_FG}${clipped}${BAR_FG_OFF}`;
-			// NBSP padding: plain trailing spaces get trimmed downstream.
 			const pad = "\u00A0".repeat(Math.max(0, width - visibleWidth(content) - 1));
 			return [`${BAR_BG}${content}${pad}${BAR_BG_OFF}`];
 		},
 	};
 }
 
-/** `⏺ Summary` head row: accent dot + bold toolTitle, truncated to width. */
 export function ccSummaryRow(summary: string, theme: CcRowTheme): RowsComponent {
 	return {
 		invalidate() {},
@@ -90,7 +81,6 @@ export function ccSummaryRow(summary: string, theme: CcRowTheme): RowsComponent 
 	};
 }
 
-/** Single terminal-state row (`⏺ Plan Complete ✓`) — no body, no bar. */
 export function ccSingleRow(title: string, theme: CcRowTheme, tail?: { text: string; color: string }): RowsComponent {
 	return {
 		invalidate() {},
@@ -103,7 +93,6 @@ export function ccSingleRow(title: string, theme: CcRowTheme, tail?: { text: str
 	};
 }
 
-/** Paint one wrapped fragment: the leading `strong` region stays white. */
 function paintFragment(fragment: string, strongLeft: number, theme: CcRowTheme): { painted: string; strongLeft: number } {
 	const take = Math.min(strongLeft, fragment.length);
 	const strongPart = take > 0 ? theme.fg("toolTitle", fragment.slice(0, take)) : "";
@@ -111,11 +100,6 @@ function paintFragment(fragment: string, strongLeft: number, theme: CcRowTheme):
 	return { painted: strongPart + restPart, strongLeft: strongLeft - take };
 }
 
-/**
- * `⎿` body block: dim gutter on the first row, 5-space continuation, every
- * row wrapped to the viewport. Collapsed (`expanded === false`) bodies past
- * CLIP_LINES clip with a dim hint row.
- */
 export function ccBodyBlock(body: readonly BodyLine[], theme: CcRowTheme, expanded: boolean): RowsComponent {
 	return {
 		invalidate() {},
@@ -127,8 +111,6 @@ export function ccBodyBlock(body: readonly BodyLine[], theme: CcRowTheme, expand
 			for (const line of lines) {
 				const text = typeof line === "string" ? line : line.strong + line.rest;
 				let strongLeft = typeof line === "string" ? 0 : line.strong.length;
-				// Body rows are plain text (shapers strip styling), so fragments
-				// offset cleanly against the strong budget.
 				for (const fragment of wrapTextWithAnsi(text, wrapW)) {
 					const { painted, strongLeft: next } = paintFragment(fragment, strongLeft, theme);
 					strongLeft = next;
@@ -144,19 +126,13 @@ export function ccBodyBlock(body: readonly BodyLine[], theme: CcRowTheme, expand
 	};
 }
 
-/** Assembled panel: optional bar / summary / body (each part skippable). */
 export interface CcPanelParts {
-	/** Command bar text (usually details.command); absent = no bar. */
 	bar?: string;
-	/** Summary row text; absent = degraded panel (body only). */
 	summary?: string;
-	/** Body rows under the ⎿ gutter. */
 	body?: BodyLine[];
-	/** Alternative single-row form (plan-complete); wins over bar/summary/body. */
 	single?: { title: string; tail?: { text: string; color: string } };
 }
 
-/** Flat panel assembly — bar + ⏺ summary + ⎿ body, in the CC language. */
 export function ccPanel(parts: CcPanelParts, theme: CcRowTheme, expanded: boolean): RowsComponent {
 	return {
 		invalidate() {},

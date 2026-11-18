@@ -52,20 +52,15 @@ export const CONSOLIDATE_DIRECTIVE_TYPE = "pi-memory-consolidate";
 export interface ConsolidateWrite {
 	file: string;
 	content: string;
-	/** G2-C11 provenance: the delete targets this write absorbed. */
 	merged_from?: string[];
 }
 
-/** G2-C11: a delete is a bare file name, or a file name plus its per-file
- * reason (why it disappeared without being merged anywhere). */
 export type ConsolidateDelete = string | { file: string; reason: string };
 
-/** Normalize the union to {file, reason?} entries (old shape: no reason). */
 export function normalizeDeletes(deletes: ConsolidateDelete[]): Array<{ file: string; reason?: string }> {
 	return deletes.map((d) => (typeof d === "string" ? { file: d } : { file: d.file, reason: d.reason }));
 }
 
-/** The directive the model receives (content of the custom message). */
 export function buildConsolidationDirective(
 	layer: "user" | "project",
 	stats: LayerStats,
@@ -93,7 +88,6 @@ export interface ConsolidateResult {
 	message: string;
 }
 
-/** Text-level frontmatter field read (G2-C12/C13) — no reparse, no reorder. */
 export function readFrontmatterField(content: string, key: string): string | undefined {
 	if (!content.startsWith("---")) return undefined;
 	const lines = content.split("\n");
@@ -105,9 +99,8 @@ export function readFrontmatterField(content: string, key: string): string | und
 	return undefined;
 }
 
-/** Insert created/consolidated_at lines just before the closing --- (G2-C12). */
 export function stampConsolidationFields(content: string, created: string | undefined, consolidatedAt: string | undefined): string {
-	if (!content.startsWith("---")) return content; // invalid shape is the pre-write validator's failure, not ours
+	if (!content.startsWith("---")) return content;
 	const lines = content.split("\n");
 	const close = lines.findIndex((l, i) => i > 0 && l.trim() === "---");
 	if (close === -1) return content;
@@ -119,10 +112,6 @@ export function stampConsolidationFields(content: string, created: string | unde
 	return lines.join("\n");
 }
 
-/** G2-C12: the oldest creation timestamp among the write's sources — the
- * sources' created field when present, else their mtime (still on disk at
- * this point: deletes run after writes' planning but BEFORE removal… no —
- * removal runs after stamping in the same try block, so stats are valid). */
 function earliestCreatedFor(dir: string, w: ConsolidateWrite): string | undefined {
 	const stamps: number[] = [];
 	for (const src of w.merged_from ?? []) {
@@ -134,7 +123,6 @@ function earliestCreatedFor(dir: string, w: ConsolidateWrite): string | undefine
 		stamps.push(Number.isFinite(createdMs) ? createdMs : statSync(full).mtimeMs);
 	}
 	if (stamps.length === 0) {
-		// no merged_from: fall back to the overwritten same-name file, if any
 		const existing = join(dir, w.file);
 		if (!existsSync(existing)) return undefined;
 		const content = (readOrUndefined(existing)) ?? "";
@@ -144,7 +132,6 @@ function earliestCreatedFor(dir: string, w: ConsolidateWrite): string | undefine
 	return new Date(Math.min(...stamps)).toISOString();
 }
 
-// tiny sync read helper (try/catch'd)
 function readOrUndefined(file: string): string | undefined {
 	try {
 		return readFileSync(file, "utf8");
@@ -153,7 +140,6 @@ function readOrUndefined(file: string): string | undefined {
 	}
 }
 
-/** Validate + apply a consolidation batch (the tool's core; exported for tests). */
 export function runConsolidation(
 	dir: string,
 	writes: ConsolidateWrite[],
@@ -170,8 +156,7 @@ export function runConsolidation(
 
 	const before = layerStats(dir);
 
-	// validate every write BEFORE touching anything
-	const safe = safeMemoryFileName; // S2: the engine's one filename predicate
+	const safe = safeMemoryFileName;
 	const deletesNorm = normalizeDeletes(deletes);
 	const deleteSet = new Set(deletesNorm.map((d) => d.file));
 	const seenWrites = new Set<string>();
@@ -189,15 +174,11 @@ export function runConsolidation(
 	for (const d of deletesNorm) {
 		if (!safe(d.file)) return fail(`unsafe delete target "${d.file}" (bare kebab-case name ending in .md, not MEMORY.md)`);
 		if (!existsSync(join(dir, d.file))) {
-			// write/delete overlap was already rejected above, so no write can
-			// supply this name — existence on disk is the only remaining source
 			return fail(`delete target "${d.file}" not found (check the "layer" argument — it defaults to "project")`);
 		}
 		if (d.reason !== undefined && typeof d.reason !== "string") return fail(`delete "${d.file}": reason must be a string`);
 	}
 
-	// G2-C11 provenance: every deleted file must be absorbed by some write's
-	// merged_from or carry its own reason — orphan deletions are rejected.
 	const orphaned = deletesNorm
 		.filter((d) => d.reason === undefined && !writes.some((w) => (w.merged_from ?? []).includes(d.file)))
 		.map((d) => d.file);
@@ -223,14 +204,13 @@ export function runConsolidation(
 	if (!lock) return fail("consolidation already in progress (another session holds the lock)");
 
 	try {
-		// G2-C12: stamp created/consolidated_at so a merge never resets fact age.
 		const consolidatedAt = new Date().toISOString();
 		for (const w of writes) {
 			const created = earliestCreatedFor(dir, w);
 			const content = stampConsolidationFields(w.content, created, w.merged_from !== undefined || created !== undefined ? consolidatedAt : undefined);
-			atomicWriteFile(dir, w.file, content); // C7: invalidates the scan cache
+			atomicWriteFile(dir, w.file, content);
 		}
-		for (const d of deletesNorm) removeDocument(dir, d.file); // W1: ENOENT-idempotent, cache dropped per delete
+		for (const d of deletesNorm) removeDocument(dir, d.file);
 		reindex(dir);
 		const after = layerStats(dir);
 		return {
@@ -250,11 +230,9 @@ export function runConsolidation(
 
 
 
-// ─── auto-trigger state machine (V2-C) ───
 
 export interface TriggerDeps {
 	sendDirective: (layer: "user" | "project", directive: string) => void;
-	/** test seam for lock TTL clock */
 	now?: () => number;
 }
 
@@ -265,10 +243,6 @@ export interface TriggerState {
 	lastReason?: string;
 }
 
-/** Over-budget probe for one layer: index truncated, index bytes over the
- * layer's cap, or file count over the threshold (all mean the index can no
- * longer represent the store). B1 (OPT-3): the bytes check closes the gap
- * where a 9-24KB user-layer index had no WARNING yet injected at 8KB. */
 export function needsConsolidation(stats: LayerStats, indexCap: number): string | null {
 	if (stats.indexTruncated) return "index truncated";
 	if (stats.indexBytes > indexCap) return `index ${stats.indexBytes}/${indexCap} bytes`;
@@ -278,13 +252,10 @@ export function needsConsolidation(stats: LayerStats, indexCap: number): string 
 
 export class ConsolidationTrigger {
 	readonly state: TriggerState = { attempts: 0, turnsSinceAttempt: 0, inFlight: false };
-	/** set while the directive-driven turn is running, so P3 counters can
-	 * exclude it from review/correction accounting */
 	directiveTurnActive = false;
 
 	constructor(private readonly deps: TriggerDeps) {}
 
-	/** turn_end tick: throttled, at most 2 directives per session. */
 	onTurnEnd(projectDir: string, userDir: string): void {
 		this.state.turnsSinceAttempt++;
 		if (this.state.inFlight) return;
@@ -302,7 +273,6 @@ export class ConsolidationTrigger {
 		}
 	}
 
-	/** manual /memory-consolidate: bypasses throttle, still one directive. */
 	manual(projectDir: string, userDir: string, layerArg?: string): { sent: boolean; detail: string } {
 		const order: Array<["user" | "project", string, number]> =
 			layerArg === "user"
@@ -331,17 +301,12 @@ export class ConsolidationTrigger {
 		this.deps.sendDirective(layer, buildConsolidationDirective(layer, stats, cap, reason));
 	}
 
-	/** tool_result(memory_consolidate) or agent_settled clears in-flight.
-	 * B3 (OPT-3): only agent_settled clears directiveTurnActive — clearing it
-	 * at tool_result let the tail of the consolidation turn (the model's
-	 * summary) leak into review/correction accounting. */
 	settle(options?: { directive?: boolean }): void {
 		this.state.inFlight = false;
 		if (options?.directive) this.directiveTurnActive = false;
 	}
 }
 
-/** Register the tool + /memory-consolidate command + wiring hooks. */
 export function registerConsolidation(
 	pi: ExtensionAPI,
 	dirs: (ctx?: { cwd?: string }) => { project: string; user: string },
@@ -376,13 +341,12 @@ export function registerConsolidation(
 				const dir = userLayer ? dirs(ctx).user : dirs(ctx).project;
 				const result = runConsolidation(dir, p.writes ?? [], p.deletes ?? [], userLayer);
 				if (!result.ok) throw new Error(result.message);
-				onApplied?.(); // G2-C14: mark the session as having consolidated
+				onApplied?.();
 				return {
 					content: [{ type: "text", text: `memory_consolidate: ${result.message}` }],
 					details: { ok: true, written: result.written, deleted: result.deleted },
 				};
 			},
-			// TR C: one row per outcome — the batch manifest stays in the text.
 			renderCall: (args, theme) => renderConsolidateCall(args as ConsolidateArgs, theme as never),
 			renderResult: (result, _options, theme) =>
 				renderRows(consolidateResultRows(result), theme as never),
@@ -400,7 +364,6 @@ export function registerConsolidation(
 					"info",
 				);
 			} catch {
-				/* stale ctx — the directive was already sent */
 			}
 		},
 	});

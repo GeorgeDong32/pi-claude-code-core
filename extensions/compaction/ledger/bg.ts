@@ -1,11 +1,3 @@
-/*
- * Ledger background section (SPEC SC §5.6 LED-04 Background, task W6).
- *
- * Renders in-flight background items (bg-shell tasks, subagents, flow-watch
- * listeners) — one line each. Items arrive through the injected provider
- * (LED-07 isolation); the W4 assembly wires bg-shell's real state; items
- * that end are simply absent from the next provider call (完成即移除).
- */
 
 import type { BgItem, OpenIdentity } from "./types.ts";
 

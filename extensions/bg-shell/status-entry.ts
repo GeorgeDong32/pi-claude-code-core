@@ -1,34 +1,15 @@
 // Vendored adaptation for pi-claude-code-core (BG): the data half of the
-// user-visible task status row (BG-ENTRY-03). Every background-task
-// completion and every user kill appends a display-only session entry via
-// `pi.appendEntry` — the API contract keeps it OUT of the LLM context.
-// CH E5 (2026-11-15): stopping a task that had already ended appends its
-// real end state and exitCode at most once — never a `killed` row unless a
-// kill actually ended it, and nothing at all when the row was already
-// appended (`notified`).
-//
-// The RENDERING half lives in pi-claude-code-tui (`lib/bg-task-row.ts`):
-// a `⏺ Background Task(bg-N)` pseudo tool row with a `⎿` detail gutter,
-// CC GenericTaskStatus parity. core deliberately registers NO entry
-// renderer here — pi's renderer lookup is first-wins across extensions in
-// load order, so a core renderer would permanently shadow the TUI's; with
-// core silent, the TUI is the single rendering owner, and environments
-// without the TUI simply persist the entry (data is never lost, the row
-// appears once the TUI is installed).
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { debugError } from "./debug.ts";
 import { oneLine } from "./notify.ts";
 import type { Task } from "./registry.ts";
 
-/** The session entry type; frozen by the BG-ENTRY-03 contract row. */
 export const STATUS_ENTRY_TYPE = "cc-core-bg-shell-task";
 
-/** Pure data carried by the entry (no functions — it persists to disk). */
 export interface TaskStatusData {
 	id: string;
 	command: string;
-	/** Optional human label the model gave the call (CC description parity). */
 	description?: string;
 	state: string;
 	exitCode?: number;

@@ -44,17 +44,10 @@ export interface DeclarationSnapshot {
 	toolCount: number;
 }
 
-/** Latest-snapshot + historical-max meter state. */
 interface MeterState {
 	last: DeclarationSnapshot | null;
 }
 
-// Core's own registered tool names (static — see the header; NOT a runtime
-// query). Extensions may add tools; unknowns land in "other". Names shared
-// with the registering module import its constant to prevent drift
-// (code-review R1 P2). bg_wait is registered by pi-subagents in SOME
-// deployments — kept; TaskOutput/TaskList/TaskStop are registered by core's
-// vendored bg-shell (code-review R2 P3: not pi builtins).
 const CORE_TOOL_NAMES = new Set<string>([
 	"TaskOutput",
 	"TaskList",
@@ -65,7 +58,6 @@ const CORE_TOOL_NAMES = new Set<string>([
 	"session_recall",
 	"contact_supervisor",
 	"subagent_supervisor",
-	// goal module (shared constants)
 	CREATE_GOAL_TOOL_NAME,
 	QUESTION_TOOL_NAME,
 	QUESTIONNAIRE_TOOL_NAME,
@@ -76,9 +68,7 @@ const CORE_TOOL_NAMES = new Set<string>([
 	"get_goal",
 	"update_goal",
 	"pause_goal",
-	// modes module
 	"plan_ready",
-	// bg-shell
 	"bg_wait",
 ]);
 
@@ -91,7 +81,7 @@ export function createDeclarationMeter(): {
 		observe(payload: unknown): void {
 			try {
 				const tools = extractTools(payload);
-				if (!tools) return; // no tools on this dialect/request — skip
+				if (!tools) return;
 				let total = 0;
 				let count = 0;
 				const perClass: Record<string, number> = {};
@@ -102,7 +92,6 @@ export function createDeclarationMeter(): {
 					count += 1;
 					const name = entry.name;
 					if (name && name.startsWith("mcp__")) {
-						// mcp__<server>__<tool> — empty server segment lands in "unknown"
 						const rest = name.slice("mcp__".length);
 						const sep = rest.indexOf("__");
 						const server = sep > 0 ? rest.slice(0, sep) : "unknown";
@@ -126,8 +115,6 @@ export function createDeclarationMeter(): {
 	};
 }
 
-/** dialect-tolerant extraction — returns [{name, raw}] or null when the
- *  payload carries no recognizable tool list. */
 function extractTools(payload: unknown): Array<{ name: string | null; raw: unknown }> | null {
 	if (!payload || typeof payload !== "object") return null;
 	const p = payload as Record<string, unknown>;
@@ -141,7 +128,6 @@ function extractTools(payload: unknown): Array<{ name: string | null; raw: unkno
 	for (const item of rawList) {
 		if (item && typeof item === "object") {
 			const t = item as Record<string, unknown>;
-			// flat form: name / function.name / Bedrock toolSpec.name
 			const toolSpec = t.toolSpec && typeof t.toolSpec === "object" ? (t.toolSpec as Record<string, unknown>) : null;
 			const flatName =
 				(typeof t.name === "string" && t.name) ||
@@ -153,7 +139,6 @@ function extractTools(payload: unknown): Array<{ name: string | null; raw: unkno
 				out.push({ name: flatName, raw: item });
 				continue;
 			}
-			// Google nested form: tools: [{ functionDeclarations: [...] }]
 			if (Array.isArray(t.functionDeclarations)) {
 				for (const fd of t.functionDeclarations as Array<Record<string, unknown>>) {
 					out.push({ name: typeof fd.name === "string" ? fd.name : null, raw: fd });

@@ -1,8 +1,4 @@
 // Vendored from gvanderclay/pi-bg-bash v0.2.1 (MIT). Copyright (c) 2026 Gage Vander Clay.
-// Opt-in diagnostics. With `CC_CORE_BG_DEBUG=1` the extension appends JSON Lines
-// to `<state root>/debug.log`: errors it would otherwise swallow, and the
-// events of a task's life. Nothing here may throw or change behaviour: a failed
-// write is dropped. The variable is read on every call.
 import {
 	appendFileSync,
 	existsSync,
@@ -20,9 +16,7 @@ import { stateRoot } from "./launch.ts";
 import { oneLine } from "./notify.ts";
 import type { Task } from "./registry.ts";
 
-/** The log is rotated at session start once it is larger than this. */
 const ROTATE_ABOVE_BYTES = 5 * 1024 * 1024;
-/** Gzipped generations kept: `debug.log.1.gz` (newest) to `debug.log.5.gz`. */
 const GENERATIONS = 5;
 
 export function debugOn(): boolean {
@@ -42,11 +36,9 @@ export function debug(event: string, fields: Record<string, unknown> = {}): void
 		mkdirSync(stateRoot(), { recursive: true, mode: 0o700 });
 		appendFileSync(debugPath(), `${JSON.stringify(line)}\n`, { mode: 0o600 });
 	} catch {
-		// a failed debug write is itself dropped
 	}
 }
 
-/** Log an error the code is about to swallow (or downgrade), tagged with where it happened. */
 export function debugError(where: string, error: unknown, fields: Record<string, unknown> = {}): void {
 	const e = error as { message?: unknown; code?: unknown; stack?: unknown } | null | undefined;
 	debug("error", {
@@ -58,7 +50,6 @@ export function debugError(where: string, error: unknown, fields: Record<string,
 	});
 }
 
-/** The fields that identify a task in a log line. */
 export function taskFields(task: Task): Record<string, unknown> {
 	return {
 		task: task.id,
@@ -68,7 +59,6 @@ export function taskFields(task: Task): Record<string, unknown> {
 	};
 }
 
-/** The fields that say how a task ended. */
 export function exitFields(task: Task): Record<string, unknown> {
 	return { ...taskFields(task), state: task.state, exitCode: task.exitCode, reason: task.reason };
 }
@@ -90,7 +80,7 @@ export function rotateDebugLog(): void {
 		try {
 			renameSync(log, claimed);
 		} catch {
-			return; // another process claimed it first
+			return;
 		}
 		if (existsSync(generation(GENERATIONS))) unlinkSync(generation(GENERATIONS));
 		for (let n = GENERATIONS - 1; n >= 1; n--) {

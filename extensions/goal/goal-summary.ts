@@ -1,18 +1,3 @@
-/**
- * goal-summary.ts — usage summary text, the serializable widget projection,
- * and the missing-criteria completion notice (SPEC SR E13a: split from
- * goal.ts; pure module — no pi access, no closure state).
- *
- * Spec IDs: GO-A (usage display), DC4b (serializable widget projection),
- * G3-C20/G3-C21 (criteria coverage notice + third-attempt warning).
- *
- * Design decisions:
- * - WidgetGoalProjection is the exported return shape of widgetGoalProjection:
- *   carrying it on the bus snapshot makes the widget rebuildable by any
- *   consumer without closure getters.
- * - missingCriteriaLines scans [Cn] tags only; objectives without numbered
- *   criteria never trigger the notice.
- */
 import {
 	formatDuration,
 	formatTokenValue,
@@ -23,7 +8,6 @@ import {
 } from "./goal-core.ts";
 import type { GoalRecord } from "./goal-record.ts";
 
-// ---------- summaries ----------
 
 function usageLines(goal: GoalRecord): string[] {
 	return [
@@ -56,28 +40,6 @@ export function detailedSummary(goal: GoalRecord | null): string {
 	return lines.join("\n");
 }
 
-/**
- * Live above-editor widget for the active goal. Inspired by rpiv-todo's
- * TodoOverlay: register the widget once with a factory, read live state
- * via the closure at render time, and call `tui.requestRender()` on every
- * state change so the overlay refreshes without re-registration.
- *
- * Layout (sisyphus, running):
- *   ◆ Sisyphus  [▰▰▰▱▱] 3/5
- *   ├─ ⟡ extract validator … wire it … update tests.
- *   ├─ Status: sisyphus running · auto-continue · 14m 21s · 24.3k tokens
- *   └─ .pi/goals/active_goal_xxx.md
- *
- * Layout (paused with blocker):
- *   ⊘ Goal paused
- *   ├─ ⟡ improve benchmark coverage for the parser
- *   ├─ Status: paused (agent) · 2m 14s · 12.4k tokens
- *   ├─ Blocker: cannot find the tests directory
- *   └─ Suggested: ask the user for the test location
- */
-// DC4b: serializable projection of the fields renderGoalWidgetLines
-// consumes — carrying it on the snapshot makes the widget rebuildable
-// by any consumer without closure getters.
 export interface WidgetGoalProjection {
 	objective: string; status: string; sisyphus: boolean;
 	stopReason?: string; pauseReason?: string; pauseSuggestedAction?: string;
@@ -100,11 +62,8 @@ export function widgetGoalProjection(goal: GoalRecord): WidgetGoalProjection {
 	};
 }
 
-/** G3-C21 threshold — named constant per the spec's hard constraint ⑥. */
 export const AUDIT_ATTEMPT_NOTICE = 3;
 
-/** G3-C20: which [Cn] criteria appear in the objective but not in the
- * completion summary. Objectives without numbered criteria → []. */
 export function missingCriteriaLines(objective: string, completionSummary: string): string[] {
 	const ids = new Set<string>();
 	for (const m of objective.matchAll(/\[(C\d+)\]/g)) ids.add(m[1]!);

@@ -35,15 +35,12 @@ export interface CutpointParams {
 	keepRecentTokens: number;
 	keepSlackTokens: number;
 	feasibility: Feasibility;
-	/** Signal weight table (settings.weights keyed by class name). */
 	weights: Readonly<Record<string, number>>;
 	lambda: number;
 	idleGapMs: number;
-	/** Extra signals beyond the generic four (W7/W8 plug in here). */
 	signals?: readonly BoundarySignal[];
 }
 
-/** Host cut-point roles (isCutPointMessage mirror — never reimagine these). */
 const CUT_POINT_ROLES = new Set([
 	"user",
 	"assistant",
@@ -53,14 +50,12 @@ const CUT_POINT_ROLES = new Set([
 	"compactionSummary",
 ]);
 
-/** A cut at `i` keeps entries[i..]; legal iff host rules allow cutting there. */
 function isLegalCut(entries: ProjectedEntry[], i: number): boolean {
 	const entry = entries[i];
-	if (entry.sourceEntry.type === "compaction") return false; // never the boundary itself
+	if (entry.sourceEntry.type === "compaction") return false;
 	return entry.messages.some((message) => CUT_POINT_ROLES.has(message.role));
 }
 
-/** Suffix token sums over projected messages: suffix[i] = tokens of [i..n). */
 export function suffixTokenSums(entries: ProjectedEntry[]): number[] {
 	const suffix: number[] = new Array(entries.length + 1).fill(0);
 	for (let i = entries.length - 1; i >= 0; i--) {
@@ -71,7 +66,6 @@ export function suffixTokenSums(entries: ProjectedEntry[]): number[] {
 	return suffix;
 }
 
-/** Map a firing signal name to its §5.4 boundary class. */
 function classOfSignal(name: string): BoundaryClass {
 	switch (name) {
 		case "run-closed":
@@ -84,7 +78,7 @@ function classOfSignal(name: string): BoundaryClass {
 		case "tool-turn":
 			return name;
 		default:
-			return "plain-turn"; // unknown signals still produce a legal cut; class is cosmetic there
+			return "plain-turn";
 	}
 }
 
@@ -110,10 +104,6 @@ export function selectCut(entries: ProjectedEntry[], params: CutpointParams): Cu
 	const suffix = suffixTokenSums(entries);
 	const sourceEntries: SessionEntry[] = entries.map((entry) => entry.sourceEntry);
 
-	// Native reference cut (findCutPoint) — the score distance term and the
-	// CUT-02 fallback. The candidate FLOOR is keep (never nativeTail: when
-	// native's granularity overshoots cap, capacity wins over "keep more",
-	// CUT-08).
 	const native = findCutPoint(sourceEntries, 0, n, keep);
 	const nativeTail = suffix[native.firstKeptEntryIndex] ?? suffix[0];
 	const lower = keep;
@@ -141,8 +131,6 @@ export function selectCut(entries: ProjectedEntry[], params: CutpointParams): Cu
 	}
 
 	if (best === undefined) {
-		// CUT-02: window empty (granularity can overshoot even when tailMax ≥
-		// keep) — fall back to the native-equivalent cut, never below keep.
 		const index = Math.max(0, Math.min(native.firstKeptEntryIndex, n - 1));
 		const cut = describeCut(entries, index, suffix, "native-equivalent", 0);
 		return { status: "native-equivalent", cut };
@@ -152,7 +140,6 @@ export function selectCut(entries: ProjectedEntry[], params: CutpointParams): Cu
 	return { status: "ok", cut };
 }
 
-/** Attach split-turn semantics + ids to a chosen index (native-compatible). */
 function describeCut(
 	entries: ProjectedEntry[],
 	index: number,
@@ -175,7 +162,6 @@ function describeCut(
 	};
 }
 
-/** Convenience for callers that already hold raw messages (POL-10/V8 tests). */
 export function estimateMessageTokens(messages: AgentMessage[]): number {
 	let sum = 0;
 	for (const message of messages) sum += estimateTokens(message as never);

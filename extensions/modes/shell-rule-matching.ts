@@ -111,7 +111,6 @@ export function matchShellRule(
 				return rule.prefix === cmd
 			}
 			if (!allowCompound && cmd !== rule.prefix) {
-				// compound guard handled by caller for allow behavior
 			}
 			if (cmd === rule.prefix) return true
 			if (cmd.startsWith(rule.prefix + " ")) return true

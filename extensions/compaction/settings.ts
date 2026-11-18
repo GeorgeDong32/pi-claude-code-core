@@ -19,7 +19,6 @@ import { join } from "node:path";
 import { readJson } from "../../lib/settings.ts";
 import type { ControllerMode } from "./types.ts";
 
-/** Signal weight table (§5.4; CUT-03 pins the ORDER, not the values). */
 export interface SignalWeights {
 	runClosed: number;
 	goalStep: number;
@@ -33,7 +32,6 @@ export interface SignalWeights {
 
 export interface RexFlowLedgerSettings {
 	enabled: boolean;
-	/** Explicit board path; bypasses discovery (LED-05b source ①). */
 	boardPath?: string;
 }
 
@@ -41,7 +39,6 @@ export interface LedgerSettings {
 	rexFlow: RexFlowLedgerSettings;
 }
 
-/** ST-02 key set — frozen (SC-CFG-01); every field normalized on read. */
 export interface CompactionSettings {
 	mode: ControllerMode;
 	precomputeRatio: number;
@@ -72,20 +69,9 @@ export interface CompactionSettings {
 	standingPatterns: string[];
 	ledger: LedgerSettings;
 	weights: SignalWeights;
-	/** CUT-03 score distance penalty λ. */
 	lambda: number;
 }
 
-/**
- * Appendix C defaults. mode: "on" ships as the default per the user's
- * explicit approval on 2026-11-10 (DEVIATIONS.md SC-1, recovery clause ②) —
- * this is a user override, NOT a gate pass: the W2 local replay fact stands
- * (M1 = 0.52 < 0.90 target; BLK 7/7 green; real-machine H-SC evidence list
- * still open, see DEVIATIONS SC-3). Automatic demotions are unaffected:
- * native compaction disabled → shadow (POL-06), conflict-edit streak →
- * shadow. Rollback stays one line: PI_CORE_COMPACTION=shadow or a settings
- * file with mode:"shadow".
- */
 export const DEFAULT_COMPACTION_CORE_SETTINGS: CompactionSettings = Object.freeze({
 	mode: "on",
 	precomputeRatio: 0.6,
@@ -114,9 +100,7 @@ export const DEFAULT_COMPACTION_CORE_SETTINGS: CompactionSettings = Object.freez
 	maxDirectiveLines: 100,
 	maxOpenItems: 60,
 	standingPatterns: [
-		// Chinese conservative set (LED-02 宁多勿少).
 		"不要", "禁止", "必须", "一律", "始终", "只能", "不得", "别",
-		// English conservative set.
 		"never", "always", "must", "do not", "don't", "only", "without",
 	],
 	ledger: { rexFlow: { enabled: true } },
@@ -133,19 +117,12 @@ export const DEFAULT_COMPACTION_CORE_SETTINGS: CompactionSettings = Object.freez
 	lambda: 20,
 });
 
-/** Number coercion: finite, > min (exclusive) or fallback. */
 function num(value: unknown, fallback: number, min: number, minInclusive = false): number {
 	if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
 	const ok = minInclusive ? value >= min : value > min;
 	return ok ? value : fallback;
 }
 
-/**
- * POL-02 ratio-group validation: `0 < targetPostRatio < preRatio <
- * applyRatio < 1`, `0 < hardFitRatio ≤ 1`, `overflowFitRatio ≤ hardFitRatio`.
- * Any violation reverts the WHOLE group to defaults. Returns
- * [settings, reverted] so the caller emits exactly one warn.
- */
 export type RatioGroup = Pick<
 	CompactionSettings,
 	"targetPostRatio" | "precomputeRatio" | "applyRatio" | "hardFitRatio" | "overflowFitRatio"
@@ -153,9 +130,6 @@ export type RatioGroup = Pick<
 
 export function validateRatioGroup(partial: Partial<RatioGroup>): { ratios: RatioGroup; reverted: boolean } {
 	const d = DEFAULT_COMPACTION_CORE_SETTINGS;
-	// Absent keys inherit defaults; a PRESENT key that is mistyped or
-	// out-of-range is a violation — the whole group reverts together (POL-02),
-	// never a field-by-field silent substitution of bad values.
 	const unit = (v: unknown) => typeof v === "number" && Number.isFinite(v) && v > 0 && v < 1;
 	let violated = false;
 	const merged: RatioGroup = {
@@ -167,13 +141,11 @@ export function validateRatioGroup(partial: Partial<RatioGroup>): { ratios: Rati
 	};
 	for (const key of ["targetPostRatio", "precomputeRatio", "applyRatio", "hardFitRatio", "overflowFitRatio"] as const) {
 		const raw = partial[key];
-		if (raw === undefined) continue; // absent → default
+		if (raw === undefined) continue;
 		if (key === "overflowFitRatio") {
 			if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) merged.overflowFitRatio = raw;
 			else violated = true;
 		} else if (key === "hardFitRatio") {
-			// C4 (2026-11-10 review): spec allows hardFitRatio = 1.0 (the
-			// whole window) — validate 0 < v ≤ 1 instead of strict unit().
 			if (typeof raw === "number" && Number.isFinite(raw) && raw > 0 && raw <= 1) merged.hardFitRatio = raw;
 			else violated = true;
 		} else if (unit(raw)) merged[key] = raw;
@@ -259,11 +231,8 @@ function normalize(raw: Record<string, unknown>): { settings: CompactionSettings
 	};
 }
 
-// Frozen-layout file path, homedir-based like core-economy (C2 review R1 P1-1);
-// lazy init, test seam to redirect.
 let settingsPath: string | undefined;
 
-/** Test seam: redirect the settings file (tests only). */
 export function setCompactionSettingsPath(path: string | undefined): void {
 	settingsPath = path;
 }
@@ -283,7 +252,6 @@ export function loadCompactionSettings(env: Record<string, string | undefined> =
 	const path = getCompactionSettingsPath();
 	const fileWarned: string[] = [];
 	const raw = readJson<Record<string, unknown>>(path, {}, (reason) => {
-		// absent file = defaults, silent; anything else = one warn + defaults.
 		if (reason !== "missing") fileWarned.push(`${reason} core-compaction.json ignored; defaults apply`);
 	});
 	const { settings, warned } = normalize(raw);
@@ -292,7 +260,7 @@ export function loadCompactionSettings(env: Record<string, string | undefined> =
 	let envWarn: string | undefined;
 	if (envMode !== undefined) {
 		if (envMode === "off" || envMode === "shadow" || envMode === "on") {
-			mode = envMode; // ST-03: env wins over the file
+			mode = envMode;
 		} else {
 			envWarn = `PI_CORE_COMPACTION=${envMode} ignored (off|shadow|on)`;
 		}

@@ -26,7 +26,6 @@ function hasFingerprint(issue: Issue): boolean {
 	return typeof issue.fingerprint === "string" && issue.fingerprint.length > 0;
 }
 
-/** Dedupe by (file, line, category), or by stable `fingerprint` when present. */
 export function dedupeIssues(issues: Issue[]): Issue[] {
 	const best = new Map<string, Issue>();
 	for (const issue of issues) {
@@ -57,14 +56,9 @@ export function dedupeIssues(issues: Issue[]): Issue[] {
 
 export function filterByThreshold(issues: Issue[], threshold: number): Issue[] {
 	const floor = Math.max(0, Math.min(10, Math.floor(threshold)));
-	// Issues without a usable confidence (legacy/shape-adapted output) default
-	// to a neutral 5 instead of being silently dropped (`undefined >= floor`
-	// is false, which used to kill every such issue — a systematic
-	// false-negative source observed in the field).
 	return issues.filter((i) => confidenceOf(i) >= floor);
 }
 
-/** Neutral-midpoint fallback for issues that arrived without a score. */
 export function confidenceOf(issue: Issue): number {
 	if (typeof issue.confidence === "number" && Number.isFinite(issue.confidence)) {
 		return Math.max(1, Math.min(10, issue.confidence));
@@ -72,17 +66,6 @@ export function confidenceOf(issue: Issue): number {
 	return 5;
 }
 
-/**
- * Default verdict policy (strict):
- *   - any surviving blocker or major → `request_changes`
- *   - only minor / nit → `comment`
- *   - no surviving issues → `approve` (caller must still check coverage)
- *
- * Legacy policy (kept for `verdictPolicy:"legacy"`):
- *   - request_changes on any blocker OR ≥3 major
- *   - approve on no blocker and no major
- *   - otherwise comment
- */
 export type VerdictPolicy = "strict" | "legacy";
 
 export function computeVerdict(issues: Issue[], policy: VerdictPolicy = "strict"): Verdict {
@@ -105,10 +88,6 @@ export function defaultApproveReason(issues: Issue[]): string {
 	return "No blockers or major issues remain after filtering.";
 }
 
-/**
- * Apply code-side gate enforcement on raw LLM (or pre-scored) output.
- * Always recomputes verdict from filtered issues; LLM verdict is ignored.
- */
 export function enforceGateOutput(
 	raw: { issues: Issue[]; reason?: string },
 	threshold: number,
@@ -128,10 +107,6 @@ export function enforceGateOutput(
 	return { verdict, issues, reason, dispositions: [], status: "ok" };
 }
 
-/**
- * Build an empty dispositions array when the gate did not return one. We
- * keep every candidate visible so the report can audit dropped/merged ones.
- */
 export function buildDispositions(
 	candidates: Issue[],
 	surviving: Issue[],

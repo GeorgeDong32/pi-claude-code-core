@@ -1,52 +1,3 @@
-/**
- * memory/index.ts — the memory module wiring (RV, spec 2026-10-02-memory-recall-v2
- * — supersedes the 2026-10-01-memory-recall-fix MR wiring).
- *
- *   session_start       reconcile both layers + settings load + static yield probe
- *   before_agent_start  dynamic yield probe → policy + two-layer capped index;
- *                       RV prompt path — one recall selection per user message,
- *                       bounded by recallWaitMs; the block persists as a custom
- *                       message right after the user message (request #1 sees it).
- *                       pi 1.2.0 union: custom-message runs (sendMessage
- *                       triggerTurn:true — goal continuations, directives)
- *                       keep policy/index injection but SKIP recall selection
- *                       (RV-01/03 scopes selection to real user prompts)
- *   message_end         RV steer path — user messages that arrive mid-run select
- *                       with waitMs 0 (parked); custom blocks never trigger (RV-01)
- *   turn_end            RV deferred delivery (first continues=true turn_end;
- *                       sendMessage triggerTurn:false — flushed after dispatch)
- *                       + auto-consolidation trigger (V2-C) + P3 automation
- *   agent_end           RV run boundary — prompt-state cleanup only (v1.2:
- *                       an in-flight selection may still complete and deliver;
- *                       latest-wins supersede happens at the next user
- *                       message, not at run end)
- *   session_shutdown    AR1005-RC-04 — dispose the recall machine on ANY
- *                       shutdown reason (synchronous, no model wait); late
- *                       selector completions are dropped by generation
- *                       invalidation. session_start also defensively
- *                       disposes (reload/resume drivers) — neither replaces
- *                       the other.
- *   tool_call           guardMemoryToolCall (G1 verdicts; BH-R2: the secret
- *                       probe is memory-layer-scoped and scans only the
- *                       incoming text — write's content, edit's
- *                       edits[].newText; the legacy guardMemoryWrites stays
- *                       a guard.ts module export under test, not production
- *                       wiring)
- *   tool_result         memory_consolidate settle + stale-read staleness note
- *   agent_settled       consolidation in-flight clear
- *   registerTool        session_recall, memory_consolidate (V2-C)
- *   registerCommand     /memory (incl. RV recall status), /memory-consolidate,
- *                       /memory-import-claude, /memory-import-hermes
- *
- * NO context hook (RV: request-level projection is gone — the 30× cost and
- * the every-request re-injection of one frozen selection were the top
- * recall failures; delivery is persisted-once per user message instead).
- * Recall runs ONLY when memory.recallModel resolves (D3 — unset or
- * unresolvable = no recall, no lexical fallback). All recall session state
- * derives from the projection history (D9 — recall.ts, the deep module).
- * Injection failures NEVER block a turn (P3-ME-09): every hook body is
- * try/catch-wrapped at the boundary.
- */
 import { notify as sharedNotify } from "../ui/notify.ts";
 import { accessSync, constants as fsConstants, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -80,40 +31,27 @@ import { ConsolidationTrigger, CONSOLIDATE_DIRECTIVE_TYPE, registerConsolidation
 import { setupAutomation, loadMemorySettings, DEFAULT_RECALL_WAIT_MS, type AutomationState, type MemorySettings } from "./automation.ts";
 import { importFromClaude, importFromHermes, importHermesFull } from "./importers.ts";
 
-/** RV: optional test seam — wiring tests substitute the selector factory;
- * pi itself always loads the factory with a single argument. */
 export interface MemoryExtensionDeps {
 	selectorFactory?: typeof llmSelector;
 }
 
 export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryExtensionDeps = {}): void {
 	const home = homedir();
-	// resolve the agent dir at call time so HOME overrides (tests) apply
 	const gate = new InjectionGate(join(process.env.HOME ?? home, ".pi", "agent"));
 
 	let degradedNotified = false;
 	let memoryDirWritable = true;
 	let memorySettings: MemorySettings = { automation: true };
 	const automationState: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0, routed: 0 };
-	// RV: the recall machine (recall.ts deep module) — ALL session state
-	// derives from the projection history on every call (D9); the wiring
-	// only routes events. The machine exists only while memory.recallModel
-	// resolves (D3: no model, no recall — no lexical fallback).
 	let recallMachine: RecallMachine | null = null;
 	let recallModelLabel = "";
 	let recallOffNotified = false;
 	let promptMessagePending = false;
 
-	/** RV/D9: the history snapshot — the projection's message list. */
 	function historyFor(ctx: ExtensionContext): readonly unknown[] {
-		// quickwin-4 (arch review): ONE defensive sessionManager reader — the
-		// local hand-rolled cast moved to modes/session-branch.ts.
 		return readSessionProjection(ctx.sessionManager);
 	}
 
-	/** B (recall-frequency-tuning): user turns already in the branch — the
-	 * recall machine's warmup seed. Same reader as historyFor (one defensive
-	 * sessionManager seam); counts role === "user" messages only. */
 	function countBranchUserTurns(ctx: ExtensionContext): number {
 		let n = 0;
 		for (const m of readSessionProjection(ctx.sessionManager) as Array<{ role?: string }>) {
@@ -122,7 +60,6 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 		return n;
 	}
 
-	/** The persisted custom message shape for a delivered recall block. */
 	function makeRecallMessage(block: RecallBlock) {
 		return {
 			customType: block.customType,
@@ -139,7 +76,6 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 	 * must never deliver in parallel. */
 	function ensureRecallMachine(ctx: ExtensionContext): RecallMachine | null {
 		if (!memorySettings.recallModel) {
-			// recall switched off (settings reload): kill any old machine
 			if (recallMachine) {
 				recallMachine.dispose();
 				recallMachine = null;
@@ -154,8 +90,6 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 				recallOffNotified = true;
 				console.log(`pi-memory: recallModel "${memorySettings.recallModel}" unresolvable — recall off`);
 			}
-			// AR1005-RC-04: unresolvable after being on — the old machine must not
-			// keep delivering (its requests were created under the old settings)
 			if (recallMachine) {
 				recallMachine.dispose();
 				recallMachine = null;
@@ -165,44 +99,30 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 		}
 		const label = `${(model as unknown as { provider: string }).provider}/${(model as unknown as { id: string }).id}`;
 		if (!recallMachine || recallModelLabel !== label) {
-			recallMachine?.dispose(); // dispose BEFORE the new machine exists — no parallel delivery
+			recallMachine?.dispose();
 			recallModelLabel = label;
 			recallMachine = createRecall({
 				selector: (extensionDeps.selectorFactory ?? llmSelector)({ model: () => model, registry: () => ctx.modelRegistry as never }),
 				modelLabel: label,
 				files: () => eligibleMemories(userMemoryDir(ctx), memoryDir(ctx), gitCanonicalRoot(ctx.cwd ?? process.cwd()) ?? undefined),
 				cwd: ctx.cwd ?? process.cwd(),
-				// B (recall-frequency-tuning): seed the warmup counter with the
-				// user turns already in the sessionManager branch (before_agent_start
-				// fires before the in-flight message is persisted — no off-by-one;
-				// NOT agent.state.messages, which already holds it). A rebuild
-				// mid-session (settings/model change) re-derives the seed so a
-				// resumed conversation never replays the warmup.
 				initialUserTurns: countBranchUserTurns(ctx),
 				// spec v1.2: immediate delivery the moment a parked selection
 				// completes — pi queues it as a pending custom message and flushes
 				// at the next turn_end (request #2 within the run, next turn's
-				// request #1 otherwise). Never blocks the screen.
 				deliver: (block) => {
 					pi.sendMessage(makeRecallMessage(block), { triggerTurn: false });
 				},
-				// AR1005-RC-02: controlled background diagnostics — one line per
-				// failed request; supersede/dispose stay silent.
 				diagnose: (message) => console.log(`pi-memory: recall ${message}`),
 			});
 		}
 		return recallMachine;
 	}
 
-	/** RV-16: user-layer files that mention a known project key (from
-	 * ~/.pi/agent/projects/*) and carry no `paths:` scoping — surfaced by
-	 * /memory as misplaced candidates. */
 	function misplacedUserFiles(udir: string): Array<{ file: string; key: string }> {
 		try {
 			const projectsRoot = join(process.env.HOME ?? home, ".pi", "agent", "projects");
 			if (!existsSync(projectsRoot)) return [];
-			// W4: the tail-segment derivation is paths.friendlyProjectHint;
-			// the ≥4 threshold is this caller's own policy
 			const keys = new Set(
 				readdirSync(projectsRoot)
 					.map((d) => friendlyProjectHint(d))
@@ -225,8 +145,6 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 		}
 	}
 
-	/** Resolve settings → model → machine, then run one selection. Null when
-	 * recall is off (unset/unresolvable recallModel) or nothing qualified. */
 	async function recallBlockFor(text: string, ctx: ExtensionContext, waitMs: number): Promise<RecallBlock | null> {
 		const machine = ensureRecallMachine(ctx);
 		if (!machine) return null;
@@ -234,8 +152,6 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 	}
 
 	function memoryDir(ctx?: { cwd?: string }): string {
-		// anchor on the SESSION cwd (ctx.cwd); process.cwd() is only the
-		// fallback. Re-resolve per call so HOME overrides (tests) apply.
 		return resolveMemoryPaths(ctx?.cwd ?? process.cwd(), process.env.HOME ?? home).memoryDir;
 	}
 
@@ -246,17 +162,10 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 	function notifyOnce(ctx: ExtensionContext | undefined, msg: string): void {
 		if (degradedNotified) return;
 		degradedNotified = true;
-		// C2: UI-visible warnings through the shared entry (bus + cctui
-		// negotiation). No headless console branch — headless sessions have
-		// no presentation surface, so the notice is simply not delivered.
 		if (ctx?.hasUI) sharedNotify(ctx, msg, "warning");
 	}
 
-	// G1-C3: short-repo-name warns fire once per session per message shape.
 	let warnedMisfiles = new Set<string>();
-	// G1-C5: sha256 baseline of the protected files, taken at session_start
-	// (direct reads — never through the memdir cache, whose mtime granularity
-	// would miss content-level changes) and re-checked at agent_end.
 	let protectedBaseline = new Map<string, string | null>();
 	let bypassNoticeShown = false;
 
@@ -264,11 +173,10 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 		try {
 			return createHash("sha256").update(readFileSync(file)).digest("hex");
 		} catch {
-			return null; // unreadable/missing — not baseline-able
+			return null;
 		}
 	};
 
-	// G2-C9/C14 thresholds — named constants per the spec's hard constraint ⑥.
 	const DELETION_SPIKE_FILES = 3;
 	const BYTES_DROP_RATIO = 0.3;
 
@@ -283,9 +191,6 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 		}
 	};
 
-	/** G2-C14: vs this session's start snapshot — mass deletion or a big byte
-	 * drop without a memory_consolidate call surfaces ONE notice pointing at
-	 * the snapshot location. Never blocks, never rolls back. */
 	let consolidationUsedThisSession = false;
 	const checkMassDeletion = (ctx: ExtensionContext): void => {
 		try {
@@ -318,7 +223,7 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 							"warning",
 						);
 					}
-					return; // one notice per agent_end scan is enough
+					return;
 				}
 			}
 		} catch {
@@ -364,10 +269,6 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 			consolidationUsedThisSession = false;
 			baselineProtectedFiles(ctx);
 			snapshotBothLayers(ctx);
-			// AR1005-RC-04: defensive teardown — a session_start on a live
-			// extension instance (reload/resume drivers) must not let an old
-			// machine's in-flight work deliver into the new session. This does
-			// NOT replace the real session_shutdown wiring below.
 			recallMachine?.dispose();
 			recallMachine = null;
 			recallModelLabel = "";
@@ -376,22 +277,15 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 			gate.probeStatic();
 			memorySettings = loadMemorySettings(join(process.env.HOME ?? home, ".pi", "agent"));
 			automationState.enabled = memorySettings.automation;
-			// pre-create both layers (D3a): a fresh project must not degrade the
-			// WHOLE injection (incl. the user layer) to policy-only just because
-			// its project memory dir doesn't exist yet — the probe below reads
-			// ENOENT as "not writable"
 			for (const d of [memoryDir(ctx), userMemoryDir(ctx)]) {
 				try {
 					mkdirSync(d, { recursive: true });
 				} catch {
-					/* unwritable parent — the probe below degrades correctly */
 				}
 			}
 			reindex(memoryDir(ctx));
-			reindex(userMemoryDir(ctx)); // V2-D1 user layer
-			// writability probe: a failed write degrades to policy-only
+			reindex(userMemoryDir(ctx));
 			try {
-				// existence is not writability (review #17): probe the access mode
 				accessSync(memoryDir(ctx), fsConstants.W_OK);
 				memoryDirWritable = true;
 			} catch {
@@ -400,12 +294,8 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 			coreBus().publish({
 				memory: { yielded: gate.state.yielded, ...(gate.state.yielded ? { dir: memoryDir(ctx) } : {}) },
 			});
-			// spec 2026-10-03 §2 drain: settings are loaded and the yield probe
-			// has settled at this point — fire the background queue drain for
-			// this project (never awaited on the startup path).
 			automation.drainPending(ctx);
 		} catch {
-			/* never block session start */
 		}
 	});
 
@@ -420,42 +310,21 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 			// scoped to USER runs so custom runs behave exactly as they did on
 			// 1.1.0 (where the event never fired for them).
 			const isUserRun = event.messageType === "user";
-			// RV run boundary (defensive — agent_end owns the real reset; this
-			// covers drivers where agent_end never fired). USER runs only: v1.2
-			// supersede is latest-wins at the next USER message — a custom run
-			// must not abort an in-flight deferred selection that 1.1.0 would
-			// still have delivered (caught in the 1.2.0 upgrade review).
 			if (isUserRun) recallMachine?.abort();
-			// The flag means "the prompt path selected for THIS user message".
-			// A custom run runs no selection — leaving it true would make the
-			// message_end short-circuit swallow the first mid-run user steer of
-			// every continuation/directive run (1.2.0 regression caught in
-			// review: the custom message's own message_end is RV-01-filtered and
-			// never clears it).
 			promptMessagePending = isUserRun;
 			const wasYielded = gate.state.yielded;
 			gate.probePrompt(event.systemPrompt ?? "");
 			if (gate.state.yielded !== wasYielded) {
-				// dynamic probe just flipped — refresh the bus channel
 				coreBus().publish({
 					memory: { yielded: gate.state.yielded, ...(gate.state.yielded ? { dir: memoryDir(ctx) } : {}) },
 				});
 			}
-			if (gate.state.yielded) return undefined; // hermes owns injection
+			if (gate.state.yielded) return undefined;
 			const dir = memoryDir(ctx);
 			const udir = userMemoryDir(ctx);
 			const waitMs = memorySettings.recallWaitMs ?? DEFAULT_RECALL_WAIT_MS;
-			// Custom runs keep the policy/index injection (their system prompt
-			// is rebuilt through the same setup) but skip recall selection:
-			// RV-01/03 scopes selection to one per REAL user message, and a
-			// selector raced against empty text would only add cost and inject
-			// recall blocks into continuation runs.
 			if (!memoryDirWritable) {
 				notifyOnce(ctx, "memory dir not writable — running policy-only");
-				// policy-only: the index derives from the (unwritable) dir and
-				// cannot be trusted to match, so inject just the policy block.
-				// Recall still runs — it only READS (an unwritable dir simply
-				// yields no candidates).
 				const degradedBlock = isUserRun ? await recallBlockFor(event.prompt, ctx, waitMs) : null;
 				return degradedBlock
 					? { systemPrompt: `${event.systemPrompt ?? ""}\n\n${policyCompact(dir)}`, message: makeRecallMessage(degradedBlock) }
@@ -464,9 +333,6 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 			const userScan = scanMemoryDirCached(udir);
 			const projectScan = scanMemoryDirCached(dir);
 			const skippedTotal = userScan.skipped + projectScan.skipped;
-			// RV-14: user-layer entries with `paths:` only render their index
-			// rows (and pinned bodies) when the session's git canonical root
-			// matches — scoped memories stay invisible elsewhere.
 			const root = gitCanonicalRoot(ctx.cwd ?? process.cwd()) ?? undefined;
 			const scopedUserFiles = userScan.files.filter((f) => !f.entry.paths || scopeMatches(root, f.entry.paths));
 			const injection = buildPolicyInjection(
@@ -475,14 +341,10 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 				dir,
 			) + (skippedTotal > 0 ? `\n<!-- memory: ${skippedTotal} file(s) skipped (invalid frontmatter) -->` : "");
 			const systemPrompt = `${event.systemPrompt ?? ""}\n\n${injection}`;
-			// RV-01/03 prompt path: one selection per real user message, bounded
-			// by waitMs; a block persists as a custom message right after the
-			// user message (request #1 sees it — S4). Custom-message runs skip
-			// selection (see isUserRun above).
 			const block = isUserRun ? await recallBlockFor(event.prompt, ctx, waitMs) : null;
 			return block ? { systemPrompt, message: makeRecallMessage(block) } : { systemPrompt };
 		} catch {
-			return undefined; // injection failure never blocks the turn
+			return undefined;
 		}
 	});
 
@@ -490,18 +352,11 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 		try {
 			const name = typeof event.toolName === "string" ? event.toolName : "";
 			const input = (event.input ?? {}) as Record<string, unknown>;
-			// RV-07: read suppression is HISTORY-derived now (recall.ts
-			// deriveHistory resolves read toolCalls against cwd) — no live
-			// tracking here. This hook only guards writes.
-			// V2-D2: both layers are guarded (project first, then user)
-			// G1-C4: self-modification protection first — its list is
-			// hardcoded (protected-paths.ts) and orthogonal to memory.
 			const target = typeof input.path === "string" ? input.path : "";
 			const protectedHit = matchProtectedPath(target, { home: sessionHome(), cwd: ctx.cwd ?? process.cwd() });
 			if (protectedHit) {
 				return { block: true, reason: protectedPathBlockReason(protectedHit) };
 			}
-			// G1-C1/C2/C3/C6 + the secret probe, over both layers at once.
 			const verdict: GuardVerdict = guardMemoryToolCall(name, input, {
 				projectDir: memoryDir(ctx),
 				userDir: userMemoryDir(ctx),
@@ -521,7 +376,6 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 		return undefined;
 	});
 
-	// ── V2-C consolidation: directive + triggerTurn, native tool rendering ──
 	const consolidation = new ConsolidationTrigger({
 		sendDirective: (layer, directive) => {
 			pi.sendMessage(
@@ -540,65 +394,45 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 	);
 	pi.on("turn_end", (event, ctx: ExtensionContext) => {
 		try {
-			if (gate.state.yielded) return; // hermes owns memory while present
+			if (gate.state.yielded) return;
 			consolidation.onTurnEnd(memoryDir(ctx), userMemoryDir(ctx));
 		} catch {
-			/* never block the turn */
 		}
 	});
 	pi.on("agent_end", (_event, ctx: ExtensionContext) => {
 		try {
-			// G2-C14: mass-deletion post-check vs this session's start snapshot.
 			checkMassDeletion(ctx);
-			// G1-C5: compare protected files against the session_start baseline.
 			checkProtectedFiles(ctx);
-			// spec v1.2: NO abort here — an in-flight selection for this run may
-			// still complete and deliver (appends when not streaming → next
-			// turn's request #1 sees it). Latest-wins supersede happens at the
-			// NEXT user message (before_agent_start abort), not at run end.
 			promptMessagePending = false;
 		} catch {
-			/* never block */
 		}
 	});
 	pi.on("message_end", (event, ctx: ExtensionContext) => {
 		try {
 			if (gate.state.yielded) return;
 			const message = (event as { message?: { role?: string; customType?: string } }).message;
-			// RV-01: real user messages only (custom blocks — recall injections,
-			// consolidation directives, goal continuations — never trigger).
 			if (!message || message.role !== "user" || message.customType) return;
 			if (promptMessagePending) {
-				// the prompt path already selected for this message at
-				// before_agent_start — just clear the flag
 				promptMessagePending = false;
 				return;
 			}
-			// steer / followUp arrived mid-run: never block the run — waitMs 0
-			// parks the result for the next continues=true turn_end. The machine
-			// is created here too (the steer path may run before any idle prompt).
 			const text = extractUserText(message);
 			if (text === null) return;
 			const steerMachine = ensureRecallMachine(ctx);
 			if (!steerMachine) return;
 			void steerMachine.onUserMessage(text, () => historyFor(ctx), 0);
 		} catch {
-			/* never block the run */
 		}
 	});
 	pi.on("tool_result", (event, ctx: ExtensionContext) => {
 		try {
-			// B3: in-flight only — the turn is still the directive's turn
 			if ((event as { toolName?: string }).toolName === "memory_consolidate") consolidation.settle();
-			// AD2: policy-driven reads carry no freshness signal — stamp a
-			// staleness note on reads into the memory layers
 			const e = event as { toolName?: string; input?: Record<string, unknown>; content?: Array<{ type: string; text?: string }> };
 			if (e.toolName === "read" && typeof e.input?.path === "string") {
 				const path = e.input.path;
 				if ([userMemoryDir(ctx), memoryDir(ctx)].some((d) => path === d || path.startsWith(`${d}/`))) {
 					const header = (() => {
 						try {
-							// G2-C13: content-aware age (created/consolidated_at rule)
 							return freshnessHeader(statSync(path).mtimeMs, readFileSync(path, "utf8"));
 						} catch {
 							return null;
@@ -611,34 +445,25 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 				}
 			}
 		} catch {
-			/* never block */
 		}
 		return undefined;
 	});
 	pi.on("session_shutdown", (_event, _ctx: ExtensionContext) => {
 		try {
-			// AR1005-RC-04: terminal teardown on ANY shutdown reason —
-			// synchronous, never waits on the model. Late selector completions
-			// are dropped by the machine's generation invalidation (zero history
-			// reads, zero deliveries). Automation's own shutdown handler (queue
-			// staging) is a separate registration and still runs.
 			recallMachine?.dispose();
 			recallMachine = null;
 			recallModelLabel = "";
 			promptMessagePending = false;
 		} catch {
-			/* never block shutdown */
 		}
 	});
 	pi.on("agent_settled", () => {
 		try {
 			consolidation.settle({ directive: true });
 		} catch {
-			/* never block */
 		}
 	});
 
-	// ── V2-A automatic maintenance: correction / review / flush + queue drain ──
 	const automation = setupAutomation(pi, {
 		gate,
 		dirs: (ctx) => {
@@ -692,8 +517,6 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 				details: { hits: result.hits.length, skippedLines: result.skippedLines },
 			};
 		},
-// TR C: compact rows — hit count + first pointer instead of the wall
-		// of excerpts (the full text still reaches the model untouched).
 		renderCall: (args, theme) => renderSessionRecallCall(args as SessionRecallArgs, theme as never),
 		renderResult: (result, _options, theme) =>
 			renderRows(sessionRecallResultRows(result), theme as never),
@@ -711,18 +534,12 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 			try {
 				indexBytes = byteLength(readFileSync(join(dir, "MEMORY.md"), "utf-8"));
 			} catch {
-				/* no index */
 			}
 			try {
 				userIndexBytes = byteLength(readFileSync(join(udir, "MEMORY.md"), "utf-8"));
 			} catch {
-				/* no index */
 			}
 			const cctx = ctx as ExtensionContext;
-			// Panel accuracy fix (2026-10-03): re-attempt machine creation before
-			// reporting — the panel used to read the last before_agent_start's
-			// result and label a fresh session (no agent turn yet) as
-		// "recallModel unresolvable" even when the ref resolves fine.
 			ensureRecallMachine(cctx);
 			const derived = deriveHistory(historyFor(cctx), cctx.cwd ?? process.cwd());
 			const content = renderMemoryDiagnostics({
@@ -754,7 +571,6 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 			pi.sendMessage({
 				customType: "pi-memory-status",
 				content,
-				// display metadata for the CC panel renderer (content untouched)
 				details: { command: "/memory" },
 				display: true,
 			});
@@ -787,7 +603,6 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 			const cctx = ctx as ExtensionContext;
 			const text: string[] = [];
 			if (args.trim()) {
-				// legacy single-file mode
 				const file = args.trim();
 				const report = importFromHermes(file, memoryDir(cctx));
 				text.push(`memory-import-hermes: converted ${report.copied}, skipped ${report.skipped} (idempotent)`, ...report.notes);

@@ -1,13 +1,3 @@
-/**
- * modes/plan.ts — the plan concept: plan.md file management plus plan text
- * parsing. Carved out of the old modes/utils.ts grab-bag (arch review C3,
- * 2026-10-03); behavior unchanged. Owns: plan file path/IO (template,
- * ensure/read/write, symlink-annotated path checks), workspace path
- * resolution, and the todo-list text grammar (extract/mark/DONE/completion
- * signals, placeholder filtering, assistant Plan:-section sync). Also hosts
- * the shared isAssistantMessage/assistantMessageText helpers (SR-4b) —
- * deliberately not in lib/ and not merged with compaction's `textOf`.
- */
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { createHash } from "node:crypto"
 import path from "node:path"
@@ -21,7 +11,7 @@ export interface TodoItem {
 
 export function cleanStepText(text: string): string {
 	let cleaned = text
-		.replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1") // strip bold/italic
+		.replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1")
 		.replace(/`([^`]+)`/g, "$1") // strip inline code
 		.replace(
 			/^(Use|Run|Execute|Create|Write|Read|Check|Verify|Update|Modify|Add|Remove|Delete|Install)\s+(the\s+)?/i,
@@ -72,7 +62,6 @@ export function extractDoneSteps(message: string): number[] {
 	return steps;
 }
 
-/** Mark any `[DONE:n]` steps found in `text` complete. Returns how many tags were seen. */
 export function markCompletedSteps(text: string, items: TodoItem[]): number {
 	const doneSteps = extractDoneSteps(text);
 	for (const step of doneSteps) {
@@ -90,17 +79,14 @@ const COMPLETION_SIGNALS: RegExp[] = [
 	/\bfinished\b/i,
 ];
 
-/** Heuristic: does the assistant text claim the work is finished? */
 export function isCompletionSignal(text: string): boolean {
 	return COMPLETION_SIGNALS.some((p) => p.test(text));
 }
 
-/** Stable hash of plan content for popup throttling. */
 export function hashPlan(content: string): string {
 	return createHash("sha256").update(content).digest("hex").slice(0, 16)
 }
 
-// ---- Plan file helpers (v2.0.0) -----------------------------------------
 
 const PLAN_FILE_TEMPLATE = `# Plan
 
@@ -189,7 +175,6 @@ function planPathHasSymlinkAncestor(filePath: string, stopAt: string): boolean {
 		try {
 			if (lstatSync(current).isSymbolicLink()) return true
 		} catch {
-			/* missing segment — ok while creating plan file */
 		}
 		const parent = path.dirname(current)
 		if (parent === current) break
@@ -207,7 +192,6 @@ export function filterSubstantivePlanItems(items: TodoItem[]): TodoItem[] {
 	return items.filter((item) => !isPlaceholderPlanItem(item.text))
 }
 
-/** Extract the `Plan:` section from an assistant message for plan.md sync. */
 export function extractPlanSection(message: string): string | null {
 	const headerMatch = message.match(/\*{0,2}Plan:\*{0,2}\s*\n/i)
 	if (!headerMatch) return null
@@ -216,19 +200,12 @@ export function extractPlanSection(message: string): string | null {
 	return section.length > 0 ? section : null
 }
 
-/** True when plan.md is missing, empty, or still the default placeholder template. */
 export function shouldSyncAssistantPlanToFile(planContent: string | null): boolean {
 	if (!planContent?.trim()) return true
 	if (!planContent.includes("<!-- permission-modes:plan -->")) return false
 	return filterSubstantivePlanItems(extractTodoItems(planContent)).length === 0
 }
 
-// ---- assistant message helpers (SR-4b) -------------------------------------
-// One shared copy of the isAssistant/getText pair used by index.ts (turn_end)
-// and plan-session.ts (agent_end plan sync). Deliberately NOT merged with
-// compaction's `textOf`: that one requires `typeof text === "string"` per
-// block, so `[{type:"text"},{type:"text",text:"a"}]` yields `"a"` there but
-// `"\na"` here — different semantics, different module.
 
 export const isAssistantMessage = (m: any): boolean =>
 	!!m && m.role === "assistant" && Array.isArray(m.content);

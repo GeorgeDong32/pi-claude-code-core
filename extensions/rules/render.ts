@@ -1,24 +1,3 @@
-/**
- * rules/render.ts — the rules engine's pure core (DESIGN-RULES "D1 主测试面").
- *
- * renderRules is a total function: missing directories contribute nothing,
- * invalid files are skipped with a trailing count note, and identical input
- * yields byte-identical output (P3-RU-05).
- *
- * Rendering model (P3-RU-04):
- *   - `always` rules render inline (title + body) unless larger than
- *     inlineThresholdChars, then they degrade to an index row.
- *   - `globs` rules render as one index row each; rules whose globs match
- *     one of `touchedPaths` render inline (activation fold-in).
- *   - A single file whose expanded content exceeds budgetChars is dropped
- *     entirely (no index row either).
- *   - When the inline total overflows the budget, always-rules degrade to
- *     index rows (largest first) until it fits; the index itself is never
- *     truncated mid-content — rows are dropped whole from the tail.
- *
- * No filesystem access: callers pass a RuleFs adapter (real fs in wiring,
- * in-memory map in tests — one internal seam, two adapters).
- */
 import { INCLUDE_DEPTH_LIMIT, extractIncludes, parseFrontmatter, type IncludeRef } from "./scan.ts";
 import { RULES_MAX } from "../../lib/context-budget.js";
 export { globToRegExp } from "../../lib/glob.ts";
@@ -26,7 +5,6 @@ import { globMatches } from "../../lib/glob.ts";
 
 export type RuleScope = "builtin" | "global" | "compat" | "project";
 
-/** Scope priority for same-name shadowing: later beats earlier. */
 export const SCOPE_PRIORITY: RuleScope[] = ["builtin", "global", "compat", "project"];
 
 export interface RuleDir {
@@ -35,9 +13,7 @@ export interface RuleDir {
 }
 
 export interface RuleFs {
-	/** Sorted list of `*.md` file names in a directory ([] when missing). */
 	listMarkdownFiles(dir: string): string[];
-	/** File content; throws on unreadable (callers treat as invalid). */
 	readFile(path: string): string;
 }
 
@@ -45,7 +21,6 @@ export interface RenderRulesInput {
 	dirs: RuleDir[];
 	cwd: string;
 	projectTrusted: boolean;
-	/** Paths the session already touched — matching globs rules render inline. */
 	touchedPaths?: string[];
 	budgetChars?: number;
 	inlineThresholdChars?: number;
@@ -59,16 +34,13 @@ export interface RenderedRule {
 	description: string;
 	globs?: string[];
 	always: boolean;
-	/** Fully expanded content (frontmatter resolved, includes inlined). */
 	content: string;
 }
 
-/** Resolve an @include target against the including file's location. */
 export function resolveIncludeTarget(ref: IncludeRef, includingPath: string, home: string): string {
 	const target = ref.target;
 	if (ref.kind === "home") return join(home, target.slice(2));
 	if (ref.kind === "absolute") return target.startsWith("/") ? target : `/${target}`;
-	// relative: resolve against the directory of the including file
 	const baseDir = includingPath.slice(0, Math.max(includingPath.lastIndexOf("/"), 0));
 	return join(baseDir, target.slice(ref.kind === "relative-file" ? 2 : 0));
 }
@@ -79,7 +51,6 @@ function join(a: string, b: string): string {
 	return `${a}/${b}`;
 }
 
-/** Inline expansion of @include refs: all included bodies first, then the host body. */
 export function expandIncludes(
 	content: string,
 	includingPath: string,
@@ -95,12 +66,12 @@ export function expandIncludes(
 	let out = content;
 	for (const ref of refs) {
 		const target = resolveIncludeTarget(ref, includingPath, home);
-		if (visited.has(target)) continue; // cycle → drop at revisit point
+		if (visited.has(target)) continue;
 		let included: string;
 		try {
 			included = fs.readFile(target);
 		} catch {
-			continue; // missing → silent
+			continue;
 		}
 		const innerVisited = new Set(visited);
 		innerVisited.add(target);
@@ -109,14 +80,12 @@ export function expandIncludes(
 		includedBodies.push(
 			expandIncludes(body, target, fs, home, innerVisited, depth + 1).trim(),
 		);
-		out = out.replace(ref.raw, ""); // token removed; body hoisted above
+		out = out.replace(ref.raw, "");
 	}
 	if (includedBodies.length === 0) return content;
-	// include bodies first, then the remainder of the host file
 	return `${includedBodies.join("\n\n")}\n\n${out.trim()}`;
 }
 
-/** Collect rules from all dirs with same-name shadowing (project wins). */
 export function collectRules(input: RenderRulesInput): { rules: RenderedRule[]; invalidCount: number } {
 	const { dirs, fs, projectTrusted } = input;
 	const home = homeDir();
@@ -150,7 +119,6 @@ export function collectRules(input: RenderRulesInput): { rules: RenderedRule[]; 
 			const slug = file.replace(/\.md$/, "");
 			const fm = parsed.frontmatter ?? {};
 			const name = fm.name ?? slug;
-			// `**` (or a lone unmatched glob) degrades to always (P3-RU-02)
 			const rawGlobs = fm.globs;
 			const globs = rawGlobs?.filter((g) => g !== "**");
 			const effectiveGlobs = globs && globs.length > 0 ? globs : undefined;
@@ -172,25 +140,18 @@ export function collectRules(input: RenderRulesInput): { rules: RenderedRule[]; 
 }
 
 function homeDir(): string {
-	// deterministic per process; tests substitute via HOME-independent fakes
-	// where needed by passing absolute paths
 	if (globalHome === null) globalHome = process.env.HOME ?? "";
 	return globalHome;
 }
 
-// `@~/` resolution home. Initialized LAZILY (first use) from the environment
-// — a static initializer would capture HOME before test overrides land; the
-// wiring's explicit setRulesHome(homedir()) still wins when called.
 let globalHome: string | null = null;
 
-/** Set the home dir used to resolve `@~/` includes (wiring calls once). */
 export function setRulesHome(home: string): void {
 	globalHome = home;
 }
 
 export interface RenderResult {
 	output: string;
-	/** Rules whose globs matched touchedPaths (activation fold-ins). */
 	activated: string[];
 }
 
@@ -203,7 +164,6 @@ export function renderRules(input: RenderRulesInput): RenderResult {
 	interface InlineBlock {
 		text: string;
 		name: string;
-		/** Touched-globs fold-in (spec P3-RU-04: these degrade first). */
 		conditional: boolean;
 	}
 	const inlineBlocks: InlineBlock[] = [];
@@ -211,7 +171,7 @@ export function renderRules(input: RenderRulesInput): RenderResult {
 	const activated: string[] = [];
 
 	for (const rule of rules) {
-		if (rule.content.length > budget) continue; // >40K → drop entirely
+		if (rule.content.length > budget) continue;
 		const touchedHit = rule.globs !== undefined && touched.some((p) => globMatches(p, rule.globs!));
 		const inline = rule.always || touchedHit;
 		if (touchedHit) activated.push(rule.name);
@@ -234,13 +194,6 @@ export function renderRules(input: RenderRulesInput): RenderResult {
 	const indexLen = () =>
 		(indexRows.length > 0 ? INDEX_SECTION_HEADER.length + 2 : 0) +
 		indexRows.reduce((n, r) => n + r.length + 1, 0);
-	// Every emitted byte is accounted for: header + block connectors + the
-	// index section (with its own header) + the trailing skip note. When the
-	// budget binds, conditional fold-ins degrade to index rows FIRST
-	// (P3-RU-04: 条件规则先降为索引行), then the largest always blocks, then
-	// index rows drop whole from the tail — never mid-content. A block that
-	// is SMALLER than its degrade row is never degraded (that would grow the
-	// output); the tail-drop path handles that end of the spectrum.
 	const degradeRow = (name: string) =>
 		`- ${name} — content trimmed for budget; read the rules directory on demand`;
 	const worthDegrading = (b: InlineBlock) => b.text.length > degradeRow(b.name).length + 1;
@@ -250,7 +203,6 @@ export function renderRules(input: RenderRulesInput): RenderResult {
 			HEADER.length +
 			NOTE_RESERVE +
 			2 * (inlineBlocks.length > 0 ? 1 : 0) +
-			// block/connectors: (N-1) "\n" between inline blocks + (R-1) between rows
 			Math.max(0, inlineBlocks.length - 1) +
 			Math.max(0, indexRows.length - 1) >
 		budget;
@@ -270,10 +222,6 @@ export function renderRules(input: RenderRulesInput): RenderResult {
 				const block = inlineBlocks.splice(biggest, 1)[0];
 				indexRows.unshift(degradeRow(block.name));
 			} else if (inlineBlocks.length > 0) {
-				// every remaining block is smaller than its degrade row —
-				// degrading would GROW the output. The budget guard still
-				// outranks inline preference: drop the smallest block whole
-				// (never truncate mid-content) with no index replacement.
 				let smallest = 0;
 				for (let i = 1; i < inlineBlocks.length; i++) {
 					if (inlineBlocks[i].text.length < inlineBlocks[smallest].text.length) smallest = i;
@@ -292,12 +240,9 @@ export function renderRules(input: RenderRulesInput): RenderResult {
 	if (indexRows.length > 0) {
 		parts.push(INDEX_SECTION_HEADER + indexRows.join("\n"));
 	}
-	// no hard slice: the loop above accounts for every emitted byte, so
-	// mid-content truncation never happens (P3-RU-04 red line)
 	const output = `${parts.join("\n\n")}\n<!-- rules: skipped ${invalidCount} invalid -->\n`;
 	return { output, activated };
 }
 
 const HEADER = "## Rules\n";
-/** Reserved room for the trailing skip note inside the budget loop. */
 const NOTE_RESERVE = "\n<!-- rules: skipped 000 invalid -->\n".length;

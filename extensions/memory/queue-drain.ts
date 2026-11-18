@@ -47,8 +47,6 @@ import {
 } from "./queue.ts";
 import type { LlmComplete, OpsCompletion } from "./llm.ts";
 
-/** Drain lane constants (P0-3/2026-10-03): one 20s LLM budget per record;
- * at most 5 records per session; at most 3 attempts per record. */
 export const FLUSH_QUEUE_MS = 20_000;
 export const QUEUE_DRAIN_MAX = 5;
 export const QUEUE_MAX_ATTEMPTS = 3;
@@ -62,13 +60,8 @@ export interface DrainCap {
 }
 
 export interface QueueDrainPorts {
-	/** Run the extraction completion for one record's parts (prompt template,
-	 *  model wiring and the 20s budget live with the automation's injection). */
 	complete: (cap: DrainCap, parts: ConversationPart[]) => Promise<OpsCompletion>;
-	/** Apply extracted ops — defaults to applyMemoryOps via applyOpsOutcome. */
 	applyOps?: (ops: MemoryOp[], cap: DrainCap, routedNotes: string[]) => OpsOutcome;
-	/** Session blacklist (bump-failure records): consulted and extended by
-	 *  key `original|sessionId` so a rename to pending cannot bypass it. */
 	blacklistHas: (key: string) => boolean;
 	blacklistAdd: (key: string) => void;
 }
@@ -80,8 +73,6 @@ export interface DrainSummary {
 	lastError?: string;
 }
 
-/** W6: the ONE application summary shared by runOps and the drain — same
- *  ops, same dirs, same routing produce the same numbers and notes. */
 export function applyOpsOutcome(
 	ops: MemoryOp[],
 	dirs: { user: string; project: string },
@@ -91,8 +82,6 @@ export function applyOpsOutcome(
 	return applyMemoryOps(ops, dirs, { projectKey, routedNotes });
 }
 
-/** One claimed record, best-effort (P0-3 §4.3). Every exit settles or
- *  releases the token (finally-guarded — no happy-path-only cleanup). */
 async function drainOneRecord(cap: DrainCap, claim: QueueClaim, ports: QueueDrainPorts): Promise<DrainSummary> {
 	const summary: DrainSummary = { applied: 0, routedNotes: [] };
 	let finished = false;
@@ -103,12 +92,9 @@ async function drainOneRecord(cap: DrainCap, claim: QueueClaim, ports: QueueDrai
 			if (consume) settleClaim(cap.d.agentDir, claim);
 			else releaseClaim(cap.d.agentDir, claim);
 		} catch {
-			/* settle/release itself failed — leave the diagnosable claim
-			 * for the stale-recovery protocol; never leak a rejected promise */
 		}
 	};
 	try {
-		// B4: persist the attempt BEFORE the call — a SIGKILL mid-call counts
 		if (!bumpClaimedAttempts(cap.d.agentDir, claim)) {
 			ports.blacklistAdd(`${claim.original}|${claim.record.sessionId}`);
 			finish(false);
@@ -118,7 +104,7 @@ async function drainOneRecord(cap: DrainCap, claim: QueueClaim, ports: QueueDrai
 		try {
 			completion = await ports.complete(cap, claim.record.parts);
 		} catch {
-			finish(false); // infra failure — released, retry next session
+			finish(false);
 			return summary;
 		}
 		if (completion.ok) {
@@ -143,12 +129,12 @@ async function drainOneRecord(cap: DrainCap, claim: QueueClaim, ports: QueueDrai
 					return summary;
 				}
 			}
-			finish(true); // ok (incl. zero ops = confirmed nothing salvageable)
+			finish(true);
 		} else if (claim.record.attempts >= QUEUE_MAX_ATTEMPTS) {
 			finish(true);
 			summary.lastError = `flush-queued: dropped after ${claim.record.attempts} attempts (${completion.reason ?? "failed"})`;
 		} else {
-			finish(false); // attempts left — retry next session
+			finish(false);
 		}
 	} finally {
 		finish(false);
@@ -176,34 +162,21 @@ function validateClaimed(cap: DrainCap, claim: QueueClaim, ports: QueueDrainPort
 		return { drop: "flush-queued: expired record" };
 	}
 	if (ports.blacklistHas(`${claim.original}|${claim.record.sessionId}`)) return { skip: true };
-	// B1 routing: exact projectsDir match (projectKey substring heuristics
-	// can cross-project collide).
 	if (claim.record.projectsDir !== cap.d.projectsDir) return { skip: true };
 	return {};
 }
 
 export interface DrainResult {
-	/** Per-record summaries in record order (empty when nothing drained). */
 	summaries: DrainSummary[];
-	/** Settle-with-diagnostic messages from the validation pass. */
 	drops: string[];
 }
 
-/** The full drain pass for one captured cap. Never writes shared state —
- *  returns the summaries; the caller aggregates diagnostics. */
 export async function drainQueue(cap: DrainCap, ports: QueueDrainPorts): Promise<DrainResult> {
 	let processed = 0;
 	const eligible: QueueClaim[] = [];
 	const drops: string[] = [];
-	// P0-3 §4.3: dead-claim recovery first. Recovered claims are ALREADY
-	// ours (the reclaim rename took ownership) — they go straight into
-	// validation; re-claiming them would nest suffixes (§3 name grammar).
 	const recovered = reclaimStaleClaims(cap.d.agentDir, Date.now());
 	const candidates = loadQueue(cap.d.agentDir).map((c) => c.file);
-	// LAZY claiming: the cap is checked BEFORE each claim — an eagerly-claimed
-	// surplus would strand records this pid can neither drain (beyond the cap
-	// this pass) nor have recovered (reclaim skips our own pid) while the
-	// host lives (review R2 on the fix). Recovered tokens are already ours.
 	const claimIterator = (function* (): Generator<QueueClaim | null> {
 		for (const file of candidates) {
 			if (processed >= QUEUE_DRAIN_MAX) return;
@@ -212,7 +185,7 @@ export async function drainQueue(cap: DrainCap, ports: QueueDrainPorts): Promise
 		yield* recovered;
 	})();
 	for (const claim of claimIterator) {
-		if (!claim) continue; // held by another worker / vanished — skip
+		if (!claim) continue;
 		const verdict = validateClaimed(cap, claim, ports);
 		if (verdict.skip) {
 			releaseClaim(cap.d.agentDir, claim);
@@ -223,11 +196,10 @@ export async function drainQueue(cap: DrainCap, ports: QueueDrainPorts): Promise
 			drops.push(verdict.drop);
 			continue;
 		}
-		processed++; // QUEUE_DRAIN_MAX counts only records that reach the LLM lane
+		processed++;
 		eligible.push(claim);
 	}
 	if (eligible.length === 0) return { summaries: [], drops };
-	// ≤5 records × 20s in PARALLEL (worst case max(20s), not 5×20s serial).
 	const settled = await Promise.allSettled(eligible.map((claim) => drainOneRecord(cap, claim, ports)));
 	const summaries: DrainSummary[] = [];
 	for (const outcome of settled) {

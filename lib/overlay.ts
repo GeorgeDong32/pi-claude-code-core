@@ -1,34 +1,19 @@
-/**
- * Shared overlay picker skeleton (P0-LB-03).
- *
- * Wraps `ctx.ui.custom` + `overlayOptions` behind one helper that renders a
- * vertical list with a selected state and degrades gracefully outside the
- * TUI (rpc/json/print modes fall back to `ctx.ui.select`; headless returns
- * null). First consumer: pi-effort effort-picker (P1-EF-02); then pm
- * plan-approval-dialog (P1-PM-04 ③) and the goal dialog (P2-GO-03a).
- */
 
 import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, visibleWidth } from "@earendil-works/pi-tui";
 import type { Component, OverlayOptions } from "@earendil-works/pi-tui";
 
 export interface OverlayItem {
-	/** Value returned by showOverlay on confirm. */
 	value: string;
-	/** Visible label (may differ from value). */
 	label: string;
-	/** Optional dimmed right-aligned hint. */
 	hint?: string;
 }
 
 export interface ShowOverlayOptions {
 	title: string;
 	items: OverlayItem[];
-	/** Initial selection by value; defaults to the first item. */
 	selected?: string;
-	/** Footer hint line; sensible default provided. */
 	footer?: string;
-	/** Overlay geometry passthrough (anchor/width/margins...). */
 	overlayOptions?: OverlayOptions;
 }
 
@@ -55,7 +40,6 @@ export async function showOverlay(
 			);
 			return result ?? null;
 		} catch {
-			// Fall through to the select() degradation.
 		}
 	}
 
@@ -66,17 +50,6 @@ export async function showOverlay(
 	return item ? item.value : null;
 }
 
-/**
- * Shared overlay plumbing for a CUSTOM component (P0-LB-03; consumers:
- * effort-picker P1, pm plan-approval-dialog P1-PM-04③, goal dialog P2).
- *
- * Thin wrapper over `ctx.ui.custom` that centralizes the `overlay:true` +
- * geometry passthrough pattern. The component keeps full ownership of its
- * rendering and key handling; the caller owns the fallback behavior outside
- * TUI contexts. Throws through like `ctx.ui.custom` does (no silent
- * degradation for components that cannot be expressed as a select list).
- */
-/** Minimal UI surface showComponentOverlay needs (both ctx variants have it). */
 export interface CustomOverlayContext {
 	ui: {
 		custom: <T>(
@@ -89,17 +62,7 @@ export interface CustomOverlayContext {
 export async function showComponentOverlay<T>(
 	ctx: CustomOverlayContext,
 	options: {
-		/**
-		 * `any` params deliberately: each consumer's component declares its own
-		 * concrete tui/theme types (pi's Theme/TUI generics differ per ctx
-		 * variant), so the shared plumbing stays type-agnostic.
-		 */
 		component: (tui: any, theme: any, kb: any, done: (value: T) => void) => Component;
-		/**
-		 * Geometry passthrough. Omitted = called WITHOUT overlay options,
-		 * exactly like a bare `ctx.ui.custom(factory)` (goal questionnaire);
-		 * provided = `overlay: true` + geometry (effort picker, plan dialog).
-		 */
 		overlayOptions?: OverlayOptions;
 		/** OSC 7501 program status: report pi as blocked on user input while
 		 * the component is visible (pi 1.5.0 `blocked` option — inline
@@ -128,7 +91,6 @@ function defaultGeometry(): OverlayOptions {
 	};
 }
 
-// ---- list component -------------------------------------------------------
 
 const DEFAULT_FOOTER = "↑/↓ to move · Enter to confirm · Esc to cancel";
 

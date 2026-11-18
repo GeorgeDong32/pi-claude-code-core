@@ -59,12 +59,6 @@ function foldInto(accum: BranchStats, entry: BranchEntryWithUsage): void {
 	accum.cost += u.cost?.total || 0
 }
 
-/**
- * Fold `branch` into `state` incrementally and return the totals. Entries
- * are expected immutable once appended (pi appends on message_end); the
- * tail-id check detects any prefix move and recomputes from scratch.
- * Addition order matches the brute-force sum, so results are exactly equal.
- */
 export function accumulateBranchStats(
 	branch: BranchEntry[],
 	state: BranchStatsState,

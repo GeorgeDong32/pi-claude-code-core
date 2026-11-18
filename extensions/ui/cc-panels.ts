@@ -34,7 +34,6 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { ccPanel, type BodyLine, type CcPanelParts, type CcRowTheme, type RowsComponent } from "./cc-rows.ts";
 
-// ---- message duck types (mirror pi's CustomMessage shape we consume) -----
 
 export interface PanelMessage {
 	content?: unknown;
@@ -46,7 +45,6 @@ export interface PanelRenderOptions {
 	outputPad?: number;
 }
 
-/** Flatten a custom message's content into plain text (string or blocks). */
 function contentText(message: PanelMessage): string {
 	const content = message.content;
 	if (typeof content === "string") return content;
@@ -63,7 +61,6 @@ function contentText(message: PanelMessage): string {
 	return "";
 }
 
-/** details.command (display metadata added by core's send sites). */
 function commandFromDetails(message: PanelMessage): string | undefined {
 	const details = message.details;
 	if (details == null || typeof details !== "object") return undefined;
@@ -71,9 +68,7 @@ function commandFromDetails(message: PanelMessage): string | undefined {
 	return typeof command === "string" && command.length > 0 ? command : undefined;
 }
 
-// ---- shapers -------------------------------------------------------------
 
-/** `/core` — panel form and `/core exposure` result form. */
 export function shapeCoreStatus(message: PanelMessage): CcPanelParts {
 	const lines = contentText(message).split("\n");
 	const header = lines[0] ?? "";
@@ -84,7 +79,6 @@ export function shapeCoreStatus(message: PanelMessage): CcPanelParts {
 	const bullets = lines.filter((l) => l.startsWith("- ")).map((l) => l.slice(2));
 	if (bullets.length === 0) return { summary: title, body: lines.slice(1) };
 	const first = bullets[0]!;
-	// exposure form: `- exposure of "srv" → tier (side note)`
 	const exposure = first.match(/^exposure of "(.+?)" → (\S+) \((.+)\)$/);
 	if (exposure) {
 		return {
@@ -93,7 +87,6 @@ export function shapeCoreStatus(message: PanelMessage): CcPanelParts {
 			body: [exposure[3]!],
 		};
 	}
-	// panel form: the `mcp: …` lead bullet feeds the summary
 	if (first.startsWith("mcp: ")) {
 		return {
 			bar: commandFromDetails(message),
@@ -104,7 +97,6 @@ export function shapeCoreStatus(message: PanelMessage): CcPanelParts {
 	return { bar: commandFromDetails(message), summary: title, body: bullets };
 }
 
-/** memory status diagnostics + the two import reports. */
 export function shapeMemoryStatus(message: PanelMessage): CcPanelParts {
 	const lines = contentText(message).split("\n");
 	const bar = commandFromDetails(message);
@@ -121,11 +113,9 @@ export function shapeMemoryStatus(message: PanelMessage): CcPanelParts {
 			body: lines,
 		};
 	}
-	// unknown shape — degrade to body only
 	return { bar, body: lines };
 }
 
-/** /review-agents roster. */
 export function shapeReviewAgents(message: PanelMessage): CcPanelParts {
 	const lines = contentText(message).split("\n");
 	const body: BodyLine[] = [];
@@ -158,7 +148,6 @@ export function shapeReviewAgents(message: PanelMessage): CcPanelParts {
 	return { bar: commandFromDetails(message), summary: summary.join(""), body };
 }
 
-/** /model-profile mapping table. */
 export function shapeModelProfiles(message: PanelMessage): CcPanelParts {
 	const lines = contentText(message).split("\n");
 	if (lines[0] !== "Model profiles:") return { bar: commandFromDetails(message), body: lines };
@@ -171,10 +160,8 @@ export function shapeModelProfiles(message: PanelMessage): CcPanelParts {
 	return { bar: commandFromDetails(message), summary: `model profiles: ${body.length}`, body };
 }
 
-/** /permissions merged rules + session grants. */
 export function shapePermissions(message: PanelMessage): CcPanelParts {
 	const text = contentText(message).replace(/\*\*/g, "");
-	// first fenced block = rules; optional second = grants
 	const fences = [...text.matchAll(/```\n([\s\S]*?)```/g)].map((m) => m[1]!.replace(/\n$/, ""));
 	const rulesFence = fences[0];
 	if (!rulesFence) return { bar: commandFromDetails(message), body: text.split("\n") };
@@ -200,7 +187,6 @@ export function shapePermissions(message: PanelMessage): CcPanelParts {
 	return { bar: commandFromDetails(message), summary, body };
 }
 
-/** /outside-writes + /undo-outside-writes --list. */
 export function shapeOutsideWrites(message: PanelMessage): CcPanelParts {
 	const lines = contentText(message).split("\n");
 	const count = (lines[0] ?? "").match(/^Tracked outside-cwd writes \((\d+)\):$/);
@@ -212,7 +198,6 @@ export function shapeOutsideWrites(message: PanelMessage): CcPanelParts {
 	};
 }
 
-/** modes-execute: plan approval → synthetic user bar + steps. */
 export function shapeModesExecute(message: PanelMessage): CcPanelParts {
 	const lines = contentText(message).split("\n");
 	const steps = lines.filter((l) => /^\d+\.\s/.test(l));
@@ -224,17 +209,14 @@ export function shapeModesExecute(message: PanelMessage): CcPanelParts {
 	};
 }
 
-/** plan-complete: fixed single terminal row. */
 export function shapePlanComplete(_message: PanelMessage): CcPanelParts {
 	return { single: { title: "Plan Complete", tail: { text: " ✓", color: "success" } } };
 }
 
-/** /rules inventory: the shaper-side summary line is already first. */
 export function shapeRulesList(message: PanelMessage): CcPanelParts {
 	const lines = contentText(message).split("\n");
 	const first = lines[0] ?? "";
 	if (!first.startsWith("rules: ")) return { bar: commandFromDetails(message), body: lines };
-	// `rules: 6 inline, 14 indexed, …` → middot-separated
 	return {
 		bar: commandFromDetails(message),
 		summary: first.replace(/, /g, " · "),
@@ -242,14 +224,11 @@ export function shapeRulesList(message: PanelMessage): CcPanelParts {
 	};
 }
 
-/** rules steer injection: dim ⎿ block only — no bar, no summary head. */
 export function shapeRulesActivate(message: PanelMessage): CcPanelParts {
 	return { body: contentText(message).split("\n") };
 }
 
-// ---- registration ---------------------------------------------------------
 
-/** A shaper: message → panel parts. Returning parts always renders a panel. */
 export type PanelShaper = (message: PanelMessage) => CcPanelParts;
 
 /**
@@ -267,7 +246,6 @@ export function panelRenderer(shape: PanelShaper): (message: PanelMessage, optio
 	};
 }
 
-/** The customType → shaper table (core-owned types only). */
 export const CC_PANEL_SHAPERS: Readonly<Record<string, PanelShaper>> = {
 	"pi-core-status": shapeCoreStatus,
 	"pi-memory-status": shapeMemoryStatus,
@@ -281,7 +259,6 @@ export const CC_PANEL_SHAPERS: Readonly<Record<string, PanelShaper>> = {
 	"pi-rules-activate": shapeRulesActivate,
 };
 
-/** Register every core panel renderer (single call from the assembly entry). */
 export function registerCcPanels(pi: Pick<ExtensionAPI, "registerMessageRenderer">): void {
 	for (const [customType, shape] of Object.entries(CC_PANEL_SHAPERS)) {
 		pi.registerMessageRenderer(customType, panelRenderer(shape));

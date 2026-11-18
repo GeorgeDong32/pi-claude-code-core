@@ -18,7 +18,6 @@ import { Container, Text } from "@earendil-works/pi-tui";
 
 import { firstLines, humanBytes, resultText, type ThemeLike } from "../../lib/tool-render.ts";
 
-/** Physical preview lines when collapsed (bash renderer uses the same 5). */
 export const RECALL_PREVIEW_LINES = 5;
 
 export interface RecallCallArgs {
@@ -35,26 +34,20 @@ export interface RecallResultDetails {
 	eof?: boolean;
 }
 
-/** Short, scannable id: obs_4b1d7b39 (12 chars past the prefix). */
 export function shortId(id: string): string {
 	return id.length <= 16 ? id : id.slice(0, 16);
 }
 
-/** `· start` / `· +15.5KB` — where in the original this page begins. */
 export function humanOffset(offset: number | undefined): string {
 	if (!offset || offset <= 0) return "start";
 	return `+${humanBytes(offset)}`;
 }
 
-/** One-line call row: `Recall Observation obs_4b1d7b39 · +15.5KB`. */
 export function recallCallText(args: RecallCallArgs): string {
 	const id = typeof args.id === "string" && args.id ? shortId(args.id) : "obs_?";
 	return `Recall Observation ${id} · ${humanOffset(args.offset)}`;
 }
 
-/** Strip the two protocol header lines — only when details confirm this
- * result is a shaped recall page (TR A: honest fallback keeps them when
- * details are absent, e.g. error paths). */
 export function stripProtocolHeader(text: string, details: RecallResultDetails): string {
 	if (typeof details.bytes !== "number") return text;
 	const lines = text.split("\n");
@@ -64,7 +57,6 @@ export function stripProtocolHeader(text: string, details: RecallResultDetails):
 	return text;
 }
 
-/** The collapsed header row: `15.9KB · 189 lines · +0B→15.5KB · more ▸`. */
 export function recallHeaderText(details: RecallResultDetails): string {
 	const size = typeof details.bytes === "number" ? humanBytes(details.bytes) : "?";
 	const lines = typeof details.lines === "number" ? `${details.lines} lines` : "? lines";
@@ -74,7 +66,6 @@ export function recallHeaderText(details: RecallResultDetails): string {
 	return `${size} · ${lines} · ${from}→${to} · more ▸`;
 }
 
-/** renderResult body lines (shared by collapsed preview and expanded). */
 export function recallBodyLines(
 	result: { content?: unknown; details?: unknown },
 ): { header: string | null; body: string[] } {
@@ -85,7 +76,6 @@ export function recallBodyLines(
 	return { header: hasDetails ? recallHeaderText(details) : null, body };
 }
 
-/** A minimal reusable multi-row component (clear + rebuild per frame). */
 export class RecallRows extends Container {
 	rebuild(rows: string[]): void {
 		this.clear();
@@ -93,12 +83,10 @@ export class RecallRows extends Container {
 	}
 }
 
-/** renderCall implementation — single Text row. */
 export function renderRecallCall(args: RecallCallArgs, theme: ThemeLike): Text {
 	return new Text(theme.fg("toolTitle", recallCallText(args)), 0, 0);
 }
 
-/** renderResult implementation — header + preview/expanded body. */
 export function renderRecallResult(
 	result: { content?: unknown; details?: unknown },
 	options: { isError?: boolean; isPartial?: boolean; expanded?: boolean },

@@ -43,19 +43,14 @@ import {
 	type Observation,
 } from "./observation.ts";
 
-/** CMP-04: warn once per factory when candidates exist but nothing packs. */
 export const SENTINEL_STREAK_LIMIT = 3;
 
 export interface ProjectionPorts {
-	/** Persist an observation's original bytes (idempotent, content-addressed). */
 	readonly store: (observation: Observation) => Promise<void>;
-	/** Append one ledger event (audit trail — write-only, see ledger.ts). */
 	readonly appendLedger: (entry: Record<string, unknown>) => Promise<void>;
 }
 
-/** All mutable per-session mechanism state — owned by the adapter, one object. */
 export interface ProjectionState {
-	/** Requests each `${root}\0${id}` has been part of — the send authority. */
 	readonly sentCounts: Map<string, number>;
 	/** C1 (arch review 2026-10-03): candidate identity memo, key
 	 * `${root}\0${toolName}\0${toolCallId}` (toolCallId alone is NOT unique —
@@ -79,24 +74,8 @@ export interface ProjectionState {
 	 * not memoized here, so the per-message fail-open retry semantics
 	 * (OBS-08) are unchanged. */
 	readonly stored: Set<string>;
-	/** AR1005-OB-01: the STABLE projection memo, keyed by the same
-	 * `${root}\0${toolName}\0${toolCallId}` identity as `identity`. Value =
-	 * the placeholder string + its token estimate — NOTHING else (no full
-	 * text copy, no permanent split array). Populated at the FIRST
-	 * replacement need (never during the full-send phase), reused verbatim
-	 * on every later request. Lives with the state's lifecycle: different
-	 * roots/tools never cross, a process restart regenerates. Survives a
-	 * failed ledger append (the computation is kept; the ledger/send
-	 * counts/savings are NOT committed — they retry next request). */
 	readonly placeholder: Map<string, { text: string; tokens: number }>;
-	/** OB test/diagnostic observable: how many times the (line-scanning)
-	 * placeholder construction actually ran — one per identity per process. */
 	placeholderConstructions: number;
-	/** BH-E3b: object ids (`${root}\0${id}`) whose placeholder ledger row has
-	 * ALREADY been written this process. Per-request rows grew session ledgers
-	 * to 43 MB / 194K placeholder rows (Air backtest); the FIRST replacement
-	 * still audits, later hot requests skip the row. A FAILED append stays
-	 * unmarked, so the OBS-08 retry semantics are unchanged. */
 	readonly placeholderLedgered: Set<string>;
 	sentinelWarned: boolean;
 	sentinelStreak: number;
@@ -120,20 +99,11 @@ export function createProjectionState(): ProjectionState {
 }
 
 export interface ProjectionOutcome {
-	/** The projected message list (unaffected messages pass through by reference). */
 	readonly messages: readonly AgentMessage[];
-	/** How many messages were replaced with placeholders this request. */
 	readonly replacedThisRequest: number;
 	/** OBS-08 fail-open reasons, one per failed message — the adapter logs them. */
 	readonly failOpenReasons: readonly string[];
-	/** CMP-04 sentinel tripped this request — the adapter warns once. */
 	readonly sentinelWarning: string | null;
-	/**
-	 * OBS-09 cumulative counters to publish, or null when nothing new.
-	 * OBS-09-SITES: non-null counters always carry the per-site entries for
-	 * the observations FIRST replaced by this request (the single-shot
-	 * semantics upstream SoL-Pi flashes) — display-only, bus-side data.
-	 */
 	readonly counters: {
 		readonly tokensAvoided: number;
 		readonly placeholders: number;
@@ -150,15 +120,9 @@ export async function projectContext(args: {
 	const projected = [...args.messages];
 	let replacedThisRequest = 0;
 	let eligiblePastFullSends = 0;
-	// OBS-09-SITES: one entry per observation FIRST replaced by this request —
-	// the array's emptiness IS the old firstReplacement boolean (counters stay
-	// null without it, so the publish trigger is unchanged).
 	const firstReplacementSites: Array<{ tool: string; id: string; avoidedTokens: number; toolCallId?: string }> = [];
 	const failOpenReasons: string[] = [];
 
-	// Requests each candidate has already been part of, counted by the
-	// assistant messages that precede it (upstream recovery heuristic: a
-	// process restarted mid-session resumes its send counts approximately).
 	const priorAssistantCounts = new Array<number>(args.messages.length);
 	let assistantCount = 0;
 	for (let index = args.messages.length - 1; index >= 0; index -= 1) {
@@ -169,16 +133,7 @@ export async function projectContext(args: {
 	for (let index = 0; index < args.messages.length; index += 1) {
 		const message = args.messages[index];
 		try {
-			// BH-E3c: the candidate check lives INSIDE the per-message try — a
-			// malformed message (e.g. no content array) must fail open for itself,
-			// never kill the whole request.
-			// BH-E3a: obs_recall results ARE recall excerpts (bounded at 16 KiB,
-			// above THRESHOLD_BYTES) — packing them again would nest a pack inside
-			// a pack (Air backtest: 53 nested objects); exempt them entirely.
 			if (!message || !isPureTextResult(message) || message.toolName === RECALL_TOOL_NAME) continue;
-			// C1: analyze each candidate ONCE per process — the transcript is
-			// append-only, so the same (root, toolName, toolCallId) re-appears
-			// with identical bytes on every later request.
 			const memoKey = `${args.root}\0${message.toolName}\0${message.toolCallId}`;
 			let observation = args.state.identity.get(memoKey);
 			if (observation === undefined) {
@@ -193,8 +148,6 @@ export async function projectContext(args: {
 
 			const sendCountKey = `${args.root}\0${observation.id}`;
 			const previousSends = args.state.sentCounts.get(sendCountKey) ?? priorAssistantCounts[index] ?? 0;
-			// CMP-04: eligibility is counted before any replacement attempt so a
-			// broken store or a dropped projection still trips the sentinel.
 			if (previousSends >= FULL_SENDS) eligiblePastFullSends += 1;
 			if (previousSends < FULL_SENDS) {
 				await args.ports.appendLedger({
@@ -210,11 +163,6 @@ export async function projectContext(args: {
 				continue;
 			}
 
-			// AR1005-OB-01: the placeholder is constructed ONCE per identity —
-			// the head/tail complete-line excerpt scan is pure waste on every
-			// later request (measured ~26 ms/request at 8 MiB). The memo is set
-			// BEFORE the ledger append: a failed ledger keeps the computed
-			// memo (OB-01) while the counts below stay uncommitted (OBS-08).
 			let memo = args.state.placeholder.get(memoKey);
 			if (memo === undefined) {
 				const text = placeholderFor(observation);
@@ -225,11 +173,6 @@ export async function projectContext(args: {
 			const placeholder = memo.text;
 			const placeholderTokens = memo.tokens;
 			const removedTokens = Math.max(0, observation.tokens - placeholderTokens);
-			// BH-E3b: the placeholder ledger row is written ONCE per object id per
-			// process — per-request rows grew session ledgers to 43 MB / 194K
-			// placeholder rows (Air backtest). Line format unchanged; the FIRST
-			// replacement still audits, and the seen-mark lands only AFTER a
-			// successful append, so a failed ledger keeps retrying (OBS-08).
 			if (!args.state.placeholderLedgered.has(sendCountKey)) {
 				await args.ports.appendLedger({
 					event: "placeholder",
@@ -243,18 +186,12 @@ export async function projectContext(args: {
 				});
 				args.state.placeholderLedgered.add(sendCountKey);
 			}
-			// invariant 9: replace ONLY the content array; the spread copy keeps
-			// every other field of the original message intact.
 			projected[index] = { ...message, content: [{ type: "text", text: placeholder }] };
 			args.state.sentCounts.set(sendCountKey, previousSends + 1);
 			replacedThisRequest += 1;
 			if (previousSends === FULL_SENDS) {
 				args.state.placeholderCount += 1;
 				args.state.savedTokens += removedTokens;
-				// OBS-09-SITES: toolCallId correlates the entry with the tool row the
-				// user sees (duck-read: the loop only enters for isPureTextResult
-				// ToolResultMessages, but a malformed field degrades to omission,
-				// never a throw).
 				firstReplacementSites.push({
 					tool: observation.toolName,
 					id: observation.id,
@@ -263,14 +200,10 @@ export async function projectContext(args: {
 				});
 			}
 		} catch (error) {
-			// OBS-08 fail-open, per-message: one failure keeps that message's
-			// original bytes; the rest of the loop continues.
 			failOpenReasons.push(error instanceof Error ? error.message : String(error));
 		}
 	}
 
-	// CMP-04 sentinel: eligible candidates but the projection produced nothing
-	// — the chain broke somewhere upstream (e.g. a pi upgrade).
 	let sentinelWarning: string | null = null;
 	if (!args.state.sentinelWarned && eligiblePastFullSends > 0 && replacedThisRequest === 0) {
 		args.state.sentinelStreak += 1;

@@ -1,8 +1,3 @@
-/**
- * SC-MET-01: aggregate recorded runtime checkpoints, never replay messages.
- * Run with pnpm exec tsx scripts/compaction-metrics.mjs <jsonl-or-directory>...
- * Output contains counts/durations only; real session content is never printed.
- */
 import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -19,7 +14,6 @@ async function sessionFiles(path, seen) {
 	if (!info.isDirectory()) return [];
 	const files = [];
 	for (const entry of await readdir(absolute, { withFileTypes: true })) {
-		// Do not follow directory symlinks or traverse the same tree twice.
 		if (entry.isDirectory() || entry.isFile()) files.push(...await sessionFiles(resolve(absolute, entry.name), seen));
 	}
 	return files;

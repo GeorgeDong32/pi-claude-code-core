@@ -1,10 +1,3 @@
-/**
- * mcp-gov/panel.ts — the /core panel's MCP section (P4-MC-06).
- *
- * live snapshot (adapter present) ‖ static inventory (mcp.json config chain
- * + settings packages scan) — plus a rule summary and an install hint.
- * green = connected|cached AND an allow rule exists; absent → hint.
- */
 
 import { statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -17,10 +10,6 @@ export interface McpPanelSection {
 	lines: string[];
 }
 
-// P3-1 S4 (SPEC 2026-10-07): mcp.json goes through lib/settings readJson
-// (invariant 10) with a stat-fingerprint cache — same discipline as
-// web-gov's pi-core-web.json (disclosed limit: mtime-preserving same-length
-// in-place edits stay invisible until the next stat-visible change).
 const inventoryCache = new Map<string, { fingerprint: string; servers: string[]; sources: string[] }>();
 
 export function readStaticMcpInventory(home = homedir()): { servers: string[]; sources: string[] } {
@@ -30,7 +19,7 @@ export function readStaticMcpInventory(home = homedir()): { servers: string[]; s
 		const st = statSync(mcpJson);
 		fp = `${st.mtimeMs}:${st.size}:${st.ino}`;
 	} catch {
-		return { servers: [], sources: [] }; // missing → empty, silently
+		return { servers: [], sources: [] };
 	}
 	const cached = inventoryCache.get(mcpJson);
 	if (cached && cached.fingerprint === fp) return { servers: cached.servers, sources: cached.sources };
@@ -53,7 +42,6 @@ export function renderMcpPanel(input: {
 	ruleSummary: string[];
 	denyCount: number;
 	home?: string;
-	/** B4: extra lines rendered in BOTH states (the declarations meter line). */
 	extraLines?: string[];
 }): McpPanelSection {
 	const home = input.home ?? homedir();
@@ -72,7 +60,6 @@ export function renderMcpPanel(input: {
 				],
 			};
 		} catch {
-			/* snapshot threw → fall through to inventory */
 		}
 	}
 	const inventory = readStaticMcpInventory(home);

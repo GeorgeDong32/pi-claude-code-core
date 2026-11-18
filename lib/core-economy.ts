@@ -25,12 +25,8 @@ export const DEFAULT_CORE_ECONOMY: CoreEconomyConfig = Object.freeze({
 	observationPack: true,
 });
 
-// C2 review R1 P1-1: frozen-layout file — the root stays homedir()-based
-// (NOT host getAgentDir(), which honors PI_CODING_AGENT_DIR and would
-// silently relocate existing users' switches). Lazy init only.
 let configPath: string | undefined;
 
-/** Test seam: redirect the config file. */
 export function setCoreEconomyPath(path: string): void {
 	configPath = path;
 }
@@ -38,7 +34,7 @@ export function setCoreEconomyPath(path: string): void {
 export function loadCoreEconomy(): CoreEconomyConfig {
 	const path = (configPath ??= join(homedir(), ".pi", "agent", "core-economy.json"));
 	const parsed = readJson<Partial<CoreEconomyConfig>>(path, {}, (reason) => {
-		if (reason === "missing") return; // absent file = defaults, silently (as before)
+		if (reason === "missing") return;
 		console.warn(`[core-economy] ${reason} config ignored; defaults apply`);
 	});
 	return {

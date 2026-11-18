@@ -54,9 +54,6 @@ export function normalizeQuestionnaireQuestions(rawQuestions: GoalQuestionnaireQ
 }
 
 export function formatQuestionnaireAnswers(result: GoalQuestionnaireResult): string {
-	// The full questions (context, options) already live in the tool-call
-	// args the model sent — echoing them back doubles the context cost.
-	// Record answers only, keyed by question id.
 	return result.answers
 		.map((answer) => `**${answer.id}:** ${answer.wasCustom ? "(wrote) " : ""}${answer.answer}`)
 		.join("\n");
@@ -83,11 +80,6 @@ export function proposalDialogFailureMessage(error: unknown): string {
 	return `Goal draft confirmation failed: ${detail}. The goal was NOT created; drafting remains active.`;
 }
 
-/**
- * Shared question UI used by both the agent-callable goal_questionnaire tool and
- * the internal draft-confirm prompt. This keeps pi-goal self-contained and
- * avoids depending on external question/questionnaire packages.
- */
 export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: GoalQuestionnaireQuestion[]): Promise<GoalQuestionnaireResult> {
 	if (!ctx.hasUI) {
 		return { questions: [], answers: [], cancelled: true };
@@ -97,13 +89,6 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 	const isMulti = questions.length > 1;
 	const totalTabs = questions.length + 1;
 
-	// shared overlay plumbing (P2-GO-03a): bare custom call, no overlay
-	// options — identical to the previous inline ctx.ui.custom(factory).
-	// blocked (OSC 7501): pi reports "blocked on user input" to the terminal
-	// (Rex/Ghostty agentic inboxes) while any questionnaire — including the
-	// propose_goal_draft Confirm / Continue Chatting dialog — waits on the
-	// user; the message names the first question so the inbox line is useful.
-	// Inline components only (pi 1.5.0); older hosts ignore the field.
 	return await showComponentOverlay<GoalQuestionnaireResult>(ctx, {
 		blocked: {
 			kind: "question",
@@ -117,12 +102,8 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 		let inputMode = false;
 		let inputQuestionId: string | null = null;
 		let cachedLines: string[] | undefined;
-		// GDS-02: the render cache is keyed by width × height so a terminal
-		// resize re-lays-out even when the width is unchanged.
 		let cachedWidth = -1;
 		let cachedHeight = -1;
-		// Scroll state (GDS-02/GDS-03): body offset plus the geometry captured
-		// by the last render, so key handling can compute half/full pages.
 		let scrollOffset = 0;
 		let lastViewport = 0;
 		let lastBodyCount = 0;
@@ -141,8 +122,6 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 		};
 		const editor = new Editor(tui, editorTheme);
 
-		// GDS-04 with silent degradation: if a theme key is missing, render
-		// the unstyled text instead of throwing inside render().
 		const safeBg = (key: string, s: string): string => {
 			try {
 				return theme.bg(key, s);
@@ -178,7 +157,7 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 		}
 
 		function enterQuestion(q: GoalQuestionnaireQuestion) {
-			scrollOffset = 0; // tab/answer change resets the body scroll (spec §2.3)
+			scrollOffset = 0;
 			const existing = answers.get(q.id);
 			const draft = drafts.get(q.id);
 			if (q.options.length === 0) {
@@ -230,7 +209,7 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 		};
 
 		function exitEditor() {
-			scrollOffset = 0; // leaving the editor changes the pinned footer
+			scrollOffset = 0;
 			if (inputQuestionId) {
 				const text = editor.getText();
 				if (text.trim()) drafts.set(inputQuestionId, text);
@@ -269,9 +248,6 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 				return;
 			}
 
-			// Scroll routing (GDS-03): FIRST, ahead of the multi-tab navigation
-			// and the submit-tab branch — selection mode only. The inputMode
-			// branch above already returned, so the editor keeps ctrl+u/ctrl+d.
 			if (
 				matchesKey(data, Key.pageUp) || matchesKey(data, Key.pageDown) ||
 				matchesKey(data, Key.ctrl("u")) || matchesKey(data, Key.ctrl("d"))
@@ -354,10 +330,6 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 		}
 
 		function render(width: number): string[] {
-			// GDS-02: the cache is keyed by width × height; scrolling walks the
-			// existing refresh() path (cache cleared + requestRender). Height
-			// comes from the GDS-05 chain: tui.terminal.rows, then
-			// process.stdout.rows, then the 24-row default.
 			const height = availableDialogHeight(pickTerminalHeight([
 				(tui as { terminal?: { rows?: number } } | null | undefined)?.terminal?.rows,
 				typeof process !== "undefined" ? process.stdout?.rows : undefined,
@@ -380,16 +352,10 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 			const safeWidth = Math.max(20, width);
 			const q = currentQuestion();
 			const opts = displayOptions();
-			// GDS-01 sections: pinned header (separator + tab bar + question),
-			// scrollable body (context / answer summary), pinned footer
-			// (option window + key hints + separator). Concatenating the three
-			// without slicing reproduces the legacy flat layout byte for byte.
 			const header: string[] = [];
 			const body: string[] = [];
 			const footer: string[] = [];
 			const addTo = (target: string[]) => (s: string) => target.push(truncateToWidth(s, safeWidth, "…", true));
-			// Indented wrap: continuation lines (and every line of multi-line
-			// context) keep the indent instead of flushing to column 0.
 			const wrapTo = (target: string[]) => (s: string, indent = " ") =>
 				target.push(...wrapTextWithAnsi(s, safeWidth - visibleWidth(indent)).map((line) => indent + line));
 			const addH = addTo(header);
@@ -413,9 +379,6 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 				header.push("");
 			}
 
-			// GDS-04: the selected row gets a selectedBg background; the footer
-			// shows at most MAX_OPTION_WINDOW rows, with the hidden count
-			// reported for the hint line's "(+N more)" note.
 			function renderOptions(target: string[]): number {
 				const win = optionWindow(opts.length, optionIndex);
 				for (let i = win.start; i < win.start + win.shown; i++) {
@@ -487,10 +450,6 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 	});
 }
 
-/**
- * Confirm a proposed draft through the shared questionnaire UI. Escape / cancel
- * maps to "continue" so the user is never trapped.
- */
 export async function showProposalDialog(
 	ctx: ExtensionContext,
 	confirmationText: string,

@@ -9,7 +9,6 @@ import {
 } from "./permission-rule-parser.ts"
 import type { PermissionRule } from "./permissions.ts"
 
-/** Cross-platform code-execution entry points (shared with CC dangerousPatterns.ts). */
 export const CROSS_PLATFORM_CODE_EXEC = [
 	"python",
 	"python3",
@@ -44,10 +43,6 @@ export const DANGEROUS_BASH_PATTERNS: readonly string[] = [
 	"curl",
 	"wget",
 	"git",
-	// Package managers with lifecycle-script execution (adjudication ②,
-	// 2026-09-12): broad install/exec verb rules bypass the classifier —
-	// npm postinstall, pip setup.py, cargo build.rs are arbitrary code runs.
-	// Bare names catch Bash(npm:*); verb forms catch Bash(npm install:*).
 	"npm",
 	"npm install",
 	"npm uninstall",
@@ -133,7 +128,6 @@ function ruleKey(rule: PermissionRule): string {
 	return `${rule.behavior}:${permissionRuleValueToString(rule.ruleValue)}:${rule.source}`
 }
 
-/** Remove dangerous allow rules from the active set; stash them for restore on auto exit. */
 export function stripDangerousPermissionRules(
 	rules: PermissionRule[],
 ): StripDangerousResult {

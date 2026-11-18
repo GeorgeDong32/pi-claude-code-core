@@ -31,7 +31,6 @@ import type {
 	PolicyAction,
 } from "./types.ts";
 
-// ─── POL-01: effective threshold ────────────────────────────────────────────
 
 /**
  * T_n = contextWindow − effectiveReserveTokens (H8). Any missing input or a
@@ -47,17 +46,14 @@ export function effectiveThreshold(
 	return tn > 0 ? tn : null;
 }
 
-/** P = tokens / T_n; null tokens (H7) → null (POL-04: no state advance). */
 export function pressure(tokens: number | null, tn: number | null): number | null {
 	if (tokens === null || tn === null || tn <= 0) return null;
 	return tokens / tn;
 }
 
-// ─── POL-06/POL-08: mode resolution ─────────────────────────────────────────
 
 export interface ModeResolution {
 	mode: ControllerMode;
-	/** Present whenever the effective mode differs from the configured one. */
 	reason?: string;
 }
 
@@ -79,16 +75,9 @@ export function resolveMode(
 	return { mode: configured };
 }
 
-// ─── POL-07: apply-point safety (INV-11, BLK-1) ─────────────────────────────
 
-/**
- * Safe to propose at this boundary only when the last assistant response
- * settled cleanly AND no native recovery is pending. `"completed"` alone is
- * NOT sufficient (H12: stopReason "length" maps to outcome "completed").
- */
 export function applyPointSafe(input: ApplyPointSafety): boolean {
 	if (input.nativeRecoveryPending) return false;
-	// Undefined stopReason = no assistant to evaluate — cannot verify safety.
 	if (input.stopReason !== "stop" && input.stopReason !== "toolUse") return false;
 	return true;
 }
@@ -110,13 +99,11 @@ export function lastAssistantStopReason(entries: ReadonlyArray<unknown>): string
 	return undefined;
 }
 
-// ─── POL-09: joint feasibility ──────────────────────────────────────────────
 
 export interface FeasibilityInput {
 	tn: number;
 	keepRecentTokens: number;
 	summaryTokenEstimate: number;
-	/** Token size of the previous compaction's summary, when one exists. */
 	lastSummaryTokens?: number;
 	precomputeRatio: number;
 	applyRatio: number;
@@ -125,23 +112,12 @@ export interface FeasibilityInput {
 
 export interface Feasibility {
 	feasible: boolean;
-	/** Adaptive summary budget S = max(default, 1.2 × last summary). */
 	effectiveSummaryTokens: number;
-	/** Expected growth between snapshot and apply, in tokens. */
 	expectedGrowth: number;
-	/** Capacity upper bound for the kept tail (§5.4 tailMax). */
 	tailMax: number;
-	/** T_n the current configuration would need (for /smart-compact status). */
 	neededTn: number;
 }
 
-/**
- * Joint feasibility over threshold, tail budget and the hard-fit gate:
- * `keep + S + G ≤ q·T` with `G = max(0, a − p)·T` (growth expected between a
- * snapshot at preRatio and the apply threshold — worst case, since a snapshot
- * may fire exactly at p). `S` adapts to the previous summary so a chatty
- * summarizer cannot silently eat the tail budget.
- */
 export function jointFeasibility(input: FeasibilityInput): Feasibility {
 	const { tn, keepRecentTokens, precomputeRatio, applyRatio, targetPostRatio } = input;
 	const s = Math.max(
@@ -161,16 +137,11 @@ export function jointFeasibility(input: FeasibilityInput): Feasibility {
 	};
 }
 
-// ─── POL-10: post-compaction estimate ───────────────────────────────────────
 
 export interface EstimatePostInput {
-	/** Candidate summary text (ledger block included). */
 	summary: string;
-	/** Kept-tail messages under the CURRENT projection (context edits applied). */
 	keptMessages: AgentMessage[];
-	/** Full current projection messages, for overhead calibration. */
 	currentProjectionMessages: AgentMessage[];
-	/** ctx.getContextUsage().tokens when available, else null (H7 windows). */
 	ctxTokensUsage: number | null;
 	contextWindow: number;
 	unknownOverheadTokens: number;
@@ -183,24 +154,13 @@ export interface PostEstimate {
 	total: number;
 }
 
-/** Sum of estimateTokens over messages (chars/4 heuristic, same as host). */
 export function estimateMessages(messages: AgentMessage[]): number {
 	let sum = 0;
 	for (const message of messages) sum += estimateTokens(message as never);
 	return sum;
 }
 
-/**
- * estimatePost = summary tokens + kept-tail tokens + overhead. Overhead is
- * calibrated from real usage when available: clamp(usage − estimate(projection),
- * 0, 0.3·window); otherwise the conservative unknownOverheadTokens default.
- * Estimation drift is absorbed by hardFitRatio's margin (R13), and telemetry
- * records estimate-vs-next-real-usage for W2 calibration (M8).
- */
 export function estimatePost(input: EstimatePostInput): PostEstimate {
-	// Synthetic compactionSummary message — same shape the host projects for a
-	// compaction entry (session-manager.js createCompactionSummaryMessage), so
-	// the estimator sees what the next request would actually contain.
 	const summaryMessage = {
 		role: "compactionSummary",
 		summary: input.summary,
@@ -222,24 +182,16 @@ export function estimatePost(input: EstimatePostInput): PostEstimate {
 	return { summaryTokens, tailTokens, overhead, total: summaryTokens + tailTokens + overhead };
 }
 
-// ─── POL-03: the state machine ──────────────────────────────────────────────
 
 export type PolicyEvent =
 	| {
 			type: "boundary";
-			/** Pressure P at this boundary; null ⇒ no evaluation (POL-04). */
 			P: number | null;
-			/** POL-07 predicate already evaluated by the caller. */
 			applySafe: boolean;
-			/** True only on turn_end / agent_before_settle (apply points). */
 			isApplyPoint: boolean;
-			/** V1–V10 outcome, supplied by apply.ts at apply points (W3). */
 			prechecksPassed: boolean;
-			/** Joint feasibility under the CURRENT window/settings. */
 			feasibility: Feasibility | null;
-			/** Fresh nonce minted by the caller for a new proposal. */
 			proposalNonce?: string;
-			/** Controller may compute (mode on/shadow, not degraded-out). */
 			mayCompute: boolean;
 	  }
 	| { type: "compute-ok" }
@@ -270,7 +222,6 @@ export interface PolicyDecision {
 	action: PolicyAction;
 }
 
-/** Everything `evaluate` needs from settings (POL-02-validated values). */
 export interface PolicySettings {
 	precomputeRatio: number;
 	applyRatio: number;
@@ -313,9 +264,6 @@ export function evaluate(
 			return { state: initialState(state.generation + 1), action: { type: "reset" } };
 
 		case "served": {
-			// A2 (2026-11-10 rework R4): the fallback leg supplied the snapshot
-			// to native. Only a READY phase transitions (idle + min gap) —
-			// every other phase is a no-op.
 			if (state.phase === "ready") {
 				return {
 					state: { ...state, phase: "idle", precomputeGapTurns: settings.minPrecomputeGapTurns, lastOutcome: { outcome: "served", atTurn: state.turns } },
@@ -332,31 +280,24 @@ export function evaluate(
 				refusedCooldownTurns: Math.max(0, state.refusedCooldownTurns - 1),
 				precomputeGapTurns: Math.max(0, state.precomputeGapTurns - 1),
 			};
-			// INV-5: while a proposal is outstanding or a compute is in flight,
-			// boundaries never start new work (single-flight, no re-propose).
 			if (state.phase === "proposed" || state.phase === "computing") {
 				return { state: next, action: { type: "none" } };
 			}
 			if (state.phase === "infeasible-window") {
-				// Still infeasible → stay; feasibility restored → drop to idle
-				// semantics and evaluate this boundary like an idle one below.
 				if (!event.feasibility?.feasible) return { state: next, action: { type: "none" } };
 				next.phase = "idle";
 			}
 			if (state.phase === "ready") {
 				return event.isApplyPoint ? propose(next, event, settings) : { state: next, action: { type: "none" } };
 			}
-			// idle (possibly with cooldown / gap outstanding — decremented above).
 			if (next.refusedCooldownTurns > 0 || next.precomputeGapTurns > 0) {
 				return { state: next, action: { type: "none" } };
 			}
-			if (event.P === null) return { state: next, action: { type: "none" } }; // POL-04
+			if (event.P === null) return { state: next, action: { type: "none" } };
 			if (!event.mayCompute) return { state: next, action: { type: "none" } };
 			if (event.P >= settings.precomputeRatio) {
 				if (event.feasibility === null) return { state: next, action: { type: "none" } };
 				if (!event.feasibility.feasible) {
-					// POL-09: no precompute; the phase itself throttles the
-					// telemetry (infeasibleReported marks it emitted).
 					return {
 						state: { ...next, phase: "infeasible-window", infeasibleReported: true },
 						action: {
@@ -415,7 +356,7 @@ export function evaluate(
 					proposalId: undefined,
 					lastOutcome: { outcome: "applied", atTurn: state.turns },
 				},
-				action: { type: "none" }, // seam-after + telemetry are W3's effects
+				action: { type: "none" },
 			};
 
 		case "reconcile-lost":

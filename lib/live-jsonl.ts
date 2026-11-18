@@ -18,13 +18,9 @@
 import { closeSync, constants as fsConstants, fstatSync, openSync, readSync } from "node:fs";
 
 export interface CommittedLines {
-	/** Complete lines, each JSON.parse re-validated; bad lines skipped (see badLines). */
 	lines: unknown[];
-	/** Bytes before the last complete newline that were consumed. */
 	committedBytes: number;
-	/** Dropped half-line bytes at the tail (counted, not thrown). */
 	tornTailBytes: number;
-	/** Lines whose JSON.parse failed — skipped and counted, never thrown. */
 	badLines: number;
 }
 
@@ -35,8 +31,6 @@ export type LiveReadError =
 	| { kind: "oversized" }
 	| { kind: "unstable" };
 
-/** Default read cap: 8 MB — the goal ledger is far below this; a runaway
- *  file is a bug we want surfaced, not buffered. */
 export const LIVE_JSONL_MAX_BYTES = 8 * 1024 * 1024;
 
 export function readCommittedLines(path: string, opts?: { maxBytes?: number }): CommittedLines {
@@ -55,7 +49,6 @@ export function readCommittedLines(path: string, opts?: { maxBytes?: number }): 
 		try {
 			closeSync(fd);
 		} catch {
-			/* best effort */
 		}
 	}
 }
@@ -80,12 +73,6 @@ function readFromFd(fd: number, maxBytes: number): CommittedLines {
 	if (after.size < before.size) {
 		throw { kind: "shrunk" } satisfies LiveReadError;
 	}
-	// Bytes double-read TOCTOU re-check: same-inode truncate-and-rewrite-longer
-	// keeps dev/ino and can grow size — only the byte comparison catches it.
-	// PREFIX comparison (spec): a concurrent append is TOLERATED — the second
-	// read may be longer; what must match is the first read's own span. Only
-	// when the same bytes were rewritten in place (prefix mismatch) do we
-	// retry once and then throw unstable.
 	const second = readAll(fd, maxBytes);
 	if (!prefixMatches(first, second)) {
 		const retry = readAll(fd, maxBytes);
@@ -94,7 +81,6 @@ function readFromFd(fd: number, maxBytes: number): CommittedLines {
 		}
 	}
 
-	// Committed prefix: up to (not including) the last complete newline.
 	const buf = first;
 	const lastNewline = buf.lastIndexOf(0x0a);
 	const committedBytes = lastNewline < 0 ? 0 : lastNewline + 1;
@@ -105,9 +91,8 @@ function readFromFd(fd: number, maxBytes: number): CommittedLines {
 	if (committedBytes > 0) {
 		const text = buf.subarray(0, committedBytes).toString("utf8");
 		for (const line of text.split("\n")) {
-			if (line.trim().length === 0) continue; // whitespace-only lines: skip, not malformed
+			if (line.trim().length === 0) continue;
 			try {
-				// trim before parse: a hand-edited first line may carry a BOM (U+FEFF)
 				lines.push(JSON.parse(line.trim()));
 			} catch {
 				badLines += 1;
@@ -117,11 +102,6 @@ function readFromFd(fd: number, maxBytes: number): CommittedLines {
 	return { lines, committedBytes, tornTailBytes, badLines };
 }
 
-/** Reads the file from absolute offset 0 to EOF (explicit positions — the
- *  fd's own position may be anywhere after a prior pass). The maxBytes cap
- *  also guards the read loop: a file that grows past the cap mid-read (the
- *  pre-read fstat gate is already behind us) throws oversized instead of
- *  buffering without bound. */
 function readAll(fd: number, maxBytes: number): Buffer {
 	const chunks: Buffer[] = [];
 	let total = 0;
@@ -138,10 +118,6 @@ function readAll(fd: number, maxBytes: number): Buffer {
 	return Buffer.concat(chunks, total);
 }
 
-/** True when `b` starts with exactly the bytes of `a` (a concurrent append
- *  makes b longer — tolerated; a rewrite of the same span makes it differ).
- *  Exported for the two-state regression pin (R2 P2-A): reverting the
- *  prefix compare to a whole-buffer equals must turn tests red. */
 export function prefixMatches(a: Buffer, b: Buffer): boolean {
 	return b.length >= a.length && b.subarray(0, a.length).equals(a);
 }

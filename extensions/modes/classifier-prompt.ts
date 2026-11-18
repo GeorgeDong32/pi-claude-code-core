@@ -39,7 +39,6 @@ export function getExternalPermissionsTemplate(): string {
 	return permissionsTemplateCache
 }
 
-/** For tests — reset cached prompt reads. */
 export function clearClassifierPromptCache(): void {
 	basePromptCache = undefined
 	permissionsTemplateCache = undefined
@@ -85,10 +84,6 @@ function formatRuleBullets(rules: string[] | undefined): string | undefined {
 	return rules.map((r) => `- ${r}`).join("\n")
 }
 
-/**
- * Assemble the CC external auto-mode classifier system prompt.
- * User rules in autoMode REPLACE the tagged defaults (external template semantics).
- */
 export function buildClassifierSystemPrompt(
 	autoMode?: AutoModeRules,
 ): string {

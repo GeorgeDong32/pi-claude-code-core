@@ -35,9 +35,6 @@ import type { GoalRecord } from "./goal-record.ts";
  * detached from unhandled-rejection reporting.
  */
 
-/** Structural session shape the auditor drives (AR1005-AU-02 test seam:
- * production uses the real createAgentSession result; tests use a
- * controlled adapter — one host boundary, not a mock-everything layer). */
 export interface AuditorSession {
 	subscribe(listener: (event: unknown) => void): () => void;
 	prompt(prompt: string): Promise<unknown>;
@@ -45,14 +42,12 @@ export interface AuditorSession {
 	dispose(): void;
 }
 
-/** Opens an auditor session over createAgentSession-shaped options. */
 export type OpenAuditorSession = (opts: Parameters<typeof createAgentSession>[0]) => Promise<{ session: AuditorSession }>;
 
 export interface GoalAuditorConfig {
 	provider?: string;
 	model?: string;
 	thinkingLevel?: ThinkingLevel;
-	/** Total audit budget in ms (clamped to MIN_AUDIT_TIMEOUT_MS). */
 	auditTimeoutMs?: number;
 }
 
@@ -95,14 +90,8 @@ export function parseGoalAuditorConfig(raw: unknown): GoalAuditorConfig {
 	return config;
 }
 
-/** Default total audit budget; covers the observed healthy audit range (3–9 min)
- *  while bounding the incident shape (auditor tool hang = infinite wait). */
 export const DEFAULT_AUDIT_TIMEOUT_MS = 600_000;
-/** Floor for user-configured timeouts: below this even one model round-trip can exceed the budget. */
 export const MIN_AUDIT_TIMEOUT_MS = 60_000;
-/** G3-C18: the fixed-format blockers marker — single source shared by the
- *  prompt writer and parseBlockers (the memory side pins POLICY_MARKER the
- *  same way; two independent literals would drift silently). */
 export const BLOCKERS_MARKER = "BLOCKERS:";
 
 function asAuditTimeoutMs(value: unknown): number | undefined {
@@ -111,9 +100,6 @@ function asAuditTimeoutMs(value: unknown): number | undefined {
 }
 
 export function loadGoalAuditorFileConfig(cwd: string): GoalAuditorConfig {
-	// shared settings-JSON primitive (P2-GO-03a); parse/canonicalize unchanged.
-	// C1 (arch review 2026-10-18): cached read — read-only here; the save side
-	// builds a fresh object and writeJsonAtomic drops the cache entry.
 	const raw = readJsonCached<Record<string, unknown>>(goalAuditorConfigPath(cwd), {});
 	return parseGoalAuditorConfig(raw);
 }
@@ -145,12 +131,6 @@ export function saveGoalAuditorFileConfig(cwd: string, config: GoalAuditorConfig
 	return clean;
 }
 
-/**
- * G3-C18: parse the fixed-format BLOCKERS block from an auditor report.
- * Returns the blocker lines (without the "- [Bn] " prefix), [] for the
- * explicit empty list, or null when the block is absent (legacy reports —
- * callers fall back to the old prefix truncation).
- */
 export function parseBlockers(report: string): string[] | null {
 	const lines = report.split("\n");
 	const start = lines.findIndex((l) => l.trim() === BLOCKERS_MARKER);
@@ -158,7 +138,7 @@ export function parseBlockers(report: string): string[] | null {
 	const out: string[] = [];
 	for (let i = start + 1; i < lines.length; i++) {
 		const line = lines[i]!.trim();
-		if (!line.startsWith("-")) break; // block ends at the first non-item line (the verdict)
+		if (!line.startsWith("-")) break;
 		const item = line.replace(/^\-\s*/, "").replace(/^\[[Bb]\d+\]\s*/, "").trim();
 		if (item === "(none)" || item === "") continue;
 		out.push(item);
@@ -188,8 +168,6 @@ export function buildGoalAuditorPrompt(args: {
 		"<approved/>",
 		"<disapproved/>",
 		"",
-		// G3-C18: fixed-format blockers — the persistent re-injection ([C19])
-		// consumes this list instead of a raw prefix truncation.
 		"Right BEFORE the final verdict line, output a fixed-format blockers list:",
 		BLOCKERS_MARKER,
 		"- [B1] one-sentence blocker (max ~120 chars)",
@@ -235,8 +213,6 @@ export function makeAuditorResourceLoader(): ResourceLoader {
 			"Never modify files. Never approve unless the actual user objective is complete.",
 		].join("\n"),
 		getAppendSystemPrompt: () => [],
-		// pi 0.85 ResourceLoader additions (fork drift fix, goal-auditor
-		// authored against 0.74)
 		getSystemPromptSource: () => undefined,
 		getAppendSystemPromptSources: () => [],
 		extendResources: () => {},
@@ -277,8 +253,6 @@ export async function runGoalCompletionAuditor(args: {
 	completionSummary?: string | null;
 	detailedSummary: string;
 	signal?: AbortSignal;
-	/** AU-02 internal test seam: controlled session adapter (defaults to the
-	 * real createAgentSession). Production and tests drive the same interface. */
 	sessionAdapter?: OpenAuditorSession;
 }): Promise<GoalAuditorResult> {
 	const config = loadGoalAuditorConfig(args.ctx.cwd);
@@ -290,19 +264,11 @@ export async function runGoalCompletionAuditor(args: {
 		return { approved: false, disapproved: true, output: "", model: modelLabel(model), thinkingLevel, error: resolved.error };
 	}
 	try {
-		// AU-02: the session enters a try/finally covering its ENTIRE remaining
-		// lifecycle the moment creation resolves. Creation itself may reject —
-		// then there is no session object and no disposer to call (the catch
-		// below reports the error outcome; nothing leaks).
 		const openSession = args.sessionAdapter ?? ((opts) => createAgentSession(opts) as Promise<{ session: AuditorSession }>);
 		const { session } = await openSession({
 			cwd: args.ctx.cwd,
 			model,
 			thinkingLevel,
-			// pi 0.85: modelRegistry option was replaced by a default
-			// modelRuntime reading agentDir/auth.json + models.json; the
-			// auditor model is resolved to a concrete Model above, so the
-			// inherited registry is not needed (fork drift fix)
 			resourceLoader: makeAuditorResourceLoader(),
 			sessionManager: SessionManager.inMemory(args.ctx.cwd),
 			settingsManager: SettingsManager.inMemory({ compaction: { enabled: false } }) as never,
@@ -318,8 +284,6 @@ export async function runGoalCompletionAuditor(args: {
 					if (part.type === "text" && typeof part.text === "string") outputParts.push(part.text);
 				}
 			});
-			// AU-02: cancelled DURING creation — do not prompt, dispose exactly
-			// once (the finally below), no model work.
 			if (args.signal?.aborted) return { approved: false, disapproved: true, output: "", model: modelLabel(model), thinkingLevel, error: "Auditor aborted." };
 			// Bounded-abort wiring (spec 2026-10-04-goal-audit-hang-fix §3.3):
 			// pi's PromptOptions has no signal, so translate tool-abort/timeout
@@ -354,9 +318,6 @@ export async function runGoalCompletionAuditor(args: {
 				args.signal?.removeEventListener("abort", onAbort);
 			}
 		} finally {
-			// AU-02: subscribe/prompt/early-return/unsubscribe failures must ALL
-			// still dispose; each step guarded so one throwing cannot skip the
-			// other. dispose exactly once (this is the only disposal site).
 			try {
 				unsubscribe?.();
 			} catch {

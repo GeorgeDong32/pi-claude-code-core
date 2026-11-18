@@ -51,8 +51,6 @@ export function resolveSessionFocus(args: {
 	}
 	if (args.legacyGoal && args.legacyGoal.status !== "complete") {
 		if (args.pool.has(args.legacyGoal.id)) return args.legacyGoal.id;
-		// The pool is read-only here — the caller adopts the legacy record
-		// into its owned pool through the injected callback (P2-2 Step 4).
 		args.adoptLegacyGoal?.(cloneGoal(args.legacyGoal));
 		return args.legacyGoal.id;
 	}
@@ -91,7 +89,6 @@ export function buildUnfocusedOpenGoalsSummary(openGoalCount: number): string {
 export function mergeFocusedGoalWithDisk(args: { memoryGoal: GoalRecord; diskGoal: GoalRecord }): GoalRecord {
 	const tokensUsed = Math.max(args.memoryGoal.usage.tokensUsed, args.diskGoal.usage.tokensUsed);
 	const activeSeconds = Math.max(args.memoryGoal.usage.activeSeconds, args.diskGoal.usage.activeSeconds);
-	// costUsed merges with the same max rule as tokens — no new merge semantics.
 	const costUsed = Math.max(args.memoryGoal.usage.costUsed ?? 0, args.diskGoal.usage.costUsed ?? 0);
 	return {
 		...args.diskGoal,

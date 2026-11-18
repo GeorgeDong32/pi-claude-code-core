@@ -1,8 +1,4 @@
 // Vendored from gvanderclay/pi-bg-bash v0.2.1 (MIT). Copyright (c) 2026 Gage Vander Clay.
-// The `/tasks` command. In the terminal UI it lists the tasks: enter shows a task's
-// output, x kills the task after a confirmation, q or esc closes the list. In RPC mode,
-// which has no custom components, a picked task is killed after a confirmation.
-// Without a UI it prints the list.
 import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
@@ -25,13 +21,7 @@ import {
 import { logTail, oneLine, taskLine } from "./notify.ts";
 import { getRegistry, killTask, type Task } from "./registry.ts";
 
-/** How often the open list and output view re-read the registry and the log. */
 const REFRESH_MS = 1000;
-/** C8 (arch review 2026-10-18): a refresh timer self-terminates once the host
- * stops calling the component's render — the only proof the view is still on
- * screen. requestRender keeps the loop alive while mounted (the timer asks,
- * the host renders, the timestamp refreshes); an externally removed panel
- * stops receiving render calls and the timer goes quiet 3 ticks later. */
 const STALE_MS = 3 * REFRESH_MS;
 
 export function timerIsStale(lastRenderAt: number, now: number): boolean {
@@ -40,7 +30,6 @@ export function timerIsStale(lastRenderAt: number, now: number): boolean {
 
 type Pick = { task: Task; action: "view" | "kill" };
 
-/** The tasks as `/tasks` lists them: running first, then the most recently started. */
 function listed(): Task[] {
 	return [...getRegistry().tasks.values()].sort(
 		(a, b) => Number(b.state === "running") - Number(a.state === "running") || b.startedAt - a.startedAt,
@@ -49,9 +38,6 @@ function listed(): Task[] {
 
 export async function tasksCommand(ctx: ExtensionCommandContext): Promise<void> {
 	const tasks = listed;
-	// C2 follow-up: transient notices go through the shared entry (bus queue +
-	// cctui negotiation) instead of a bare host notify; the headless fallback
-	// matches the review module's console pattern.
 	const notify = (msg: string, level: "info" | "warning" = "info") => {
 		if (ctx.hasUI) sharedNotify(ctx, msg, level);
 		else console.log(`bg-shell: ${msg}`);
@@ -67,7 +53,6 @@ export async function tasksCommand(ctx: ExtensionCommandContext): Promise<void> 
 		return;
 	}
 	let selected: string | undefined;
-	// The list comes back after each view or kill, with the tasks' current state, until esc.
 	while (tasks().length > 0) {
 		const at = selected;
 		const pick = await ctx.ui.custom<Pick | undefined>((tui, theme, _keys, done) => taskList(at, tui, theme, done));
@@ -102,7 +87,6 @@ function taskList(
 	let tasks: Task[] = [];
 	let list: SelectList;
 	const container = new Container();
-	// SelectList cannot swap its items, so each refresh builds a new one and keeps the selected task.
 	const build = (keep: string | undefined, fallback: number): void => {
 		tasks = listed();
 		const items = tasks.map((task) => ({ value: task.id, label: taskLine(task) }));
@@ -131,7 +115,7 @@ function taskList(
 	let lastRenderAt = Date.now();
 	const timer = setInterval(() => {
 		if (timerIsStale(lastRenderAt, Date.now())) {
-			clearInterval(timer); // C8: host stopped rendering this panel
+			clearInterval(timer);
 			return;
 		}
 		build(current()?.id, Math.max(0, tasks.indexOf(current() as Task)));
@@ -158,10 +142,8 @@ function taskList(
 	};
 }
 
-/** Lines of chrome around the output: two borders, the title and the hint. */
 const CHROME = 4;
 
-/** The end of the task's log, scrollable, opened at the bottom and following the log while it is there. Never moves the read position. */
 function outputView(task: Task, tui: TUI, theme: Theme, done: () => void): Component {
 	const read = (): { lines: string[]; cut: boolean } => {
 		const { text, cut } = logTail(task, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES);
@@ -171,7 +153,6 @@ function outputView(task: Task, tui: TUI, theme: Theme, done: () => void): Compo
 	let rows: string[] = [];
 	let wrappedAt = 0;
 	let top = Number.POSITIVE_INFINITY;
-	// ponytail: fills the terminal less a little room for Pi's own rows; an overlay if that crowds them.
 	const height = (): number => Math.max(3, tui.terminal.rows - CHROME - 2);
 	const clamp = (): void => {
 		top = Math.max(0, Math.min(top, rows.length - height()));
@@ -179,13 +160,13 @@ function outputView(task: Task, tui: TUI, theme: Theme, done: () => void): Compo
 	let lastRenderAt = Date.now();
 	const timer = setInterval(() => {
 		if (timerIsStale(lastRenderAt, Date.now())) {
-			clearInterval(timer); // C8: host stopped rendering this view
+			clearInterval(timer);
 			return;
 		}
 		clamp();
 		const atBottom = top >= rows.length - height();
 		({ lines, cut } = read());
-		wrappedAt = 0; // render wraps the new lines
+		wrappedAt = 0;
 		if (atBottom) top = Number.POSITIVE_INFINITY;
 		tui.requestRender();
 	}, REFRESH_MS);

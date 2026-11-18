@@ -30,15 +30,9 @@ import { loadPermissionModesConfig } from "./config.ts"
 import { resolveBashPathChecks, tokenizeSegment } from "./bash-path-check.ts"
 
 const SAFE_WRAPPER_PREFIXES = [
-	// CC bashPermissions.ts SAFE_WRAPPER_PATTERNS parity (2026-11-08 P2):
-	// timeout with GNU long/short flags whose VALUES are allowlisted
-	// ([A-Za-z0-9_.+-] — no $() smuggling), then a duration;
 	/^timeout[ \t]+(?:(?:--(?:foreground|preserve-status|verbose)|--(?:kill-after|signal)=[A-Za-z0-9_.+-]+|--(?:kill-after|signal)[ \t]+[A-Za-z0-9_.+-]+|-v|-[ks][ \t]+[A-Za-z0-9_.+-]+|-[ks][A-Za-z0-9_.+-]+)[ \t]+)*(?:--[ \t]+)?\d+(?:\.\d+)?[smhd]?[ \t]+/,
-	// bare time (no -p required) + optional --
 	/^time[ \t]+(?:--[ \t]+)?/,
-	// nice: bare, -n N, or legacy -N
 	/^nice(?:[ \t]+-n[ \t]+-?\d+|[ \t]+-\d+)?[ \t]+(?:--[ \t]+)?/,
-	// stdbuf: fused short flags only (-o0, -eL groups)
 	/^stdbuf(?:[ \t]+-[ioe][LN0-9]+)+[ \t]+(?:--[ \t]+)?/,
 	/^nohup[ \t]+(?:--[ \t]+)?/,
 ]
@@ -105,12 +99,6 @@ export function stripSafeLeadingEnvVars(command: string): string {
 	return stripped
 }
 
-/**
- * P2 (2026-11-08): single-level $() / backtick subcommand expansion for
- * deny/ask matching — the inner text becomes an extra candidate (CC does
- * this via AST; a regex-level pass is the accepted approximation —
- * (...) groups and { ...; } are a known gap, DEVIATIONS #134).
- */
 function expandSubcommands(cmd: string): string[] {
 	const out: string[] = []
 	const re = /\$\(([\s\S]*?)\)|`([^`]*)`/g
@@ -198,14 +186,6 @@ const COMMAND_SUBSTITUTION_PATTERNS: RegExp[] = [
 	/`/,
 ]
 
-/**
- * CC bashSecurity.ts isSafeHeredoc port (P0-1 condition, user-mandated):
- * `cmd $(cat <<'DELIM'\n…\nDELIM\n)` — quoted/escaped delimiter only,
- * line-based first-close matching, nested-match rejection, argument-
- * position requirement, and a strict character whitelist on the remaining
- * text. Returns the command with every verified safe heredoc stripped, or
- * null when any heredoc fails the pattern (caller treats as substitution).
- */
 function stripSafeHeredocs(command: string): string | null {
 	if (!/\$\(.*<</.test(command)) return command
 	const heredocPattern = /\$\(cat[ \t]*<<(-?)[ \t]*(?:'+([A-Za-z_]\w*)'+|\\([A-Za-z_]\w*))/g

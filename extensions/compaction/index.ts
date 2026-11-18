@@ -1,51 +1,3 @@
-/*
- * Smart Compaction — controller assembly (SPEC SC §5.1/§5.10 ST-03..06,
- * §5.7/§5.8 wiring; task W4).
- *
- * The 14th module factory. Event map:
- *
- *   session_start / session_shutdown   settings reload + reset (ST-03),
- *                                      abort in-flight compute, generation++
- *   turn_end / agent_before_settle     apply points (POL-07): boundary
- *                                      evaluation → propose draft (APP-01…08,
- *                                      fully synchronous — APP-03) or launch
- *                                      the background compute (single promise
- *                                      chain, INV-2)
- *   reconcile trigger set (§5.2, S1⑦)  turn_start / context /
- *                                      before_provider_request / agent_end /
- *                                      agent_settled / input /
- *                                      session_before_compact / session_tree /
- *                                      session_shutdown — first arrival after
- *                                      a draft scans the branch for our nonce
- *                                      (APP-08, INV-13)
- *   session_before_compact             fallback supply leg (FB-01…07) +
- *                                      POL-07② recovery flag on overflow
- *   session_compact                    FB-08 native-summary audit
- *                                      (fromExtension falsy only)
- *   session_compact_failed             POL-07② recovery flag
- *   /smart-compact [status|mode off|shadow|on]   ST-04
- *
- * Every handler body is try/caught (INV-1) and the proposal path contains no
- * await before returning the draft. pi-compat probe (POL-08) forces mode off
- * below 1.5.0; `compaction.enabled=false` forces shadow (POL-06).
- *
- * NOTE on lost(overridden): the BLK-2(a) blocking test (executable spec)
- * requires the SNAPSHOT to survive an override so a later clean boundary can
- * commit it — resolving the §5.2 wording ("快照作废") in favor of §4.4's
- * "快照不消耗". lost(branch-changed/dropped) DOES void the snapshot.
- *
- * Reading guide (review batches A/D):
- *   - POL-07: BOTH apply points take the assistant stopReason from the
- *     session branch (ctx.sessionManager.getBranch(), backward scan) —
- *     never the event payload alone (A1).
- *   - The fallback supply leg consumes a ready snapshot through the
- *     `served` transition (ready → idle; A2), not commit/discard.
- *   - lost(overridden) re-proposal is capped at a per-session CUMULATIVE
- *     OVERRIDE_DEGRADE_AFTER = 2 (commits don't reset it; session reset
- *     does) → degrade to shadow (A3).
- *   - SC-MET-01 records content-free timing/pressure checkpoints only in
- *     mode on; proposal and confirmed commit remain separate measurements.
- */
 
 import { VERSION, SettingsManager, getLatestCompactionEntry, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { homedir } from "node:os";
@@ -102,7 +54,6 @@ const RECONCILE_EVENTS = [
 ] as const;
 
 export default function compactionController(pi: ExtensionAPI): void {
-	// ── session-scoped state (rebuilt on session_start) ───────────────────
 	let settings: CompactionSettings = DEFAULT_COMPACTION_CORE_SETTINGS;
 	let runtime = new SessionRuntime({
 		settings,
@@ -111,7 +62,7 @@ export default function compactionController(pi: ExtensionAPI): void {
 		notifyAfter,
 	});
 	let inFlight: { controller: AbortController; generation: number; promise: Promise<void> } | null = null;
-	let nativeRecoveryPending = false; // POL-07②
+	let nativeRecoveryPending = false;
 	let sessionTreeSinceProposal = false;
 	let resolvedMode: "off" | "shadow" | "on" = "on";
 	let compatWarningShown = false;
@@ -126,12 +77,8 @@ export default function compactionController(pi: ExtensionAPI): void {
 		}
 	};
 
-	/** Agent dir resolution: real sessions expose <agentDir>/sessions/…;
-	 * fall back to ~/.pi/agent (the settings-file home, ST-02). */
 	const agentDirOf = (ctx: ExtensionContext): string => {
 		const sessionDir = ctx.sessionManager.getSessionDir();
-		// Both "<agentDir>/sessions/<encoded>" (real hosts) and a bare
-		// "<agentDir>/sessions" root (test scaffolds) resolve to agentDir.
 		const marker = sessionDir.indexOf("/sessions");
 		if (sessionDir.length > 0 && marker > 0) return sessionDir.slice(0, marker);
 		return join(homedir(), ".pi", "agent");
@@ -144,7 +91,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 		const loaded = loadCompactionSettings();
 		settings = loaded.settings;
 		for (const warning of loaded.warned) console.warn(`[compaction] ${warning}`);
-		// POL-08 version gate > POL-06 native-enabled gate > configured mode.
 		const versionOk = versionAtLeast(VERSION, "1.5.0");
 		if (!versionOk && !compatWarningShown) {
 			console.warn(`[compaction] pi ${VERSION} < 1.5.0 — controller forced off`);
@@ -164,7 +110,7 @@ export default function compactionController(pi: ExtensionAPI): void {
 	};
 
 	const nativeCompactionEnabled = (ctx?: ExtensionContext): boolean => {
-		if (!ctx) return true; // cannot probe yet — assume enabled; re-resolved per session
+		if (!ctx) return true;
 		try {
 			const manager = SettingsManager.create(ctx.cwd, agentDirOf(ctx));
 			return manager.getCompactionSettings(ctx.model ?? { provider: "", id: "" }).enabled;
@@ -173,7 +119,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 		}
 	};
 
-	// ── pressure + feasibility inputs ─────────────────────────────────────
 	const thresholdOf = (ctx: ExtensionContext): { tn: number | null; keep: number } => {
 		try {
 			const manager = SettingsManager.create(ctx.cwd, agentDirOf(ctx));
@@ -208,7 +153,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 		}
 	};
 
-	// ── ledger providers (all synchronous, LED-07-isolated inside assemble) ──
 	const ledgerProviders = (ctx: ExtensionContext, region?: CompressedRegionViewLike) => ({
 		goal: () => {
 			try {
@@ -249,7 +193,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 			: undefined,
 	});
 
-	// ── background compute (single promise chain, SUM-07) ─────────────────
 	const launchCompute = (ctx: ExtensionContext): void => {
 		const generation = runtime.state.generation;
 		const controller = new AbortController();
@@ -260,18 +203,8 @@ export default function compactionController(pi: ExtensionAPI): void {
 		const promise = (async () => {
 			try {
 				const projection = ctx.sessionManager.buildSessionProjection();
-				// R1 (2026-11-11 pre-release review): the V-gate baseline is the
-				// branch AT INPUT TIME, captured before the first await. Entries
-				// appended while the summarizer runs must land AFTER the snapshot
-				// path so V1–V4 see them as post-snapshot history — previously the
-				// baseline was taken on completion, letting a mid-compute
-				// context_edit on the compressed region pass V4 and resurrecting
-				// edited-away content in the committed summary.
 				const snapshotPathIds = ctx.sessionManager.getBranch().map((entry) => (entry as { id?: string }).id ?? "");
 				const { tn, keep } = thresholdOf(ctx);
-				// D3 (2026-11-10 review D): phase is already "computing" — a
-				// silent return would wedge it there (INV-5 short-circuits every
-				// later boundary until session reset). Fail through the policy.
 				if (tn === null) {
 					runtime.onComputeFailed("no-threshold");
 					return;
@@ -292,7 +225,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 					weights: settings.weights as unknown as Record<string, number>,
 					lambda: settings.lambda,
 					idleGapMs: settings.idleGapMs,
-					// W7/W8 semantic signals (CUT-04 preference classes).
 					signals: [runClosedSignal, goalStepSignal, gitCommitSignal, verifiedSignal],
 				});
 				if (cut.status === "infeasible") {
@@ -310,11 +242,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 					runtime.onComputeFailed("nothing-to-summarize");
 					return;
 				}
-				// B3 (SUM-08 closedIds) + RB2/RB3 (2026-11-10 review rework): ONE
-				// assemble BEFORE the LLM — an unviable ledger (over-budget /
-				// self-check failed) skips the summarizer call entirely
-				// (refused + cooldown naturally rate-limits retries);
-				// closedIds reuse the same result.
 				let closedIds: string[] | undefined;
 				try {
 					const region = compressedRegionOf(projection.entries as ProjectedEntry[], cut.cut.firstKeptEntryIndex);
@@ -335,7 +262,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 					apiKey = auth?.apiKey;
 					headers = auth?.headers;
 				} catch {
-					/* provider default auth */
 				}
 				const outcome: SummarizerOutcome = await runSummarizer({
 					preparation,
@@ -343,10 +269,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 					apiKey,
 					headers,
 					closedIds,
-					// Registry transport: modelRegistry.complete resolves the
-					// provider API through the session's ModelRuntime — the
-					// same registry the host itself streams through (the
-					// bare completeSimple default has no runtime registration).
 					transport: { call: (model, context, options) => ctx.modelRegistry.complete(model, context as never, options as never) as never },
 					summaryThinking: settings.summaryThinking,
 					summaryMaxTokens: settings.summaryMaxTokens,
@@ -357,7 +279,7 @@ export default function compactionController(pi: ExtensionAPI): void {
 					},
 					signal: controller.signal,
 				});
-				if (controller.signal.aborted || generation !== runtime.state.generation) return; // SUM-07
+				if (controller.signal.aborted || generation !== runtime.state.generation) return;
 				if (!outcome.ok) {
 					if (outcome.reason === "aborted") return;
 					runtime.onComputeFailed(outcome.reason);
@@ -378,17 +300,12 @@ export default function compactionController(pi: ExtensionAPI): void {
 				});
 				if (runtime.snapshot === snapshot) measure(ctx, "compute-ready", { cycleId, elapsedMs: Date.now() - started });
 			} catch {
-				// D3: a stale generation's crash must not turn the NEW
-				// generation's computing phase into refused.
 				if (generation !== runtime.state.generation) return;
 				// INV-1: a compute crash degrades to refused, never blocks.
 				runtime.onComputeFailed("compute-error");
 			}
 		})();
 		inFlight = { controller, generation, promise };
-		// SUM-07: release the single-flight slot when THIS generation's
-		// compute settles (stale generations' settles must not clobber a
-		// newer in-flight slot).
 		void promise.finally(() => {
 			if (inFlight?.generation === generation) inFlight = null;
 		});
@@ -403,22 +320,11 @@ export default function compactionController(pi: ExtensionAPI): void {
 		}
 	};
 
-	// LED-06: the narrative header's trust wording follows board association.
 	let lastFlowTrusted = false;
 
-	// ── the proposal path (synchronous, APP-01…08) ────────────────────────
-	/**
-	 * B4 (2026-11-10 review): single composer for the FINAL summary — ledger
-	 * assembled at the current instant (LED-06), self-checked (LED-08),
-	 * then header + narrative + ledger block + pi file sections. Shared by
-	 * the draft path, both fallback supply paths, and the regenerate path,
-	 * so V8a always estimates with the FINAL summary, never the bare one.
-	 * Also carries closedIds (B3/SUM-08) and the flow-trust flag (LED-06).
-	 */
 	const composeFinalSummary = (ctx: ExtensionContext, cut: { firstKeptEntryIndex: number }, rawSummary: string) => {
 		try {
 			const entries = ctx.sessionManager.buildSessionProjection().entries as ProjectedEntry[];
-			// RB3: single-source region math (last compaction → kept head).
 			const region = compressedRegionOf(entries, cut.firstKeptEntryIndex);
 			const providers = ledgerProviders(ctx, region);
 			const ledger = assembleLedger({ region, providers, settings });
@@ -428,15 +334,8 @@ export default function compactionController(pi: ExtensionAPI): void {
 			const fileIdx = Math.min(
 				...[rawSummary.indexOf("<read-files>"), rawSummary.indexOf("<modified-files>")].filter((i) => i >= 0).concat([rawSummary.length]),
 			);
-			const narrative = sanitizeLedgerLine(rawSummary.slice(0, fileIdx).trimEnd()); // D4: the narrative must never carry a live ledger tag
-			// R3 (2026-11-11 pre-release review): the file-list tail is LLM
-			// output too — a forged ledger block inside <read-files> used to
-			// sit AFTER the real block and win the last-block parse on the
-			// next carry-over round. Neutralize it like the narrative so the
-			// deterministic ledger.block is the only live block in the summary.
+			const narrative = sanitizeLedgerLine(rawSummary.slice(0, fileIdx).trimEnd());
 			const files = fileIdx < rawSummary.length ? sanitizeLedgerLine(rawSummary.slice(fileIdx)) : "";
-			// F1: association comes from the memoized assemble result — no
-			// second provider invocation on the synchronous apply path.
 			const flowTrusted = ledger.flowAssociated;
 			const summary = [narrativeHeader(flowTrusted), narrative, ledger.block, files].filter((part) => part.length > 0).join("\n\n");
 			return { ok: true as const, summary, ledgerChars: ledger.chars, flowTrusted, closedIds: ledger.closedIds };
@@ -445,8 +344,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 		}
 	};
 
-	// A1 (review P0, rework R1): applySafe is threaded from the caller (the
-	// propose gate in onApplyPoint, branch-authoritative stopReason).
 	const tryPropose = (event: { entries?: unknown[] }, ctx: ExtensionContext, midRun: boolean, applySafe: boolean): { entries: unknown[] } | undefined => {
 		const snapshot = runtime.snapshot;
 		if (!snapshot || runtime.state.phase !== "ready") return undefined;
@@ -456,7 +353,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 		const branch = ctx.sessionManager.getBranch();
 		const projection = ctx.sessionManager.buildSessionProjection();
 		const entries = projection.entries as ProjectedEntry[];
-		// Compressed region ids: branch ids before the kept head.
 		const cutBranchIndex = branch.findIndex((entry) => (entry as { id?: string }).id === snapshot.cut.firstKeptEntryId);
 		if (cutBranchIndex < 0) {
 			runtime.onDiscarded("v3-cut-invalid");
@@ -464,7 +360,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 		}
 		const compressedRegionIds = new Set(branch.slice(0, cutBranchIndex).map((entry) => (entry as { id?: string }).id ?? ""));
 
-		// B4: compose the final summary through the shared single path.
 		const composed = composeFinalSummary(ctx, snapshot.cut, snapshot.summary);
 		if (!composed.ok) {
 			runtime.onDiscarded("v6-summary-invalid", { reason: composed.reason });
@@ -473,7 +368,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 		lastFlowTrusted = composed.flowTrusted;
 		const finalSummary = composed.summary;
 
-		// V1–V10 with the REAL final numbers.
 		const keptMessages = entries.slice(snapshot.cut.firstKeptEntryIndex).flatMap((entry) => entry.messages);
 		const estimate = estimatePost({
 			summary: finalSummary,
@@ -500,13 +394,12 @@ export default function compactionController(pi: ExtensionAPI): void {
 			signalAborted: false,
 			sameBoundaryEntries: (event.entries ?? []) as Array<Record<string, unknown>>,
 		});
-		if (prechecks.action === "hold") return undefined; // V10: snapshot stays ready
+		if (prechecks.action === "hold") return undefined;
 		if (prechecks.action === "discard") {
 			runtime.onDiscarded(prechecks.reason, { estPostTokens: estimate.total });
 			return undefined;
 		}
 
-		// Propose: seam BEFORE first (APP-05), then the draft (APP-01).
 		const proposalId = randomUUID();
 		const decision = runtime.onPropose({
 			type: "propose",
@@ -531,7 +424,7 @@ export default function compactionController(pi: ExtensionAPI): void {
 			estPostTokens: estimate.total, proposedAtTurn: runtime.state.turns,
 			tokensBefore, tn, cycleId: metricCycleId, proposedAt: Date.now(),
 		};
-		sessionTreeSinceProposal = false; // C2 (2026-11-10 review): a fresh proposal clears the stale session_tree flag
+		sessionTreeSinceProposal = false;
 		measure(ctx, "proposal", { proposalId, tokens: tokensBefore, tn, estPostTokens: estimate.total });
 		return mergeDraftEntries((event.entries ?? []) as unknown[], draft);
 	};
@@ -550,7 +443,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 		return { readFiles: read, modifiedFiles: modified };
 	};
 
-	// ── reconciliation (APP-08) ────────────────────────────────────────────
 	let pendingProposal: {
 		proposalId: string;
 		compressedRegionIds: Set<string>;
@@ -579,19 +471,12 @@ export default function compactionController(pi: ExtensionAPI): void {
 				runtime.onReconciled(result, { ...info, tokensAfter: undefined });
 				measure(ctx, "applied", {
 					proposalId: pendingProposal.proposalId, cycleId: pendingProposal.cycleId,
-					// Usage is null immediately after compaction (H7); retain the
-					// pressure at proposal, not a fabricated post-commit sample.
 					tokens: pendingProposal.tokensBefore, tn: pendingProposal.tn,
 					estPostTokens: pendingProposal.estPostTokens,
 					elapsedMs: Date.now() - pendingProposal.proposedAt,
 				});
 				pendingProposal = null;
 			} else if (result.lostReason === "overridden") {
-				// BLK-2(a) executable-spec semantics + A3 bound: onOverridden
-				// writes the APP-08 discarded telemetry, moves the phase back
-				// to ready (fresh nonce slot), and degrades to shadow once the
-				// CUMULATIVE per-session override count reaches
-				// OVERRIDE_DEGRADE_AFTER.
 				runtime.onOverridden(info);
 				pendingProposal = null;
 			} else {
@@ -599,20 +484,12 @@ export default function compactionController(pi: ExtensionAPI): void {
 				pendingProposal = null;
 			}
 		} catch {
-			/* reconcile is best-effort; the next trigger retries */
 		}
 	};
 
-	// ── apply-point boundary evaluation ───────────────────────────────────
-	// A1 (2026-11-10 review P0, rework R1): POL-07's stopReason authority is
-	// the SESSION BRANCH (ctx.sessionManager.getBranch()), scanned backward
-	// for the last assistant message — event.message only covers turn_end,
-	// and event.entries is the host's draft accumulator, never messages.
 	const onApplyPoint = (event: { entries?: unknown[]; message?: { stopReason?: string }; outcome?: string }, ctx: ExtensionContext, midRun: boolean): { entries: unknown[] } | undefined => {
 		if (resolvedMode === "off" || resolvedMode === "shadow") return undefined;
 		try {
-			// NOTE: no reconcile here — this handler may itself return the
-			// draft being proposed; the NEXT trigger-set event reconciles.
 			const { tn, keep } = thresholdOf(ctx);
 			if (tn === null) return undefined;
 			const tokens = pressureOf(ctx);
@@ -628,38 +505,28 @@ export default function compactionController(pi: ExtensionAPI): void {
 			});
 			const stopReason = event.message?.stopReason ?? lastAssistantStopReason(ctx.sessionManager.getBranch());
 			const applySafe = applyPointSafe({ stopReason, outcome: event.outcome, nativeRecoveryPending });
-			// First evaluation: start-computing decisions ONLY. The propose
-			// transition happens exactly once, inside tryPropose's own
-			// propose event (after the V-gates pass, without a second tick) —
-			// evaluating it here
-			// would strand the phase at "proposed" with no draft returned.
 			const decision = runtime.onBoundary({
 				type: "boundary",
 				P,
 				applySafe,
 				isApplyPoint: false,
-				prechecksPassed: true, // the real V1–V10 run inside tryPropose
+				prechecksPassed: true,
 				feasibility,
 				mayCompute: resolvedMode === "on" && !runtime.degraded && !inFlight,
 				proposalNonce: randomUUID(),
 			});
 			if (decision.action.type === "start-computing" && !inFlight) launchCompute(ctx);
-			if (decision.action.type === "mark-infeasible") runtime.onInfeasible(feasibility?.neededTn); // B5 (dedup via infeasibleReported)
-			// A1 (review P0): the propose path itself must pass POL-07 —
-			// previously tryPropose hardcoded applySafe:true, letting
-			// length-boundary drafts swallow native recovery. Unknown
-			// stopReason stays fail-closed (applyPointSafe semantics).
+			if (decision.action.type === "mark-infeasible") runtime.onInfeasible(feasibility?.neededTn);
 			if (applySafe && P !== null && P >= settings.applyRatio) {
 				return tryPropose(event, ctx, midRun, applySafe);
 			}
 			return undefined;
 		} catch (error) {
-			runtime.onApplyError(); // B5 (2026-11-10 review): APP-06 telemetry — emit itself is fail-open
-			return undefined; // APP-06: never throw into pi
+			runtime.onApplyError();
+			return undefined;
 		}
 	};
 
-	// ── fallback leg (§5.8) ────────────────────────────────────────────────
 	const onBeforeCompact = async (event: {
 		reason: "manual" | "threshold" | "overflow";
 		customInstructions?: string;
@@ -668,7 +535,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 	}, ctx: ExtensionContext): Promise<{ compaction?: unknown } | undefined> => {
 		if (resolvedMode === "off") return undefined;
 		try {
-			// POL-07②: mark pending native recovery on overflow attempts.
 			if (event.reason === "overflow") nativeRecoveryPending = true;
 			if (resolvedMode === "shadow") return undefined;
 			fallbackMetric = { attemptId: randomUUID(), at: Date.now(), reason: event.reason };
@@ -681,11 +547,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 			const gatesForSnapshot = (): Gates => {
 				const snapshot = runtime.snapshot;
 				if (!snapshot) return { gates: false, fit: false, estimate: Number.POSITIVE_INFINITY };
-				// B4/RB4: compose ONCE — a failed ledger self-check means the
-				// snapshot cannot be supplied at all (gates false), the V8a
-				// estimate uses the FINAL summary, and the supply paths reuse
-				// this exact composed result (no second compose, no drift
-				// between the estimated and the actually-supplied bytes).
 				const composed = composeFinalSummary(ctx, snapshot.cut, snapshot.summary);
 				if (!composed.ok) return { gates: false, fit: false, estimate: Number.POSITIVE_INFINITY };
 				const projection = ctx.sessionManager.buildSessionProjection();
@@ -711,9 +572,9 @@ export default function compactionController(pi: ExtensionAPI): void {
 					tnAtSnapshot: snapshot.tnAtSnapshot,
 					tnNow: tn,
 					summaryValidated: snapshot.validated,
-					applySafe: true, // V7 n/a on the supply path
+					applySafe: true,
 					estimatePostTokens: estimate.total,
-					hardFitLimit: Number.POSITIVE_INFINITY, // evaluated separately below
+					hardFitLimit: Number.POSITIVE_INFINITY,
 					efficiencyLimit: undefined,
 					degraded: runtime.degraded,
 					signalAborted: event.signal?.aborted ?? false,
@@ -739,9 +600,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 
 			if (decision.action === "supply-snapshot" && runtime.snapshot) {
 				const snapshot = runtime.snapshot;
-				// RB4: reuse the summary gatesForSnapshot ALREADY composed —
-				// one compose per evaluation, zero drift between the V8a
-				// estimate and the actually-supplied bytes.
 				const composed = initial.composed;
 				if (!composed || !composed.ok) {
 					runtime.snapshot = null;
@@ -757,18 +615,14 @@ export default function compactionController(pi: ExtensionAPI): void {
 					modifiedFiles: files.modifiedFiles,
 					proposalId: randomUUID(),
 				});
-				runtime.snapshot = null; // consumed by the supply
-				runtime.onServed(); // A2: leave "ready" — re-precompute, never re-propose the consumed draft
+				runtime.snapshot = null;
+				runtime.onServed();
 				return supply;
 			}
 			if (decision.action === "native") return undefined;
 
-			// ② wait-for-ready: race the in-flight compute against the SINGLE
-			// deadline timer (the INV-2 exception) + the event signal.
 			if (decision.action === "wait-for-ready" && inFlight) {
 				const signal = event.signal;
-				// C1 (2026-11-10 review): timer handles are cleared and the
-				// abort listener detached once the race settles — no leaks.
 				let timerHandle: ReturnType<typeof setTimeout> | undefined;
 				let abortListener: (() => void) | undefined;
 				const timer = new Promise<undefined>((resolveTimer) => {
@@ -785,7 +639,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 				if (timerHandle !== undefined) clearTimeout(timerHandle);
 				if (abortListener) signal?.removeEventListener("abort", abortListener);
 				if (signal?.aborted || Date.now() >= deadlineAt) {
-					// FB-07: bump generation, abort the old task, return now.
 					runtime.onFellthrough(signal?.aborted ? "aborted" : "deadline");
 					abortInFlight();
 					runtime.onSessionReset();
@@ -794,7 +647,7 @@ export default function compactionController(pi: ExtensionAPI): void {
 				const afterWait = gatesForSnapshot();
 				if (runtime.state.phase === "ready" && afterWait.gates && afterWait.fit && runtime.snapshot) {
 					const snapshot = runtime.snapshot;
-					const composed = afterWait.composed; // RB4: reuse the wait-gates compose
+					const composed = afterWait.composed;
 					if (!composed || !composed.ok) {
 						runtime.snapshot = null;
 						runtime.onDiscarded("v6-summary-invalid", { reason: composed && !composed.ok ? composed.reason : "compose-miss" });
@@ -810,20 +663,19 @@ export default function compactionController(pi: ExtensionAPI): void {
 						proposalId: randomUUID(),
 					});
 					runtime.snapshot = null;
-					runtime.onServed(); // A2 (wait-path supply): same transition
+					runtime.onServed();
 					return supply;
 				}
-				return undefined; // ready but unfit → do not supply, do not regenerate late
+				return undefined;
 			}
 
-			// ③ synchronous regeneration, single attempt, remaining budget.
 			if (decision.action === "regenerate" && Date.now() < deadlineAt) {
 				const outcome = await regenerateNow(ctx, tn, deadlineAt, event.reason, event.signal);
 				if (outcome) return outcome;
 			}
 			return undefined;
 		} catch {
-			return undefined; // FB-05
+			return undefined;
 		}
 	};
 
@@ -832,10 +684,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 		const generation = runtime.state.generation;
 		try {
 			const projection = ctx.sessionManager.buildSessionProjection();
-			// R1 (2026-11-11 pre-release review): same input-time baseline as
-			// launchCompute — the regenerate leg awaits the summarizer while a
-			// native compaction is pending; entries landing during that await
-			// must invalidate the produced summary, not be adopted verbatim.
 			const snapshotPathIds = ctx.sessionManager.getBranch().map((entry) => (entry as { id?: string }).id ?? "");
 			const { keep } = thresholdOf(ctx);
 			const feasibility = jointFeasibility({
@@ -863,18 +711,11 @@ export default function compactionController(pi: ExtensionAPI): void {
 				previousSummaryNarrative: previous ? stripLedgerBlock(previous.summary) : undefined,
 			});
 			if (!preparation) return undefined;
-			// B3 + RB2/RB3 (2026-11-10 review rework): ledger precheck BEFORE
-			// the LLM — this leg runs inside session_before_compact with the
-			// user BLOCKED; an unviable ledger fails fast back to native
-			// instead of burning the deadline on a doomed summary call.
 			let closedIds: string[] | undefined;
 			try {
 				const region = compressedRegionOf(projection.entries as ProjectedEntry[], cut.cut.firstKeptEntryIndex);
 				const ledger = assembleLedger({ region, providers: ledgerProviders(ctx, region), settings });
 				if (!ledger.selfCheck.ok) {
-					// D7.1 (2026-11-10 review D): a regenerate failure falls
-					// through to native — onDiscarded would void a still-ready
-					// snapshot and emit a cycle-less discarded from idle.
 					runtime.onFellthrough(ledger.selfCheck.missing.includes("ledger-over-budget") ? "ledger-over-budget" : "ledger-self-check-failed");
 					return undefined;
 				}
@@ -903,17 +744,13 @@ export default function compactionController(pi: ExtensionAPI): void {
 				signal: controller.signal,
 			});
 			const outcome = await Promise.race([outcomePromise, deadlinePromise]);
-			if (regenTimer !== undefined) clearTimeout(regenTimer); // C1: no timer leak
+			if (regenTimer !== undefined) clearTimeout(regenTimer);
 			signal?.removeEventListener("abort", regenAbort);
 			if (Date.now() >= deadlineAt) {
-				runtime.onFellthrough("deadline"); // B5 (2026-11-10 review)
+				runtime.onFellthrough("deadline");
 				return undefined;
 			}
-			if (!outcome || !outcome.ok) return undefined; // single attempt, no retry (FB-07)
-			// R1: a mid-await compaction or context_edit on the compressed
-			// region invalidates the just-produced summary (its input is the
-			// pre-edit projection) — fall through to native like any other
-			// regenerate failure. Mirrors V1/V2/V4 on the supply path.
+			if (!outcome || !outcome.ok) return undefined;
 			const branchNow = ctx.sessionManager.getBranch();
 			const baselineHolds = snapshotPathIds.every((id, i) => (branchNow[i] as { id?: string } | undefined)?.id === id);
 			if (!baselineHolds) {
@@ -931,12 +768,9 @@ export default function compactionController(pi: ExtensionAPI): void {
 				runtime.onFellthrough("v4-conflict-edit");
 				return undefined;
 			}
-			// B4: compose the FINAL summary (ledger included) BEFORE V8a —
-			// estimating with the bare summary under-counts and can pass an
-			// over-budget compaction through.
 			const composedRegen = composeFinalSummary(ctx, cut.cut, outcome.summary);
 			if (!composedRegen.ok) {
-				runtime.onFellthrough(composedRegen.reason); // RB2: no silent failure; D7.1: fellthrough, not discarded
+				runtime.onFellthrough(composedRegen.reason);
 				return undefined;
 			}
 			const kept = (projection.entries as ProjectedEntry[]).slice(cut.cut.firstKeptEntryIndex).flatMap((entry) => entry.messages);
@@ -948,7 +782,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 				contextWindow: (ctx.model as { contextWindow?: number } | undefined)?.contextWindow ?? 128_000,
 				unknownOverheadTokens: settings.unknownOverheadTokens,
 			});
-			// V8a with THIS reason's ratio (overflow stricter, INV-12).
 			if (estimate.total > hardFitLimitFor(reason, settings, tn)) return undefined;
 			void generation;
 			const files = fileListsOf(composedRegen.summary);
@@ -981,7 +814,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 		inFlight = null;
 	};
 
-	// ── event wiring ──────────────────────────────────────────────────────
 	pi.on("session_start" as never, ((event: unknown, ctx: ExtensionContext) => {
 		try {
 			reloadSettings(ctx);
@@ -993,7 +825,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 			metricCycleId = undefined;
 			fallbackMetric = undefined;
 		} catch {
-			/* never block */
 		}
 	}) as never);
 
@@ -1005,7 +836,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 			metricCycleId = undefined;
 			fallbackMetric = undefined;
 		} catch {
-			/* never block */
 		}
 	}) as never);
 
@@ -1013,22 +843,20 @@ export default function compactionController(pi: ExtensionAPI): void {
 		try {
 			sessionTreeSinceProposal = true;
 			abortInFlight();
-			runtime.onSessionReset(); // V1: branch changed — drop custody
+			runtime.onSessionReset();
 			pendingProposal = null;
 			metricCycleId = undefined;
 			fallbackMetric = undefined;
 		} catch {
-			/* never block */
 		}
 	}) as never);
 
 	for (const name of RECONCILE_EVENTS) {
 		pi.on(name as never, ((_event: unknown, ctx: ExtensionContext) => {
 			try {
-				if (name === "agent_settled" && resolvedMode !== "off") nativeRecoveryPending = false; // POL-07② clear (D2: off keeps zero state)
+				if (name === "agent_settled" && resolvedMode !== "off") nativeRecoveryPending = false;
 				reconcileIfPending(ctx);
 			} catch {
-				/* never block */
 			}
 		}) as never);
 	}
@@ -1038,45 +866,35 @@ export default function compactionController(pi: ExtensionAPI): void {
 	}) as never);
 
 	pi.on("agent_before_settle" as never, ((event: { entries?: unknown[]; message?: { stopReason?: string }; outcome?: string }, ctx: ExtensionContext) => {
-		// C3 (2026-11-10 review): reconcile a pending proposal BEFORE
-		// evaluating this boundary (phase "proposed" never re-proposes, so
-		// ordering is safe).
 		try {
 			reconcileIfPending(ctx);
 		} catch {
-			/* never block */
 		}
 		return onApplyPoint(event, ctx, false);
 	}) as never);
 
 	pi.on("session_before_compact" as never, ((event: Parameters<typeof onBeforeCompact>[0], ctx: ExtensionContext) => {
-		// C3: entering the fallback leg reconciles first — a still-pending
-		// draft must be settled before we decide supply/wait/regenerate.
 		try {
 			reconcileIfPending(ctx);
 		} catch {
-			/* never block */
 		}
 		return onBeforeCompact(event, ctx);
 	}) as never);
 
 	pi.on("session_compact_failed" as never, ((_event: unknown, ctx: ExtensionContext) => {
 		try {
-			if (resolvedMode === "off") return; // D2: off = byte-identical to not installed (G5)
+			if (resolvedMode === "off") return;
 			nativeRecoveryPending = true;
 			if (fallbackMetric) {
 				measure(ctx, "fallback-end", { attemptId: fallbackMetric.attemptId, reason: fallbackMetric.reason, elapsedMs: Date.now() - fallbackMetric.at, failed: true });
 				fallbackMetric = undefined;
 			}
 		} catch {
-			/* never block */
 		}
 	}) as never);
 
 	pi.on("session_compact" as never, ((event: { fromExtension?: boolean; summary?: string; entry?: { summary?: string } }, ctx: ExtensionContext) => {
 		try {
-			// D2 (2026-11-10 review D): off = byte-identical to not installed
-			// (G5) — no FB-08 audit telemetry, no notify. shadow keeps it (SC-5).
 			if (resolvedMode === "off") return;
 			if (fallbackMetric) {
 				measure(ctx, "fallback-end", {
@@ -1085,8 +903,7 @@ export default function compactionController(pi: ExtensionAPI): void {
 				});
 				fallbackMetric = undefined;
 			}
-			if (event.fromExtension) return; // our own supply — seam not involved (FB-04)
-			// FB-08: audit the NATIVE summary (⑤–⑦ only); telemetry + one notify.
+			if (event.fromExtension) return;
 			const summary = event.summary ?? event.entry?.summary ?? "";
 			const audit = auditNativeSummary(summary, {
 				minNarrativeChars: settings.minNarrativeChars,
@@ -1105,16 +922,13 @@ export default function compactionController(pi: ExtensionAPI): void {
 					try {
 						ctx.ui.notify("[compaction] native summary failed validation (empty/truncated/file-list-only) — audit only, entry unchanged");
 					} catch {
-						/* notify is best-effort */
 					}
 				}
 			}
 		} catch {
-			/* never block */
 		}
 	}) as never);
 
-	// ── /smart-compact command (ST-04) ──────────────────────────────────────
 	pi.registerCommand("smart-compact" as never, {
 		description: "Smart Compaction controller: bare = status; 'mode <off|shadow|on>'",
 		getArgumentCompletions: (prefix: string) => {
@@ -1125,9 +939,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 				const first = tokens[0] ?? "";
 				return ["status", "mode"].filter((t) => t.startsWith(first)).map((t) => ({ value: t, label: t }));
 			}
-			// Only while the second token is being typed ("mode " / "mode <p>").
-			// pi replaces the WHOLE argument prefix with item.value, so the value
-			// must re-include the first token.
 			if (tokens[0] === "mode" && tokens.length <= 2 && (tokens.length === 1 || !trailing)) {
 				const second = trailing ? "" : tokens[1] ?? "";
 				return ["off", "shadow", "on"]

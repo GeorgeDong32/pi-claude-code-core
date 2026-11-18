@@ -33,14 +33,12 @@ import { classifySubCall, validateAssembled, validateSubCall, type ValidationThr
 import type { BuiltPreparation } from "./preparation.ts";
 import type { SubCallKind, SubCallRecord } from "./types.ts";
 
-/** What the wrapper observed for one streamFn invocation. */
 interface RawCall {
 	kind: SubCallKind;
 	message: AssistantMessage;
 }
 
 export interface SummarizerTransport {
-	/** Defaults to completeSimple (compact()'s own transport). */
 	call?: (model: Model<Api>, context: unknown, options: Record<string, unknown>) => Promise<AssistantMessage>;
 }
 
@@ -49,7 +47,6 @@ export interface SummarizerOptions {
 	model: Model<Api>;
 	apiKey?: string;
 	headers?: Record<string, string>;
-	/** core settings slice (summaryThinking / summaryMaxTokens). */
 	summaryThinking: CompactionSettings["summaryThinking"];
 	summaryMaxTokens: number | null;
 	thresholds: ValidationThresholds;
@@ -62,19 +59,15 @@ export interface SummarizerOptions {
 export type SummarizerOutcome =
 	| {
 			ok: true;
-			/** compact()'s merged result (narrative + pi-appended file lists). */
 			summary: string;
 			usage?: Usage;
-			/** Collapsed logical calls, in call order. */
 			subCalls: SubCallRecord[];
-			/** True when attempt 2 succeeded after a failed attempt 1. */
 			retried: boolean;
 	  }
 	| { ok: false; reason: "validation"; failures: string[]; attempts: number }
 	| { ok: false; reason: "error"; error: string; attempts: number }
 	| { ok: false; reason: "aborted" };
 
-/** Narrative text of an assistant message (text blocks only, no thinking). */
 function narrativeOf(message: AssistantMessage): string {
 	const content = message.content as unknown;
 	if (!Array.isArray(content)) return "";
@@ -95,10 +88,6 @@ function usageOf(message: AssistantMessage): SubCallRecord["usage"] {
 	return usage ? { input: usage.input, output: usage.output, reasoning: usage.reasoning } : undefined;
 }
 
-/**
- * Collapse raw invocations into logical calls: consecutive same-kind entries
- * are retryAssistantCall re-entries of one logical call — keep the LAST.
- */
 export function collapseSubCalls(raw: RawCall[]): SubCallRecord[] {
 	const out: SubCallRecord[] = [];
 	for (const call of raw) {
@@ -110,20 +99,18 @@ export function collapseSubCalls(raw: RawCall[]): SubCallRecord[] {
 			usage: usageOf(call.message),
 		};
 		const previous = out[out.length - 1];
-		if (previous && previous.kind === record.kind) out[out.length - 1] = record; // retry — last wins
+		if (previous && previous.kind === record.kind) out[out.length - 1] = record;
 		else out.push(record);
 	}
 	return out;
 }
 
-/** Build the observation/injection wrapper (SUM-03) around a transport. */
 export function createStreamFnWrapper(
 	options: { summaryMaxTokens: number | null; dropReasoning: boolean },
 	observed: RawCall[],
 	transport: NonNullable<SummarizerTransport["call"]>,
 ) {
 	return async (model: Model<Api>, context: unknown, callOptions: Record<string, unknown>) => {
-		// Classify by the first user-role message's opening shape (SUM-09).
 		const messages = (context as { messages?: Array<{ role?: string; content?: unknown }> }).messages ?? [];
 		const userText = messages.find((m) => m.role === "user");
 		const text = typeof userText?.content === "string"
@@ -132,7 +119,6 @@ export function createStreamFnWrapper(
 				? (userText.content as Array<{ text?: string }>).map((b) => b.text ?? "").join("")
 				: "";
 		const kind = classifySubCall(text.trimStart());
-		// Injection (S3): maxTokens cap + reasoning removal, then delegate.
 		const injected: Record<string, unknown> = { ...callOptions };
 		if (options.summaryMaxTokens !== null) injected.maxTokens = options.summaryMaxTokens;
 		if (options.dropReasoning) delete injected.reasoning;
@@ -184,13 +170,11 @@ export async function runSummarizer(input: SummarizerOptions): Promise<Summarize
 				wrapper as never,
 			);
 			const subCalls = collapseSubCalls(observed);
-			// Layer 1: per logical sub-call.
 			const subFailures: string[] = [];
 			for (let i = 0; i < subCalls.length; i += 1) {
 				const verdict = validateSubCall(subCalls[i], input.thresholds);
 				if (!verdict.ok) subFailures.push(...verdict.failures.map((f) => `${f}[${i}]`));
 			}
-			// Layer 2: assembled merged result.
 			const assembled = validateAssembled(
 				{
 					summary: result.summary,
@@ -206,7 +190,6 @@ export async function runSummarizer(input: SummarizerOptions): Promise<Summarize
 			}
 			lastFailures = failures;
 			if (input.signal.aborted) return { ok: false, reason: "aborted" };
-			// SUM-05: one hardened retry.
 		} catch (error) {
 			if (input.signal.aborted) return { ok: false, reason: "aborted" };
 			return { ok: false, reason: "error", error: error instanceof Error ? error.message : String(error), attempts };
@@ -215,7 +198,6 @@ export async function runSummarizer(input: SummarizerOptions): Promise<Summarize
 	return { ok: false, reason: "validation", failures: lastFailures, attempts };
 }
 
-// ─── SUM-06: summary model resolution ───────────────────────────────────────
 
 export interface SummaryModelResolution {
 	model: Model<Api> | undefined;
@@ -223,12 +205,6 @@ export interface SummaryModelResolution {
 	reason?: string;
 }
 
-/**
- * Resolve the configured summaryModel ("provider/id" or null = session
- * model), mirroring extensions/memory/llm.ts#resolveModelRef; when the
- * resolved model's window cannot hold the estimated input ×1.1 plus output
- * reserve, fall back to the session model (telemetry: summaryModelFallback).
- */
 export function resolveSummaryModel(configured: string | null, registry: { getAll?: () => unknown[] } | undefined, inputTokens: number, sessionModel: Model<Api> | undefined): SummaryModelResolution {
 	if (configured === null || configured.trim() === "") return { model: sessionModel, fallbackToSession: false };
 	const key = configured.trim().toLowerCase();

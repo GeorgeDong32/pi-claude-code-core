@@ -22,13 +22,11 @@ export interface NotificationItem {
 
 const CAP = 20;
 
-/** Is a CC-TUI replica live (presence key)? Presentation-layer probe. */
 function ccTuiLive(): boolean {
 	const g = globalThis as Record<string, unknown>;
 	return (g.__piCcTui as { active?: boolean } | undefined)?.active === true || g.__ccTuiActive === true;
 }
 
-/** Is a CC-TUI replica live, and does its build consume the queue itself? */
 function ccTuiNotificationsConsumer(): boolean {
 	const g = globalThis as Record<string, unknown>;
 	return (
@@ -36,7 +34,6 @@ function ccTuiNotificationsConsumer(): boolean {
 	);
 }
 
-/** Append to the tail queue (pure data publish; single-threaded atomicity). */
 export function publishNotification(
 	level: NotificationLevel,
 	msg: string,
@@ -48,14 +45,6 @@ export function publishNotification(
 	bus.publish({ notifications: next.slice(-CAP) });
 }
 
-/**
- * Presenter-facing notify. The direct ctx.ui.notify forward serves exactly
- * the cctui builds that cannot consume the queue themselves (no
- * notificationsConsumer capability declared) — version negotiation keeps
- * old installs notified. New cctui builds diff the queue via the snapshot;
- * without any cctui the fallback adapter owns display. Every path shows
- * the message exactly once.
- */
 export function notify(
 	ctx: { hasUI?: boolean; ui?: { notify(message: string, level: NotificationLevel): void } },
 	msg: string,

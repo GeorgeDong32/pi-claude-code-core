@@ -26,8 +26,6 @@ function linesFor(bus: CoreBus): Map<string, string> {
 	return m;
 }
 
-/** Set (or remove, with undefined) one source's footer line and publish the
- *  whole merged array. Same-source overwrites are idempotent. */
 export function setFooterLine(source: string, line: string | undefined): void {
 	const bus = coreBus();
 	const lines = linesFor(bus);

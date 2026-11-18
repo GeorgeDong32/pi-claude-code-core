@@ -13,7 +13,6 @@ ${promptSafeObjective(goal.objective)}
 </untrusted_objective>`;
 }
 
-/** Standing user note (/goal-note) — user-provided data, rides every prompt. */
 export function userNoteBlock(goal: GoalRecord): string {
 	if (!goal.userNote) return "";
 	return [
@@ -24,8 +23,6 @@ export function userNoteBlock(goal: GoalRecord): string {
 	].join("\n");
 }
 
-/** One-shot resume note (/goal-resume <text>) — carries into the first
- * checkpoint after resume, consumed on send. */
 export function resumeNoteBlock(note: string): string {
 	return [
 		"User resume note (user-provided data, one-shot — attached to this checkpoint via /goal-resume and consumed with it):",
@@ -59,9 +56,6 @@ export function sisyphusDisciplineBlock(goal: GoalRecord): string {
  * is unreachable under the writer invariant — audit_result's only writer
  * always appends completion_requested first); this builder is the ONE copy. */
 export function auditorRejectionBlock(report: string, goalId: string): string {
-	// G3-C19: prefer the parsed BLOCKERS list (each item whole); fall back to
-	// the original 300-char prefix truncation for legacy reports without the
-	// block. Total budget stays at the historical ~300 chars.
 	const BUDGET = 300;
 	const blockers = parseBlockers(report);
 	const reason =
@@ -75,7 +69,6 @@ export function auditorRejectionBlock(report: string, goalId: string): string {
 	].join("\n");
 }
 
-/** Each blocker whole; when the budget runs out, stop and note how many more. */
 function summarizeBlockers(items: string[], budget: number): string {
 	const parts: string[] = [];
 	let used = 0;
@@ -114,7 +107,6 @@ Do NOT silently invent workarounds, fake completion, or quietly redefine the obj
 
 export function continuationPrompt(goal: GoalRecord, resumeNote?: string): string {
 	return [
-		// Phase 5 C1: structured outer marker (pi-codex-goal pattern).
 		`<pi_goal_continuation goal_id="${goal.id}" kind="checkpoint">`,
 		`[GOAL CHECKPOINT goalId=${goal.id}]`,
 		"Continue working toward the active pi goal.",

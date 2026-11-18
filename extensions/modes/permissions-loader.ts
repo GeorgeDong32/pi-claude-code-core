@@ -1,12 +1,3 @@
-/**
- * Load / persist permission rules from global + project scopes.
- *
- * E8a (spec 2026-11-15-cleanup-hardening): the no-op
- * ensureLocalPermissionsGitignored was deleted (it read .gitignore but
- * never wrote); the gitignored-tip detection now asks `git check-ignore`
- * (full pattern grammar) and falls back to the old exact-line comparison
- * when git is unavailable or errors.
- */
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
@@ -54,12 +45,6 @@ export function getProjectPermissionsPath(
 }
 
 function readJsonFile(filePath: string): PermissionsConfig | null {
-	// shared settings-JSON primitive (P0-LB-01); shape extraction unchanged,
-	// malformed files keep the historical console.warn diagnostic.
-	// C1 (arch review 2026-10-18): cached read — this fires on every tool
-	// call via loadMergedPermissionRules; both write paths go through
-	// writeJsonAtomic, which drops the cache entry. (The global side has had
-	// its own mtime cache in config.ts for years — this closes the gap.)
 	const parsed = readJsonCached<{ permissions?: PermissionsConfig } & PermissionsConfig>(
 		filePath,
 		{} as { permissions?: PermissionsConfig } & PermissionsConfig,
@@ -115,8 +100,6 @@ function writePermissionsToFile(
 	try {
 		mkdirSync(path.dirname(filePath), { recursive: true })
 
-		// original behavior: a malformed existing file aborts the write
-		// (warn + false) instead of silently overwriting with {}
 		let corrupted = false
 		let data = readJson<Record<string, unknown>>(filePath, {}, (reason) => {
 			if (reason === "malformed" || reason === "non-object") corrupted = true
@@ -187,21 +170,9 @@ export function addPermissionRule(opts: {
 		opts.destination === "local",
 	)
 
-	// E8a: the former ensureLocalPermissionsGitignored(opts.cwd) call for
-	// destination === "local" lived here — it read .gitignore and wrote
-	// nothing (dead code, deleted).
 	return writePermissionsToFile(filePath, opts.behavior, [norm], false)
 }
 
-/**
- * E8a (spec 2026-11-15-cleanup-hardening): is the local permissions file
- * covered by the repo's ignore rules? Primary detector is
- * `git check-ignore -q <entry>` run in cwd — it honors the full pattern
- * grammar, so a `.pi/` directory pattern covers the file (the old
- * exact-line comparison false-positived on it). git missing or erroring
- * (e.g. exit 128 outside a repo) falls back to the old exact-line
- * .gitignore comparison.
- */
 function isLocalPermissionsGitignored(cwd: string, entry: string): boolean {
 	const check = spawnSync("git", ["check-ignore", "-q", entry], {
 		cwd,
@@ -235,7 +206,6 @@ export function warnIfLocalPermissionsNotGitignored(
 	}
 }
 
-/** For tests: write raw project permissions file. */
 export function writeProjectPermissionsFile(
 	cwd: string,
 	perms: PermissionsConfig,
@@ -245,7 +215,6 @@ export function writeProjectPermissionsFile(
 	writeJsonAtomic(filePath, { permissions: perms })
 }
 
-/** For tests: write global permission-modes.json permissions block. */
 export function writeGlobalPermissionsConfig(
 	perms: PermissionsConfig,
 	configPath?: string,

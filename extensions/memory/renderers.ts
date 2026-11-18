@@ -1,8 +1,3 @@
-/**
- * memory/renderers.ts — compact presentation rows for the module's two
- * tools (spec 2026-10-02-core-tool-renderers TR §3/C): session_recall and
- * memory_consolidate. Read-only over args/details/result text.
- */
 import { Text } from "@earendil-works/pi-tui";
 
 import { resultText, type ThemeLike } from "../../lib/tool-render.ts";
@@ -13,7 +8,6 @@ export interface SessionRecallArgs {
 	until?: string;
 }
 
-/** `Session Recall "partial query" [-7d]` — query clipped to 24 chars. */
 export function sessionRecallCallText(args: SessionRecallArgs): string {
 	const query = (args.query ?? "").replace(/\s+/g, " ").trim();
 	const clipped = query.length > 24 ? `${query.slice(0, 24)}…` : query;
@@ -25,7 +19,6 @@ export function renderSessionRecallCall(args: SessionRecallArgs, theme: ThemeLik
 	return new Text(theme.fg("toolTitle", sessionRecallCallText(args)), 0, 0);
 }
 
-/** Result rows: hit-count header + the first hit pointer + overflow note. */
 export function sessionRecallResultRows(result: { content?: unknown; details?: unknown }): string[] {
 	const details = (result.details ?? {}) as { hits?: number; skippedLines?: number };
 	const lines = resultText(result).split("\n").map((l) => l.trim()).filter(Boolean);
@@ -44,7 +37,6 @@ export interface ConsolidateArgs {
 	layer?: string;
 }
 
-/** `Memory Consolidate project · 2W/1D`. */
 export function consolidateCallText(args: ConsolidateArgs): string {
 	const layer = args.layer === "user" ? "user" : "project";
 	const w = Array.isArray(args.writes) ? args.writes.length : 0;
@@ -56,7 +48,6 @@ export function renderConsolidateCall(args: ConsolidateArgs, theme: ThemeLike): 
 	return new Text(theme.fg("toolTitle", consolidateCallText(args)), 0, 0);
 }
 
-/** Result rows: applied counts (details) or the raw text on error. */
 export function consolidateResultRows(result: { content?: unknown; details?: unknown }): string[] {
 	const details = (result.details ?? {}) as { written?: number; deleted?: number };
 	if (typeof details.written === "number" || typeof details.deleted === "number") {

@@ -1,10 +1,3 @@
-/**
- * modes/outside-writes.ts — the outside-cwd write snapshot engine.
- * Carved out of the old modes/utils.ts grab-bag (arch review C3, 2026-10-03);
- * behavior unchanged. Owns the <ts>__<hash>.json snapshot records under the
- * project tmp dir (track / list / restore / pop, 100-entry eviction). The
- * command layer lives in modes/outside-writes-commands.ts.
- */
 import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { getProjectTmpDir, hashPath } from "./path-safety.ts"
@@ -36,14 +29,12 @@ export function trackOutsideWrite(
 		const dir = getProjectTmpDir(cwd)
 		const files = readdirSync(dir).filter((f) => f.endsWith(".json"))
 		if (files.length >= MAX_TRACKED_WRITES) {
-			// Evict oldest by filename (which starts with ISO timestamp, sortable)
 			const sorted = files.sort()
 			const evictCount = files.length - MAX_TRACKED_WRITES + 1
 			for (let i = 0; i < evictCount; i++) {
 				try {
 					unlinkSync(path.join(dir, sorted[i]!))
 				} catch {
-					/* ignore */
 				}
 			}
 		}
@@ -59,11 +50,6 @@ export function trackOutsideWrite(
 	}
 }
 
-/**
- * Read all snapshots from the project's tmp dir, sorted by timestamp
- * ascending. Malformed JSON files are skipped (logged). Returns [] on
- * any error or when dir doesn't exist.
- */
 export function listTrackedOutsideWrites(
 	cwd: string,
 ): OutsideWriteSnapshot[] {
@@ -75,7 +61,6 @@ export function listTrackedOutsideWrites(
 			try {
 				const raw = readFileSync(path.join(dir, f), "utf-8")
 				const parsed = JSON.parse(raw) as OutsideWriteSnapshot
-				// Basic shape validation
 				if (
 					typeof parsed.timestamp === "string" &&
 					typeof parsed.originalPath === "string" &&
@@ -120,14 +105,12 @@ export function restoreOutsideWrite(snapshot: OutsideWriteSnapshot): {
 			}
 			return { restored: true, action: "noop" }
 		}
-		// Non-null backup: compare current content
 		if (existsSync(originalPath)) {
 			const current = readFileSync(originalPath, "utf-8")
 			if (current === backupContent) {
 				return { restored: true, action: "noop" }
 			}
 		}
-		// Write backup (creates parent dirs if needed)
 		mkdirSync(path.dirname(originalPath), { recursive: true })
 		writeFileSync(originalPath, backupContent, { mode: 0o644 })
 		return { restored: true, action: "restored" }
@@ -137,12 +120,6 @@ export function restoreOutsideWrite(snapshot: OutsideWriteSnapshot): {
 	}
 }
 
-/**
- * Delete the snapshot file corresponding to `snapshot`. Safe to call
- * when the file doesn't exist (no-op).
- *
- * Filename is reconstructed the same way as `trackOutsideWrite`.
- */
 export function popTrackedOutsideWrite(
 	cwd: string,
 	snapshot: OutsideWriteSnapshot,

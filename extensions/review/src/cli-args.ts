@@ -17,19 +17,12 @@
  */
 
 export interface ParsedReviewArgs {
-	/** Freeform user request: review focus, PR url, or context. */
 	input?: string;
-	/** Dry-run: print resolved plan without spawning. */
 	noSpawn: boolean;
-	/** Single-agent fast mode: one reviewer, no gate. */
 	lite: boolean;
-	/** Override the gate model for this run (otherwise config.gate.model). */
 	gateModel?: string;
 }
 
-/** Removed valued flags — silently skip flag + value to keep input clean.
- *  R8: the value is consumed only when it is NOT itself a flag token, so a
- *  legacy flag directly followed by another `--flag` never swallows it. */
 const LEGACY_VALUED_FLAGS = new Set([
 	"--threshold",
 	"--reviewer",
@@ -46,7 +39,7 @@ export function parseReviewArgs(raw: string): ParsedReviewArgs {
 		const t = tokens[i];
 		if (LEGACY_VALUED_FLAGS.has(t)) {
 			const next = tokens[i + 1];
-			if (next !== undefined && !next.startsWith("--")) i++; // consume the value too
+			if (next !== undefined && !next.startsWith("--")) i++;
 			continue;
 		}
 		if (t === "--no-spawn") {
@@ -63,7 +56,7 @@ export function parseReviewArgs(raw: string): ParsedReviewArgs {
 			continue;
 		}
 		if (t.startsWith("-")) {
-			continue; // ignore other legacy / unknown flags
+			continue;
 		}
 		inputParts.push(t);
 	}
@@ -76,7 +69,6 @@ export function parseReviewArgs(raw: string): ParsedReviewArgs {
 	return result;
 }
 
-/** Split on whitespace preserving quoted segments. */
 function tokenize(raw: string): string[] {
 	const out: string[] = [];
 	let cur = "";

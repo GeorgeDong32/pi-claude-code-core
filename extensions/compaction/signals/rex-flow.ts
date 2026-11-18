@@ -1,10 +1,3 @@
-/*
- * rex-flow boundary signal (SPEC SC §5.6 LED-05c / §5.4 CUT-04, task W7).
- *
- * run-closed: the boundary AFTER the first toolCall-free assistant message
- * that follows a run-done sentinel (or a board-done run) in the branch —
- * the natural "this run just wrapped up" cut point, highest class weight.
- */
 
 import type { BoundarySignal } from "./generic.ts";
 
@@ -37,11 +30,10 @@ export const runClosedSignal: BoundarySignal = {
 	weight: (ctx) => {
 		const entry = ctx.entries[ctx.index];
 		if (!entry || !isAssistantWithoutToolCall(entry)) return 0;
-		// Any run-done sentinel since the previous toolCall-free assistant?
 		let cursor = ctx.index - 1;
 		while (cursor >= 0) {
 			const candidate = ctx.entries[cursor];
-			if (isAssistantWithoutToolCall(candidate)) return 0; // earlier plain assistant already consumed the sentinel window
+			if (isAssistantWithoutToolCall(candidate)) return 0;
 			if (/\brun-done\b|\brun_done\b/.test(textOf(candidate))) return 1;
 			cursor -= 1;
 		}

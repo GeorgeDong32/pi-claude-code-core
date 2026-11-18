@@ -6,7 +6,6 @@ import { redactForClassifier } from "./classifier-redact.ts"
 
 const CONTENT_PREVIEW_CHARS = 500
 
-/** Project tool input for classifier transcript lines. '' = no security-relevant input. */
 export function toClassifierInput(
 	toolName: string,
 	input: Record<string, unknown>,

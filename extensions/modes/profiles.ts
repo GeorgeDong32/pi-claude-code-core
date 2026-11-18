@@ -1,18 +1,3 @@
-/**
- * Pure helpers for the model-profile config.
- *
- * Profiles map each mode (ask / plan / auto / bypass) to a model ID — either
- * `"provider/model"` or `"provider/model:effort"` (with an optional
- * `:effort` suffix that sets the thinking level after the switch) — or to a
- * ModeConfig object with explicit `model` / `effort` / `skills` / `tools`.
- *
- * The config file lives at `~/.pi/agent/model-profiles.json` — a deliberately
- * distinct name from pi's own `models.json` (which is used for custom
- * provider definitions) to avoid format conflict.
- *
- * No pi dependency. All functions are pure (or fs-only with graceful
- * fallback) so they can be unit-tested without mocking the agent runtime.
- */
 
 import { existsSync, mkdirSync } from "node:fs"
 import { readJson, writeJsonAtomic } from "../../lib/settings.ts"
@@ -20,27 +5,13 @@ import { parseModelId as parseModelIdShared } from "../../lib/model-id.ts"
 import { homedir } from "node:os"
 import { join } from "node:path"
 
-/** Per-mode configuration object with optional model, effort, skill, and tool filters. */
 export interface ModeConfig {
 	model?: string
-	/**
-	 * Thinking / effort level applied after the model switch
-	 * (e.g. `"high"`, `"medium"`, `"off"`). Takes precedence over a
-	 * `:suffix` on `model` (e.g. `"provider/model:high"`).
-	 */
 	effort?: string
-	/** Skill name allowlist. ["*"] = all loaded skills. A specific list = only those. */
 	skills?: string[]
-	/** Tool name allowlist. ["*"] = all active tools. A specific list = only those. */
 	tools?: string[]
 }
 
-/**
- * One named profile mapping modes to model IDs and/or ModeConfig objects.
- *
- * Backward compat: a bare string `"provider/model:thinking"` is shorthand for
- * `{ model: "provider/model:thinking", skills: ["*"], tools: ["*"] }`.
- */
 export interface ModelProfile {
 	ask?: string | ModeConfig
 	plan?: string | ModeConfig
@@ -48,15 +19,11 @@ export interface ModelProfile {
 	bypass?: string | ModeConfig
 }
 
-/** Full config file shape: an `active` pointer plus any number of named profiles. */
 export interface ModelProfilesConfig {
 	active?: string
 	[key: string]: ModelProfile | string | undefined
 }
 
-/** Default = real homedir path. Exposed via getter/setter so tests can
- *  redirect to a tmpdir fixture without breaking the ESM read-only-export
- *  contract (you can't assign to an imported `let` binding). */
 let _modelsPath: string = join(
 	homedir(),
 	".pi",
@@ -72,21 +39,8 @@ export function setModelsPath(p: string): void {
 	_modelsPath = p
 }
 
-/** Convenience read-only re-export for code that just wants the path. */
 export const modelsPath: string = _modelsPath
 
-/**
- * Parse `"provider/model"` or `"provider/model:thinking"` into components.
- * Returns `{ provider, model, thinkingLevel }` or `null` if the input has no
- * slash (no provider), or is empty.
- *
- * Thin field-name adapter over the shared parser (P0-LB-02: one
- * implementation; pm calls the fields model/thinkingLevel, lib calls them
- * modelId/effort).
- *
- * A trailing `:` (e.g. `"opencode/big-pickle:"`) is treated as "no thinking
- * suffix" — `thinkingLevel` is omitted in the returned object.
- */
 export function parseModelId(
 	raw: string,
 ): { provider: string; model: string; thinkingLevel?: string } | null {
@@ -97,10 +51,7 @@ export function parseModelId(
 		: { provider: parsed.provider, model: parsed.modelId, thinkingLevel: parsed.effort }
 }
 
-/** Internal: read+parse the config file. Returns {} on any failure. */
 function readConfigFromDisk(): ModelProfilesConfig {
-	// shared settings-JSON primitive (P0-LB-01); malformed files keep the
-	// historical console.warn diagnostic, missing/empty stay silent
 	return readJson<ModelProfilesConfig>(_modelsPath, {}, (reason) => {
 		if (reason === "malformed" || reason === "non-object") {
 			console.warn(`[permission-modes] Failed to load ${_modelsPath}: invalid JSON`)
@@ -128,7 +79,6 @@ export function loadModelProfiles(): ModelProfilesConfig {
 export function ensureModelProfilesConfig(): ModelProfilesConfig {
 	if (existsSync(_modelsPath)) return readConfigFromDisk()
 
-	// Try to detect default model from pi settings
 	let defaultModelId = ""
 	const settings = readJson<Record<string, unknown>>(
 		join(homedir(), ".pi", "agent", "settings.json"),
@@ -160,12 +110,6 @@ export function ensureModelProfilesConfig(): ModelProfilesConfig {
 	return defaults
 }
 
-/**
- * Resolve the model ID string for a given mode from the active profile.
- * Falls back to the `default` profile when the active one doesn't define
- * that mode's model (including partial mode objects with only skills/tools).
- * Returns `undefined` when nothing matches.
- */
 function modelFromProfileEntry(
 	entry: string | ModeConfig | undefined,
 ): string | undefined {
@@ -190,20 +134,6 @@ export function resolveModelForMode(
 	return undefined
 }
 
-/**
- * Resolve the effort / thinking level for a mode from the active profile.
- *
- * Priority:
- *   1. Explicit `ModeConfig.effort` on the resolved mode entry
- *   2. `:suffix` on the model string (e.g. `"provider/model:high"`)
- *
- * Returns `undefined` when the profile maps a model but expresses NO effort
- * for the mode — per the ownership chain (PLAN §3.3 / P1-EF-06 d) a mode
- * switch must then leave the thinking level completely alone (pm 2.8.0
- * silently coerced to "medium"; that equivalence was consciously broken,
- * see DEVIATIONS). Falls back through the `default` profile the same way
- * as {@link resolveModelForMode}.
- */
 export function resolveEffortForMode(
 	config: ModelProfilesConfig,
 	mode: "ask" | "plan" | "auto" | "bypass",
@@ -234,27 +164,16 @@ function effortFromProfileEntry(
 	return undefined
 }
 
-/**
- * Get the active profile name, defaulting to `"default"`.
- */
 export function getActiveProfileName(config: ModelProfilesConfig): string {
 	return config.active || "default"
 }
 
-/**
- * List all profile names (keys whose value is an object, excluding `active`).
- */
 export function listProfiles(config: ModelProfilesConfig): string[] {
 	return Object.keys(config).filter(
 		(k) => k !== "active" && typeof config[k] === "object",
 	)
 }
 
-/**
- * Normalize a raw profile mode entry (string or ModeConfig) into a canonical
- * ModeConfig object. Returns a default ModeConfig (skills:["*"], tools:["*"])
- * when entry is undefined.
- */
 function normalizeModeEntry(
 	entry: string | ModeConfig | undefined,
 ): ModeConfig {
@@ -268,31 +187,18 @@ function normalizeModeEntry(
 	}
 }
 
-/**
- * Resolve the effective ModeConfig for a given mode from the active profile,
- * falling back through defaults.
- *
- * Resolution order:
- *   1. Active profile's mode entry (normalized to ModeConfig)
- *   2. "default" profile's mode entry (normalized to ModeConfig)
- *   3. Hardcoded fallback: { skills: ["*"], tools: ["*"] }
- *
- * Never returns undefined — always returns at least the hardcoded fallback.
- */
 export function resolveModeConfig(
 	config: ModelProfilesConfig,
 	mode: "ask" | "plan" | "auto" | "bypass",
 ): ModeConfig {
 	const profileName = config.active || "default"
 
-	// Try active profile
 	const profile = config[profileName] as ModelProfile | undefined
 	if (profile) {
 		const entry = profile[mode]
 		if (entry !== undefined) return normalizeModeEntry(entry)
 	}
 
-	// Fall back to "default" profile
 	if (profileName !== "default") {
 		const def = config["default"] as ModelProfile | undefined
 		if (def) {
@@ -301,14 +207,9 @@ export function resolveModeConfig(
 		}
 	}
 
-	// Hardcoded fallback
 	return { skills: ["*"], tools: ["*"] }
 }
 
-/**
- * Resolve the effective skill allowlist for a mode.
- * Returns ["*"] when no filter is configured (allow all).
- */
 export function resolveSkillFilter(
 	config: ModelProfilesConfig,
 	mode: "ask" | "plan" | "auto" | "bypass",
@@ -316,19 +217,6 @@ export function resolveSkillFilter(
 	return resolveModeConfig(config, mode).skills ?? ["*"]
 }
 
-/**
- * Resolve the effective tool allowlist for a mode.
- * Returns "*" when no filter is configured (allow all tools).
- *
- * Invariants (v1.1.4 stub — full implementation in v1.1.5):
- *   - `read` is always mandatory in ALL modes
- *   - Plan mode: `edit` and `write` are always excluded
- *
- * NOTE: This is a STUB for v1.1.4 — the full re-write of
- * `applyToolRestrictions()` happens in v1.1.5. The stub returns the raw
- * filter from config with `read` re-injected. Plan-mode disabled set
- * enforcement is deferred to v1.1.5.
- */
 export function resolveToolFilter(
 	config: ModelProfilesConfig,
 	mode: "ask" | "plan" | "auto",
@@ -336,14 +224,9 @@ export function resolveToolFilter(
 	const mc = resolveModeConfig(config, mode)
 	const raw = mc.tools ?? ["*"]
 	if (raw.length === 1 && raw[0] === "*") return "*"
-	// Ensure read is always present
 	return [...new Set([...raw, "read"])]
 }
 
-/**
- * Check whether a profile with the given name exists (i.e. is an object entry
- * in the config). `active` is treated as a string pointer, not a profile.
- */
 export function profileExists(
 	config: ModelProfilesConfig,
 	name: string,

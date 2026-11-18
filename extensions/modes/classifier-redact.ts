@@ -1,4 +1,3 @@
-/** Redact likely secrets before sending to classifier provider. */
 
 export function redactForClassifier(text: string, limit = 4000): string {
 	const redacted = text
