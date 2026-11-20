@@ -160,7 +160,7 @@ class PlanApprovalComponent implements Component {
   private readonly truncated: boolean;
   private scrollOffset = 0;
   private selectedIndex = 0;
-  private cachedLines: string[] | undefined;
+  private cachedLines: readonly string[] | undefined;
   private cachedWidth: number | undefined;
   private disposed = false;
 
@@ -245,7 +245,7 @@ class PlanApprovalComponent implements Component {
     }
   }
 
-  render(width: number): string[] {
+  render(width: number): readonly string[] {
     if (this.cachedLines && this.cachedWidth === width) {
       return this.cachedLines;
     }
@@ -345,7 +345,7 @@ class PlanApprovalComponent implements Component {
     return this.cachedLines;
   }
 
-  private getPlanLines(width: number): string[] {
+  private getPlanLines(width: number): readonly string[] {
     const innerWidth = Math.max(20, width - 4);
     return this.markdown.render(innerWidth);
   }

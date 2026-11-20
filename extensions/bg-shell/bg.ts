@@ -127,7 +127,7 @@ function taskList(
 	};
 	build(selectedId, 0);
 	return {
-		render: (width: number): string[] => {
+		render: (width: number): readonly string[] => {
 			lastRenderAt = Date.now();
 			return container.render(width);
 		},

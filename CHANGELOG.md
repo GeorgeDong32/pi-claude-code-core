@@ -277,6 +277,9 @@
 ### Added — Claude Code approved-list import (2026-11-02, P2)
 - `/permissions import-cc [--dry-run]`:读取 CC 三层 settings(`~/.claude/settings.json` → global、`<cwd>/.claude/settings.json` → project、`.claude/settings.local.json` → local)+ 历史 `~/.claude.json` `projects.<cwd>.allowedTools`(→ project)。规则映射:`Bash/Read/Edit/Write/Grep/Glob(...)` 原样、`WebFetch(domain:..)` → `webfetch(domain:..)`(web-gov)、`mcp__srv__tool` → `mcp(srv_tool)`(mcp-gov)、裸工具名工具级(pi 无该工具则惰性并注明);无法解析的规则进 skip 报告。dry-run 只打印计划;真实导入幂等(已存在跳过)。
 
+### Changed — pi 1.6.0 compatibility (devDeps matrix)
+- devDeps 全量矩阵 1.5.2 → 1.6.0（pi-agent-core / pi-ai / pi-coding-agent / pi-tui）；peerDeps `<2.0.0` 不变。适配点仅一处 breaking：pi-tui 1.6 组件 `render()` 返回 `readonly string[]` 且 `Container` 缓存同一数组——`bg-shell` 的 taskList 转发与 `plan-approval-dialog` 的 markdown 行缓存改为 `readonly string[]` 签名（纯转发/只读，无复制需求）；其余（`pi.exec` 信号退出码 128+N：bg-shell 走自封装 spawn 不受影响；RPC `session_start` 双发修复：契约套件全绿）零触及。三门禁 + 升级金丝雀全绿（test 1138 pass / contracts 108+4todo / canary 5）。
+
 ### Changed — pi 1.5.2 compatibility (devDeps matrix)
 - devDeps 全量矩阵 1.5.0 → 1.5.2（pi-agent-core / pi-ai / pi-coding-agent / pi-tui，四项同升）；peerDeps 范围 `<2.0.0` 不变。1.5.1/1.5.2 无新增必选 ExtensionAPI、无扩展面 breaking（GrepOperations.readFile 回调变更与 `tools: []` 省略均不在本仓使用面），**零代码适配**；transitive `@earendil-works/pi-mcp` 随 pi-coding-agent 1.5.2 升至 1.5.2（曾因 node_modules 内 10-22 手动残留的 1.4.0 真实目录遮蔽 pnpm 解析、致 pi-host-semantics bun 场景 `validateMcpServerConfig` 导出失败——已删除重建链接）。三门禁 + 升级金丝雀全绿（contracts 108 passed，pi-host-semantics 修复后完整跑通）。
 
