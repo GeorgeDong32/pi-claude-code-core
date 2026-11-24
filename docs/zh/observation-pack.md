@@ -10,12 +10,19 @@ NVlabs/SoL-Pi(MIT),SPEC OBS-01..10(0.2.0 吸收)
 让大体积工具结果不必重放也能继续取用:超过 `THRESHOLD_BYTES`(10 KiB)的
 纯文本工具结果,前 `FULL_SENDS`(2)次 provider 请求完整发送;之后由
 `context` 投影替换为短而稳定的占位符(约 1 KiB,完整行)。原文存于每会话
-存储,agent 用 **`obs_recall`** 工具按页取回(模型可见文本含翻页头)。
+存储,agent 用 **`obs_recall`** 工具取回:按字节 `offset` 翻页,或先选择 ——
+`filter`(正则匹配整个对象,每个匹配带 `context` 行上下文,默认 2)或
+`tail`(末尾 N 行);`offset` 再对选择结果翻页。选中行带 1-based 行号
+(`N: ` 匹配行,`N  ` 上下文行)。占位符给出磁盘路径,可直接 grep 该文件。
+模型可见文本里的协议头:两行,选择时追加第三行 `[selection: …]`
+(P0-2,2026-11-24:30 天会话日志里每次 recall 都从头翻到尾 —— 中位 2、
+最多 4 个回合 —— 因为模型没有办法只要失败那几行)。
 
 **呈现(TR,spec 2026-10-02-core-tool-renderers)**:`obs_recall` 自带
 renderCall/renderResult(`renderers.ts`)——短调用行(`Recall Observation
-obs_4b1d7b39 · +15.5KB`)+ 分页结果视图(大小 · 行数 · 范围,内容预览
-≤5 行,`end ✓`/`more ▸`),数据来自 `details`;两行模型协议头对人剥离
+obs_4b1d7b39 · +15.5KB`,或 `· filter "FAIL"` / `· tail 40`)+ 分页结果视图(大小 · 行数 · 范围,内容预览
+≤5 行,`end ✓`/`more ▸`;选择时头部显示 `2/10 matched · …` 或
+`last 2 of 10 · …`),数据来自 `details`;两行(选择时三行)模型协议头对人剥离
 (给模型的文本原样,渲染层只读)。cctui auto 模式尊重自带渲染器;force
 模式豁免(`FORCE_RESULT_EXEMPT`)。
 
@@ -43,8 +50,8 @@ fail-open——适配器任何一处抛错(会话根解析、ledger 接线、总
 
 | 文件 | 说明 |
 |---|---|
-| `index.ts` | 装配:context 投影、obs_recall 工具、哨兵 |
-| `observation.ts` | `createObservation`、`ensureStored`、`placeholderFor`、`isPureTextResult`、阈值(`THRESHOLD_BYTES`、`FULL_SENDS`)、UTF-8 边界 withhold(4 字节 emoji 安全)。CH E11:`estimateTokens` 改为 ASCII 码点按 /4 计、每个非 ASCII 码点按 1 计(`"中文测试"` → 4,上游 `length/4` 下为 1)——对 SoL-Pi 原版的刻意偏离;字段形状不变 |
+| `index.ts` | 装配:context 投影、obs_recall 工具、哨兵。P0-2:工具接受 `filter`/`context`/`tail`;`RecallSelectionError`(坏正则、非正 tail、对象超限、offset 越界)以 `obs_recall: <原因>` 文本返回,不再误报 "unknown observation id";第一行头字节不变(XPKG-04) |
+| `observation.ts` | `createObservation`、`ensureStored`、`placeholderFor`、`isPureTextResult`、阈值(`THRESHOLD_BYTES`、`FULL_SENDS`)、P0-2 选择的 `readRecallSelected` + `SELECTION_MAX_BYTES`(8 MiB)+ `RECALL_DEFAULT_CONTEXT`(2)、占位符里的磁盘 `path:` 行、UTF-8 边界 withhold(4 字节 emoji 安全)。CH E11:`estimateTokens` 改为 ASCII 码点按 /4 计、每个非 ASCII 码点按 1 计(`"中文测试"` → 4,上游 `length/4` 下为 1)——对 SoL-Pi 原版的刻意偏离;字段形状不变 |
 | `ledger.ts` | 面向总线的累计 `ObservationPatch` 台账 |
 | `projection.ts` | 纯投影步骤(候选循环、send 计数恢复、FULL_SENDS 判定、哨兵)。**AR1005-OB(2026-10-05)**:`ProjectionState` 另持有**稳定 placeholder memo** —— 以同一 `${root}\0${toolName}\0${toolCallId}` identity 为键,值仅为 placeholder 字符串 + token 估算。头/尾完整行摘录构造(全文扫描,8 MiB 约 26 ms)原先每个热请求都跑一遍;现在每 identity 每进程恰一次(实测 16 KiB/2 MiB/8 MiB × 51 请求 1 次构造,热请求 ~0.001 ms)。memo 在首次 replacement 需要时生成(full-send 阶段绝不构造)、逐字复用、ledger 失败后保留(计数/节省不提交、下次重试)、不跨 root/tool;进程重启重新生成。state 上的 `placeholderConstructions` 为诚实可观察量(无 monkeypatch、无生产导出配置)。**BH-E3(2026-11-14)**:obs_recall 结果完全豁免投影(召回摘录再打包会嵌套包——Air 实测 53 个嵌套对象);placeholder ledger 行每个对象 id 每进程只写一条(`placeholderLedgered` seen-set——逐请求追加曾把 Air 会话 ledger 撑到 43 MB / 19.4 万行;追加失败不标记、下次重试,OBS-08;行格式不变);候选检查移入逐消息 fail-open try,畸形消息也不再杀死整个请求 |
 
@@ -52,10 +59,13 @@ fail-open——适配器任何一处抛错(会话根解析、ledger 接线、总
 
 - 占位符必须跨请求稳定(可按 id 寻址,obs-id 格式经 `isObservationId`
   校验)。
+- 选择需读整个对象(上限 `SELECTION_MAX_BYTES`);超过则模型按 `offset` 翻页。
+  `grep -q` 式探测不受影响 —— `filter` 报覆盖率(`matched=N of M lines`)
+  而不是状态码。
 - 预算敏感的截断宁可丢弃最小整块也不许超预算(C13 修复)——保持该行为。
 - 与 `session_recall`(memory)配合但相互独立:工具、存储都分开。
 
 ## 测试
 
-`extensions/observation-pack/tests/` —— node:test 经 tsx;投影的宿主语义
+`extensions/observation-pack/tests/` —— node:test 经 tsx(P0-2 见 `recall-selection.test.ts`);投影的宿主语义
 另在 `test/contracts/pi-host-semantics.test.ts` 钉住。

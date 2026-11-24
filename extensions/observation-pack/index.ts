@@ -22,6 +22,12 @@
  * process (per-request rows ballooned Air session ledgers to 43 MB); and the
  * whole `context` handler body is fail-open — any throw returns the
  * unmodified context (invariant 8).
+ *
+ * P0-2: besides byte paging, `obs_recall` selects — `filter`
+ * (regex over the whole object, `context` lines around each match) or `tail`
+ * (last N lines) — and the placeholder names the on-disk path. In 30 days of
+ * session logs every recall paged the object start to end (median 2, max 4
+ * round trips) because the model had no way to ask for the failing lines.
  */
 import { join } from "node:path";
 import { VERSION } from "@earendil-works/pi-coding-agent";
@@ -42,6 +48,9 @@ import {
 	observationPath,
 	placeholderFor,
 	readRecallChunk,
+	readRecallSelected,
+	RecallSelectionError,
+	type SelectedRecall,
 	RECALL_TOOL_NAME,
 	THRESHOLD_BYTES,
 } from "./observation.ts";
@@ -100,11 +109,15 @@ export function createObservationPackExtension(hostExports: {
 		pi.registerTool({
 			name: RECALL_TOOL_NAME,
 			label: "Recall Observation",
-			description: "Read a stored large tool result by observation id and byte offset.",
-			promptSnippet: "Recall a paged excerpt from a previously replaced large tool result",
+			description:
+				"Read a stored large tool result by observation id. Page by byte `offset`, or select first: `filter` (regex; whole-object matching lines plus `context` lines around each) or `tail` (last N lines). `offset` pages whichever selection is in effect. Selected lines carry their 1-based line number.",
+			promptSnippet: "Recall a paged excerpt — or a filtered/tail selection — from a previously replaced large tool result",
 			parameters: Type.Object({
 				id: Type.String({ description: "Observation id from a placeholder, e.g. obs_<24 hex>" }),
 				offset: Type.Optional(Type.Number({ description: "Byte offset to resume from (0 first)" })),
+				filter: Type.Optional(Type.String({ description: "Regex; keep only the lines (of the whole result) that match" })),
+				context: Type.Optional(Type.Number({ description: "Lines of context before/after each filter match (default 2)" })),
+				tail: Type.Optional(Type.Number({ description: "Return the last N lines of the whole result" })),
 			}),
 			async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 				const id = String(params.id);
@@ -113,21 +126,30 @@ export function createObservationPackExtension(hostExports: {
 				}
 				const offset = Math.max(0, Number(params.offset ?? 0));
 				const { root } = observationRootsFor(ctx);
+				const wantsSelection = params.filter !== undefined || params.tail !== undefined;
 				try {
-					const chunk = await readRecallChunk(observationPath(root, id), offset, RECALL_LIMITS);
+					const chunk = wantsSelection
+						? await readRecallSelected(observationPath(root, id), { offset, filter: params.filter, context: params.context, tail: params.tail }, RECALL_LIMITS)
+						: await readRecallChunk(observationPath(root, id), offset, RECALL_LIMITS);
+					const selected = wantsSelection ? (chunk as SelectedRecall) : null;
 					const header = [
 						`[obs_recall id=${id} offset=${offset} next_offset=${chunk.nextOffset} eof=${chunk.eof}]`,
 						`[chunk_bytes=${chunk.bytes} chunk_lines=${chunk.lines}; use next_offset to continue]`,
+						...(selected ? [selected.selection] : []),
 					].join("\n");
 					const text = `${header}\n${chunk.text}`;
 					if (Buffer.byteLength(text, "utf8") > RECALL_MAX_BYTES || countLines(text) > RECALL_MAX_LINES) {
 						return { content: [{ type: "text", text: "Recall output exceeded its hard limit" }], details: { id, offset } };
 					}
-					return {
-						content: [{ type: "text", text }],
-						details: { id, offset, bytes: chunk.bytes, lines: chunk.lines, nextOffset: chunk.nextOffset, eof: chunk.eof },
-					};
+					const base = { id, offset, bytes: chunk.bytes, lines: chunk.lines, nextOffset: chunk.nextOffset, eof: chunk.eof };
+					const details = selected
+						? { ...base, filter: params.filter, tail: params.tail, matchedLines: selected.matchedLines, totalLines: selected.totalLines }
+						: base;
+					return { content: [{ type: "text", text }], details };
 				} catch (error) {
+					if (error instanceof RecallSelectionError) {
+						return { content: [{ type: "text", text: `obs_recall: ${error.message}` }], details: { id, offset, filter: params.filter, tail: params.tail } };
+					}
 					const reason = error instanceof Error ? error.message : String(error);
 					return { content: [{ type: "text", text: `Unknown observation id: ${id} (${reason})` }], details: { id } };
 				}

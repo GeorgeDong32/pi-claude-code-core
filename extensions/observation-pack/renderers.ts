@@ -23,6 +23,9 @@ export const RECALL_PREVIEW_LINES = 5;
 export interface RecallCallArgs {
 	id?: string;
 	offset?: number;
+	filter?: string;
+	context?: number;
+	tail?: number;
 }
 
 export interface RecallResultDetails {
@@ -32,6 +35,10 @@ export interface RecallResultDetails {
 	lines?: number;
 	nextOffset?: number;
 	eof?: boolean;
+	filter?: string;
+	tail?: number;
+	matchedLines?: number;
+	totalLines?: number;
 }
 
 export function shortId(id: string): string {
@@ -45,14 +52,23 @@ export function humanOffset(offset: number | undefined): string {
 
 export function recallCallText(args: RecallCallArgs): string {
 	const id = typeof args.id === "string" && args.id ? shortId(args.id) : "obs_?";
-	return `Recall Observation ${id} · ${humanOffset(args.offset)}`;
+	const selection =
+		typeof args.filter === "string" && args.filter
+			? `filter ${JSON.stringify(args.filter)}`
+				: typeof args.tail === "number"
+					? `tail ${args.tail}`
+					: null;
+	const where = selection && !args.offset ? "" : ` · ${humanOffset(args.offset)}`;
+	return `Recall Observation ${id}${selection ? ` · ${selection}` : ""}${where}`;
 }
 
 export function stripProtocolHeader(text: string, details: RecallResultDetails): string {
 	if (typeof details.bytes !== "number") return text;
 	const lines = text.split("\n");
 	if (lines.length >= 2 && lines[0]!.startsWith("[obs_recall id=") && lines[1]!.startsWith("[chunk_bytes=")) {
-		return lines.slice(2).join("\n").replace(/^\n/, "");
+		// P0-2: a selection adds a third protocol line
+		const body = lines.length >= 3 && lines[2]!.startsWith("[selection: ") ? lines.slice(3) : lines.slice(2);
+		return body.join("\n").replace(/^\n/, "");
 	}
 	return text;
 }
@@ -60,10 +76,16 @@ export function stripProtocolHeader(text: string, details: RecallResultDetails):
 export function recallHeaderText(details: RecallResultDetails): string {
 	const size = typeof details.bytes === "number" ? humanBytes(details.bytes) : "?";
 	const lines = typeof details.lines === "number" ? `${details.lines} lines` : "? lines";
-	if (details.eof) return `${size} · ${lines} · end ✓`;
+	const coverage =
+		typeof details.matchedLines === "number" && typeof details.totalLines === "number"
+			? `${details.matchedLines}/${details.totalLines} matched · `
+			: typeof details.totalLines === "number" && typeof details.tail === "number"
+				? `last ${details.tail} of ${details.totalLines} · `
+				: "";
+	if (details.eof) return `${coverage}${size} · ${lines} · end ✓`;
 	const from = humanOffset(details.offset);
 	const to = typeof details.nextOffset === "number" ? `+${humanBytes(details.nextOffset)}` : "?";
-	return `${size} · ${lines} · ${from}→${to} · more ▸`;
+	return `${coverage}${size} · ${lines} · ${from}→${to} · more ▸`;
 }
 
 export function recallBodyLines(

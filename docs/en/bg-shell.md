@@ -85,6 +85,26 @@ the threshold still hard-caps the foreground run.
   placeholder `waitFor` values drowned the agent in it), and the `waitFor`
   schema description tells the model to omit the parameter when not waiting
 
+## Check-pipeline exit guard (cc-core addition, 2026-11-24)
+
+`pipefail.ts`: the model writes `pnpm test 2>&1 | tail -25` more often than
+not (55.6% of test/build/check command segments in 30 days of session logs),
+and the status the tool then reports is tail's — a red run reads as success.
+When `needsPipefail(command)` is true, `launch()` runs that invocation's shell
+with `-o pipefail` (`pipefailArgs`, bash/zsh only — dash `sh` rejects the
+option), so the `__CC_BG_EXIT__` marker carries the pipeline's status.
+
+Scoped on purpose: only a check-like command (`pnpm/npm/yarn/bun/npx
+test|check|lint|build|…`, `vitest`, `tsc`, `cargo/go test`, `pytest`, `make`,
+`just`, `./gradlew`, `dotnet test|build`) as the upstream of a real pipe
+(`|`/`|&`, never `||`, quotes stripped); pipelines ending in `grep -q` /
+`rg -q` / `grep -c` are skipped (the model reads grep's status there); a
+command that already mentions `pipefail` is left alone. The flag applies to
+the whole invocation, so other pipelines in the same command also become
+truthful — intended. `CC_CORE_BG_DEBUG` logs a `pipefail` event per guarded
+launch. Tests: `tests/pipefail.test.ts` (detection on real log shapes, argv
+per shell, one real launch proving marker 127 vs 0).
+
 ## Environment (test seams, not user config)
 
 `CC_CORE_BG_DEBUG=1` (JSONL debug log), `CC_CORE_BG_PROMOTE_MS`,

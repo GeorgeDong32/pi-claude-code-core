@@ -1,4 +1,7 @@
 // Vendored from gvanderclay/pi-bg-bash v0.2.1 (MIT). Copyright (c) 2026 Gage Vander Clay.
+// cc-core addition: a check-command pipeline runs its shell with
+// `-o pipefail` so the reported exit status is the pipeline's, not tail's
+// (see pipefail.ts).
 import { spawn } from "node:child_process";
 import {
 	accessSync,
@@ -17,7 +20,8 @@ import { delimiter, join } from "node:path";
 
 import * as pi from "@earendil-works/pi-coding-agent";
 
-import { debugError } from "./debug.ts";
+import { debug, debugError } from "./debug.ts";
+import { needsPipefail, pipefailArgs } from "./pipefail.ts";
 
 const WRAPPER = [
 	"cmd=$1; nonce=$2; shift 3; exec 3>&2 2>/dev/null",
@@ -128,6 +132,8 @@ export async function launch(options: LaunchOptions): Promise<number> {
 		throw new Error(`Working directory does not exist: ${cwd}\nCannot execute bash commands.`);
 	}
 	const { shell, args, env: base } = options.shell ?? resolveShell();
+	const finalArgs = needsPipefail(command) ? pipefailArgs(shell, args) : args;
+	if (finalArgs !== args) debug("pipefail", { shell, command: command.slice(0, 200) });
 	const env = { ...base };
 	for (const key of SESSION_ENV_KEYS) delete env[key];
 	Object.assign(env, options.sessionEnv);
@@ -136,7 +142,7 @@ export async function launch(options: LaunchOptions): Promise<number> {
 	try {
 		const child = spawn(
 			"sh",
-			["-c", WRAPPER, "cc-bg", command, nonce, String(options.piPid ?? process.pid), shell, ...args],
+			["-c", WRAPPER, "cc-bg", command, nonce, String(options.piPid ?? process.pid), shell, ...finalArgs],
 			{
 				cwd,
 				env,

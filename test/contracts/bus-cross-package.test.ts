@@ -19,6 +19,7 @@
  *          README row (2026-10-08 + 2026-11-15 host batches).
  */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { VERSION } from "@earendil-works/pi-coding-agent";
 import { clearCoreGlobals, snapshotCoreGlobals, restoreCoreGlobals } from "./fake-host.ts";
 import { createCoreBus, resetCoreBusForTests, coreBus } from "../../extensions/bus.ts";
 import { notify as uiNotify } from "../../extensions/ui/notify.ts";
@@ -128,19 +129,39 @@ describe("XPKG-02/03 onChange + instance (B3)", () => {
 type CoreSnapshotLike = { instance?: string };
 
 describe("XPKG-04 obs_recall result protocol (shape pin)", () => {
-	it("the structured details fields are the display-side source (id/offset/bytes/lines/nextOffset/eof)", async () => {
+	it("the structured details fields are the display-side source (id/offset/bytes/lines/nextOffset/eof; a selection only adds)", async () => {
+		// P0-2: the field set is pinned at RUNTIME by driving the real tool —
+		// plain paging yields the six XPKG-04 fields; filter/tail ADD
+		// filter/tail/matchedLines/totalLines and never drop one of the six.
 		const mod = await import("../../extensions/observation-pack/index.ts");
-		// locate the obs_recall tool registration and pin its result shape by
-		// driving the real tool with a stored observation
-		const host = { registerTool: () => {}, on: () => {} } as never;
-		void mod;
-		void host;
-		// The full runtime pin lives in the observation-pack suite; the
-		// CONTRACT here is the field set, pinned from the source that builds it.
-		const src = await import("node:fs").then((fs) => fs.readFileSync(new URL("../../extensions/observation-pack/index.ts", import.meta.url), "utf-8"));
-		expect(src).toContain("details: { id, offset, bytes: chunk.bytes, lines: chunk.lines, nextOffset: chunk.nextOffset, eof: chunk.eof }");
-		// the two text header lines are a model protocol, not a display API
-		expect(src).toMatch(/\[obs_recall id=\$\{id\} offset=\$\{offset\} next_offset=/);
+		const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+		const { tmpdir } = await import("node:os");
+		const { join } = await import("node:path");
+		type Tool = { name: string; execute: (...args: unknown[]) => Promise<{ content: Array<{ type: string; text: string }>; details: Record<string, unknown> }> };
+		let tool: Tool | undefined;
+		const pi = {
+			registerTool: (def: Tool) => {
+				if (def.name === "obs_recall") tool = def;
+			},
+			on: () => () => {},
+			registerCommand: () => {},
+			setStatus: () => {},
+		};
+		mod.default({ version: VERSION })(pi as never);
+		expect(tool, "obs_recall registered").toBeDefined();
+		const root = mkdtempSync(join(tmpdir(), "xpkg04-"));
+		const sessionId = "sess-xpkg04";
+		const id = `obs_${"c".repeat(24)}`;
+		mkdirSync(join(root, "observation-pack", sessionId, "objects"), { recursive: true });
+		writeFileSync(join(root, "observation-pack", sessionId, "objects", `${id}.txt`), "a\nFAIL b\nc\n");
+		const ctx = { sessionManager: { getSessionDir: () => root, getSessionId: () => sessionId } };
+		const base = ["bytes", "eof", "id", "lines", "nextOffset", "offset"];
+		const plain = await tool!.execute("tc", { id }, undefined, undefined, ctx as never);
+		expect(Object.keys(plain.details).sort()).toEqual(base);
+		expect(plain.content[0]!.text).toMatch(/^\[obs_recall id=obs_[a-f0-9]{24} offset=0 next_offset=/);
+		const selected = await tool!.execute("tc", { id, filter: "FAIL", context: 0 }, undefined, undefined, ctx as never);
+		expect(Object.keys(selected.details).sort()).toEqual([...base, "filter", "matchedLines", "tail", "totalLines"].sort());
+		expect(selected.details.matchedLines).toBe(1);
 	});
 });
 

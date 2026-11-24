@@ -176,10 +176,11 @@ export function placeholderFor(observation: Observation): string {
 		`[large tool result replaced after its first ${FULL_SENDS} provider requests]`,
 		`id: ${observation.id}`,
 		`tool: ${observation.toolName}`,
+		`path: ${observation.filePath}`,
 		`original_bytes: ${observation.bytes}`,
 		`original_lines: ${observation.lines}`,
 		`estimated_tokens: ${observation.tokens}`,
-		`retrieve: call obs_recall with {"id":"${observation.id}","offset":0}; continue with returned next_offset`,
+		`retrieve: call obs_recall with {"id":"${observation.id}","offset":0} to page from the start (continue with the returned next_offset), {"id":"${observation.id}","filter":"<regex>"} for matching lines, or {"id":"${observation.id}","tail":N} for the last N lines; the file above can also be grepped directly`,
 		`[first complete lines, up to ${headBudget} bytes]`,
 		head,
 		`[middle omitted; last complete lines, up to ${tailBudget} bytes]`,
@@ -200,6 +201,114 @@ function trimUtf8End(buffer: Buffer, limit: number): number {
 	let end = limit;
 	while (end > 0 && end < buffer.length && ((buffer[end] ?? 0) & 0xc0) === 0x80) end -= 1;
 	return end;
+}
+
+/**
+ * Selection ceiling (P0-2): `filter`/`tail` read the whole
+ * object to select lines; above this the model pages by `offset` instead.
+ * Largest object seen in 30 days of session logs: 51 KiB.
+ */
+export const SELECTION_MAX_BYTES = 8 * 1024 * 1024;
+/** Lines before/after each `filter` match (failures sit a few lines past the match). */
+export const RECALL_DEFAULT_CONTEXT = 2;
+
+export interface RecallSelection {
+	readonly offset: number;
+	readonly filter?: string;
+	readonly context?: number;
+	readonly tail?: number;
+}
+
+export interface SelectedRecall extends RecallChunk {
+	/** third header line for the model, e.g. `[selection: filter="FAIL" context=2 matched=12 of 1870 lines]` */
+	readonly selection: string;
+	readonly matchedLines?: number;
+	readonly totalLines?: number;
+}
+
+/** A bad request (regex, tail, offset, size) — reported to the model as text. */
+export class RecallSelectionError extends Error {}
+
+/** Same paging rules as readRecallChunk, over an in-memory selection. */
+function pageText(text: string, offset: number, limits: { readonly maxBytes: number; readonly maxLines: number }): RecallChunk {
+	const buffer = Buffer.from(text, "utf8");
+	if (offset > buffer.length) throw new RecallSelectionError(`Offset ${offset} exceeds selection size ${buffer.length}`);
+	let end = Math.min(buffer.length, offset + limits.maxBytes);
+	let newlineCount = 0;
+	for (let index = offset; index < end; index += 1) {
+		if (buffer[index] !== 0x0a) continue;
+		newlineCount += 1;
+		if (newlineCount === limits.maxLines) {
+			end = index + 1;
+			break;
+		}
+	}
+	end = trimUtf8End(buffer, end);
+	const chunk = buffer.subarray(offset, end);
+	const nextOffset = end;
+	return { text: chunk.toString("utf8"), bytes: chunk.length, lines: countBufferLines(chunk), nextOffset, eof: nextOffset >= buffer.length };
+}
+
+/**
+ * `filter` (regex over whole-object lines, `context` lines around each match)
+ * or `tail` (last N lines), then paged by `offset`. Selected lines carry their
+ * 1-based number: `N: ` for a match, `N  ` for context, so the model can cite
+ * and narrow. A failed regex or a non-positive tail is a RecallSelectionError.
+ */
+export async function readRecallSelected(
+	path: string,
+	selection: RecallSelection,
+	limits: { readonly maxBytes: number; readonly maxLines: number },
+): Promise<SelectedRecall> {
+	const handle = await open(path, READ_OBJECT_FLAGS);
+	let text: string;
+	try {
+		const fileStats = await handle.stat();
+		if (!fileStats.isFile()) throw new Error("Stored observation is not a regular file");
+		if (fileStats.size > SELECTION_MAX_BYTES) {
+			throw new RecallSelectionError(`selection needs the whole object (${fileStats.size} bytes > ${SELECTION_MAX_BYTES}); page with offset instead`);
+		}
+		text = await handle.readFile("utf8");
+	} finally {
+		await handle.close();
+	}
+	const lines = text.split("\n");
+	if (lines.at(-1) === "") lines.pop();
+
+	let selected: string[];
+	let selectionHeader: string;
+	let matchedLines: number | undefined;
+	if (selection.tail !== undefined) {
+		const tail = Math.floor(selection.tail);
+		if (!Number.isFinite(tail) || tail < 1) throw new RecallSelectionError("tail must be a positive integer");
+		const from = Math.max(0, lines.length - tail);
+		selected = lines.slice(from).map((line, index) => `${from + index + 1}: ${line}`);
+		selectionHeader = `[selection: tail=${tail} of ${lines.length} lines]`;
+	} else {
+		let regex: RegExp;
+		try {
+			regex = new RegExp(selection.filter ?? "");
+		} catch (error) {
+			throw new RecallSelectionError(`invalid regex: ${error instanceof Error ? error.message : String(error)}`);
+		}
+		const context = Math.max(0, Math.floor(selection.context ?? RECALL_DEFAULT_CONTEXT));
+		const matched = new Set<number>();
+		lines.forEach((line, index) => {
+			if (regex.test(line)) matched.add(index);
+		});
+		const keep = new Set<number>();
+		for (const index of matched) {
+			for (let j = index - context; j <= index + context; j += 1) if (j >= 0 && j < lines.length) keep.add(j);
+		}
+		selected = [...keep]
+			.sort((a, b) => a - b)
+			.map((index) => `${index + 1}${matched.has(index) ? ": " : "  "}${lines[index]}`);
+		matchedLines = matched.size;
+		selectionHeader = `[selection: filter=${JSON.stringify(selection.filter ?? "")} context=${context} matched=${matched.size} of ${lines.length} lines]`;
+	}
+	const body = selected.length === 0 ? "" : `${selected.join("\n")}\n`;
+	const chunk = pageText(body, selection.offset, limits);
+	return { ...chunk, selection: selectionHeader, matchedLines, totalLines: lines.length };
 }
 
 export async function readRecallChunk(

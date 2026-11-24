@@ -1,6 +1,12 @@
 ## Unreleased
 
+### Added
+
+- **`obs_recall` selection (observation-pack)**: besides byte paging, `filter` (regex over the whole stored result, `context` lines around each match, default 2) and `tail` (last N lines); `offset` pages the selection; selected lines carry their 1-based number; a third protocol line `[selection: …]` reports coverage (`matched=N of M lines`). The placeholder now names the on-disk path of the original. Bad regex / non-positive tail come back as `obs_recall: <reason>` text. First header line and plain-paging `details` unchanged (XPKG-04). Motivation: in 30 days of session logs every recall paged the object start to end (median 2, max 4 round trips).
+- **bg-shell check-pipeline exit guard**: when a bash command pipes a test/build/check command (`pnpm test 2>&1 | tail -25` and the like) without setting pipefail, that invocation's shell runs with `-o pipefail` (bash/zsh only), so the reported exit status is the pipeline's, not `tail`'s. Skips `grep -q`-style probes and commands that already set pipefail. 55.6% of check command segments in 30 days of session logs went straight into a pipe.
+
 ### Changed
+
 
 - **BREAKING — memory 用户层退役（spec 2026-11-23-memory-policy）**：跨项目用户层 `~/.pi/agent/memory/` 不再注入、不再召回、不再写入、不再整合，且无设置开关（此前依赖双层注入/召回的会话行为直接改变）。遗留文件只读保留（pinned 文件仍注入直到迁移完成），guard 直接拒绝任何写入该目录的操作并给迁移指引；`memoryWriteRoots` 只剩项目目录，用户目录失去审批 carve-out；`/memory-import-hermes` 全部落项目层（user 类型段转 `reference`）。跨项目知识应迁移到用户自己的笔记（Obsidian）。`/memory` 面板显示退役状态与迁移提示。
 - **BREAKING — memory 整合改为仅手动**：删除 turn_end 自动整合触发器及其节流/2-per-session/inFlight 状态机与 `ConsolidationTrigger`；`/memory-consolidate` 手动发送 directive（仅项目层，`user` 参数被拒绝并提示退役）。超预算商店在 `/memory` 诊断可见。

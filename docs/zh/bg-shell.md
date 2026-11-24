@@ -73,6 +73,24 @@ RPC 降级 `ui.select`；无 UI 打印列表）。`ctrl+shift+b` 把前台运行
   报错两条路径不再追加（模型传占位 waitFor 值时该提示泛滥），且
   `waitFor` 参数说明明确告知不等待时应省略该参数
 
+## check 管道退出码守卫（cc-core 新增，2026-11-24）
+
+`pipefail.ts`：模型写 `pnpm test 2>&1 | tail -25` 是常态（30 天会话日志里
+55.6% 的 test/build/check 命令段直通管道），工具报的退出码于是是 tail 的
+—— 测试红了读起来像成功。`needsPipefail(command)` 为真时，`launch()` 给
+这一次调用的 shell 加 `-o pipefail`（`pipefailArgs`，仅 bash/zsh —— dash
+`sh` 不认这个选项），`__CC_BG_EXIT__` marker 于是携带管道的真实状态。
+
+刻意限定范围：只对 check 类命令（`pnpm/npm/yarn/bun/npx
+test|check|lint|build|…`、`vitest`、`tsc`、`cargo/go test`、`pytest`、
+`make`、`just`、`./gradlew`、`dotnet test|build`）作为真实管道（`|`/`|&`，
+不含 `||`，引号内容先剥掉）上游的情况生效；以 `grep -q` / `rg -q` /
+`grep -c` 结尾的管道跳过（模型要的就是 grep 的状态码）；命令里已出现
+`pipefail` 则不动。该选项作用于整次调用，同一命令里的其他管道也随之
+变真实 —— 这是预期行为。`CC_CORE_BG_DEBUG` 每次守卫触发记一条
+`pipefail` 事件。测试：`tests/pipefail.test.ts`（真实日志形态的检测、
+按 shell 的 argv、一次真实 launch 证明 marker 127 对 0）。
+
 ## 环境变量（测试缝，非用户配置）
 
 `CC_CORE_BG_DEBUG=1`（JSONL 调试日志）、`CC_CORE_BG_PROMOTE_MS`、

@@ -85,16 +85,18 @@ describe("placeholder excerpt (OBS-02)", () => {
 		const observation = createObservation(bigResult(text), root)!;
 		const placeholder = placeholderFor(observation);
 		assert.ok(placeholder.includes(`id: ${observation.id}`));
+		assert.ok(placeholder.includes(`path: ${observation.filePath}`), "P0-2: the placeholder names the on-disk object");
 		assert.ok(placeholder.includes("retrieve: call obs_recall"));
 		const excerptBytes = Buffer.byteLength(placeholder, "utf8");
-		// 1KB excerpt + ~10 header lines: hard upper bound sanity.
-		assert.ok(excerptBytes < 1600, `placeholder too large: ${excerptBytes}`);
+		// 1KB excerpt + ~12 header lines (P0-2 added the path line and the
+		// selection hint): hard upper bound sanity.
+		assert.ok(excerptBytes < 1800, `placeholder too large: ${excerptBytes}`);
 		// Every excerpted line is a complete line of the original text.
 		const originalLines = new Set(text.split("\n"));
 		const excerpted = placeholder
 			.split("\n")
 			.filter((l) => l.length > 0)
-			.filter((l) => !l.startsWith("[") && !/^id: |^tool: |^original_|^estimated_|^retrieve: /.test(l));
+			.filter((l) => !l.startsWith("[") && !/^id: |^tool: |^path: |^original_|^estimated_|^retrieve: /.test(l));
 		for (const line of excerpted) assert.ok(originalLines.has(line), `partial line leaked: ${line.slice(0, 40)}`);
 	});
 

@@ -1,5 +1,13 @@
 # PROGRESS
 
+## 2026-11-24 harness 演讲对照优化批（P0-1 / P0-2 / P1-3）
+
+- **来源**：对照 AI_Engineer_CODE_2026 六篇 harness 演讲（Schmid / Ronacher / Alvoeiro / Konda / Bhardwaj / Hedin）与 core 现状，用户拍板三项一并做，P1-4（review finding 落盘）暂不做。数据基线来自本机 30 天会话日志扫描（6,200 次 bash：77.8% 含管道、66.6% 带 head/tail；390 段 check 命令 217 段直通管道；obs_recall 71 次 / 33 对象，每对象实际翻页数 == 需要页数，中位 2 最大 4）。
+- **P0-1 管道退出码守卫**（`extensions/bg-shell/pipefail.ts` + `launch.ts`）：check 类命令作为真实管道上游且未写 pipefail → 该次调用 shell 加 `-o pipefail`（仅 bash/zsh）；跳过 `grep -q`/`rg -q`/`grep -c` 结尾的探测。测试 `tests/pipefail.test.ts` 5 例（真实日志形态检测、按 shell argv、一次真实 launch 证明 marker 127 对 0）；变异检查：回退接线后 e2e 变红。
+- **P0-2 obs_recall 选择**（`observation-pack/observation.ts` `readRecallSelected`、`index.ts` 参数、`renderers.ts`）：`filter`+`context`（默认 2）/`tail`，行号前缀，第三行 `[selection: …]`，占位符加 `path:` 行；XPKG-04 首行与纯翻页 details 不变。测试 `tests/recall-selection.test.ts` 13 例；既有占位符测试排除 `path:` 行、上限 1600→1800。canary / CON-04 / tool-renderers 绿。
+- **P1-3 组装级 prompt 稳定性测试**（`test/lib/assembly-prompt-stability.test.ts`，vitest，FakeHost 全装配 + pi 式链式 before_agent_start）：第 2 个用户回合起（含 custom 运行、隔天）systemPrompt 字节相同，且首回合差异精确等于 modes 一次性块。**发现**：modes 的 `[Ask]` 提醒在 session_start 武装、首回合消费（`modes/index.ts:714` → `:519`），每个 ask 会话第 2 回合必然一次前缀缓存失效；一次性语义有测试钉着（`mode-prompt.test.ts:329`），改为常驻块还是保持一次性由用户定，本批未动。
+- **文档**：`docs/{en,zh}/observation-pack.md`、`docs/{en,zh}/bg-shell.md` 同步；CHANGELOG Unreleased Added 两条。
+
 ## 2026-11-24 memory 策略修订批（spec 2026-11-23-memory-policy）
 
 - **来源**：用户主导的 memory 反思（多轮方向讨论 + spec 批准）。四项主干：用户层退役（直接删除、无开关）、整合仅手动（删 `ConsolidationTrigger`）、任务边界召回（`RECALL_BOUNDARY_TURNS=2`、仅 prompt 路径、超时丢弃、回声过滤、预算 3 文件/16KB、默认等待 5000ms）、会话稳定注入（重建键 = session start / compaction 计数）。
