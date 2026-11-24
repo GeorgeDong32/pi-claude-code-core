@@ -1,62 +1,82 @@
-# memory — Two-Layer Memory
+# memory — Project Memory (single layer)
 
 > English. 中文版: [../zh/memory.md](../zh/memory.md)
 
-**Directory**: `extensions/memory/` — new module (P3, V1 shape + V2 expansion)
+**Directory**: `extensions/memory/` — new module (P3, V1 shape + V2 expansion;
+single layer since the 2026-11-24 policy revision)
 
 ## What it does
 
-A two-layer (user + project) memory system: injects a capped index into the
-system prompt, recalls memory files as **persisted once-per-user-message
-blocks chosen by an LLM manifest selector** (RV, spec 2026-10-02-memory-recall-v2),
-guards memory-write paths, runs auto-consolidation, and imports from Claude /
-Hermes formats. Zero runtime dependencies, one LLM lane.
+A single-layer (project) memory system: injects a capped index + policy block
+into the system prompt (rebuilt only at session start / compaction), recalls
+memory files as **persisted blocks on the first user messages of a task**
+(boundary recall, prompt-path only), guards memory-write paths, consolidates
+on manual request, and imports from Claude / Hermes formats. Zero runtime
+dependencies, one LLM lane.
+
+The cross-project USER layer (`~/.pi/agent/memory/`) is **retired**: it is no
+longer injected, recalled, written or consolidated. Remaining files there are
+read-only (pinned files still inject until their migration to the user's own
+notes completes); the guard rejects any write into that directory and the
+importers land everything in the project layer.
 
 ## Key surfaces
 
-**Wiring — 2 tools + 4 commands + 8 hooks** (from `index.ts` header):
+**Wiring — 2 tools + 4 commands + hooks** (from `index.ts` header):
 
 | Hook | Behavior |
 |---|---|
-| `session_start` | Reconcile both layers + settings load + static yield probe; **queue drain** (spec 2026-10-03) fires after settings settle — background, per-project, never awaited on the startup path; automation's own `session_start` resets every per-session closure state (A1 — the host reuses handler closures across in-process `/new`,`/resume`,`/fork`; without the reset a dead AbortController silently killed all automation after the first switch); **AR1005-RC**: also defensively disposes the recall machine + clears the model label / prompt flag / notify-once state (reload/resume drivers — complements, never replaces, `session_shutdown`) |
-| `before_agent_start` | Dynamic yield probe → policy + two-layer capped index; **RV prompt path** — one selection per user message bounded by `recallWaitMs`, the block persists as a custom message right after the user message. pi 1.2.0 union: custom-message runs (`sendMessage` `triggerTurn:true` — goal continuations, directives) keep the policy/index injection but **skip recall selection** (RV-01/03 scopes selection to real user prompts) |
-| `message_end` | **RV steer path** — mid-run user messages select with wait 0; custom blocks never trigger (RV-01). Spec v1.2: a parked selection DELIVERS THE MOMENT it completes via `sendMessage(triggerTurn:false)` — pi queues it as a pending custom message and flushes at the next turn_end (the first assistant message's end at the earliest): request #2 sees it within the run, the next turn's request #1 otherwise. Nothing is discarded; `display:false` keeps it invisible in both TUIs |
-| `turn_end` | **RV deferred delivery** (first continues=true turn_end, `sendMessage` `triggerTurn:false` — pi flushes pending custom messages right after handler dispatch) + P3 automation counting + correction gate (review extraction moved to `agent_end`, 2026-10-03) |
-| `agent_end` | **RV run boundary** (v1.2: in-flight selections may still complete and deliver — supersede happens at the next user message) + background review extraction (moved from turn_end 2026-10-03: completed-run snapshot, ≥10 turns / ≥15 tool calls thresholds, warmup, suffix-60 window cap, empty-window guard — no mid-run extraction, at most one LLM pass per run) |
-| `session_shutdown` | **AR1005-RC-04**: dispose the recall machine on ANY shutdown reason — synchronous, never waits on the model. A late selector completion (adapter ignored the AbortSignal) is dropped by generation invalidation: no history read, no delivery, no unhandled rejection (contract AR1005-RC-HOST pins this against the real `ExtensionRunner` + `invalidate()`; the baseline defect was exactly that crash) |
-| `tool_call` | `guardMemoryToolCall` (G1 verdicts; BH-R2: the secret probe is memory-layer-scoped and scans only the incoming text — write's `content`, edit's `edits[].newText`); read suppression is history-derived (RV-07) |
-| `tool_result` | `memory_consolidate` settle + stale-read staleness note |
-| `agent_settled` | Consolidation in-flight clear |
+| `session_start` | Reconcile the project layer + settings load + static yield probe; `sessionStartedAtMs` captured (recall echo filter baseline); injection cache dropped; **queue drain** (spec 2026-10-03) fires after settings settle — background, per-project, never awaited on the startup path; automation's own `session_start` resets every per-session closure state (A1 — the host reuses handler closures across in-process `/new`,`/resume`,`/fork`); **AR1005-RC**: also defensively disposes the recall machine (reload/resume drivers — complements, never replaces, `session_shutdown`). The retired user dir is intentionally NOT created/reindexed |
+| `before_agent_start` | Policy + capped index from the injection cache (session-stable); **task-boundary recall on the prompt path** — a real user message selects only while `userTurns < RECALL_BOUNDARY_TURNS` (2) counting messages since the last `compactionSummary`; a selection waits at most `recallWaitMs` (default 5000, clamped 1s–15s) and a timeout **aborts and DISCARDS** — nothing injects into the run after the prompt path gave up. Custom-message runs (`sendMessage` `triggerTurn:true` — goal continuations, consolidation directives) keep the injection but never select |
+| `agent_end` | Background review extraction (completed-run snapshot, ≥10 turns / ≥15 tool calls thresholds, warmup ≥3 user turns, suffix-60 window cap, empty-window guard — no mid-run extraction, at most one LLM pass per run); the model-wrote-memory mutex suppresses the LLM pass while still advancing the cursor |
+| `session_shutdown` | **AR1005-RC-04**: dispose the recall machine on ANY shutdown reason — synchronous, never waits on the model. A late selector completion is dropped by generation invalidation: no history read, no delivery, no unhandled rejection (contract AR1005-RC-HOST pins this against the real `ExtensionRunner` + `invalidate()`) |
+| `tool_call` | `guardMemoryToolCall` (G1 verdicts; BH-R2: the secret probe is memory-layer-scoped and scans only the incoming text — write's `content`, edit's `edits[].newText`); any write into the retired user dir is blocked outright; read suppression is history-derived (RV-07) |
+| `tool_result` | Stale-read staleness note |
+| `agent_settled` | Consolidation directive-turn flag cleared (automation accounting reopens) |
 | `registerTool` | `session_recall`, `memory_consolidate` |
-| `registerCommand` | `/memory` (incl. recall status), `/memory-consolidate`, `/memory-import-claude`, `/memory-import-hermes` |
+| `registerCommand` | `/memory` (incl. recall status + retired-layer notice), `/memory-consolidate` (manual-only, project layer), `/memory-import-claude`, `/memory-import-hermes` |
 
-**No `context` hook anymore** — request-level projection was the root cause
-of the 30× cache-miss cost and the frozen-selection re-injection (RC-1/RC-2).
+**No `message_end` / `turn_end` recall or consolidation** — recall is
+prompt-path only (a mid-run steer is not a task boundary), and consolidation
+never auto-fires: over-budget stores surface in `/memory` diagnostics and the
+`/memory-consolidate` command sends the directive.
+
+**No `context` hook** — request-level projection was the root cause of the
+30× cache-miss cost (RC-1/RC-2).
+
+**Session-stable injection**: the policy block is rebuilt only when the
+compaction count changes (or writability flips). A mid-session memory write
+never flips the system prompt — the KV cache survives the session.
+
+**Task-boundary recall details**:
+- candidate pool: project layer only, newest-first, **excluding files whose
+  mtime ≥ `sessionStartedAtMs`** (a file written this session never re-enters
+  the pool — no echo loops);
+- budget: ≤3 files / 16KB per session (`lib/context-budget.ts`);
+- the selector query carries the previous real user message (≤1000 chars);
+- the block persists as a `pi-memory-recall` custom message (`RecallDetailsV1`
+  frozen, contract P0-CT-08; `delivery` is always `"immediate"` — the deferred
+  era is gone, `stats.late` counts discarded timeouts).
 
 **Configuration** (`~/.pi/agent/settings.json`, `memory` key):
 - `model` (string, `"provider/id"`): ops side-channel model (review /
   correction / queue drain — compact and shutdown only STAGE queue records,
-  zero LLM). Fallback chain (spec
-  2026-10-03): `model` → `recallModel` → session model — an unresolvable
-  ref falls through to the next candidate, never straight back to the slow
-  session model. Deliberate asymmetry vs D3: recall treats `recallModel`
-  as a REQUIRED quality gate (unset = recall off), ops treat it as a
-  cheap-lane preference (unresolvable → session model, not a failure);
-  ops quality thus rides whatever `recallModel` was configured for.
+  zero LLM). Fallback chain (spec 2026-10-03): `model` → `recallModel` →
+  session model — an unresolvable ref falls through to the next candidate,
+  never straight back to the slow session model. Deliberate asymmetry vs D3:
+  recall treats `recallModel` as a REQUIRED quality gate (unset = recall
+  off), ops treat it as a cheap-lane preference.
 - `recallModel` (string, `"provider/id"`): the selector model. **Required for
   recall — unset or unresolvable means NO recall** (D3, no lexical fallback).
-- `recallWaitMs` (number, default **0** since spec v1.2, clamped to 0–15000): per-message
-  selector wait budget on the prompt path. 0 = never block the screen on the
-  selector — the block arrives via the completion-driven pending-message
-  flush instead. A positive value trades screen delay for request-#1 recall.
+- `recallWaitMs` (number, default **5000**, clamped 1s–15s): per-message
+  selector wait budget on the prompt path. On timeout the selection is
+  aborted and discarded (never delivered late — nothing injects after the
+  prompt path returned).
 
-Known costs (accepted, spec D4 + handoff traps): the `before_agent_start`
-handler chain is serially awaited, so a positive `recallWaitMs`
-(only when a selector model is configured) delays later extensions' handlers
-and the main model request by up to that budget — the v1.2 default of 0
-removes this cost entirely; and subagent child sessions load core too — every
-child's dispatch prompt runs one selector call (token cost + ≤waitMs
-first-token latency). That is expected behavior, not a bug to special-case.
+Known costs (accepted): a positive `recallWaitMs` delays the main model
+request by up to that budget, but only on the first two user messages of a
+task; subagent child sessions load core too — their dispatch prompts run one
+selector call within the same boundary budget.
 
 **Bus**: `memory` channel — `{ yielded, dir }`; index budget published via
 `contextBudget.memoryIndexMax` (25K, `lib/context-budget.ts`).
@@ -65,54 +85,54 @@ first-token latency). That is expected behavior, not a bug to special-case.
 
 | File | Notes |
 |---|---|
-| `index.ts` | Assembly; hook bodies try/catch-wrapped at the boundary. Event routing only — every recall decision lives in `recall.ts` |
-| `memdir.ts` | Directory scan/reconcile; `scanMemoryDirCached` fingerprint cache + git-root memo + a 1s fresh-window TTL (arch review C7: later scans in a turn skip the readdir+stat fingerprint pass; external edits are visible within ~1s — every internal write path invalidates explicitly); `eligibleMemories` = the recall candidate set (both layers, newest-first, absolute paths); `memoryKey` = the canonical `user-memory/<file>` / `memory/<file>` key |
-| `writer.ts` | Document write engine (SPEC 2026-10-07 P2-3): write/remove/reindex — the ONLY mutators of memory documents and MEMORY.md; one-way dep store/consolidate/importers → writer → memdir; `paths.ts` holds both identity derivations (fullProjectKey vs friendlyProjectHint) |
-| `recall.ts` | **The RV deep module** (entries: `onUserMessage` / `abort` / `dispose`; AR1005-RC-01). All session state derives from the projection history on every call (D9): hard dedup since the last `compactionSummary` (RV-06), read suppression from read toolCalls resolved against cwd (RV-07), byte budget from past `details.bytes` (RV-08), recentTools = succeeded-never-failed since the last user message (RV-13). Skill-wrapper stripping + length hygiene (RV-02); latest-wins supersede (RV-05); render with byte-safe truncation + path note; `RecallDetailsV1` (frozen, contract-pinned). **AR1005-RC**: every request owns a generation + AbortController + wait timer + cancelled resolver — a newer message, `abort`, `dispose` or machine replacement invalidates it immediately (an in-flight await never hangs on an abort-ignoring selector; a LATE completion reads no history, delivers nothing, mutates nothing). `onUserMessage` has total-promise semantics (RC-02: entry/deferred-stage throws converge to null + at most one diagnostic per failed request — the steer path's `void` call cannot produce an unhandled rejection); deferred delivery commits run-dedup/counters only after `deliver()` returns (RC-03) |
-| `selector.ts` | `llmSelector` over the shared llm.ts lane: manifest = `[layer][type] key (age): description` newest-first capped at 200; precision-first prompt (empty list is a good answer); recentTools anti-noise rule; `resolveRecallModel` = exact provider/id → unique bare id → OFF (no session-model fallback, D3) |
-| `policy.ts` | Policy injection block (`POLICY_COMPACT`) |
-| `guard.ts` | Write guard: G1 verdicts + the secret probe. BH-R2: the probe runs only for memory-layer targets and scans only the incoming text — write's `content`, edit's `edits[].newText` — never the whole resulting file (a pre-existing secret-looking line must not block a clean edit) |
+| `index.ts` | Assembly; hook bodies try/catch-wrapped at the boundary. Event routing only — every recall decision lives in `recall.ts`. Owns the injection cache, the echo-filter baseline and the consolidation directive-turn flag |
+| `memdir.ts` | Directory scan/reconcile; `scanMemoryDirCached` fingerprint cache + a 1s fresh-window TTL (every internal write path invalidates explicitly); `eligibleMemories(projectDir)` = the single-layer recall candidate set (newest-first, absolute paths); `memoryKey` = the canonical `memory/<file>` key (old `user-memory/` keys in replayed transcripts simply never match again) |
+| `writer.ts` | Document write engine (SPEC 2026-10-07 P2-3): write/remove/reindex — the ONLY mutators of memory documents and MEMORY.md; one-way dep store/consolidate/importers → writer → memdir |
+| `recall.ts` | **The RV deep module** (entries: `onUserMessage` / `abort` / `dispose`; AR1005-RC-01). All session state derives from the projection history on every call (D9): boundary check = real user messages since the last `compactionSummary` (RECALL_BOUNDARY_TURNS), hard dedup (RV-06), read suppression (RV-07), byte budget (RV-08), recentTools (RV-13). Skill-wrapper stripping + length hygiene (RV-02); latest-wins supersede (RV-05); render with byte-safe truncation + path note; `RecallDetailsV1` (frozen, contract-pinned). **AR1005-RC**: every request owns a generation + AbortController + wait timer — a newer message, `abort`, `dispose` or timeout invalidates it immediately; a LATE completion reads no history, delivers nothing, mutates nothing. `onUserMessage` has total-promise semantics (RC-02) |
+| `selector.ts` | `llmSelector` over the shared llm.ts lane: manifest = `[type] key (age): description` newest-first capped at 200; precision-first prompt (empty list is a good answer); `previousUserMessage` context line; `resolveRecallModel` = exact provider/id → unique bare id → OFF (no session-model fallback, D3) |
+| `policy.ts` | Single-layer policy block (`policyCompact`) + `buildPolicyInjection` (pinned section from the retired dir + project index, lane-clamped) |
+| `guard.ts` | Write guard: G1 verdicts + the secret probe + the retired-layer block (any write into the user dir is rejected with a migration pointer) |
 | `yield.ts` | `InjectionGate` — static + dynamic yield probes (fail-open: injection failures never block a turn, P3-ME-09) |
-| `consolidate.ts` | Consolidation trigger/tool/command; writes via `memory_consolidate` (batch must reduce bytes or file count) |
-| `automation.ts` | P3 automation state + settings (reads via `lib/settings` readJson, invariant 10); per-session state reset on `session_start` (A1); queue drain runs records in PARALLEL (`Promise.allSettled`, ≤5 — worst case 5×20s serial → max(20s); diagnostics aggregated to single-point writes) | 
-| `queue.ts` | Pending-extraction queue (spec 2026-10-03; P0-3 single-rename ownership protocol: claim/pending/GC tokens, re-read after claim, TTL+owner-probe recovery, soft budget never deletes live claims): the shutdown path stages the unextracted tail (cursor-relative suffix-60) as ONE atomic JSON record under `~/.pi/agent/memory-queue/`; the next same-project `session_start` drains it in the background (≤5 records, ≤3 attempts, exact `projectsDir` routing, age/size GC). BH-E2: expiry (attempt cap + record age) is validated BEFORE the routing/blacklist skips — expired records take the same settle-with-diagnostic disposal path regardless of routing, so cross-project records can no longer be skipped-and-released forever; age is the record's own `savedAt`, never the file mtime. The shutdown handler itself runs ZERO LLM — the host awaits shutdown handlers serially with no timeout, and the old awaited 10s flush measurably stalled every long-session exit. Records are a plaintext second copy of the session tail (≤7 days, ≤2MB total), disclosed here |
-| `importers.ts` | Claude / Hermes import; never overwrites local edits |
-| `store.ts`, `llm.ts`, `paths.ts` | V2 storage (atomic write primitive invalidates the scan cache), the single LLM lane, path resolution (`sessionsDirFor` uses pi's wrapping-dash sessions naming `-${sanitize}-`). CH E7: the lane's own timeout timer reports `timeout` (an externally supplied signal still reports `aborted`); the reason surfaces verbatim in `/memory` diagnostics and no consumer branches on it |
-| `session-recall.ts` | Cross-session recall (`session_recall` tool). Arch review C8: ASYNC bounded scan (no event-loop blocking) with three caps — ≤200 files (newest first), ≤1MB per file as a BOUNDED PARTIAL READ (never a whole-file skip: the newest sessions are usually the largest), ≤8MB total budget — plus a transparency footer (`scanned=… truncated_size=… budget=… bytes=…/…`; the narrow-your-query advice rides budget exhaustion only). The sessions-dir path fix made the tool work on real machines for the first time (it previously pointed at a directory pi never writes) |
+| `consolidate.ts` | Manual-only consolidation: `sendConsolidationDirective` (command) + `memory_consolidate` tool (batch must reduce bytes or file count) + `needsConsolidation` (diagnostics) |
+| `automation.ts` | P3 automation state + settings (reads via `lib/settings` readJson, invariant 10); per-session state reset on `session_start` (A1); `isDirectiveTurn` seam keeps consolidation runs out of extraction accounting; queue drain runs records in PARALLEL (`Promise.allSettled`, ≤5) |
+| `queue.ts` | Pending-extraction queue (spec 2026-10-07 P0-3 single-rename ownership protocol): shutdown stages the unextracted tail as ONE atomic JSON record under `~/.pi/agent/memory-queue/`; the next same-project `session_start` drains it in the background. BH-E2: expiry precedes routing skips; the shutdown handler runs ZERO LLM |
+| `importers.ts` | Claude / Hermes import; everything lands in the project layer (user-typed sections become `reference`); never overwrites local edits |
+| `store.ts`, `llm.ts`, `paths.ts` | V2 storage (atomic write primitive invalidates the scan cache), the single LLM lane, path resolution (`memoryWriteRoots` = project dir only — the retired user dir has no approval carve-out). `MemoryLayer` stays on the frozen MemoryOp shape; user-layer ops are skipped with an explicit reason |
+| `session-recall.ts` | Cross-session recall (`session_recall` tool): async bounded scan — ≤200 files, ≤1MB bounded partial reads, ≤8MB total, transparency footer |
 
 ## Invariants & gotchas
 
 - **Fail-open**: any injection failure is swallowed at the boundary — a turn
   must never die because memory hiccuped.
+- **Single layer**: the project dir is the only injected/recalled/written
+  store. Do not reintroduce a user layer, a routing table or a layer-choice
+  prompt — cross-project knowledge belongs in the user's own notes, and the
+  guard now blocks user-dir writes outright.
+- **Manual-only consolidation**: nothing ever sends a consolidation directive
+  on a timer or a hook. The throttle/2-per-session/inFlight trigger state
+  machine was deleted; `agent_settled` only clears the directive-turn flag.
+- **Boundary recall**: selection runs only while fewer than
+  `RECALL_BOUNDARY_TURNS` (2) real user messages exist since the last
+  compaction; message_end/steer paths never select; a timeout is an abort +
+  discard — never reinstate late delivery.
+- **Session-stable injection**: never rebuild the policy block on a memory
+  write; the rebuild keys are session start and the compaction count only.
 - **Zero-LLM shutdown (spec 2026-10-03)**: `session_shutdown` only stages a
-  queue record (synchronous atomic write, ≤120KB); extraction happens later
-  on the drain lane. Never reintroduce an awaited LLM call in a
-  `session_shutdown` handler.
+  queue record; extraction happens later on the drain lane.
 - **Queue ownership protocol (spec 2026-10-07 P0-3)**: one staged record is
-  held by at most one live worker — every transition (ready/pending → claim,
-  dead claim → reclaimer's claim, claim → fresh pending) is a SINGLE
-  same-directory atomic rename; hard links are forbidden (double-name
-  window). After claiming, always re-read the record from the claim file.
-  Stale claims are reclaimed only past a 10-minute TTL AND a dead-owner probe
-  (`kill(pid,0)` ESRCH) — the TTL alone never strips a live worker. The 2MiB
-  budget is SOFT: claims and write-tmps count bytes but are never GC-deleted
-  while their owner may live; a still-over-budget new staging may drop only
-  ITSELF. This is a retrying best-effort queue, NOT exactly-once: a crash
-  between apply and settle can re-apply on the next drain (disclosed). Mixed
-  old/new core versions draining concurrently are NOT safe — upgrade by
-  stopping the old processes first. Recovery from a stuck state: offline,
-  verify the original ready path is absent, then rename the claim/pending
-  back; never overwrite an existing file.
-- **Persisted-once delivery (D1)**: a recall block enters the transcript as a
-  `pi-memory-recall` custom message at most once per real user message —
-  custom blocks themselves never trigger recall (RV-01), and history-derived
-  hard dedup means one file surfaces at most once per compaction window
-  (RV-06).
+  held by at most one live worker — single same-directory atomic renames;
+  re-read after claim; TTL + dead-owner probe for recovery. This is a
+  retrying best-effort queue, NOT exactly-once. Mixed old/new core versions
+  draining concurrently are NOT safe — upgrade by stopping the old processes
+  first.
+- **Persisted-once delivery (D1)**: a recall block enters the transcript at
+  most once per real user message; hard dedup means one file surfaces at most
+  once per compaction window (RV-06).
 - **No model, no recall (D3)**: `memory.recallModel` unset/unresolvable →
   recall is entirely off. Never add a lexical or session-model fallback.
-- **State from history only (D9)**: no closure state in the wiring — dedup /
-  read / budget / recentTools all re-derive from
-  `buildSessionProjection().messages` (details survival is contract-pinned).
+- **State from history only (D9)**: no closure state in the recall decisions —
+  dedup / read / budget / boundary all re-derive from
+  `buildSessionProjection().messages`.
 - The importer treats local files as authoritative: imports never clobber
   local edits.
 - Budget constants come from `lib/context-budget.ts` (`RECALL_*` are
@@ -121,9 +141,9 @@ first-token latency). That is expected behavior, not a bug to special-case.
 ## Tests
 
 `test/lib/memory*.test.ts` + `recall.test.ts` + `memory-llm-selector.test.ts`
-(vitest: core wiring, RV machine, RV selector, V2 storage/automation/
-consolidate/migration, carveout) — memory kept its suites in `test/lib`
-rather than a colocated directory. The `pi-memory-recall` customType +
-details-v1 field set are pinned in the contract suite (P0-CT-08), and the
-real-package `buildSessionProjection` details-survival is pinned in
-`pi-host-semantics.test.ts` ⑥.
+(vitest: core wiring, RV machine + boundary + timeout-discard, RV selector,
+V2 storage/automation/consolidate/migration) and `extensions/memory/tests/`
+(node:test: B8 write-root, BH-R2 probe scope, BH-E2 queue, C9 snapshots).
+The `pi-memory-recall` customType + details-v1 field set are pinned in the
+contract suite (P0-CT-08); the real-package teardown behavior in
+`pi-host-semantics.test.ts` ⑦.

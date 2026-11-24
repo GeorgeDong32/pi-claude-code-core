@@ -546,3 +546,22 @@ TR-2. **门禁（main 6cdfe6a）**：check 双过；vitest 91 文件全绿（+ad
 TR-3. **A 真机补证据（沙盒 2026-11-15-tr，GLM Flash 驱动）**：S3-MiniMax PASS（M3.1-Flash + 8192 cap：applied/validated，2,533 字符正文）；S3-OpenAI 兼容 PASS（CPAO provider 走 pi openai-completions 适配器全链路，3,041 字符正文）；S3-GPT 被 CPA 代理阻断（gpt-6* 全系 400 unknown provider——待证据，恢复条件=可路由 GPT 端点；core 侧 refused 行为顺带再证）；H-SC-6 严格腿 PASS（DEAD provider 指 127.0.0.1:9：预压 refused/reason:"error"+冷却 10 turns→阈值 124,779 原生触发→regenerate 腿**按设计用会话模型**（summaryModel 只管预压，index.ts regenerateNow 传 ctx.model）→native-backfill 真摘要 3,906 字符→probe 双事件→会话存活）。SR-9 的 CPA 兜底注记由此形成对照：直连死模型构造成功且链条全对。
 TR-4. **B H-SC-7 真实 orchestrator run 全判据 PASS**：被测会话（bypass，cwd=目标仓）跑完整 L2——DISCUSS 1-6 确认→planner session 产出 specs/r1-three-files.md@a019bbcb→worker/GK 独立 session（w/a·w1、gatekeeper·r1、w/b·w2、w/c·w3）→t1/t2 merge→**压缩中点**（tokensBefore 90,282，ST-01 applied/validated，9,369 字符摘要）→t3 压缩后用台账 id 正确派发（tool 日志仅协议工具，无 board 重读；期间 t3 一轮 rework 重做通过）→GK 回收、board r1:done、target 6 提交干净历史。摘要台账 `[flow r1 · reviewing]`：开放 run+闭环各一行+t3 todo+哨兵行；台账层诱饵零出现（如实注记：模型叙事层自行发现并提及 decoy 一次，控制器台账正确排除；更严构法应将诱饵置于扫描不可见处）。过程两次用户提示（session-vs-window 澄清、GK 闲置推动）；GK 初版未挂 watch 用轮询代替、orchestrator 检出发纪律提醒——均如实记。
 TR-5. **沙盒证据**：`~/.cache/pi-core-acceptance/2026-11-15-tr/LEDGER.md`（字段级数字+抽查记录），原始 36MB 不入库（SC-3 先例）；沙盒台账含每场景 compaction 条目/ST-01/metrics 的直接 jsonl 核验。
+
+## memory 策略修订批（spec 2026-11-23-memory-policy，2026-11-24）
+
+来源：用户主导的 memory 系统反思（多轮方向讨论后定稿，spec 经用户批准）。四项主干：用户层退役、整合仅手动、任务边界召回、会话稳定注入。本节记录对旧 spec/台账的推翻与新决策。
+
+M-1. **用户层退役为直接删除而非开关**：讨论中曾提出保留设置开关（`memory.userLayer: off`），用户最终裁定「直接退役，不留开关」——spec 2026-10-02-memory-recall-v2 的双层注入/召回/RV-15 写侧路由全部废除（RV-15 的跨项目泄漏数据成为退役论据而非保留理由）。遗留文件只读保留（pinned 文件仍注入直到迁移），guard 直接拒绝写入；`MemoryLayer` 类型与队列记录形状按 P0-CT-09 冻结保留，user 层 op 以显式理由跳过。
+
+M-2. **整合仅手动（推翻 D4 自动 directive 链）**：`ConsolidationTrigger`（turn_end 触发、throttle 10-turn、2-per-session cap、inFlight 守卫）整类删除；`/memory-consolidate` 成为唯一入口（仅项目层，`user` 参数拒绝）。D4 的「超预算自动 directive」路径由 `/memory` 诊断 + 手动命令取代。被测行为（needsConsolidation 判据、must-shrink 事务）不变。
+
+M-3. **任务边界召回（推翻 B 批 warmup/cooldown 与 RV v1.2 延迟投递）**：B 批（2026-10-20）的 `PI_CORE_RECALL_{WARMUP,COOLDOWN}_TURNS` 环境变量接缝删除（用户裁定不留接缝）；RV v1.2 的 message_end steer 路径与完成驱动延迟投递删除——召回仅 prompt 路径、仅任务头两条用户消息（`RECALL_BOUNDARY_TURNS=2`，自最近 compactionSummary 计数）、超时即 abort+丢弃（`stats.late` 计数，`delivery` 恒 `immediate`）。`recallWaitMs` 默认 0→5000（真机 5s 等待是可接受的边界代价；0 曾是 v1.2 为「不阻塞上屏」的取舍，在边界触发下频率大降故默认回收正值）。候选池加会话回声过滤（mtime ≥ sessionStartedAtMs 排除）。预算收紧 5 文件/60KB → 3 文件/16KB。`RecallDetailsV1` 字段集冻结不变（P0-CT-08）。
+
+M-4. **会话稳定注入**：policy 块仅在 session start / compaction 计数变化时重建（此前每次 before_agent_start 都重扫重排，中途写入会翻转让 KV 缓存失效）。
+
+M-5. **沙盒真机验收计划**（已执行，全判据 PASS——见 PROGRESS 同批条目）：HOME=/tmp 沙盒 + 真实 config + 42 文件快照，经 rex 驱动真实 pi TUI；判据：0 自动整合 directive、召回仅边界回合且全 immediate、0 回声、项目商店完好、会话内注入字节稳定。
+
+M-6. **迁移前置审批**：用户层遗留笔记（本机 29 文件 + Air 35 文件名）与〔Obsidian〕标记偏好项的 Obsidian 迁移清单、`~/AGENTS.md` 三条已批准行，均须用户批准后才能落盘；批准后删除三条偏好记忆文件（其中 exa-search-via-codemode.md 为唯一 pinned 文件，迁移时定去向）。
+M-6a. **迁移执行决议（2026-11-24，AskUser 四问）**：清单按提案执行；**`~/AGENTS.md` 三条新行用户裁定不加**（ research 期拟的 headless 禁令/sudo 交还/编号拍板三条作废，AGENTS.md 零改动）；本机 user 层**全部保留只迁移不删**（29 文件 + MEMORY.md 原地不动，M-6 中「批准后删三条偏好文件」不执行）；Air 35 文件本次不动，待 Air 升级退役版后单独一批经 SSH 迁移。落点为 OneDrive 真 vault（`~/Library/CloudStorage/OneDrive-个人/Note/Notes-Obsidian/`，含 `.obsidian` workspace；本地 `~/Notes-Obsidian/` 是分叉的部分副本——`obsidian` CLI 报 Vault not found，本地树里还滞留 11-19 的 `GeorgedeMac-mini-macos` 笔记，已复制入真 vault、原处保留）。迁移事故与修复：rex/、hermes/ 为既有文件夹，其 index.md 被迁移写入误覆盖——rex 按 README.md（该夹自述索引）重建：删除误写 index、README 目录树扩充三条新笔记；hermes 重建合并索引（cron-model-pinning + hermes-gateway-notes）并注明可从 OneDrive 版本历史还原旧索引；其余 7 个目标夹均无预存文件（逐夹核查预存 md 数）。29 文件正文逐字进 vault（14 篇抽查零失配），另有 w1 审计节单列 rex/w1-audit-osc7501-pty-wrapper.md。
+
+M-7. **spec §1「后台分批整理」被会话内决策取代（用户 2026-11-24 确认）**：spec 文件 `~/.factory/specs/2026-11-23-memory-policy.md` 第 1 节写的是后台分批整理（background-consolidate.ts、90% 阈值、两步 LLM、40% 护栏、独立锁）；会话讨论后改为仅手动（M-2），用户在实施中途以 AskUser 明确确认「仅手动 /memory-consolidate（维持现状）」。spec 其余各节（边界召回、policy 精简、验证、台账）不受影响。spec 文件本身不再回改，以本条为准。

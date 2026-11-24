@@ -10,6 +10,8 @@ export const MEMORY_FILE_BODY_MAX = 8 * 1024;
 export const MEMORY_FILE_TOTAL_MAX = MEMORY_FILE_BODY_MAX + 2048;
 export const MEMORY_FILES_MAX = 80;
 
+/** Kept for the frozen MemoryOp shape flowing through queue records and
+ * LLM responses; only "project" is applied since the user layer retired. */
 export type MemoryLayer = "user" | "project";
 
 export interface MemoryOp {
@@ -37,7 +39,7 @@ function renderFile(op: MemoryOp): string {
 	return serializeMemoryDocument(op.body ?? "", {
 		name: op.name ?? "",
 		description: op.description ?? "",
-		type: op.type ?? (op.layer === "user" ? "user" : "project"),
+		type: op.type ?? "project",
 	});
 }
 
@@ -76,43 +78,32 @@ function splitContent(content: string): { name: string; description: string; typ
 	return { name: split.title, description: split.description, type: split.type, body: split.body };
 }
 
-/** Validate + apply a batch against the two layer dirs. Total function:
- * every failure path returns an outcome, never throws into a hook. */
+/** Validate + apply a batch against the project layer. Total function:
+ * every failure path returns an outcome, never throws into a hook.
+ * The cross-project user layer is retired: ops targeting it are skipped
+ * with an explicit reason, never applied. */
 export function applyMemoryOps(
 	ops: MemoryOp[],
-	dirs: { user: string; project: string },
-	opts: { projectKey?: string; routedNotes?: string[] } = {},
+	dirs: { project: string },
 ): OpsOutcome {
 	const outcome: OpsOutcome = { applied: 0, skipped: [] };
 	if (ops.length === 0) return outcome;
 	if (ops.length > 200) return { applied: 0, skipped: [], error: "batch too large (>200 ops)" };
 
-	const dirFor = (layer: MemoryLayer): string => (layer === "user" ? dirs.user : dirs.project);
-
-	const routeLayer = (op: MemoryOp): MemoryLayer => {
-		const key = opts.projectKey;
-		if (!key || op.layer !== "user") return op.layer;
-		const haystack = `${op.name ?? ""} ${op.description ?? ""} ${op.body ?? ""}`;
-		const scoped = /(^|\n)paths:\s*/.test(op.body ?? "");
-		if (!scoped && key.length >= 3 && haystack.toLowerCase().includes(key.toLowerCase())) {
-			opts.routedNotes?.push(`${op.file ?? op.name ?? "(unnamed)"}: user → project (anchored to ${key})`);
-			return "project";
-		}
-		return op.layer;
-	};
+	const dir = dirs.project;
 
 	type Planned = { kind: "write"; file: string; dir: string; content: string } | { kind: "delete"; file: string; dir: string };
 	const planned: Planned[] = [];
-	const postFileCount = new Map<string, number>();
-	const plannedAdds = new Map<string, Set<string>>();
-	for (const d of [dirs.user, dirs.project]) {
-		postFileCount.set(d, listMemoryFiles(d).length);
-		plannedAdds.set(d, new Set());
-	}
+	let postFileCount = listMemoryFiles(dir).length;
+	const plannedAdds = new Set<string>();
 
 	for (const rawOp of ops) {
 		const op = hoistLeadingFrontmatter(rawOp);
-		const dir = dirFor(routeLayer(op));
+
+		if (op.layer === "user") {
+			outcome.skipped.push({ file: op.file, action: op.action, reason: "user layer retired — project memories only" });
+			continue;
+		}
 
 		if (op.action === "add") {
 			if (!op.name || !op.description) {
@@ -132,7 +123,7 @@ export function applyMemoryOps(
 				outcome.skipped.push({ file: op.file, action: op.action, reason: `unsafe file name "${file}"` });
 				continue;
 			}
-			if (plannedAdds.get(dir)!.has(file)) {
+			if (plannedAdds.has(file)) {
 				outcome.skipped.push({ file: op.file, action: op.action, reason: `${file} already added in this batch (duplicate)` });
 				continue;
 			}
@@ -140,7 +131,7 @@ export function applyMemoryOps(
 				outcome.skipped.push({ file: op.file, action: op.action, reason: `${file} already exists (use replace)` });
 				continue;
 			}
-			plannedAdds.get(dir)!.add(file);
+			plannedAdds.add(file);
 			const content = renderFile(op);
 			const secret = findSecret(content);
 			if (secret) {
@@ -152,7 +143,7 @@ export function applyMemoryOps(
 				continue;
 			}
 			planned.push({ kind: "write", file, dir, content });
-			postFileCount.set(dir, (postFileCount.get(dir) ?? 0) + 1);
+			postFileCount++;
 		} else if (op.action === "replace") {
 			const file = op.file ?? "";
 			if (!safeMemoryFileName(file) || !existsSync(join(dir, file))) {
@@ -204,17 +195,15 @@ export function applyMemoryOps(
 				}
 			}
 			planned.push({ kind: "delete", file, dir });
-			postFileCount.set(dir, (postFileCount.get(dir) ?? 0) - 1);
+			postFileCount--;
 		} else {
 			outcome.skipped.push({ file: op.file, action: op.action, reason: `unknown action "${String((op as MemoryOp).action)}"` });
 		}
 	}
 
 	if (planned.length === 0) return outcome;
-	for (const [dir, count] of postFileCount) {
-		if (count > MEMORY_FILES_MAX) {
-			return { applied: 0, skipped: outcome.skipped, error: `layer ${dir} would hold ${count} files (max ${MEMORY_FILES_MAX}) — consolidate first` };
-		}
+	if (postFileCount > MEMORY_FILES_MAX) {
+		return { applied: 0, skipped: outcome.skipped, error: `layer ${dir} would hold ${postFileCount} files (max ${MEMORY_FILES_MAX}) — consolidate first` };
 	}
 
 	const touched = new Set<string>();

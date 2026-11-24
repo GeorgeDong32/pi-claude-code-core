@@ -21,7 +21,6 @@ import {
 	runConsolidation,
 	type ConsolidateDelete,
 	buildConsolidationDirective,
-	ConsolidationTrigger,
 	CONSOLIDATE_DIRECTIVE_TYPE,
 	needsConsolidation,
 } from "../../extensions/memory/consolidate.ts";
@@ -72,7 +71,7 @@ afterEach(() => {
 
 describe("V2-C ops engine", () => {
 	it("add creates a valid file and reconciles the index", () => {
-		const out = applyMemoryOps([{ action: "add", layer: "project", name: "build-flow", description: "how to build", body: "bun run check" }], { user: udir, project: dir });
+		const out = applyMemoryOps([{ action: "add", layer: "project", name: "build-flow", description: "how to build", body: "bun run check" }], { project: dir });
 		expect(out.applied).toBe(1);
 		expect(existsSync(join(dir, "build-flow.md"))).toBe(true);
 		expect(readFileSync(join(dir, "MEMORY.md"), "utf-8")).toContain("[build-flow](build-flow.md)");
@@ -84,17 +83,17 @@ describe("V2-C ops engine", () => {
 			{ action: "add", layer: "project", name: "good", description: "d", body: "ok" },
 			{ action: "add", layer: "project", name: "bad", description: "d", body: "token = " + "x".repeat(20) }, // secret
 		];
-		const out = applyMemoryOps(ops, { user: udir, project: dir });
+		const out = applyMemoryOps(ops, { project: dir });
 		// one hallucinated op must not discard the batch (决1: skip-invalid)
 		expect(out.skipped.length).toBe(1);
 		expect(existsSync(join(dir, "good.md"))).toBe(true); // valid op still applies
 		// invalid-target op: skipped with reason
-		const out2 = applyMemoryOps([{ action: "remove", layer: "project", file: "missing.md" }], { user: udir, project: dir });
+		const out2 = applyMemoryOps([{ action: "remove", layer: "project", file: "missing.md" }], { project: dir });
 		expect(out2.applied).toBe(0);
 		expect(out2.skipped[0]!.reason).toContain("not found");
 		// batch-fatal gate 1: >200 ops → nothing written
 		const tooMany: MemoryOp[] = Array.from({ length: 201 }, (_, i) => ({ action: "add", layer: "project", name: `n${i}`, description: "d", body: "b" }));
-		const out3 = applyMemoryOps(tooMany, { user: udir, project: dir });
+		const out3 = applyMemoryOps(tooMany, { project: dir });
 		expect(out3.error).toContain("batch too large");
 		expect(out3.applied).toBe(0);
 		expect(existsSync(join(dir, "n0.md"))).toBe(false);
@@ -102,27 +101,28 @@ describe("V2-C ops engine", () => {
 
 	it("replace preserves frontmatter, honors stale anchors", () => {
 		put(dir, "a.md", "alpha", "old body content");
-		const ok = applyMemoryOps([{ action: "replace", layer: "project", file: "a.md", body: "new body", old_text: "old body content" }], { user: udir, project: dir });
+		const ok = applyMemoryOps([{ action: "replace", layer: "project", file: "a.md", body: "new body", old_text: "old body content" }], { project: dir });
 		expect(ok.applied).toBe(1);
 		expect(readFileSync(join(dir, "a.md"), "utf-8")).toContain("name: alpha"); // preserved
 		expect(readFileSync(join(dir, "a.md"), "utf-8")).toContain("new body");
-		const stale = applyMemoryOps([{ action: "replace", layer: "project", file: "a.md", body: "x", old_text: "old body content" }], { user: udir, project: dir });
+		const stale = applyMemoryOps([{ action: "replace", layer: "project", file: "a.md", body: "x", old_text: "old body content" }], { project: dir });
 		expect(stale.applied).toBe(0);
 		expect(stale.skipped[0]!.reason).toContain("stale anchor");
 	});
 
 	it("remove deletes the file and drops the index row", () => {
 		put(dir, "a.md", "alpha");
-		const out = applyMemoryOps([{ action: "remove", layer: "project", file: "a.md" }], { user: udir, project: dir });
+		const out = applyMemoryOps([{ action: "remove", layer: "project", file: "a.md" }], { project: dir });
 		expect(out.applied).toBe(1);
 		expect(existsSync(join(dir, "a.md"))).toBe(false);
 		expect(readFileSync(join(dir, "MEMORY.md"), "utf-8")).not.toContain("alpha");
 	});
 
-	it("user layer ops write into the user dir", () => {
-		const out = applyMemoryOps([{ action: "add", layer: "user", name: "pref-lang", description: "d", type: "user", body: "中文回复" }], { user: udir, project: dir });
-		expect(out.applied).toBe(1);
-		expect(existsSync(join(udir, "pref-lang.md"))).toBe(true);
+	it("retired user layer: ops targeting it are skipped, never applied", () => {
+		const out = applyMemoryOps([{ action: "add", layer: "user", name: "pref-lang", description: "d", type: "user", body: "中文回复" }], { project: dir });
+		expect(out.applied).toBe(0);
+		expect(out.skipped[0]!.reason).toContain("retired");
+		expect(existsSync(join(udir, "pref-lang.md"))).toBe(false);
 	});
 });
 
@@ -204,93 +204,40 @@ describe("V2-C runConsolidation (must-shrink transaction)", () => {
 	});
 });
 
-describe("V2-C directive + trigger state machine", () => {
+describe("V2-C directive (manual-only consolidation)", () => {
 	it("directive copy pins the tool, the dir, and the shrink rule", () => {
 		put(dir, "a.md", "alpha", "fact");
-		const text = buildConsolidationDirective("project", layerStats(dir), 25_000, "index truncated");
+		const text = buildConsolidationDirective(layerStats(dir), 25_000, "index truncated");
 		expect(text).toContain("memory_consolidate");
 		expect(text).toContain(dir);
 		expect(text).toContain("reduces total bytes or file count");
 		expect(text).toContain("Read the memory files");
 	});
 
-	it("auto-trigger: over-budget store sends ONE directive via sendMessage(triggerTurn)", async () => {
-		// 205 valid files ⇒ count threshold
+	it("turn_end NEVER auto-sends: an over-budget store stays silent until /memory-consolidate", async () => {
+		// 205 valid files ⇒ over the count threshold — the old trigger would
+		// have fired here; manual-only consolidation must not.
 		mkdirSync(dir, { recursive: true });
 		for (let i = 0; i < 205; i++) {
 			writeFileSync(join(dir, `m${String(i).padStart(3, "0")}.md`), `---\nname: m${i}\ndescription: d\nmetadata:\n  type: project\n---\n\nfact ${i}`);
 		}
+		expect(needsConsolidation(layerStats(dir), MEMORY_INDEX_MAX)).not.toBeNull();
 		const host = setup();
 		const ctx = host.makeCtx({ cwd: project, ui: true });
 		await host.fire("session_start", {}, ctx);
-		await host.fire("turn_end", { turnIndex: 0, message: { role: "assistant" }, toolResults: [] }, ctx);
-		expect(host.sentMessages.length).toBe(1);
-		const sent = host.sentMessages[0]!;
-		expect(sent.message.customType).toBe(CONSOLIDATE_DIRECTIVE_TYPE);
-		expect((sent.opts as { triggerTurn?: boolean })?.triggerTurn).toBe(true);
-		expect((sent.opts as { deliverAs?: string })?.deliverAs).toBe("followUp");
-		// no re-send while the directive turn is in flight — BUT this tick is
-		// also inside the 10-turn throttle window (attempts=1,
-		// turnsSinceAttempt=1 < 10), so BOTH guards block here; the inFlight
-		// guard alone is pinned separately in the isolation test below.
-		await host.fire("turn_end", { turnIndex: 1, message: { role: "assistant" }, toolResults: [] }, ctx);
-		expect(host.sentMessages.length).toBe(1);
-		// settle via agent_settled → throttle window (10 turns) blocks immediate retry
+		for (let i = 0; i < 12; i++) await host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, ctx);
 		await host.fire("agent_settled", {}, ctx);
-		await host.fire("turn_end", { turnIndex: 2, message: { role: "assistant" }, toolResults: [] }, ctx);
-		expect(host.sentMessages.length).toBe(1);
-	});
-
-	it("2-per-session cap: after two directives the trigger gives up silently", async () => {
-		mkdirSync(dir, { recursive: true });
-		for (let i = 0; i < 205; i++) {
-			writeFileSync(join(dir, `m${String(i).padStart(3, "0")}.md`), `---\nname: m${i}\ndescription: d\nmetadata:\n  type: project\n---\n\nfact ${i}`);
-		}
-		const host = setup();
-		const ctx = host.makeCtx({ cwd: project, ui: true });
-		await host.fire("session_start", {}, ctx);
-		await host.fire("turn_end", { turnIndex: 0, message: { role: "assistant" }, toolResults: [] }, ctx); // attempt 1
-		await host.fire("agent_settled", {}, ctx);
-		for (let i = 1; i <= 10; i++) await host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, ctx);
-		expect(host.sentMessages.length).toBe(2); // attempt 2 after the 10-turn window
-		await host.fire("agent_settled", {}, ctx);
-		for (let i = 11; i <= 30; i++) await host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, ctx);
-		expect(host.sentMessages.length).toBe(2); // capped
-	});
-
-	it("tool_result(memory_consolidate) settles the in-flight flag", async () => {
-		mkdirSync(dir, { recursive: true });
-		for (let i = 0; i < 205; i++) {
-			writeFileSync(join(dir, `m${String(i).padStart(3, "0")}.md`), `---\nname: m${i}\ndescription: d\nmetadata:\n  type: project\n---\n\nfact ${i}`);
-		}
-		const host = setup();
-		const ctx = host.makeCtx({ cwd: project, ui: true });
-		await host.fire("session_start", {}, ctx);
-		await host.fire("turn_end", { turnIndex: 0, message: { role: "assistant" }, toolResults: [] }, ctx);
-		await host.fire("tool_result", { toolName: "memory_consolidate", content: [], isError: false }, ctx);
-		// settled but throttle window still blocks an instant re-send
-		await host.fire("turn_end", { turnIndex: 1, message: { role: "assistant" }, toolResults: [] }, ctx);
-		expect(host.sentMessages.length).toBe(1);
-	});
-
-	it("yielded (hermes present) ⇒ auto-trigger stays silent", async () => {
-		mkdirSync(dir, { recursive: true });
-		for (let i = 0; i < 205; i++) {
-			writeFileSync(join(dir, `m${String(i).padStart(3, "0")}.md`), `---\nname: m${i}\ndescription: d\nmetadata:\n  type: project\n---\n\nfact ${i}`);
-		}
-		const npmDir = join(home, ".pi", "agent", "npm", "node_modules");
-		mkdirSync(npmDir, { recursive: true });
-		writeFileSync(join(npmDir, "hermes-memory"), "stub");
-		const host = setup();
-		const ctx = host.makeCtx({ cwd: project, ui: true });
-		await host.fire("session_start", {}, ctx);
-		await host.fire("turn_end", { turnIndex: 0, message: { role: "assistant" }, toolResults: [] }, ctx);
 		expect(host.sentMessages.length).toBe(0);
+		// the manual command still sends the PROJECT directive
+		await host.commands.get("memory-consolidate")?.("", ctx);
+		expect(host.sentMessages.length).toBe(1);
+		expect(host.sentMessages[0]!.message.customType).toBe(CONSOLIDATE_DIRECTIVE_TYPE);
+		expect((host.sentMessages[0]!.opts as { triggerTurn?: boolean })?.triggerTurn).toBe(true);
 	});
 
-	it("needsConsolidation detects truncated index, byte overflow (B1), and count overflow", async () => {
+	it("needsConsolidation detects truncated index, byte overflow (B1), and count overflow", () => {
 		expect(needsConsolidation({ dir, files: 10, totalBytes: 1000, indexBytes: 500, indexTruncated: true }, 25_000)).toBe("index truncated");
-		// B1: a 9KB user-layer index over its 8KB cap — no WARNING on disk, but over budget
+		// B1: an index over its byte cap — no WARNING on disk, but over budget
 		expect(needsConsolidation({ dir, files: 10, totalBytes: 1000, indexBytes: 9_000, indexTruncated: false }, 8_000)).toContain("9000/8000 bytes");
 		expect(needsConsolidation({ dir, files: 205, totalBytes: 1000, indexBytes: 500, indexTruncated: false }, 25_000)).toContain("205 files");
 		expect(needsConsolidation({ dir, files: 10, totalBytes: 1000, indexBytes: 500, indexTruncated: false }, 25_000)).toBeNull();
@@ -352,7 +299,7 @@ describe("V2 Phase 2 (B4) — same-batch duplicate adds", () => {
 				{ action: "add", layer: "project", name: "build-flow", description: "d1", body: "first" },
 				{ action: "add", layer: "project", name: "build-flow", description: "d2", body: "second" },
 			],
-			{ user: udir, project: dir },
+			{ project: dir },
 		);
 		expect(out.applied).toBe(1);
 		expect(out.skipped[0]!.reason).toContain("already added in this batch");
@@ -365,7 +312,7 @@ describe("V2 Phase 2 (B4) — same-batch duplicate adds", () => {
 				{ action: "add", layer: "project", name: "x", description: "d", body: "b" },
 				{ action: "replace", layer: "project", file: "x.md", body: "new" },
 			],
-			{ user: udir, project: dir },
+			{ project: dir },
 		);
 		expect(out.applied).toBe(1);
 		expect(out.skipped.some((sk) => sk.reason!.includes("not found"))).toBe(true);
@@ -379,13 +326,12 @@ describe("store op-body frontmatter hoist (spec 2026-10-02-memory-recall-v2)", (
 	it("a replace op whose body is a full file renders ONE frontmatter block with the NEW fields", () => {
 		const target = resolveMemoryPaths(project, home);
 		const tdir = target.memoryDir;
-		const tudir = target.userMemoryDir;
 		mkdirSync(tdir, { recursive: true });
 		writeFileSync(join(tdir, "symptom.md"), `---\nname: symptom\ndescription: "[insight] old description line"\nmetadata:\n  type: project\n---\n\nold body\n`);
 		const fullFileBody = `---\nname: symptom\ndescription: "[correction] new description line"\nmetadata:\n  type: project\n---\n\ncorrected body text`;
 		const out = applyMemoryOps(
 			[{ action: "replace", layer: "project", file: "symptom.md", body: fullFileBody, old_text: "old body" }],
-			{ user: tudir, project: tdir },
+			{ project: tdir },
 		);
 		expect(out.applied).toBe(1);
 		const written = readFileSync(join(tdir, "symptom.md"), "utf-8");
@@ -394,43 +340,6 @@ describe("store op-body frontmatter hoist (spec 2026-10-02-memory-recall-v2)", (
 		expect(written).not.toContain("[insight] old description line");
 		// the index (splitFrontmatter view) now sees the corrected description
 		expect(parseMemoryFrontmatter(written)?.description).toBe("[correction] new description line");
-	});
-});
-
-/* ── R3 write-side routing (RV-15): user-layer ops anchored to the current
- * project land in the PROJECT layer — the measured cross-project leakage
- * guard (12/17 user-layer files were project-anchored). ── */
-describe("store user→project routing (RV-15)", () => {
-	it("a user-layer add mentioning the project key routes to the project layer; scoped (paths:) and clean ops stay user", () => {
-		const target = resolveMemoryPaths(project, home);
-		const tdir = target.memoryDir;
-		const tudir = target.userMemoryDir;
-		mkdirSync(tdir, { recursive: true });
-		const notes: string[] = [];
-		const out = applyMemoryOps(
-			[
-				{ action: "add", layer: "user", name: "cherrydev-workflow", description: "CherryDev repo conventions", type: "project", body: "CherryDev specific workflow facts" },
-				{ action: "add", layer: "user", name: "global-style", description: "communication style", type: "user", body: "reply in chinese" },
-			],
-			{ user: tudir, project: tdir },
-			{ projectKey: "CherryDev", routedNotes: notes },
-		);
-		expect(out.applied).toBe(2);
-		expect(notes).toHaveLength(1);
-		expect(notes[0]).toContain("cherrydev-workflow");
-		expect(existsSync(join(tdir, "cherrydev-workflow.md"))).toBe(true);
-		expect(existsSync(join(tudir, "global-style.md"))).toBe(true);
-		expect(existsSync(join(tudir, "cherrydev-workflow.md"))).toBe(false);
-		// a paths-scoped body is an explicit scoping decision — not routed
-		const notes2: string[] = [];
-		const out2 = applyMemoryOps(
-			[{ action: "add", layer: "user", name: "scoped-pref", description: "solo repos preference", type: "user", body: '---\nname: scoped-pref\ndescription: d\npaths: ["~/Coding/CodeIsland/**"]\n---\n\nprefers minimal git flow' }],
-			{ user: tudir, project: tdir },
-			{ projectKey: "CherryDev", routedNotes: notes2 },
-		);
-		expect(out2.applied).toBe(1);
-		expect(notes2).toHaveLength(0);
-		expect(existsSync(join(tudir, "scoped-pref.md"))).toBe(true);
 	});
 });
 
@@ -526,28 +435,5 @@ describe("G2-C13 unified age (effectiveAgeMs)", () => {
 		const content = `---\nname: x\ndescription: d\nmetadata:\n  type: project\n---\n\nbody`;
 		const mtime = now - 12 * 24 * 3600 * 1000;
 		expect(effectiveAgeMs(content, mtime, now)).toBe(12 * 24 * 3600 * 1000);
-	});
-});
-
-// CH D1: the inFlight guard (consolidate.ts onTurnEnd) is isolated here —
-// the throttle tests above pass with BOTH guards active, so they never pin
-// inFlight on its own.
-describe("CH D1 inFlight guard isolation", () => {
-	it("blocks a re-send while in flight even past the throttle window, and releases on settle", () => {
-		mkdirSync(dir, { recursive: true });
-		// Over-budget index so the counterfactual is real: with inFlight
-		// cleared the trigger WOULD fire on this store.
-		writeFileSync(join(dir, "MEMORY.md"), `# idx\n\n${"- [x](x.md) — filler row\n".repeat(1500)}`);
-		expect(needsConsolidation(layerStats(dir), MEMORY_INDEX_MAX)).not.toBeNull();
-		const sent: string[] = [];
-		const trigger = new ConsolidationTrigger({ sendDirective: (layer) => sent.push(layer) });
-		trigger.state.attempts = 1;
-		trigger.state.turnsSinceAttempt = 15; // far past the 10-turn throttle
-		trigger.state.inFlight = true;
-		trigger.onTurnEnd(dir, udir);
-		expect(sent).toEqual([]); // ONLY the inFlight guard can block here
-		trigger.settle(); // the consolidation turn ended
-		trigger.onTurnEnd(dir, udir);
-		expect(sent).toEqual(["project"]); // released: the re-send goes out
 	});
 });

@@ -97,7 +97,7 @@ describe("V2-M section parsing", () => {
 });
 
 describe("V2-M full migration routing", () => {
-	it("USER.md → user layer; untagged MEMORY.md → user layer; current-project tags → project layer; other-project tags → user layer with [tag]", () => {
+	it("everything lands in the project layer (retired user layer untouched); current-project and foreign tags still route per project", () => {
 		hermesFixture({
 			user: "User goes by George. Timezone UTC+8. <!-- created=2026-08-02 -->\n§\nAll replies in Chinese by default. <!-- created=2026-08-11 -->",
 			memory: [
@@ -114,13 +114,13 @@ describe("V2-M full migration routing", () => {
 		mkdirSync(cherryLayer, { recursive: true });
 		const r = importHermesFull({ agentDir, projectMemoryDir: dir, userMemoryDir: udir });
 		expect(r.copied).toBe(5);
-		expect(r.routed.user).toBe(3); // 2 USER + the untagged global
-		expect(r.routed.project).toBe(2); // the current-project tag + the CherryPR tag
-		const userIndex = readFileSync(join(udir, "MEMORY.md"), "utf-8");
-		expect(userIndex).toContain("George");
-		expect(userIndex).not.toContain("CherryPR"); // foreign sections no longer leak into the user layer
+		expect(r.routed.user).toBe(0); // the retired layer never receives anything
+		expect(r.routed.project).toBe(5); // everything: 2 USER + untagged global + current tag + CherryPR tag
+		expect(existsSync(join(udir, "MEMORY.md"))).toBe(false); // retired dir untouched
 		const projIndex = readFileSync(join(dir, "MEMORY.md"), "utf-8");
+		expect(projIndex).toContain("George"); // USER.md facts land as reference memories
 		expect(projIndex).toContain("bun and vitest");
+		expect(projIndex).not.toContain("CherryPR-specific"); // foreign tags go to their own layer
 		const cherryIndex = readFileSync(join(cherryLayer, "MEMORY.md"), "utf-8");
 		expect(cherryIndex).toContain("CherryPR-specific");
 		// no matching project dir → skipped + noted (re-runnable, idempotent)
@@ -138,12 +138,12 @@ describe("V2-M full migration routing", () => {
 		});
 		const r = importHermesFull({ agentDir, projectMemoryDir: dir, userMemoryDir: udir });
 		expect(r.copied).toBe(2);
-		const userIndex = readFileSync(join(udir, "MEMORY.md"), "utf-8");
-		expect(userIndex).toContain("[tool-quirk]");
-		expect(userIndex).toContain("[failure]");
+		const projIndex = readFileSync(join(dir, "MEMORY.md"), "utf-8");
+		expect(projIndex).toContain("[tool-quirk]");
+		expect(projIndex).toContain("[failure]");
 		// one file carries feedback type
-		const files = readdirSync(udir).filter((f) => f.startsWith("hermes-"));
-		expect(files.some((f) => readFileSync(join(udir, f), "utf-8").includes("type: feedback"))).toBe(true);
+		const files = readdirSync(dir).filter((f) => f.startsWith("hermes-"));
+		expect(files.some((f) => readFileSync(join(dir, f), "utf-8").includes("type: feedback"))).toBe(true);
 	});
 
 	it("cross-source dedupe: the same fact in MEMORY.md and failures.md imports once", () => {
@@ -199,7 +199,7 @@ describe("V2-M commands + diagnostics", () => {
 		await host.commands.get("memory-import-hermes")?.("", ctx);
 		const msg = host.sentMessages.find((m) => m.message.customType === "pi-memory-status");
 		expect((msg!.message as { content?: string }).content).toContain("migrated 1 fact(s)");
-		expect(existsSync(join(udir, "hermes-george-prefers-pnpm.md"))).toBe(true);
+		expect(existsSync(join(dir, "hermes-george-prefers-pnpm.md"))).toBe(true);
 	});
 
 	it("/memory-import-hermes <file> keeps the v1 single-file behavior", async () => {
@@ -221,10 +221,10 @@ describe("V2-M commands + diagnostics", () => {
 		await host.fire("session_start", {}, ctx);
 		await host.commands.get("memory")?.("", ctx);
 		const content = (host.sentMessages.find((m) => m.message.customType === "pi-memory-status")!.message as { content?: string }).content!;
-		expect(content).toContain("user memory:");
+		expect(content).toContain("user memory (RETIRED");
 		expect(content).toContain("project memory:");
 		expect(content).toContain("automation: on");
-		expect(content).toContain("consolidation: idle");
+		expect(content).toContain("consolidation: manual-only");
 		expect(content).toContain("run /memory-import-hermes");
 		// steady-state surface: exactly these commands
 		expect([...host.commands.keys()].sort()).toEqual(["memory", "memory-consolidate", "memory-import-claude", "memory-import-hermes"]);
@@ -240,7 +240,7 @@ describe("V2-M data-safety (Phase 0 D1/D4)", () => {
 		const args = { agentDir, projectMemoryDir: dir, userMemoryDir: udir };
 		const r1 = importHermesFull(args);
 		expect(r1.copied).toBe(2);
-		const files = readdirSync(udir).filter((f) => f.startsWith("hermes-"));
+		const files = readdirSync(dir).filter((f) => f.startsWith("hermes-"));
 		expect(files.length).toBe(2);
 		expect(files).toContain("hermes-memory.md");
 		expect(files.some((f) => /^hermes-memory-[a-z0-9]{6}\.md$/.test(f))).toBe(true);

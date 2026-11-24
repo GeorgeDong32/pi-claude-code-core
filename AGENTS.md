@@ -138,7 +138,6 @@ Per-module docs live in [docs/en/](docs/en) / [docs/zh/](docs/zh) — start with
 | `CC_CORE_BG_DEBUG` / `CC_CORE_BG_{PROMOTE,GRACE,LOG_LIMIT}_*` | bg-shell | Debug log + test seams for promote/grace/log-limit thresholds |
 | `PI_B4_TEST_HOME` | mcp-gov | Test seam: overrides the home dir for `/core exposure` writes (tests only) |
 | `PI_CORE_COMPACTION` | compaction | Controller mode override: `off` \| `shadow` \| `on` (SC ST-03; wins over core-compaction.json) |
-| `PI_CORE_RECALL_{WARMUP,COOLDOWN}_TURNS` | memory | Recall frequency gates: first-N-turns warmup / min-turns cooldown (≤ 0 disables; test seam) |
 
 `PI_SUBAGENT_*` variables are produced by pi-subagents; core only reads them.
 

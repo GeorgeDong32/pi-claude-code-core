@@ -181,7 +181,9 @@ export function projectMatchesCurrent(hermesName: string, memoryDir: string): bo
 export function importHermesFull(args: {
 	agentDir: string;
 	projectMemoryDir: string;
-	userMemoryDir: string;
+	/** retired layer — kept in the signature for report compat; nothing is
+	 *  written here anymore, everything lands in the project layer */
+	userMemoryDir?: string;
 }): HermesMigrationReport {
 	const report: HermesMigrationReport = { copied: 0, skipped: 0, notes: [], routed: { user: 0, project: 0 }, otherProjects: [] };
 	const hermesDir = join(args.agentDir, "pi-hermes-memory");
@@ -192,10 +194,10 @@ export function importHermesFull(args: {
 	}
 
 	let collisions = 0;
-	const count = (outcome: string, layer: "user" | "project"): void => {
+	const count = (outcome: string): void => {
 		if (outcome === "copied") {
 			report.copied++;
-			report.routed[layer]++;
+			report.routed.project++;
 		} else if (outcome === "collision") {
 			collisions++;
 			report.skipped++;
@@ -214,21 +216,23 @@ export function importHermesFull(args: {
 		if (section.project64) {
 			const name = decodeProject64(section.project64);
 			if (name && projectMatchesCurrent(name, args.projectMemoryDir)) {
-				count(importSection(section, args.projectMemoryDir, type, categoryPrefix, seen), "project");
+				count(importSection(section, args.projectMemoryDir, type, categoryPrefix, seen));
 			} else if (name) {
 				const foreign = foreignProjectDir(name);
 				if (foreign) {
-					count(importSection(section, foreign, type === "user" ? "user" : type === "project" ? "reference" : type, "", seen), "project");
+					count(importSection(section, foreign, type === "user" ? "reference" : type, categoryPrefix, seen));
 					foreignDirs.add(foreign);
 				} else {
 					report.skipped++;
 					report.notes.push(`[${name}] section skipped — no project layer under ~/.pi/agent/projects matches (open that project once, then re-run; idempotent)`);
 				}
 			} else {
-				count(importSection(section, args.userMemoryDir, type, categoryPrefix, seen), "user");
+				// user-layer sections land in the project store: the user layer
+				// is retired, and imported data must stay visible
+				count(importSection(section, args.projectMemoryDir, type === "user" ? "reference" : type, categoryPrefix, seen));
 			}
 		} else {
-			count(importSection(section, args.userMemoryDir, type, categoryPrefix, seen), "user");
+			count(importSection(section, args.projectMemoryDir, type === "user" ? "reference" : type, categoryPrefix, seen));
 		}
 	};
 
@@ -269,13 +273,12 @@ export function importHermesFull(args: {
 					report.skipped++;
 					continue;
 				}
-				count(importSection(section, args.projectMemoryDir, typeHeuristic(section.body), "", seen), "project");
+				count(importSection(section, args.projectMemoryDir, typeHeuristic(section.body), "", seen));
 			}
 		}
 	}
 
 	reindex(args.projectMemoryDir);
-	reindex(args.userMemoryDir);
 	if (collisions > 0) {
 		report.notes.push(`${collisions} slug collision(s): distinct facts sharing a title were disambiguated with a fingerprint suffix or skipped; review the hermes-* files`);
 	}

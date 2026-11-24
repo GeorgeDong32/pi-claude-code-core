@@ -1,5 +1,12 @@
 # Memory 召回频率调参（B）— Spec
 
+> **已废弃（2026-11-24 策略修订）。** warmup/cooldown 门槛及其
+> `PI_CORE_RECALL_*` 环境变量接缝已删除；延迟投递已删除。召回现在只在
+> **任务边界**运行 —— session start 或 compaction 后的前
+> `RECALL_BOUNDARY_TURNS`（2）条真实用户消息，仅 prompt 路径，超时 =
+> abort + 丢弃 —— 且候选池排除本会话写入的文件。见
+> [memory.md](memory.md)。以下度量记录保留备查。
+
 状态：对抗审查稿（flash，1 轮）· 批次：2026-10-20 ·
 模块：`extensions/memory/recall.ts`、`extensions/memory/index.ts`
 

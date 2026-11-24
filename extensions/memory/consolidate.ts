@@ -1,6 +1,7 @@
 /**
- * memory/consolidate.ts — memory_consolidate tool + directive + auto-trigger
- * (V2-C, DESIGN-MEMORY-V2 §5).
+ * memory/consolidate.ts — memory_consolidate tool + the manual consolidation
+ * directive (V2-C, DESIGN-MEMORY-V2 §5; the automatic turn_end trigger was
+ * removed — consolidation is manual-only, see DEVIATIONS).
  *
  * Form (user-approved): a consolidation is a DIRECTIVE injected via
  * sendMessage({triggerTurn: true, deliverAs: "followUp"}); the in-session
@@ -11,7 +12,7 @@
  * S2 (OPT-3): consolidation is a POLICY on the shared write engine —
  * validation rules (filename predicate, frontmatter, secret scan, size
  * cap) and the atomic write primitive all come from store.ts; what stays
- * here is the must-shrink invariant, the mkdir lock, and the trigger.
+ * here is the must-shrink invariant, the mkdir lock, and the directive.
  *
  * Batch-member exclusivity (2026-10-18): writes and deletes may not name
  * the same file, and write keys must be unique. Both shapes previously
@@ -27,7 +28,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync,
 import { join } from "node:path";
 
 import { Type } from "typebox";
-import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { listMemoryFiles, parseMemoryFrontmatter } from "./memdir.ts";
 import { INDEX_MAX_LINES, removeDocument, reindex } from "./writer.ts";
@@ -42,7 +43,6 @@ import {
 	type LayerLock,
 	type LayerStats,
 } from "./store.ts";
-import { USER_INDEX_MAX } from "./policy.ts";
 import { consolidateResultRows, renderConsolidateCall, type ConsolidateArgs } from "./renderers.ts";
 import { renderRows } from "../../lib/tool-render.ts";
 import { MEMORY_INDEX_MAX } from "../../lib/context-budget.ts";
@@ -62,18 +62,16 @@ export function normalizeDeletes(deletes: ConsolidateDelete[]): Array<{ file: st
 }
 
 export function buildConsolidationDirective(
-	layer: "user" | "project",
 	stats: LayerStats,
 	cap: number,
 	reason: string,
 ): string {
-	const label = layer === "user" ? "USER" : "PROJECT";
 	return [
-		`[memory] The ${label} memory store is over budget (${reason}: index ${stats.indexBytes}/${cap} bytes, ${stats.files} files). Consolidate it now:`,
+		`[memory] The PROJECT memory store is over budget (${reason}: index ${stats.indexBytes}/${cap} bytes, ${stats.files} files). Consolidate it now:`,
 		`1. Read the memory files in ${stats.dir} (list the directory, read each file).`,
 		"2. Merge overlapping or duplicate memories into single files, delete stale or superseded ones, split files that mix unrelated facts. Every retained fact must survive the merge.",
 		'3. Call the memory_consolidate tool ONCE with the whole batch: writes=[complete new file contents incl. frontmatter], deletes=[file names].',
-		"The batch is rejected unless it reduces total bytes or file count. Do not touch the other memory layer.",
+		"The batch is rejected unless it reduces total bytes or file count.",
 	].join("\n");
 }
 
@@ -144,12 +142,11 @@ export function runConsolidation(
 	dir: string,
 	writes: ConsolidateWrite[],
 	deletes: ConsolidateDelete[],
-	userLayer = false,
 ): ConsolidateResult {
 	const fail = (message: string): ConsolidateResult => ({
 		ok: false, written: 0, deleted: 0, beforeBytes: 0, afterBytes: 0, beforeFiles: 0, afterFiles: 0, message,
 	});
-	const cap = userLayer ? USER_INDEX_MAX : MEMORY_INDEX_MAX;
+	const cap = MEMORY_INDEX_MAX;
 
 	if (writes.length === 0 && deletes.length === 0) return fail("empty batch: provide writes and/or deletes");
 	if (writes.length > 100 || deletes.length > 100) return fail("batch too large (max 100 writes / 100 deletes)");
@@ -231,18 +228,6 @@ export function runConsolidation(
 
 
 
-export interface TriggerDeps {
-	sendDirective: (layer: "user" | "project", directive: string) => void;
-	now?: () => number;
-}
-
-export interface TriggerState {
-	attempts: number;
-	turnsSinceAttempt: number;
-	inFlight: boolean;
-	lastReason?: string;
-}
-
 export function needsConsolidation(stats: LayerStats, indexCap: number): string | null {
 	if (stats.indexTruncated) return "index truncated";
 	if (stats.indexBytes > indexCap) return `index ${stats.indexBytes}/${indexCap} bytes`;
@@ -250,80 +235,46 @@ export function needsConsolidation(stats: LayerStats, indexCap: number): string 
 	return null;
 }
 
-export class ConsolidationTrigger {
-	readonly state: TriggerState = { attempts: 0, turnsSinceAttempt: 0, inFlight: false };
-	directiveTurnActive = false;
+export interface ConsolidationHooks {
+	/** called when a directive run is queued (marks the turn so memory
+	 *  automation does not extract from the consolidation run itself) */
+	onDirectiveSent?: (reason: string) => void;
+	/** called after a consolidation batch was applied */
+	onApplied?: () => void;
+}
 
-	constructor(private readonly deps: TriggerDeps) {}
-
-	onTurnEnd(projectDir: string, userDir: string): void {
-		this.state.turnsSinceAttempt++;
-		if (this.state.inFlight) return;
-		if (this.state.attempts >= 2) return;
-		if (this.state.attempts > 0 && this.state.turnsSinceAttempt < 10) return;
-		for (const [layer, dir, cap] of [
-			["project", projectDir, MEMORY_INDEX_MAX],
-			["user", userDir, USER_INDEX_MAX],
-		] as const) {
-			const stats = layerStats(dir);
-			const reason = needsConsolidation(stats, cap);
-			if (!reason) continue;
-			this.fire(layer, stats, cap, reason);
-			return;
-		}
-	}
-
-	manual(projectDir: string, userDir: string, layerArg?: string): { sent: boolean; detail: string } {
-		const order: Array<["user" | "project", string, number]> =
-			layerArg === "user"
-				? [["user", userDir, USER_INDEX_MAX]]
-				: layerArg === "project"
-					? [["project", projectDir, MEMORY_INDEX_MAX]]
-					: [
-							["project", projectDir, MEMORY_INDEX_MAX],
-							["user", userDir, USER_INDEX_MAX],
-						];
-		for (const [layer, dir, cap] of order) {
-			const stats = layerStats(dir);
-			if (stats.files === 0) continue;
-			this.fire(layer, stats, cap, needsConsolidation(stats, cap) ?? "manual request");
-			return { sent: true, detail: `${layer} layer (${stats.files} files)` };
-		}
-		return { sent: false, detail: "no memory files to consolidate" };
-	}
-
-	private fire(layer: "user" | "project", stats: LayerStats, cap: number, reason: string): void {
-		this.state.attempts++;
-		this.state.turnsSinceAttempt = 0;
-		this.state.inFlight = true;
-		this.state.lastReason = `${layer}: ${reason}`;
-		this.directiveTurnActive = true;
-		this.deps.sendDirective(layer, buildConsolidationDirective(layer, stats, cap, reason));
-	}
-
-	settle(options?: { directive?: boolean }): void {
-		this.state.inFlight = false;
-		if (options?.directive) this.directiveTurnActive = false;
-	}
+export function sendConsolidationDirective(
+	pi: ExtensionAPI,
+	dir: string,
+	hooks: ConsolidationHooks,
+): { sent: boolean; detail: string } {
+	const stats = layerStats(dir);
+	if (stats.files === 0) return { sent: false, detail: "no memory files to consolidate" };
+	const reason = needsConsolidation(stats, MEMORY_INDEX_MAX) ?? "manual request";
+	hooks.onDirectiveSent?.(reason);
+	pi.sendMessage(
+		{ customType: CONSOLIDATE_DIRECTIVE_TYPE, content: buildConsolidationDirective(stats, MEMORY_INDEX_MAX, reason), display: false },
+		{ triggerTurn: true, deliverAs: "followUp" },
+	);
+	return { sent: true, detail: `project layer (${stats.files} files)` };
 }
 
 export function registerConsolidation(
 	pi: ExtensionAPI,
-	dirs: (ctx?: { cwd?: string }) => { project: string; user: string },
-	trigger: ConsolidationTrigger,
-	onApplied?: () => void,
+	dirs: (ctx?: { cwd?: string }) => { project: string },
+	hooks: ConsolidationHooks = {},
 ): void {
 	pi.registerTool(
 		defineTool({
 			name: "memory_consolidate",
 			label: "Memory Consolidate",
 			description:
-				"Apply a consolidation batch to one memory layer: writes (complete file contents incl. frontmatter) + deletes. The batch must reduce total bytes or file count. Use for merging/deduplicating/pruning memory files — never for adding new memories (write those as files directly).",
-			promptSnippet: "memory_consolidate(writes, deletes, layer) — batch-rewrite memory files to shrink an over-budget store",
+				"Apply a consolidation batch to the project memory layer: writes (complete file contents incl. frontmatter) + deletes. The batch must reduce total bytes or file count. Use for merging/deduplicating/pruning memory files — never for adding new memories (write those as files directly).",
+			promptSnippet: "memory_consolidate(writes, deletes) — batch-rewrite project memory files to shrink an over-budget store",
 			parameters: Type.Object({
 				writes: Type.Array(
 					Type.Object({
-						file: Type.String({ description: "File name within the layer dir (e.g. merged-prefs.md)" }),
+						file: Type.String({ description: "File name within the project memory dir (e.g. merged-lessons.md)" }),
 						content: Type.String({ description: "Complete new file content including frontmatter" }),
 						merged_from: Type.Optional(Type.Array(Type.String(), { description: "Files this write absorbs (provenance for deletes)" })),
 					}),
@@ -333,15 +284,12 @@ export function registerConsolidation(
 					Type.Union([Type.String(), Type.Object({ file: Type.String(), reason: Type.String({ description: "Why this file disappears without being merged" }) })]),
 					{ description: "Files to delete: bare names, or {file, reason}. Every delete must appear in some write's merged_from or carry a reason." },
 				),
-				layer: Type.Optional(Type.String({ description: '"project" (default) or "user"' })),
 			}),
-			async execute(_id, params, _signal, _onUpdate, ctx) {
-				const p = params as { writes: ConsolidateWrite[]; deletes: ConsolidateDelete[]; layer?: string };
-				const userLayer = p.layer === "user";
-				const dir = userLayer ? dirs(ctx).user : dirs(ctx).project;
-				const result = runConsolidation(dir, p.writes ?? [], p.deletes ?? [], userLayer);
+			async execute(_id, params, _signal, _onUpdate, ctx: ExtensionContext) {
+				const p = params as { writes: ConsolidateWrite[]; deletes: ConsolidateDelete[] };
+				const result = runConsolidation(dirs(ctx).project, p.writes ?? [], p.deletes ?? []);
 				if (!result.ok) throw new Error(result.message);
-				onApplied?.();
+				hooks.onApplied?.();
 				return {
 					content: [{ type: "text", text: `memory_consolidate: ${result.message}` }],
 					details: { ok: true, written: result.written, deleted: result.deleted },
@@ -354,10 +302,19 @@ export function registerConsolidation(
 	);
 
 	pi.registerCommand("memory-consolidate", {
-		description: "Send the memory consolidation directive to the agent (fallback; normally automatic)",
+		description: "Send the memory consolidation directive to the agent (project layer; consolidation is manual-only)",
 		handler: async (args, ctx) => {
-			const { project, user } = dirs(ctx);
-			const r = trigger.manual(project, user, args.trim() || undefined);
+			if (args.trim() === "user") {
+				try {
+					(ctx as { ui?: { notify?: (m: string, t?: string) => void } }).ui?.notify?.(
+						"the user memory layer is retired (2026-11-24) — only the project layer consolidates",
+						"warning",
+					);
+				} catch {
+				}
+				return;
+			}
+			const r = sendConsolidationDirective(pi, dirs(ctx).project, hooks);
 			try {
 				(ctx as { ui?: { notify?: (m: string, t?: string) => void } }).ui?.notify?.(
 					r.sent ? `memory consolidation directive sent — ${r.detail}` : r.detail,

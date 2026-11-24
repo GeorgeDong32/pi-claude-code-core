@@ -49,7 +49,7 @@ const DAY = 24 * 3600_000;
 
 function cap(): DrainCap {
 	return {
-		d: { project: join(projectsDir, "memory"), user: join(home, "memory"), projectsDir, agentDir },
+		d: { project: join(projectsDir, "memory"), projectsDir, agentDir },
 		model: undefined,
 		registry: undefined as never,
 		projectKey: undefined,

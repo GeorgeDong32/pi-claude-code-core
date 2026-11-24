@@ -108,7 +108,7 @@ async function main(): Promise<void> {
 
 	for (const [i, line] of lines.entries()) {
 		const paths = resolveMemoryPaths(line.cwd, homedir());
-		const candidates = eligibleMemories(paths.userMemoryDir, paths.memoryDir);
+		const candidates = eligibleMemories(paths.memoryDir);
 		const started = Date.now();
 		const outcome = await selector.select({ query: line.text, candidates, recentTools: [] });
 		const wall = Date.now() - started;

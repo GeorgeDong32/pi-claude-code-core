@@ -1,5 +1,13 @@
 # Recall frequency tuning (B) — Spec
 
+> **SUPERSEDED (2026-11-24 policy revision).** The warmup/cooldown gates and
+> their `PI_CORE_RECALL_*` env seams were removed; deferred delivery is gone.
+> Recall now runs on the TASK BOUNDARY only — the first
+> `RECALL_BOUNDARY_TURNS` (2) real user messages after session start or
+> compaction, prompt path only, timeout = abort + discard — and the candidate
+> pool excludes files written during the current session. See
+> [memory.md](memory.md). Kept for the measurement record below.
+
 Status: draft for adversarial review (flash, 1 round) · Batch: 2026-10-20 ·
 Module: `extensions/memory/recall.ts`, `extensions/memory/index.ts`
 

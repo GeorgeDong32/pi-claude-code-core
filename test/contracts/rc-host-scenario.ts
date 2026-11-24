@@ -43,7 +43,7 @@ process.env.HOME = home;
 mkdirSync(join(home, ".pi", "agent"), { recursive: true });
 writeFileSync(
 	join(home, ".pi", "agent", "settings.json"),
-	JSON.stringify({ memory: { automation: false, recallModel: "test/sel-1", recallWaitMs: 0 } }),
+	JSON.stringify({ memory: { automation: false, recallModel: "test/sel-1", recallWaitMs: 5000 } }),
 );
 // The project memory layer lives under the HOME projects tree, not <cwd>/memory.
 const projectMemoryDir = resolveMemoryPaths(project, home).memoryDir;
@@ -84,10 +84,15 @@ const runner = new ExtensionRunner(
 );
 
 await runner.emit({ type: "session_start" } as never);
-await runner.emit({
-	type: "message_end",
-	message: { role: "user", content: [{ type: "text", text: "steer message parking a selection now" }] },
+// recall is prompt-path only (task-boundary revision): park the selection
+// on a real user prompt, not a mid-run steer (message_end never selects)
+void runner.emit({
+	type: "before_agent_start",
+	messageType: "user",
+	systemPrompt: "BASE",
+	prompt: "user prompt parking a selection now",
 } as never);
+await new Promise((resolve) => setTimeout(resolve, 50));
 console.log(`SCENARIO_SELECTOR_CALLS:${selectorCalls}`);
 
 // Session replacement: ctx getters start throwing from here on.

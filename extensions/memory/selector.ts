@@ -1,7 +1,7 @@
 
 import type { Api, Model } from "@earendil-works/pi-ai";
 
-import { RECALL_MANIFEST_MAX } from "../../lib/context-budget.ts";
+import { RECALL_MANIFEST_MAX, RECALL_MAX_FILES } from "../../lib/context-budget.ts";
 import { liftJson } from "../../lib/json-lift.ts";
 import { completeText, resolveModelRef, type LlmComplete, type RegistryLike } from "./llm.ts";
 import { effectiveAgeMs } from "./memdir.ts";
@@ -24,6 +24,9 @@ export interface SelectorRequest {
 	query: string;
 	candidates: readonly SelectionCandidate[];
 	recentTools: readonly string[];
+	/** the real user message before this one (≤1000 chars) — context so short
+	 *  follow-up prompts ("那把上面那条改掉") can still be matched */
+	previousUserMessage?: string;
 	signal?: AbortSignal;
 }
 
@@ -58,7 +61,7 @@ Rules:
 - List ONLY files that will clearly help the assistant with THIS message. Judge by the description; do not guess at contents.
 - Be selective and discerning: if you are unsure a memory will help, leave it out.
 - An empty list is a good answer when nothing clearly applies.
-- At most 5 keys, each copied verbatim from the manifest.
+- At most ${RECALL_MAX_FILES} keys, each copied verbatim from the manifest.
 - If a "Recently used tools" list is given, do not select usage-reference or API-documentation memories for those tools (the assistant is already exercising them) — but DO select memories warning about their gotchas or known issues.`;
 
 export function parseSelection(text: string, valid: ReadonlySet<string>): string[] | null {
@@ -94,12 +97,13 @@ export function llmSelector(deps: {
 				.map((c) => manifestRow(c, Date.now(), c.body))
 				.join("\n");
 			const tools = req.recentTools.length > 0 ? `\n\nRecently used tools: ${req.recentTools.join(", ")}` : "";
+			const previous = req.previousUserMessage ? `Previous user message:\n${req.previousUserMessage}\n\n` : "";
 			const done = await completeText(
 				model,
 				registry,
 				{
 					systemPrompt: SELECT_SYSTEM,
-					userPrompt: `User message:\n${req.query}\n\nMemory manifest:\n${rows}${tools}`,
+					userPrompt: `${previous}User message:\n${req.query}\n\nMemory manifest:\n${rows}${tools}`,
 					timeoutMs: RECALL_SELECT_TIMEOUT_MS,
 					signal: req.signal,
 				},

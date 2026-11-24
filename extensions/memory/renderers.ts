@@ -34,14 +34,12 @@ export function sessionRecallResultRows(result: { content?: unknown; details?: u
 export interface ConsolidateArgs {
 	writes?: Array<{ file?: string }>;
 	deletes?: Array<string>;
-	layer?: string;
 }
 
 export function consolidateCallText(args: ConsolidateArgs): string {
-	const layer = args.layer === "user" ? "user" : "project";
 	const w = Array.isArray(args.writes) ? args.writes.length : 0;
 	const d = Array.isArray(args.deletes) ? args.deletes.length : 0;
-	return `Memory Consolidate ${layer} · ${w}W/${d}D`;
+	return `Memory Consolidate · ${w}W/${d}D`;
 }
 
 export function renderConsolidateCall(args: ConsolidateArgs, theme: ThemeLike): Text {

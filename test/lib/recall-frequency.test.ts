@@ -1,26 +1,15 @@
 /**
- * test/lib/recall-frequency.test.ts — B pins (spec
- * docs/en/recall-frequency-tuning.md §5). These exercise the REAL gates;
- * the legacy recall.test.ts runs with the cooldown env seam disabled.
+ * test/lib/recall-frequency.test.ts — task-boundary pins (memory-policy
+ * spec; the B warmup/cooldown frequency gates were removed with the
+ * deferred-delivery era). These exercise the REAL gate: the selector may
+ * run only on the first RECALL_BOUNDARY_TURNS real user messages after
+ * session start or the most recent compactionSummary, derived from the
+ * projection (D9).
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { createRecall, type RecallBlock, type RecallFile } from "../../extensions/memory/recall.ts";
+import { RECALL_BOUNDARY_TURNS, createRecall, type RecallFile } from "../../extensions/memory/recall.ts";
 import type { Selector, SelectorRequest } from "../../extensions/memory/selector.ts";
-
-const SAVE_WARMUP = process.env.PI_CORE_RECALL_WARMUP_TURNS;
-const SAVE_COOLDOWN = process.env.PI_CORE_RECALL_COOLDOWN_TURNS;
-
-beforeEach(() => {
-	delete process.env.PI_CORE_RECALL_WARMUP_TURNS;
-	delete process.env.PI_CORE_RECALL_COOLDOWN_TURNS;
-});
-afterEach(() => {
-	if (SAVE_WARMUP !== undefined) process.env.PI_CORE_RECALL_WARMUP_TURNS = SAVE_WARMUP;
-	else delete process.env.PI_CORE_RECALL_WARMUP_TURNS;
-	if (SAVE_COOLDOWN !== undefined) process.env.PI_CORE_RECALL_COOLDOWN_TURNS = SAVE_COOLDOWN;
-	else delete process.env.PI_CORE_RECALL_COOLDOWN_TURNS;
-});
 
 function file(key: string): RecallFile {
 	return {
@@ -49,161 +38,73 @@ function recordingSelector(): { selector: Selector; calls: Array<{ query: string
 	};
 }
 
-function machine(opts: { initialUserTurns?: number; selector: Selector; delivered: RecallBlock[] }) {
+function machine(selector: Selector) {
 	return createRecall({
-		selector: opts.selector,
+		selector,
 		modelLabel: "t/sel",
 		files: () => [file("memory/a.md"), file("memory/b.md")],
 		cwd: "/w",
-		deliver: (b) => opts.delivered.push(b),
-		initialUserTurns: opts.initialUserTurns,
 	});
 }
 
-const HIST = (): readonly unknown[] => [];
+const userMsg = (text: string): unknown => ({ role: "user", content: text });
+const compact = (): unknown => ({ role: "compactionSummary", content: "summary" });
 
-describe("B warmup + cooldown (recall-frequency-tuning spec §5)", () => {
-	it("1: fresh session — first 3 turns run no selector; lastReason 'warmup'", async () => {
+describe("task-boundary recall gate", () => {
+	it("1: the first two real user messages run the selector; the third does not", async () => {
 		const { selector, calls } = recordingSelector();
-		const delivered: RecallBlock[] = [];
-		const m = machine({ selector, delivered });
-		for (const text of ["plan the feature", "look at recall.ts", "now the tests"]) {
-			const block = await m.onUserMessage(text, HIST, 0);
-			expect(block).toBeNull();
-		}
+		const m = machine(selector);
+		expect(await m.onUserMessage("first boundary message", () => [], 50)).not.toBeNull();
+		expect(await m.onUserMessage("second boundary message", () => [userMsg("first boundary message")], 50)).not.toBeNull();
+		const twoPrior = [userMsg("first boundary message"), userMsg("second boundary message")];
+		expect(await m.onUserMessage("third message", () => twoPrior, 50)).toBeNull();
+		expect(await m.onUserMessage("fourth message", () => [...twoPrior, userMsg("third message")], 50)).toBeNull();
+		expect(calls).toHaveLength(2);
+		expect(m.stats.lastReason).toBe("boundary");
+	});
+
+	it("2: a compaction resets the boundary — the next two messages run again", async () => {
+		const { selector, calls } = recordingSelector();
+		const m = machine(selector);
+		const spent = [userMsg("one"), userMsg("two"), userMsg("three")];
+		expect(await m.onUserMessage("out of boundary", () => spent, 50)).toBeNull();
 		expect(calls).toHaveLength(0);
-		expect(m.stats.lastReason).toBe("warmup");
-		expect(delivered).toHaveLength(0);
-	});
-
-	it("2: 4th turn runs the selector (warmup passed)", async () => {
-		const { selector, calls } = recordingSelector();
-		const m = machine({ selector, delivered: [] });
-		for (let i = 0; i < 3; i++) await m.onUserMessage(`msg ${i}`, HIST, 0);
-		await m.onUserMessage("fourth real message", HIST, 0);
-		expect(calls).toHaveLength(1);
-	});
-
-	it("3: run at turn 4; turns 5-6 cooldown-skip; turn 7 eligible (interval = cooldown + 1)", async () => {
-		const { selector, calls } = recordingSelector();
-		const m = machine({ selector, delivered: [] });
-		for (let i = 0; i < 3; i++) await m.onUserMessage(`msg ${i}`, HIST, 0);
-		await m.onUserMessage("run here: message long enough for the query gate", HIST, 0);
-		expect(calls).toHaveLength(1);
-		const fifth = await m.onUserMessage("fifth message still under cooldown with words", HIST, 0);
-		expect(fifth).toBeNull();
-		expect(m.stats.lastReason).toBe("cooldown");
-		await m.onUserMessage("sixth message still under cooldown with words", HIST, 0);
-		expect(calls).toHaveLength(1); // still cooling
-		await m.onUserMessage("seventh message now eligible again with words", HIST, 0);
-		expect(calls).toHaveLength(2); // eligible again
-	});
-
-	it("4: resume seed initialUserTurns=7 — first turn runs immediately", async () => {
-		const { selector, calls } = recordingSelector();
-		const m = machine({ selector, delivered: [], initialUserTurns: 7 });
-		await m.onUserMessage("continuing the conversation with enough words to query", HIST, 0);
-		expect(calls).toHaveLength(1);
-	});
-
-	it("5: short resume seed=2 — first turn is warmup turn 3, second runs", async () => {
-		const { selector, calls } = recordingSelector();
-		const m = machine({ selector, delivered: [], initialUserTurns: 2 });
-		const first = await m.onUserMessage("resuming a short session with a long message", HIST, 0);
-		expect(first).toBeNull();
-		expect(m.stats.lastReason).toBe("warmup");
-		await m.onUserMessage("next message long enough for the query gate", HIST, 0);
-		expect(calls).toHaveLength(1);
-	});
-
-	it("6: an eligible turn suppressed by empty candidates increments (no reset); the next eligible turn still runs", async () => {
-		const { selector, calls } = recordingSelector();
-		let empty = false;
-		const delivered: RecallBlock[] = [];
-		const m = createRecall({
-			selector,
-			modelLabel: "t/sel",
-			files: () => (empty ? [] : [file("memory/a.md"), file("memory/b.md")]),
-			cwd: "/w",
-			deliver: (b) => delivered.push(b),
-			initialUserTurns: 3,
-		});
-		await m.onUserMessage("first run message with plenty of words", HIST, 0); // run → resets to 0
-		expect(calls).toHaveLength(1);
-		await m.onUserMessage("cooldown turn after the first run", HIST, 0); // +1 (cooldown)
-		expect(m.stats.lastReason).toBe("cooldown");
-		empty = true;
-		await m.onUserMessage("eligible but suppressed: no candidates here", HIST, 0); // 1 < 2 → cooldown-skipped, increments to 2
-		expect(calls).toHaveLength(1);
-		empty = false;
-		await m.onUserMessage("next eligible turn with candidates again", HIST, 0); // 2 ≥ 2 → runs
+		const afterCompact = [userMsg("one"), userMsg("two"), userMsg("three"), compact()];
+		expect(await m.onUserMessage("first after compaction", () => afterCompact, 50)).not.toBeNull();
+		expect(await m.onUserMessage("second after compaction", () => [...afterCompact, userMsg("first after compaction")], 50)).not.toBeNull();
 		expect(calls).toHaveLength(2);
 	});
 
-	it("6b: a suppressed turn that was ELIGIBLE (turnsSinceRun ≥ threshold) does not gate the next turn", async () => {
+	it("3: only ONE compaction reset — the gate does not re-open per message after it", async () => {
 		const { selector, calls } = recordingSelector();
-		let empty = false;
-		const m = createRecall({
-			selector,
-			modelLabel: "t/sel",
-			files: () => (empty ? [] : [file("memory/a.md"), file("memory/b.md")]),
-			cwd: "/w",
-			deliver: () => {},
-			initialUserTurns: 3,
-		});
-		await m.onUserMessage("first run to reset the cooldown clock", HIST, 0); // run → 0
-		await m.onUserMessage("cooldown increment turn number one", HIST, 0); // 1
-		await m.onUserMessage("cooldown increment turn number two", HIST, 0); // 2
-		empty = true;
-		await m.onUserMessage("eligible turn suppressed by empty corpus", HIST, 0); // eligible → pipeline → +1 = 3
-		expect(m.stats.empties).toBe(1);
-		expect(calls).toHaveLength(1);
-		empty = false;
-		await m.onUserMessage("immediately after suppression, still eligible", HIST, 0); // 3 ≥ 2 → runs
+		const m = machine(selector);
+		const base = [userMsg("one"), userMsg("two"), compact()];
+		expect(await m.onUserMessage("boundary 1", () => base, 50)).not.toBeNull();
+		expect(await m.onUserMessage("boundary 2", () => [...base, userMsg("boundary 1")], 50)).not.toBeNull();
+		expect(await m.onUserMessage("boundary 3", () => [...base, userMsg("boundary 1"), userMsg("boundary 2")], 50)).toBeNull();
 		expect(calls).toHaveLength(2);
 	});
 
-	it("7: abort() mid-warmup preserves the turn counters", async () => {
+	it("4: a resumed session with >boundary prior messages does not re-recall (surfaced blocks replay in the transcript)", async () => {
 		const { selector, calls } = recordingSelector();
-		const m = machine({ selector, delivered: [] });
-		await m.onUserMessage("one: a message long enough for the query gate", HIST, 0);
-		await m.onUserMessage("two: another message long enough for the query", HIST, 0);
-		m.abort(); // clears request state, not turn counters
-		const third = await m.onUserMessage("three: still a warmup turn with enough words", HIST, 0);
-		expect(third).toBeNull();
-		expect(m.stats.lastReason).toBe("warmup");
-		await m.onUserMessage("fourth message now long enough to pass the query gate", HIST, 0);
+		const m = machine(selector);
+		const resumed = [userMsg("old one"), userMsg("old two"), userMsg("old three")];
+		expect(await m.onUserMessage("first message after resume", () => resumed, 50)).toBeNull();
+		expect(calls).toHaveLength(0);
+	});
+
+	it("5: custom-type user messages never consume boundary slots nor feed lastUserText", async () => {
+		const { selector, calls } = recordingSelector();
+		const m = machine(selector);
+		const history = [
+			{ role: "user", customType: "pi-memory-consolidate", content: "(project layer) consolidate" },
+			{ role: "user", customType: "pi-memory-recall", content: "recall block" },
+		];
+		expect(await m.onUserMessage("still the first real message", () => history, 50)).not.toBeNull();
 		expect(calls).toHaveLength(1);
 	});
 
-	it("9: the steer path (waitMs=0) shares the machine's counters", async () => {
-		const { selector, calls } = recordingSelector();
-		const m = machine({ selector, delivered: [] });
-		for (let i = 0; i < 3; i++) await m.onUserMessage(`msg ${i}`, HIST, 50);
-		await m.onUserMessage("a steer style message with enough words", HIST, 0); // steer-flavored call, same machine
-		expect(calls).toHaveLength(1);
-		const steered = await m.onUserMessage("steer during cooldown with a sufficiently long text", HIST, 0);
-		expect(steered).toBeNull();
-		expect(m.stats.lastReason).toBe("cooldown");
-	});
-
-	it("env seam: cooldown=0 allows back-to-back runs (legacy-mode parity check)", async () => {
-		process.env.PI_CORE_RECALL_COOLDOWN_TURNS = "0";
-		const { selector, calls } = recordingSelector();
-		const m = createRecall({
-			selector,
-			modelLabel: "t/sel",
-			files: () => [file("memory/a.md"), file("memory/b.md")],
-			cwd: "/w",
-			deliver: () => {},
-			initialUserTurns: 3,
-		});
-		await m.onUserMessage("first message long enough for the query", HIST, 0);
-		await m.onUserMessage("second message immediately after, also long", HIST, 0);
-		// With the default cooldown the second run would be skipped; the seam
-		// must let both through. (A third run would starve on RV-06 surfaced
-		// keys — both files delivered — so two runs is the parity signal.)
-		expect(calls).toHaveLength(2);
-		expect(m.stats.lastReason).not.toBe("cooldown");
+	it("6: the boundary width pins RECALL_BOUNDARY_TURNS = 2", () => {
+		expect(RECALL_BOUNDARY_TURNS).toBe(2);
 	});
 });

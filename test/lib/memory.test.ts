@@ -5,14 +5,14 @@
  * ~/.pi/agent/projects/<sanitized>/memory into the sandbox.
  */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { FakeHost, clearCoreGlobals, snapshotCoreGlobals } from "../contracts/fake-host.ts";
 import { resetCoreBusForTests } from "../../extensions/bus.ts";
 import memoryExtension from "../../extensions/memory/index.ts";
-import { scanMemoryDir } from "../../extensions/memory/memdir.ts";
+import { scanMemoryDir, invalidateMemDirCache } from "../../extensions/memory/memdir.ts";
 import { reindex } from "../../extensions/memory/writer.ts";
 import {
 	MAX_BYTES_PER_FILE,
@@ -53,6 +53,11 @@ function writeMemory(name: string, title: string, description: string, type = "p
 		join(dir, name),
 		`---\nname: ${title}\ndescription: ${description}\nmetadata:\n  type: ${type}\n---\n\n${body}`,
 	);
+	invalidateMemDirCache(dir);
+	// backdate: a write in the same millisecond as session_start would flake
+	// against the recall echo filter (mtime >= sessionStart → excluded)
+	const past = new Date(Date.now() - 60_000);
+	utimesSync(join(dir, name), past, past);
 }
 
 beforeEach(() => {
@@ -171,7 +176,7 @@ describe("P3-ME-03 policy injection", () => {
 		expect(prompt).toContain("[alpha](a.md) — first");
 		// path-mismatch fix (2026-10-03): the injected policy names the REAL
 		// project-layer directory, never the literal `<project>/memory/`
-		expect(prompt).toMatch(/PROJECT memory \(\/.*\/memory\)/);
+		expect(prompt).toMatch(/PROJECT memory at \/\S*\/memory/);
 		expect(prompt).not.toContain("<project>/memory/");
 	});
 });
@@ -627,15 +632,11 @@ describe("adversarial-audit fixes (2026-09-22)", () => {
 });
 
 
-/* ── RV wiring (spec 2026-10-02-memory-recall-v2 §8 cases 16–20) ── */
+/* ── RV wiring (spec 2026-10-02-memory-recall-v2 §8 cases 16–20, revised by
+ * the memory-policy spec: task-boundary recall, prompt-path only, steer
+ * path removed, discard-on-timeout) ── */
 
 import type { Selector, SelectorOutcome } from "../../extensions/memory/selector.ts";
-
-// B (recall-frequency-tuning): wiring-level cases fire few user turns and
-// expect selections — disable the warmup gate via the env seam (the B
-// suite pins the real gates).
-process.env.PI_CORE_RECALL_WARMUP_TURNS = "0";
-process.env.PI_CORE_RECALL_COOLDOWN_TURNS = "0";
 
 function writeSettings(recallModel: string): void {
 	mkdirSync(join(home, ".pi", "agent"), { recursive: true });
@@ -712,45 +713,37 @@ describe("RV wiring (spec 2026-10-02-memory-recall-v2)", () => {
 		expect(log).toHaveLength(0); // and no selector cost either
 	});
 
-	it("pi 1.2.0 union: a mid-run user steer during a custom run still selects (prompt flag not stale)", async () => {
+	it("pi 1.2.0 union: a mid-run user steer NEVER selects (the steer path was removed with the deferred era)", async () => {
 		writeMemory("a.md", "convention", "repo convention");
 		const log: Array<{ query: string; count: number }> = [];
 		const host = setupWithSelector(["memory/a.md"], log);
 		const ctx = recallCtx(host);
 		await host.fire("session_start", {}, ctx);
-		// custom run starts (goal continuation) — no selection, flag stays unarmed
+		// custom run starts (goal continuation) — no selection
 		await host.fire(
 			"before_agent_start",
 			{ type: "before_agent_start", messageType: "custom", systemPrompt: "BASE", message: { role: "user", content: [{ type: "text", text: "<pi_goal_continuation goal_id=\"g1\" kind=\"continue\">" }], customType: "pi-goal-continuation" } },
 			ctx,
 		);
-		// the custom message's own message_end: RV-01-filtered, consumes nothing
-		await host.fire("message_end", { message: { role: "user", customType: "pi-goal-continuation", content: [{ type: "text", text: "continue" }] } }, ctx);
-		// real user steer mid-run → the selection MUST still run (regression pin:
-		// a stale promptMessagePending swallowed exactly this on the first 1.2.0
-		// draft — custom run armed the flag, no selection ever consumed it)
+		// real user steer mid-run → task-boundary recall only fires on the
+		// prompt path; a mid-run steer is NOT a task boundary
 		await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: "mid-run steer about repo convention" }] } }, ctx);
 		await new Promise((r) => setTimeout(r, 10));
-		expect(log).toHaveLength(1);
-		expect(host.sentMessages.filter((m) => m.message.customType === "pi-memory-recall")).toHaveLength(1);
+		expect(log).toHaveLength(0);
+		expect(host.sentMessages.filter((m) => m.message.customType === "pi-memory-recall")).toHaveLength(0);
 	});
 
-	it("18 spec v1.2: steer path — message_end(user) parks, delivery fires the moment selection completes (no turn_end gate)", async () => {
+	it("18 boundary revision: message_end never selects — recall is prompt-path only (≤waitMs, then discarded)", async () => {
 		writeMemory("a.md", "convention", "repo convention");
 		const host = setupWithSelector(["memory/a.md"]);
 		const ctx = recallCtx(host);
 		await host.fire("session_start", {}, ctx);
 		await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: "mid-run steer message about convention" }] } }, ctx);
-		// NOTE: no turn_end is fired at all — delivery is completion-driven.
-		await new Promise((r) => setTimeout(r, 5)); // let the parked selection settle
-		const sent = host.sentMessages.filter((m) => m.message.customType === "pi-memory-recall");
-		expect(sent).toHaveLength(1); // delivered immediately on completion — pi queues + flushes at the next turn_end
-		expect((sent[0]!.opts as { triggerTurn?: boolean }).triggerTurn).toBe(false);
-		expect((sent[0]!.message as { display?: boolean }).display).toBe(false); // implicit: never rendered
-		expect((sent[0]!.message as { details?: { delivery?: string } }).details?.delivery).toBe("deferred");
+		await new Promise((r) => setTimeout(r, 5));
+		expect(host.sentMessages.filter((m) => m.message.customType === "pi-memory-recall")).toHaveLength(0);
 	});
 
-	it("19: RV-01 — the prompt message's message_end never double-selects; custom/toolResult messages never select; agent_end clears the prompt flag", async () => {
+	it("19: the prompt selects exactly once per run; its own message_end never double-selects", async () => {
 		writeMemory("a.md", "convention", "repo convention");
 		const log: Array<{ query: string; count: number }> = [];
 		const host = setupWithSelector(["memory/a.md"], log);
@@ -758,22 +751,17 @@ describe("RV wiring (spec 2026-10-02-memory-recall-v2)", () => {
 		await host.fire("session_start", {}, ctx);
 		await host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "the repo convention prompt" }, ctx);
 		expect(log).toHaveLength(1); // selected once at before_agent_start
-		// the persisted user message's own message_end: flag clears, NO second selection
+		// the persisted user message's own message_end: NO second selection
 		await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: "the repo convention prompt" }] } }, ctx);
 		expect(log).toHaveLength(1);
 		// custom + toolResult messages never trigger
 		await host.fire("message_end", { message: { role: "user", customType: "pi-memory-recall", content: [{ type: "text", text: "whatever" }] } }, ctx);
 		await host.fire("message_end", { message: { role: "toolResult", toolName: "bash", isError: false, content: [] } }, ctx);
 		expect(log).toHaveLength(1);
-		// agent_end clears the prompt flag; a fresh idle message in real pi goes
-		// through a NEW before_agent_start (clears run-scoped dedup) — simulate
-		// that flow, then a mid-run steer in the new run selects again.
+		// a fresh run selects again (abort cleared run-scoped dedup; the fake
+		// projection is empty, so the boundary is still open)
 		await host.fire("agent_end", {}, ctx);
-		await host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "second run prompt about convention" }, ctx); // waitMs>0 + instant fake → immediate
-		expect(log).toHaveLength(2);
-		await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: "the second run prompt about convention" }] } }, ctx); // prompt msg — no select
-		await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: "a mid-run steer in run two" }] } }, ctx);
-		// run-two dedup already covers a.md (delivered at before_agent_start) → no selector call
+		await host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "second run prompt about convention" }, ctx);
 		expect(log).toHaveLength(2);
 	});
 
@@ -820,8 +808,10 @@ describe("AR1005-RC wiring lifecycle", () => {
 		const host = gatedHost(gates);
 		const ctx = recallCtx(host);
 		await host.fire("session_start", {}, ctx);
-		// steer path parks request #1 on the OLD machine (test/selector-1)
-		await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: "steer that parks on old model" }] } }, ctx);
+		// prompt-path request #1 parks on the OLD machine (test/selector-1);
+		// the wait times out later, but the gate is captured here
+		const p1 = host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "convention question on old model" }, ctx);
+		await new Promise((r) => setTimeout(r, 5));
 		expect(gates).toHaveLength(1);
 		// settings change the model → session_start reloads settings and defensively disposes
 		writeSettings2("test/selector-2");
@@ -837,7 +827,8 @@ describe("AR1005-RC wiring lifecycle", () => {
 		expect(gates).toHaveLength(2);
 		gates[1]!.complete({ kind: "selected", keys: ["memory/a.md"], elapsedMs: 1 });
 		const r = (await p) as { message?: { customType?: string; details?: { model?: string } } };
-		// exactly ONE recall message — the new machine's immediate block; the old request delivered nothing
+		void p1;
+		// exactly ONE recall block — the new machine's immediate block; the old request delivered nothing
 		expect(host.sentMessages.filter((m) => m.message.customType === "pi-memory-recall")).toHaveLength(0);
 		expect(r?.message?.customType).toBe("pi-memory-recall");
 		expect(r?.message?.details?.model).toBe("test/selector-2");
@@ -849,7 +840,8 @@ describe("AR1005-RC wiring lifecycle", () => {
 		const host = gatedHost(gates);
 		const ctx = recallCtx(host);
 		await host.fire("session_start", {}, ctx);
-		await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: "steer parks before recall off" }] } }, ctx);
+		const p1 = host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "prompt parks before recall off" }, ctx);
+		await new Promise((r) => setTimeout(r, 5));
 		expect(gates).toHaveLength(1);
 		// settings drop memory entirely → session_start reload + defensive dispose
 		mkdirSync(join(home, ".pi", "agent"), { recursive: true });
@@ -858,6 +850,8 @@ describe("AR1005-RC wiring lifecycle", () => {
 		gates[0]!.complete({ kind: "selected", keys: ["memory/a.md"], elapsedMs: 1 });
 		await new Promise((r) => setTimeout(r, 5));
 		expect(host.sentMessages.filter((m) => m.message.customType === "pi-memory-recall")).toHaveLength(0);
+		const r1 = (await p1) as { message?: unknown };
+		expect(r1?.message).toBeUndefined(); // the disposed machine's request resolved null
 	});
 
 	it("RC-T09c: session_shutdown disposes — late completion delivers nothing and reads no history", async () => {
@@ -866,9 +860,9 @@ describe("AR1005-RC wiring lifecycle", () => {
 		const host = gatedHost(gates);
 		let historyReads = 0;
 		const ctx = recallCtx(host);
-		(host as unknown as never) satisfies never;
 		await host.fire("session_start", {}, ctx);
-		await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: "steer parks before shutdown" }] } }, ctx);
+		void host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "prompt parks before shutdown" }, ctx);
+		await new Promise((r) => setTimeout(r, 5));
 		historyReads++; // entry-time read (approximation — the machine read history at entry)
 		expect(gates).toHaveLength(1);
 		await host.fire("session_shutdown", { reason: "replaced" }, ctx);
@@ -879,33 +873,112 @@ describe("AR1005-RC wiring lifecycle", () => {
 	});
 });
 
+describe("injection stability + boundary wiring", () => {
+	it("the injection is rebuilt only at session start / compaction — a mid-session memory write keeps the prompt byte-identical", async () => {
+		writeMemory("a.md", "alpha", "first");
+		const host = setup();
+		const ctx = host.makeCtx({ cwd: project, ui: true, projectionMessages: [] });
+		await host.fire("session_start", {}, ctx);
+		const fire = () =>
+			host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "some prompt long enough" }, ctx) as Promise<{ systemPrompt?: string }>;
+		const first = (await fire()).systemPrompt;
+		// a memory file lands mid-session (automation write path)
+		writeMemory("b.md", "beta", "second");
+		const second = (await fire()).systemPrompt;
+		expect(second).toBe(first); // unchanged — no cache churn, no index row yet
+		expect(second).not.toContain("beta");
+		// a compaction in the projection → rebuilt, new row appears
+		(ctx as { sessionManager: { buildSessionProjection: () => { messages: unknown[] } } }).sessionManager.buildSessionProjection = () => ({
+			messages: [{ role: "compactionSummary", content: "s" }],
+		});
+		const third = (await fire()).systemPrompt;
+		expect(third).not.toBe(second);
+		expect(third).toContain("beta");
+	});
+
+	it("echo filter: memory files written this session never enter the recall pool", async () => {
+		const log: Array<{ query: string; count: number }> = [];
+		const host = setupWithSelector(["memory/fresh.md"], log);
+		const ctx = recallCtx(host);
+		await host.fire("session_start", {}, ctx);
+		// the file lands AFTER session_start — restamp it to NOW so its mtime
+		// is deterministically inside the session (writeMemory backdates)
+		writeMemory("fresh.md", "fresh", "written this session");
+		utimesSync(join(memoryDir(), "fresh.md"), new Date(), new Date());
+		invalidateMemDirCache(memoryDir());
+		const r = (await host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "recall the fresh convention" }, ctx)) as { message?: unknown };
+		expect(r?.message).toBeUndefined(); // zero candidates → no selection
+		expect(log).toHaveLength(0);
+		// backdate the file → it predates the session → eligible again
+		// (the scan cache snapshots mtimeMs — drop it or the backdate is invisible)
+		utimesSync(join(memoryDir(), "fresh.md"), new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
+		invalidateMemDirCache(memoryDir());
+		await host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "recall the backdated convention" }, ctx);
+		expect(log).toHaveLength(1);
+		expect(log[0]!.count).toBe(1);
+	});
+});
+
 /** writeSettings variant for a different model id (RC-T09a). */
 function writeSettings2(recallModel: string): void {
 	writeFileSync(join(home, ".pi", "agent", "settings.json"), JSON.stringify({ memory: { recallModel, recallWaitMs: 5000 } }));
 }
 
-describe("B recall-frequency production seeding (no env override — real gates)", () => {
-	it("a machine created against a branch with ≥3 user turns skips the warmup on its first message (seed regression pin)", async () => {
-		delete process.env.PI_CORE_RECALL_WARMUP_TURNS;
-		delete process.env.PI_CORE_RECALL_COOLDOWN_TURNS;
-		// cover the production seed path: countBranchUserTurns reads the
-		// sessionManager branch; pin its contract against a branch holding
-		// exactly 7 user messages.
-		// machine-level pin (the wiring path — countBranchUserTurns — is a
-		// three-line projection reader; this pins the seed CONTRACT it feeds):
-		const calls: number[] = [];
-		const selector = { async select() { calls.push(1); return { kind: "empty" as const, elapsedMs: 0 }; } };
-		const { createRecall } = await import("../../extensions/memory/recall.ts");
-		const m = createRecall({
-			selector,
-			modelLabel: "t/sel",
-			files: () => [{ key: "memory/seed.md", file: "seed.md", title: "s", description: "d", type: "reference", layer: "project", mtimeMs: Date.now(), absPath: "/m/seed.md", body: "b" }],
-			cwd: "/w",
-			deliver: () => {},
-			initialUserTurns: 7,
-		});
-		await m.onUserMessage("a resumed conversation continuing right away", () => [], 0);
-		// eligible immediately: the selector ran (kind empty, but it RAN)
-		expect(calls).toHaveLength(1);
+describe("consolidation manual-only wiring", () => {
+	function overBudgetStore(): void {
+		// an index that exceeds the 25K budget → needsConsolidation fires
+		const dir = memoryDir();
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(
+			join(dir, "MEMORY.md"),
+			Array.from({ length: 60 }, (_, i) => `- [row ${i}](f${i}.md) — ${"x".repeat(500)}`).join("\n"),
+		);
+	}
+
+	it("turn_end NEVER auto-fires a consolidation directive (manual-only since the trigger was removed)", async () => {
+		overBudgetStore();
+		const host = setup();
+		const ctx = host.makeCtx({ cwd: project, ui: true });
+		await host.fire("session_start", {}, ctx);
+		await host.fire("turn_end", { toolResults: [] }, ctx);
+		await host.fire("turn_end", { toolResults: [] }, ctx);
+		await host.fire("agent_settled", {}, ctx);
+		expect(host.sentMessages.filter((m) => m.message.customType === "pi-memory-consolidate")).toHaveLength(0);
+	});
+
+	it("/memory-consolidate sends the directive (project layer) and marks the session consolidation-used", async () => {
+		writeMemory("a.md", "alpha", "first");
+		const host = setup();
+		const ctx = host.makeCtx({ cwd: project, ui: true });
+		await host.fire("session_start", {}, ctx);
+		await host.commands.get("memory-consolidate")?.("", ctx);
+		const sent = host.sentMessages.filter((m) => m.message.customType === "pi-memory-consolidate");
+		expect(sent).toHaveLength(1);
+		expect((sent[0]!.message as { content?: string }).content).toContain("PROJECT memory store");
+		expect((sent[0]!.opts as { triggerTurn?: boolean }).triggerTurn).toBe(true);
+		// the /memory panel reflects the manual-only state
+		await host.commands.get("memory")?.("", ctx);
+		const listed = host.sentMessages.find((m) => m.message.customType === "pi-memory-status");
+		expect((listed!.message as { content?: string }).content).toContain("manual-only");
+	});
+
+	it("/memory-consolidate user argument is rejected with a retirement note", async () => {
+		writeMemory("a.md", "alpha", "first");
+		const host = setup();
+		const ctx = host.makeCtx({ cwd: project, ui: true });
+		await host.fire("session_start", {}, ctx);
+		await host.commands.get("memory-consolidate")?.("user", ctx);
+		expect(host.sentMessages.filter((m) => m.message.customType === "pi-memory-consolidate")).toHaveLength(0);
+		expect(host.notifications.some((n) => n.includes("retired"))).toBe(true);
+	});
+
+	it("the guard rejects model writes into the retired user memory dir", async () => {
+		const host = setup();
+		const ctx = host.makeCtx({ cwd: project, ui: true });
+		await host.fire("session_start", {}, ctx);
+		const userDir = resolveMemoryPaths(project, home).userMemoryDir;
+		const blocked = await host.fire("tool_call", { toolName: "write", input: { path: join(userDir, "new-user-pref.md"), content: "---\nname: x\ndescription: d\nmetadata:\n  type: user\n---\n\npref" } }, ctx);
+		expect(blocked).toMatchObject({ block: true });
+		expect((blocked as { reason?: string }).reason).toContain("retired");
 	});
 });

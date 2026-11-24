@@ -132,7 +132,7 @@ describe("P0-CT-08 (RV): pi-memory-recall frozen shape", () => {
 					body: "b",
 				},
 			],
-			{ delivery: "immediate", model: "test/selector-1", elapsedMs: 3, remainingSessionBytes: 60_000 },
+			{ model: "test/selector-1", elapsedMs: 3, remainingSessionBytes: 60_000 },
 		);
 		expect(block).not.toBeNull();
 		expect(Object.keys(block!.details).sort()).toEqual([...RECALL_DETAILS_FIELDS].sort());

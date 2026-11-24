@@ -52,7 +52,7 @@ export const QUEUE_DRAIN_MAX = 5;
 export const QUEUE_MAX_ATTEMPTS = 3;
 
 export interface DrainCap {
-	d: { project: string; user: string; projectsDir: string; agentDir: string };
+	d: { project: string; projectsDir: string; agentDir: string };
 	model: Model<Api> | undefined;
 	registry: never;
 	projectKey: string | undefined;
@@ -61,29 +61,23 @@ export interface DrainCap {
 
 export interface QueueDrainPorts {
 	complete: (cap: DrainCap, parts: ConversationPart[]) => Promise<OpsCompletion>;
-	applyOps?: (ops: MemoryOp[], cap: DrainCap, routedNotes: string[]) => OpsOutcome;
+	applyOps?: (ops: MemoryOp[], cap: DrainCap) => OpsOutcome;
 	blacklistHas: (key: string) => boolean;
 	blacklistAdd: (key: string) => void;
 }
 
 export interface DrainSummary {
 	applied: number;
-	routedNotes: string[];
 	lastFlush?: string;
 	lastError?: string;
 }
 
-export function applyOpsOutcome(
-	ops: MemoryOp[],
-	dirs: { user: string; project: string },
-	projectKey: string | undefined,
-	routedNotes: string[],
-): OpsOutcome {
-	return applyMemoryOps(ops, dirs, { projectKey, routedNotes });
+export function applyOpsOutcome(ops: MemoryOp[], cap: DrainCap): OpsOutcome {
+	return applyMemoryOps(ops, { project: cap.d.project });
 }
 
 async function drainOneRecord(cap: DrainCap, claim: QueueClaim, ports: QueueDrainPorts): Promise<DrainSummary> {
-	const summary: DrainSummary = { applied: 0, routedNotes: [] };
+	const summary: DrainSummary = { applied: 0 };
 	let finished = false;
 	const finish = (consume: boolean): void => {
 		if (finished) return;
@@ -109,18 +103,16 @@ async function drainOneRecord(cap: DrainCap, claim: QueueClaim, ports: QueueDrai
 		}
 		if (completion.ok) {
 			if (completion.ops.length > 0) {
-				const routedNotes: string[] = [];
-				const apply = ports.applyOps ?? ((ops, c, notes) => applyOpsOutcome(ops, c.d, c.projectKey, notes));
+				const apply = ports.applyOps ?? ((ops, c) => applyOpsOutcome(ops, c));
 				let outcome: OpsOutcome;
 				try {
-					outcome = apply(completion.ops as MemoryOp[], cap, routedNotes);
+					outcome = apply(completion.ops as MemoryOp[], cap);
 				} catch (err) {
 					summary.lastError = `flush-queued: apply threw: ${err instanceof Error ? err.message : String(err)}`;
 					finish(false);
 					return summary;
 				}
 				summary.applied = outcome.applied;
-				summary.routedNotes = routedNotes;
 				summary.lastFlush = `flush-queued: ${outcome.applied} op(s)`;
 				if (outcome.error) {
 					// B2 apply-fatal: deterministic — retrying cannot fix it
@@ -203,7 +195,7 @@ export async function drainQueue(cap: DrainCap, ports: QueueDrainPorts): Promise
 	const settled = await Promise.allSettled(eligible.map((claim) => drainOneRecord(cap, claim, ports)));
 	const summaries: DrainSummary[] = [];
 	for (const outcome of settled) {
-		summaries.push(outcome.status === "fulfilled" ? outcome.value : { applied: 0, routedNotes: [] });
+		summaries.push(outcome.status === "fulfilled" ? outcome.value : { applied: 0 });
 	}
 	return { summaries, drops };
 }

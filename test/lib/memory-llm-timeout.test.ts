@@ -57,7 +57,7 @@ function minimalDiagnostics(lastReason: string) {
 		userIndexBytes: 0,
 		projectIndexBytes: 0,
 		automation: { enabled: false, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0 },
-		consolidation: { inFlight: false, attempts: 0 },
+		consolidation: { lastReason: null },
 		yielded: { yielded: false },
 		hermesDataFound: false,
 		misplaced: [],
@@ -67,7 +67,7 @@ function minimalDiagnostics(lastReason: string) {
 			waitMs: 4000,
 			sessionFiles: 0,
 			sessionBytes: 0,
-			stats: { selections: 0, empties: 0, failures: 1, lastReason, deliveries: 0 },
+			stats: { selections: 0, empties: 0, failures: 1, late: 0, lastReason, deliveries: 0 },
 		},
 		queue: null,
 	};

@@ -63,14 +63,14 @@ describe("BH-R2: the secret probe only guards memory-layer targets", () => {
 	});
 
 	it("a write with secret-looking content INTO a memory file is still blocked", () => {
-		const verdict = guardMemoryToolCall("write", { path: join(userDir, "leak.md"), content: memoryWithSecret }, env());
+		const verdict = guardMemoryToolCall("write", { path: join(projectDir, "leak.md"), content: memoryWithSecret }, env());
 		assert.equal(verdict.block, true);
 		assert.match(verdict.reason ?? "", /looks like a/);
 	});
 
 	it("an edit whose newText carries a secret into a memory file is still blocked", () => {
-		mkdirSync(userDir, { recursive: true });
-		const file = join(userDir, "edit-leak.md");
+		mkdirSync(projectDir, { recursive: true });
+		const file = join(projectDir, "edit-leak.md");
 		writeFileSync(file, memoryClean);
 		const verdict = guardMemoryToolCall("edit", {
 			path: file,
@@ -83,8 +83,8 @@ describe("BH-R2: the secret probe only guards memory-layer targets", () => {
 
 describe("BH-R2: edits scan only newText, not the whole resulting file", () => {
 	it("a memory file whose EXISTING content contains a secret passes a clean edit", () => {
-		mkdirSync(userDir, { recursive: true });
-		const file = join(userDir, "preexisting.md");
+		mkdirSync(projectDir, { recursive: true });
+		const file = join(projectDir, "preexisting.md");
 		writeFileSync(file, memoryWithSecret);
 		const verdict = guardMemoryToolCall("edit", {
 			path: file,
@@ -94,7 +94,7 @@ describe("BH-R2: edits scan only newText, not the whole resulting file", () => {
 	});
 
 	it("a clean memory write still passes (control)", () => {
-		const verdict = guardMemoryToolCall("write", { path: join(userDir, "ok.md"), content: memoryClean }, env());
+		const verdict = guardMemoryToolCall("write", { path: join(projectDir, "ok.md"), content: memoryClean }, env());
 		assert.equal(verdict.block, false);
 	});
 });

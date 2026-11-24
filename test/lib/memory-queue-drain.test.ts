@@ -25,11 +25,11 @@ let memoryDir: string;
 let projectsDir: string;
 
 const OPS: Array<MemoryOp> = [
-	{ action: "add", layer: "user", name: "drain-fact", description: "d", body: "body text" },
+	{ action: "add", layer: "project", name: "drain-fact", description: "d", body: "body text" },
 ];
 
 function cap(): DrainCap {
-	return { d: { project: memoryDir, user: join(home, "memory"), projectsDir, agentDir }, model: undefined, registry: undefined as never, projectKey: undefined, complete: undefined };
+	return { d: { project: memoryDir, projectsDir, agentDir }, model: undefined, registry: undefined as never, projectKey: undefined, complete: undefined };
 }
 
 function stage(id: string, over: Partial<QueueRecord> = {}): void {
@@ -183,15 +183,14 @@ describe("applyOpsOutcome parity (D-T2)", () => {
 	it("runOps' summary and the drain's summary agree for the same ops on equal fresh dirs", async () => {
 		// two PARALLEL fresh dirs — applying the same add twice into ONE dir
 		// would trivially disagree (the second is a duplicate skip)
-		const dirsA = { user: join(home, "memA"), project: join(home, "projA") };
-		const dirsB = { user: join(home, "memB"), project: join(home, "projB") };
-		const runOpsOutcome = applyMemoryOps(OPS, dirsA, { projectKey: undefined, routedNotes: [] });
-		const notesA: string[] = [];
-		const viaShared = applyOpsOutcome(OPS, dirsB, undefined, notesA);
+		const dirsA = { project: join(home, "projA") };
+		const dirsB = { project: join(home, "projB") };
+		const runOpsOutcome = applyMemoryOps(OPS, dirsA);
+		const viaShared = applyOpsOutcome(OPS, { d: { project: join(home, "projB"), projectsDir, agentDir }, model: undefined, registry: undefined as never, projectKey: undefined, complete: undefined });
 		expect(viaShared.applied).toBe(runOpsOutcome.applied);
 		expect(viaShared.error).toBe(runOpsOutcome.error);
 		expect(viaShared.skipped).toEqual(runOpsOutcome.skipped);
 		// empty ops: both count zero, no timestamps involved
-		expect(applyOpsOutcome([], { user: "", project: "" }, undefined, []).applied).toBe(0);
+		expect(applyOpsOutcome([], { d: { project: "", projectsDir, agentDir }, model: undefined, registry: undefined as never, projectKey: undefined, complete: undefined }).applied).toBe(0);
 	});
 });

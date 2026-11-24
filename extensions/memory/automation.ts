@@ -1,6 +1,7 @@
 /**
  * memory/automation.ts — the automatic maintenance hooks (V2-A §4 + spec
- * 2026-10-03-memory-exit-flush).
+ * 2026-10-03-memory-exit-flush; single-layer since the user layer retired
+ * 2026-11-24 — every memory op targets the PROJECT store).
  *
  * Replaces hermes's correction-detector / background-review / session-flush
  * with the same cadence, one shared side-channel lane (llm.ts) and one
@@ -53,7 +54,6 @@ import { registerCompactionSubscriber } from "../../lib/compaction-seam.ts";
 
 import { completeMemoryOps, resolveModelRef, type LlmComplete, type OpsCompletion } from "./llm.ts";
 import { applyMemoryOps, type MemoryOp } from "./store.ts";
-import type { ConsolidationTrigger } from "./consolidate.ts";
 import { scanMemoryDirCached } from "./memdir.ts";
 import { friendlyProjectHint } from "./paths.ts";
 import type { ConversationPart } from "./queue.ts";
@@ -70,9 +70,9 @@ export interface MemorySettings {
 	recallWaitMs?: number;
 }
 
-export const DEFAULT_RECALL_WAIT_MS = 0;
+export const DEFAULT_RECALL_WAIT_MS = 5_000;
 
-export const RECALL_WAIT_MIN_MS = 0;
+export const RECALL_WAIT_MIN_MS = 1_000;
 export const RECALL_WAIT_MAX_MS = 15_000;
 
 export function loadMemorySettings(agentDir: string): MemorySettings {
@@ -151,17 +151,17 @@ export function isCorrection(text: string): boolean {
 
 const REVIEW_SYSTEM = `You extract durable memories from coding-agent conversations and save them as operations.
 
-Save only what survives this session: user persona/preferences/work style (layer "user"), project facts, conventions, corrections, failures and tool quirks for THIS repository (layer "project"). Corrections and failures use type "feedback" and carry a bracketed category prefix in the description, e.g. [correction], [tool-quirk], [insight], [convention], [failure].
-Do not save task progress, transient state, or secrets.
+Save only what survives this session and applies to THIS repository: project facts, conventions, corrections, failures and tool quirks (layer "project"). Corrections and failures use type "feedback" and carry a bracketed category prefix in the description, e.g. [correction], [tool-quirk], [insight], [convention], [failure].
+Do not save task progress, transient state, the user's current requirements, unresolved questions or pending confirmations (save only settled decisions and verified facts), anything derivable from the code or git history, or secrets.
 
-Respond with JSON only, no markdown fences: a single object whose operations field is an array. Each operation object carries an action of add, replace or remove; a layer of user or project; for add also name (kebab slug), description (one line), type (user, feedback, project or reference) and body; for replace also file, body and old_text quoting an exact substring of the CURRENT file shown below; for remove also file. When the conversation contradicts an existing memory, replace it instead of adding a duplicate. If nothing is durable, return an empty operations array.`;
+Respond with JSON only, no markdown fences: a single object whose operations field is an array. Each operation object carries an action of add, replace or remove; a layer of "project"; for add also name (kebab slug), description (one line), type (feedback, project or reference) and body; for replace also file, body and old_text quoting an exact substring of the CURRENT file shown below; for remove also file. When the conversation contradicts an existing memory, replace it instead of adding a duplicate. If nothing is durable, return an empty operations array.`;
 
-const CORRECTION_SYSTEM = `The user just corrected the agent. Decide the durable memory to save: priority is a user preference ("don't do X", "always Y"), then a wrong assumption the agent made, then an environment fact.
+const CORRECTION_SYSTEM = `The user just corrected the agent. Decide the durable PROJECT memory to save: a wrong assumption the agent made, a project convention, or an environment/tool fact.
 If an existing memory below is now wrong, replace that file (quote its exact text in old_text); otherwise add. Also include one feedback-type memory capturing the correction itself with a [correction] prefix in its description.
-Respond with JSON only, no markdown fences: a single object whose operations field is an array (same fields as described). If the correction is purely transient (a typo, a one-off task detail), return an empty operations array.`;
+Respond with JSON only, no markdown fences: a single object whose operations field is an array (same fields as described). If the correction is purely transient (a typo, a one-off task detail, or a request about the current task only), return an empty operations array.`;
 
-const FLUSH_SYSTEM = `The session is being compressed or closed and is about to lose context. Save anything worth remembering — prioritize user preferences, corrections, and recurring patterns over task-specific detail.
-Respond with JSON only, no markdown fences: a single object whose operations field is an array (add, replace or remove; layer user or project; add carries name, description, type, body; replace carries file, body and an exact old_text quote from the current file; remove carries file). If nothing is durable, return an empty operations array.`;
+const FLUSH_SYSTEM = `The session is being compressed or closed and is about to lose context. Save durable PROJECT facts worth remembering — prioritize corrections and recurring patterns over task-specific detail. Never save task progress, the user's current requirements, unresolved questions or pending confirmations.
+Respond with JSON only, no markdown fences: a single object whose operations field is an array (add, replace or remove; layer "project"; add carries name, description, type, body; replace carries file, body and an exact old_text quote from the current file; remove carries file). If nothing is durable, return an empty operations array.`;
 
 export function projectKeyForDir(projectDir: string): string | undefined {
 	const key = friendlyProjectHint(projectDir);
@@ -170,7 +170,7 @@ export function projectKeyForDir(projectDir: string): string | undefined {
 
 function routingGuidance(projectKey: string | undefined): string {
 	const repo = projectKey ? `Current repository: ${projectKey}.` : "";
-	return `\n\n${repo} Routing rules: a memory that only applies to THIS repository (its workflows, conventions, failures, tool quirks met inside it) goes to layer "project" — never "user". Layer "user" is only for what holds in EVERY project (identity, communication style, machine-level facts, behavior of cross-project tools). A preference that would contradict another project's workflow is project-scoped, not global; if a user-layer file must stay out of most projects, add a paths: ["~/some/dir/**"] line to its frontmatter — paths scoping is for cross-project preferences limited to certain directories, never for single-repo facts; when unsure choose "project" (a project fact in "user" taxes every other session's recall). WHAT NOT TO SAVE: task progress or transient state; anything derivable from the code or git history; step-by-step debugging recipes for one-off incidents; secrets.`;
+	return `\n\n${repo} All operations go to layer "project" — the cross-project user layer is retired; never target it. WHAT NOT TO SAVE: task progress or transient state; the user's current requirements, unresolved questions or pending confirmations; anything derivable from the code or git history; step-by-step debugging recipes for one-off incidents; secrets.`;
 }
 
 
@@ -180,8 +180,6 @@ export interface AutomationState {
 	corrections: number;
 	flushes: number;
 	opsApplied: number;
-	routed: number;
-	lastRouted?: string;
 	lastReview?: string;
 	lastCorrection?: string;
 	lastFlush?: string;
@@ -246,31 +244,29 @@ function countToolCalls(message: unknown): number {
 	return (m.content as Array<{ type?: string }>).filter((p) => p?.type === "toolCall").length;
 }
 
-function memoryDigest(dirs: { user: string; project: string }): string {
-	const sections: string[] = [];
-	for (const [label, dir] of [["USER", dirs.user], ["PROJECT", dirs.project]] as const) {
-		const files = scanMemoryDirCached(dir).files;
-		if (files.length === 0) continue;
-		const chunks: string[] = [];
-		let bytes = 0;
-		for (const f of files) {
-			const body = f.body.length > 3000 ? `${f.body.slice(0, 3000)}…` : f.body;
-			if (bytes + body.length > 6000) {
-				chunks.push(`(…${files.length - chunks.length} more files omitted)`);
-				break;
-			}
-			chunks.push(body);
-			bytes += body.length;
+function memoryDigest(dirs: { project: string }): string {
+	const files = scanMemoryDirCached(dirs.project).files;
+	if (files.length === 0) return "(no memories yet)";
+	const chunks: string[] = [];
+	let bytes = 0;
+	for (const f of files) {
+		const body = f.body.length > 3000 ? `${f.body.slice(0, 3000)}…` : f.body;
+		if (bytes + body.length > 6000) {
+			chunks.push(`(…${files.length - chunks.length} more files omitted)`);
+			break;
 		}
-		sections.push(`--- Current ${label} memory files (${dir}) ---\n${chunks.join("\n---\n")}`);
+		chunks.push(body);
+		bytes += body.length;
 	}
-	return sections.length > 0 ? sections.join("\n\n") : "(no memories yet)";
+	return `--- Current PROJECT memory files (${dirs.project}) ---\n${chunks.join("\n---\n")}`;
 }
 
 export interface AutomationArgs {
 	gate: { state: { yielded: boolean } };
-	dirs: (ctx?: { cwd?: string }) => { project: string; user: string; projectsDir: string; agentDir: string };
-	trigger: ConsolidationTrigger;
+	dirs: (ctx?: { cwd?: string }) => { project: string; projectsDir: string; agentDir: string };
+	/** true while a memory-consolidation directive turn is running — its
+	 *  conversation must not feed the review/correction extractors */
+	isDirectiveTurn?: () => boolean;
 	settings: () => MemorySettings;
 	state: AutomationState;
 	deps?: AutomationDeps;
@@ -292,7 +288,8 @@ export function automationNotify(ctx: ExtensionContext, message: string): void {
 let unregisterMemorySeam: (() => void) | undefined;
 
 export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drainPending: (ctx: ExtensionContext) => void } {
-	const { gate, dirs, trigger, state } = args;
+	const { gate, dirs, state } = args;
+	const isDirectiveTurn = args.isDirectiveTurn ?? (() => false);
 	const deps = args.deps ?? {};
 
 	let pendingCorrection: string | undefined;
@@ -324,7 +321,7 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 		return any ? any([sessionAbort.signal, extra]) : sessionAbort.signal;
 	};
 
-	const buildOpsUserPrompt = (d: { project: string; user: string }, parts: ConversationPart[]): string =>
+	const buildOpsUserPrompt = (d: { project: string }, parts: ConversationPart[]): string =>
 		[
 			memoryDigest(d),
 			"",
@@ -342,10 +339,9 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 	): Promise<number> {
 		const model = sideChannelModel(ctx);
 		const projectKey = projectKeyForDir(dirs(ctx).project);
-		const routedNotes: string[] = [];
 		const request = {
 			systemPrompt: systemPrompt + routingGuidance(projectKey),
-			userPrompt: buildOpsUserPrompt(dirs(ctx), parts),
+			userPrompt: buildOpsUserPrompt({ project: dirs(ctx).project }, parts),
 			timeoutMs,
 			signal: linkedSignal(extraSignal),
 		};
@@ -361,11 +357,7 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 			return 0;
 		}
 		if (completion.ops.length === 0) return 0;
-		const outcome = applyMemoryOps(completion.ops as MemoryOp[], dirs(ctx), { projectKey, routedNotes });
-		if (routedNotes.length > 0) {
-			state.routed += routedNotes.length;
-			state.lastRouted = routedNotes.join("; ");
-		}
+		const outcome = applyMemoryOps(completion.ops as MemoryOp[], { project: dirs(ctx).project });
 		state.opsApplied += outcome.applied;
 		if (outcome.error) state.lastError = `${kind}: ${outcome.error}`;
 		return outcome.applied;
@@ -379,8 +371,8 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 			if (e.toolName !== "write" && e.toolName !== "edit") return;
 			const path = e.input?.path;
 			if (typeof path !== "string") return;
-			const d = dirs(ctx);
-			if (path === d.user || path.startsWith(`${d.user}/`) || path === d.project || path.startsWith(`${d.project}/`)) {
+			const project = dirs(ctx).project;
+			if (path === project || path.startsWith(`${project}/`)) {
 				modelWroteMemory = true;
 			}
 		} catch {
@@ -403,7 +395,7 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 	pi.on("turn_end", (event, ctx: ExtensionContext) => {
 		try {
 			if (gate.state.yielded || !state.enabled) return;
-			if (trigger.directiveTurnActive) return;
+			if (isDirectiveTurn()) return;
 
 			turnsSinceReview++;
 			toolCallsSinceReview += countToolCalls((event as { message?: unknown }).message);
@@ -541,11 +533,12 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 	const drainPending = (ctx: ExtensionContext): void => {
 		try {
 			if (gate.state.yielded || !state.enabled) return;
+			const d = dirs(ctx);
 			const cap: DrainCap = {
-				d: dirs(ctx),
+				d,
 				model: sideChannelModel(ctx),
 				registry: ctx.modelRegistry as never,
-				projectKey: projectKeyForDir(dirs(ctx).project),
+				projectKey: projectKeyForDir(d.project),
 				complete: deps.complete as LlmComplete | undefined,
 			};
 			drainPendingRecords(cap).catch((err) => {
@@ -562,7 +555,7 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 				cap.registry,
 				{
 					systemPrompt: FLUSH_SYSTEM + routingGuidance(cap.projectKey),
-					userPrompt: buildOpsUserPrompt(cap.d, clampQueueParts(parts)),
+					userPrompt: buildOpsUserPrompt({ project: cap.d.project }, clampQueueParts(parts)),
 					timeoutMs: FLUSH_QUEUE_MS,
 				},
 				{ complete: cap.complete },
@@ -575,10 +568,6 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 		const result = await drainQueue(cap, drainPorts());
 		for (const msg of result.drops) state.lastError = msg;
 		for (const summary of result.summaries) {
-			if (summary.routedNotes.length > 0) {
-				state.routed += summary.routedNotes.length;
-				state.lastRouted = summary.routedNotes.join("; ");
-			}
 			if (summary.applied > 0) {
 				state.opsApplied += summary.applied;
 				state.flushes++;

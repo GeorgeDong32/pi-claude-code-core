@@ -2,9 +2,6 @@
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { globMatches } from "../../lib/glob.ts";
-import { homedir } from "node:os";
-
 export interface MemoryEntry {
 	file: string;
 	title: string;
@@ -224,30 +221,26 @@ export function memoryKey(layer: "user" | "project", file: string): string {
 	return layer === "user" ? `user-memory/${file}` : `memory/${file}`;
 }
 
-export function eligibleMemories(userDir: string, projectDir: string, projectRoot?: string): Array<import("./recall.ts").RecallFile> {
+/**
+ * The recall candidate pool. Single-layer since the user layer retired:
+ * only PROJECT memories are eligible — old recall blocks in replayed
+ * transcripts may still carry `user-memory/<file>` keys; they simply never
+ * match a candidate again.
+ */
+export function eligibleMemories(projectDir: string): Array<import("./recall.ts").RecallFile> {
 	const out: Array<import("./recall.ts").RecallFile> = [];
-	for (const [layer, dir] of [["user", userDir], ["project", projectDir]] as const) {
-		for (const f of scanMemoryDirCached(dir).files) {
-			if (layer === "user" && f.entry.paths && !scopeMatches(projectRoot, f.entry.paths)) continue;
-			out.push({
-				key: memoryKey(layer, f.entry.file),
-				file: f.entry.file,
-				title: f.entry.title,
-				description: f.entry.description,
-				type: f.entry.type,
-				layer,
-				mtimeMs: f.mtimeMs,
-				absPath: join(dir, f.entry.file),
-				body: f.body,
-			});
-		}
+	for (const f of scanMemoryDirCached(projectDir).files) {
+		out.push({
+			key: memoryKey("project", f.entry.file),
+			file: f.entry.file,
+			title: f.entry.title,
+			description: f.entry.description,
+			type: f.entry.type,
+			layer: "project",
+			mtimeMs: f.mtimeMs,
+			absPath: join(projectDir, f.entry.file),
+			body: f.body,
+		});
 	}
-	out.sort((a, b) => b.mtimeMs - a.mtimeMs);
-	return out;
-}
-
-export function scopeMatches(projectRoot: string | undefined, patterns: readonly string[]): boolean {
-	if (!projectRoot) return false;
-	const expanded = patterns.map((p) => (p.startsWith("~/") ? p.replace(/^~/, homedir()) : p));
-	return globMatches(projectRoot, expanded) || globMatches(`${projectRoot}/__scope_child__`, expanded);
+	return out.sort((a, b) => b.mtimeMs - a.mtimeMs);
 }

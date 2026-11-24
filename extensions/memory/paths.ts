@@ -1,11 +1,12 @@
 /**
- * memory/paths.ts — disk location resolution (P3-ME-01, V2-M1 user layer).
+ * memory/paths.ts — disk location resolution (P3-ME-01).
  *
  * Project memory dir: `~/.pi/agent/projects/<sanitized-git-root>/memory/`
  * The sanitizer matches pi's own sessions directory naming (`/` → `-`),
  * and the root is the git CANONICAL root so linked worktrees share memory.
- * User memory dir (V2-D1): `~/.pi/agent/memory/` — cross-project facts and
- * preferences, same per-file format and reconciler as the project layer.
+ * User memory dir (V2-D1, retired): `~/.pi/agent/memory/` — no longer
+ * injected, recalled or written; kept only as a read-only path for
+ * snapshots, diagnostics and the pending migration to Obsidian.
  */
 
 import { execSync } from "node:child_process";
@@ -91,13 +92,15 @@ export function resolveMemoryPaths(cwd: string, home = process.env.HOME ?? homed
 }
 
 export function memoryWriteRoots(cwd: string, home = process.env.HOME ?? homedir()): string[] {
+	// The user memory dir is retired: it is no longer a write root, so
+	// writes there lose the approval carve-out and hit the guard block.
 	const p = resolveMemoryPaths(cwd, home);
-	return [p.memoryDir, p.userMemoryDir];
+	return [p.memoryDir];
 }
 
 /**
- * True when a write/edit path targets either memory layer. Shared by the
- * modes carve-out and the secret guard so the two can never drift.
+ * True when a write/edit path targets the project memory layer. Shared by
+ * the modes carve-out and the secret guard so the two can never drift.
  *
  * B8 (cherry-batch2): the carve-out is an ALLOWANCE (it skips the approval
  * dialog), so a purely lexical match would let a symlink alias physically

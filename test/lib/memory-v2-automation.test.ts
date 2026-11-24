@@ -21,7 +21,6 @@ import { parseOperations, completeMemoryOps } from "../../extensions/memory/llm.
 import {
 	automationNotify, conversationParts, isCorrection, loadMemorySettings, resolveSideChannelModel, setupAutomation, type AutomationState } from "../../extensions/memory/automation.ts";
 import { resolveRecallModel } from "../../extensions/memory/selector.ts";
-import { ConsolidationTrigger } from "../../extensions/memory/consolidate.ts";
 import { resolveMemoryPaths } from "../../extensions/memory/paths.ts";
 import { queueDir, writeQueueRecord, type QueueRecord } from "../../extensions/memory/queue.ts";
 
@@ -52,8 +51,8 @@ beforeEach(() => {
 
 /** Shared dirs lambda for every setupAutomation call site (spec
  * 2026-10-03: the contract now carries projectsDir + agentDir for queue
- * routing and queue writes). */
-const testDirs = () => ({ project: dir, user: udir, projectsDir: projectsDirStr, agentDir });
+ * routing and queue writes; the retired user layer is gone). */
+const testDirs = () => ({ project: dir, projectsDir: projectsDirStr, agentDir });
 
 afterEach(() => {
 	delete (globalThis as Record<string, unknown>).__piCcTui;
@@ -208,14 +207,14 @@ interface Harness {
 
 function harness(llmText: string, opts: { yielded?: boolean; sessionEntries?: unknown[]; complete?: () => Promise<unknown>; sessionId?: string } = {}): Harness {
 	const host = new FakeHost();
-	const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0, routed: 0 };
+	const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0 };
 	const calls: string[] = [];
-	const trigger = new ConsolidationTrigger({ sendDirective: () => {} });
+	const isDirectiveTurn = () => false;
 	const complete = opts.complete ?? (async () => ({ stopReason: "stop", errorMessage: undefined, content: [{ type: "text", text: llmText }] }));
 	const automation = setupAutomation(host.asPi(), {
 		gate: { state: { yielded: opts.yielded ?? false } },
 		dirs: testDirs as never,
-		trigger,
+		isDirectiveTurn,
 		settings: () => ({ automation: true }),
 		state,
 		deps: { complete: (() => { calls.push(llmText); return complete(); }) as never },
@@ -286,12 +285,12 @@ describe("V2-A correction automation", () => {
 
 describe("V2-A background review", () => {
 	it("fires after 10 turns with ≥3 user turns; ops applied to the right layer", async () => {
-		const h = harness(JSON.stringify({ operations: [{ action: "add", layer: "user", name: "pref-language", description: "replies in chinese", type: "user", body: "所有回复默认中文" }] }), { sessionEntries: [{ type: "message", message: { role: "user", content: [{ type: "text", text: "conv one" }] } }, { type: "message", message: { role: "assistant", content: [{ type: "text", text: "conv two" }] } }] });
+		const h = harness(JSON.stringify({ operations: [{ action: "add", layer: "project", name: "pref-language", description: "repo replies in chinese", type: "project", body: "所有回复默认中文" }] }), { sessionEntries: [{ type: "message", message: { role: "user", content: [{ type: "text", text: "conv one" }] } }, { type: "message", message: { role: "assistant", content: [{ type: "text", text: "conv two" }] } }] });
 		for (let i = 0; i < 3; i++) await h.host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `hello ${i}` }] } }, h.ctx);
 		for (let i = 0; i < 10; i++) await h.host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, h.ctx);
 		await h.host.fire("agent_end", {}, h.ctx);
 		await until(() => h.state.reviews === 1);
-		expect(existsSync(join(udir, "pref-language.md"))).toBe(true);
+		expect(existsSync(join(dir, "pref-language.md"))).toBe(true);
 	});
 
 	it("review does NOT fire at turn_end alone — the run must END (2026-10-03 cadence change)", async () => {
@@ -327,21 +326,14 @@ describe("V2-A background review", () => {
 	});
 
 	it("directive-driven consolidation turns are excluded from accounting", async () => {
-		const h = harness(OPS_JSON);
 		// simulate an active consolidation directive turn: 20 turns must NOT review
-		const trigger = new ConsolidationTrigger({ sendDirective: () => {} });
-		trigger.directiveTurnActive = true;
-		// rewire: easiest is a second harness whose dirs match and a shared trigger —
-		// instead verify via the real wiring: memoryExtension sets this on send.
 		const host = new FakeHost();
-		const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0, routed: 0 };
-		const sharedTrigger = new ConsolidationTrigger({ sendDirective: () => {} });
-		sharedTrigger.directiveTurnActive = true;
+		const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0 };
 		const calls: string[] = [];
 		setupAutomation(host.asPi(), {
 			gate: { state: { yielded: false } },
 			dirs: testDirs as never,
-			trigger: sharedTrigger,
+			isDirectiveTurn: () => true,
 			settings: () => ({ automation: true }),
 			state,
 			deps: { complete: (() => { calls.push("x"); return Promise.resolve({ stopReason: "stop", content: [{ type: "text", text: OPS_JSON }] }); }) as never },
@@ -659,12 +651,12 @@ describe("V2-A settings", () => {
 
 	it("automation:false disables every hook path", async () => {
 		const host = new FakeHost();
-		const state: AutomationState = { enabled: false, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0, routed: 0 };
+		const state: AutomationState = { enabled: false, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0 };
 		const calls: string[] = [];
 		setupAutomation(host.asPi(), {
 			gate: { state: { yielded: false } },
 			dirs: testDirs as never,
-			trigger: new ConsolidationTrigger({ sendDirective: () => {} }),
+			isDirectiveTurn: () => false,
 			settings: () => ({ automation: false }),
 			state,
 			deps: { complete: (() => { calls.push("x"); return Promise.resolve({ stopReason: "stop", content: [{ type: "text", text: OPS_JSON }] }); }) as never },
@@ -695,11 +687,11 @@ describe("V2-A prompt guardrails", () => {
 		// indirect: fire a correction and capture the systemPrompt handed to the fake
 		let seenSystem = "";
 		const host = new FakeHost();
-		const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0, routed: 0 };
+		const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0 };
 		setupAutomation(host.asPi(), {
 			gate: { state: { yielded: false } },
 			dirs: testDirs as never,
-			trigger: new ConsolidationTrigger({ sendDirective: () => {} }),
+			isDirectiveTurn: () => false,
 			settings: () => ({ automation: true }),
 			state,
 			deps: {
@@ -759,8 +751,8 @@ describe("V2 Phase 2 (B3) — settle timing", () => {
 			const m = /reviews (\d+)/.exec((msg!.message as { content?: string }).content ?? "");
 			return Number(m?.[1] ?? -1);
 		};
-		// over-budget store → directive fires; its turn is directive-owned
-		await host.fire("turn_end", { turnIndex: 0, message: { role: "assistant" }, toolResults: [] }, ctx);
+		// manual /memory-consolidate sends the directive; its turn is directive-owned
+		await host.commands.get("memory-consolidate")?.("", ctx);
 		expect(host.sentMessages.some((m) => m.message.customType === "pi-memory-consolidate")).toBe(true);
 		// tool returns mid-turn (B3: settles in-flight ONLY, turn stays owned)
 		await host.fire("tool_result", { toolName: "memory_consolidate", content: [], isError: false }, ctx);
@@ -786,11 +778,11 @@ describe("V2 Phase 3 (AD5) — extraction cursor + model-wrote mutex", () => {
 			}));
 		const prompts: string[] = [];
 		const host = new FakeHost();
-		const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0, routed: 0 };
+		const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0 };
 		setupAutomation(host.asPi(), {
 			gate: { state: { yielded: false } },
 			dirs: testDirs as never,
-			trigger: new ConsolidationTrigger({ sendDirective: () => {} }),
+			isDirectiveTurn: () => false,
 			settings: () => ({ automation: true }),
 			state,
 			deps: { complete: ((_m: unknown, req: { messages: Array<{ content: Array<{ text?: string }> }> }) => {
@@ -826,11 +818,11 @@ describe("V2 Phase 3 (AD5) — extraction cursor + model-wrote mutex", () => {
 	it("model writing a memory file suppresses the review LLM pass (cursor still advances)", async () => {
 		const calls: string[] = [];
 		const host = new FakeHost();
-		const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0, routed: 0 };
+		const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0 };
 		setupAutomation(host.asPi(), {
 			gate: { state: { yielded: false } },
 			dirs: testDirs as never,
-			trigger: new ConsolidationTrigger({ sendDirective: () => {} }),
+			isDirectiveTurn: () => false,
 			settings: () => ({ automation: true }),
 			state,
 			deps: { complete: (() => { calls.push("x"); return Promise.resolve({ stopReason: "stop", content: [{ type: "text", text: '{"operations":[]}' }] }); }) as never },
@@ -843,8 +835,8 @@ describe("V2 Phase 3 (AD5) — extraction cursor + model-wrote mutex", () => {
 		ctx.model = fakeModel;
 		ctx.modelRegistry = fakeRegistry;
 		for (let i = 0; i < 3; i++) await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `u${i}` }] } }, ctx);
-		// the model writes into a memory layer → mutex arms
-		await host.fire("tool_call", { toolName: "write", input: { path: join(udir, "self.md"), content: "---\nname: s\ndescription: d\nmetadata:\n  type: user\n---\n\nb" } }, ctx);
+		// the model writes into the project memory layer → mutex arms
+		await host.fire("tool_call", { toolName: "write", input: { path: join(dir, "self.md"), content: "---\nname: s\ndescription: d\nmetadata:\n  type: project\n---\n\nb" } }, ctx);
 		for (let i = 0; i < 10; i++) await host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, ctx);
 		await host.fire("agent_end", {}, ctx);
 		await until(() => state.reviews === 1);

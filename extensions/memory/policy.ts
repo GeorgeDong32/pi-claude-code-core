@@ -1,36 +1,35 @@
-
 import type { MemoryEntry } from "./memdir.ts";
 import { MEMORY_INDEX_MAX } from "../../lib/context-budget.ts";
-
-export const USER_INDEX_MAX = 8_000;
 
 export const PINNED_TOTAL_MAX = 2_000;
 export const PINNED_MAX_FILES = 5;
 
 export const POLICY_MARKER = "<memory-policy";
 
+/**
+ * Single-layer policy (the user layer is retired). One project store, one
+ * index, slim writing guidance that keeps proactive writing. The retired
+ * cross-project layer is named only to keep the model from reinventing it;
+ * pinned files remaining in the old user dir are still injected until their
+ * migration completes.
+ */
 export function policyCompact(projectMemoryDir: string): string {
 	return `${POLICY_MARKER}>
-You have persistent memory in TWO layers. Before answering, scan the memory
-indexes below; when a listed memory is relevant, read the file (its path is
-in the index line) before relying on assumptions.
+You have persistent PROJECT memory at ${projectMemoryDir} — facts about this
+repository: paths, workflows, conventions, lessons that only apply here.
+Scan the index below before relying on an assumption; when a listed memory
+is relevant, read its file (path in the index line) first. Write project
+memories HERE, exactly at this path — NOT in a memory/ directory inside the
+repository (that location is never read).
 
-- USER memory (~/.pi/agent/memory/): who the user is, cross-project
-  preferences, communication style — true in every project.
-- PROJECT memory (${projectMemoryDir}): facts about this repository —
-  paths, workflows, conventions, lessons that only apply here. Write
-  project memories HERE, exactly at this path — NOT in a memory/
-  directory inside the repository (that location is never read).
-
-Writing memories: create plain markdown files in the RIGHT layer with a
-frontmatter block:
+Writing memories: create plain markdown files with a frontmatter block:
 
 \`\`\`
 ---
 name: short-kebab-slug
 description: one-line summary used for recall
 metadata:
-  type: user | feedback | project | reference
+  type: project | feedback | reference
   pinned: true          # optional — always-active instruction (use sparingly)
 ---
 
@@ -38,25 +37,17 @@ Facts, then "Why:" / "How to apply:" lines for guidance-type memories. Link
 related memories with [[their-slug]].
 \`\`\`
 
-Both memory directories already exist — write files directly, no ls/mkdir
-needed. The MEMORY.md index in each layer is derived automatically; do not
-edit it by hand.
-Scope tie-breakers (when a fact could land in either layer):
-- Repo-specific facts — paths, workflows, conventions, toolchain choices,
-  module internals, commit/PR state, lessons from this codebase — belong
-  to PROJECT. Facts shared by several sibling repos of one workspace may
-  stay in USER with a paths: ["~/Coding/Workspace/**"] frontmatter line
-  (inline list; ~ expands at read time).
-  A single-repo fact never justifies a USER entry.
-- USER memory is only for what holds in EVERY project: identity,
-  communication style, machine-level facts (hardware/OS/network/globals)
-  and cross-project tool behavior (e.g. pi itself). The USER index is a
-  machine-global budget — every line in it taxes recall in all sessions.
-- When unsure, choose PROJECT: a project fact in USER pollutes every
-  other session's recall; a user fact in PROJECT is merely duplicated.
-Write memories proactively when the user states a durable preference, a
-correction, or a project fact that is not derivable from the repo. Never
-store secrets or credentials.
+Save only what cannot be read from the repo, environment or git history and
+will still matter later. Do not save task progress, current state, secrets,
+or the user's current requirements, open questions and pending
+confirmations — those live in the conversation, not in memory. Never write
+memory outside ${projectMemoryDir}: the cross-project user layer is retired,
+and cross-project knowledge belongs in the user's own notes.
+
+Both the directory and the MEMORY.md index already exist — write files
+directly, and never edit MEMORY.md by hand (it is derived). Merging,
+deduplication and pruning run via /memory-consolidate on request; do not
+reorganize memory mid-task.
 </memory-policy>`;
 }
 
@@ -95,55 +86,30 @@ function pinnedSection(files: Array<{ entry: MemoryEntry; body: string }>): { te
 	return { text: `## Pinned memories (always active)\n\n${blocks.join("\n\n")}`, bytes: size, dropped };
 }
 
-export interface LayerInput {
-	entries: Array<{ title: string; description: string; file: string }>;
-	files?: Array<{ entry: MemoryEntry; body: string }>;
-}
-
-export function userLayerSection(input: LayerInput): { text: string; bytes: number } {
-	const pinned = pinnedSection(input.files ?? []);
-	const pinnedBytes = pinned.text ? Buffer.byteLength(pinned.text, "utf8") : 0;
-	const [rows] = cappedRows(input.entries, USER_INDEX_MAX - pinnedBytes - (pinned.text ? 2 : 0) - 64);
-	const rowText = rows.length > 0 ? `# User memory index (cross-project)\n\n${rows.join("\n")}` : null;
-
-	let text: string | null = null;
-	let dropped = pinned.dropped;
-	if (rowText && pinned.text) text = `${rowText}\n\n${pinned.text}`;
-	else if (rowText) text = rowText;
-	else if (pinned.text) text = pinned.text;
-
-	if (text && Buffer.byteLength(text, "utf8") > USER_INDEX_MAX && pinned.text) {
-		text = rowText;
-		dropped = pinned.dropped + (pinned.text ? countRendered(pinned.text) : 0);
-	}
-	if (!text) text = "User memory index: (empty)";
-	if (dropped > 0) {
-		const note = `<!-- memory: ${dropped} pinned file(s) dropped (over budget) -->`;
-		if (Buffer.byteLength(`${text}\n${note}`, "utf8") <= USER_INDEX_MAX) text = `${text}\n${note}`;
-	}
-	return { text, bytes: Buffer.byteLength(text, "utf8") };
-}
-
 function countRendered(pinnedText: string): number {
 	return (pinnedText.match(/^### /gm) ?? []).length;
 }
 
-export function projectLayerSection(
-	entries: Array<{ title: string; description: string; file: string }>,
-	userBytesUsed: number,
-): { text: string; bytes: number } {
+export interface PinnedInput {
+	entries: Array<{ title: string; description: string; file: string }>;
+	files?: Array<{ entry: MemoryEntry; body: string }>;
+}
+
+export function buildPolicyInjection(pinned: PinnedInput, project: Array<{ title: string; description: string; file: string }>, projectMemoryDir: string): string {
+	const pinnedBlock = pinnedSection(pinned.files ?? []);
 	const header = `# Project memory index\n\n`;
 	const headerBytes = Buffer.byteLength(header, "utf8");
-	const remaining = Math.max(0, MEMORY_INDEX_MAX - userBytesUsed - headerBytes);
-	const [rows] = cappedRows(entries, remaining);
-	const text = rows.length > 0 ? `${header}${rows.join("\n")}` : "Project memory index: (empty)";
-	return { text, bytes: Buffer.byteLength(text, "utf8") };
+	const remaining = Math.max(0, MEMORY_INDEX_MAX - pinnedBlock.bytes - headerBytes);
+	const [rows] = cappedRows(project, remaining);
+	const rowText = rows.length > 0 ? `${header}${rows.join("\n")}` : "Project memory index: (empty)";
+
+	const parts: string[] = [policyCompact(projectMemoryDir)];
+	if (pinnedBlock.text) parts.push(pinnedBlock.text);
+	parts.push(rowText);
+	let text = parts.join("\n\n");
+	if (pinnedBlock.dropped > 0) {
+		const note = `<!-- memory: ${pinnedBlock.dropped} pinned file(s) dropped (over budget) -->`;
+		if (Buffer.byteLength(`${text}\n${note}`, "utf8") <= MEMORY_INDEX_MAX) text = `${text}\n${note}`;
+	}
+	return text;
 }
-
-export function buildPolicyInjection(user: LayerInput, project: Array<{ title: string; description: string; file: string }>, projectMemoryDir: string): string {
-	const userLayer = userLayerSection(user);
-	const projectLayer = projectLayerSection(project, userLayer.bytes);
-	return `${policyCompact(projectMemoryDir)}\n\n${userLayer.text}\n\n${projectLayer.text}`;
-}
-
-

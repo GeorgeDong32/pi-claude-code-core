@@ -13,16 +13,16 @@ import type { SelectionCandidate, Selector, SelectorOutcome } from "./selector.t
 
 export const RECALL_CUSTOM_TYPE = "pi-memory-recall";
 
-function recallTurnThreshold(envName: string, fallback: number): number {
-	const n = Number(process.env[envName]);
-	return Number.isFinite(n) && n > 0 ? Math.floor(n) : Number.isFinite(n) ? 0 : fallback;
-}
-export function recallWarmupTurns(): number {
-	return recallTurnThreshold("PI_CORE_RECALL_WARMUP_TURNS", 3);
-}
-export function recallCooldownTurns(): number {
-	return recallTurnThreshold("PI_CORE_RECALL_COOLDOWN_TURNS", 2);
-}
+/**
+ * Task-boundary recall (replacing the B-batch warmup/cooldown frequency
+ * gates, user decision in the memory-policy spec): the selector may run only
+ * on the first RECALL_BOUNDARY_TURNS real user messages after session start
+ * or the most recent compactionSummary. The count derives from the projection
+ * (D9); the CURRENT message is not yet in it — pi appends user messages to
+ * the session only after before_agent_start — so `userTurns` counts the real
+ * user messages BEFORE this one, and the check is `userTurns < RECALL_BOUNDARY_TURNS`.
+ */
+export const RECALL_BOUNDARY_TURNS = 2;
 
 export const RECALL_DETAILS_FIELDS = ["v", "delivery", "model", "files", "bytes", "elapsedMs"] as const;
 
@@ -47,6 +47,8 @@ export interface RecallStats {
 	selections: number;
 	empties: number;
 	failures: number;
+	/** selections discarded because recallWaitMs elapsed before the selector answered */
+	late: number;
 	lastReason: string | null;
 	deliveries: number;
 }
@@ -115,6 +117,10 @@ interface DerivedHistory {
 	read: Set<string>;
 	bytesUsed: number;
 	recentTools: string[];
+	/** real user messages since the last compactionSummary, BEFORE the current one */
+	userTurns: number;
+	/** most recent real user message (≤1000 chars) — selector query context for short follow-ups */
+	lastUserText: string | null;
 }
 
 function messageText(message: ProjectionMessageLike): string {
@@ -131,6 +137,8 @@ export function deriveHistory(messages: readonly unknown[], cwd: string): Derive
 	const surfaced = new Set<string>();
 	const read = new Set<string>();
 	let bytesUsed = 0;
+	let userTurns = 0;
+	let lastUserText: string | null = null;
 	const toolState = new Map<string, { success: boolean; failure: boolean }>();
 	let toolsClosed = false;
 	for (let i = messages.length - 1; i >= 0; i--) {
@@ -147,6 +155,9 @@ export function deriveHistory(messages: readonly unknown[], cwd: string): Derive
 		}
 		if (m.role === "user" && !m.customType) {
 			toolsClosed = true;
+			userTurns++;
+			// backward scan — the first hit is the most recent message before the current one
+			if (lastUserText === null) lastUserText = messageText(m).slice(0, 1000) || null;
 			continue;
 		}
 		if (m.role === "toolResult" && typeof m.toolName === "string" && !toolsClosed) {
@@ -171,12 +182,12 @@ export function deriveHistory(messages: readonly unknown[], cwd: string): Derive
 		.filter(([, st]) => st.success && !st.failure)
 		.map(([name]) => name)
 		.sort();
-	return { surfaced, read, bytesUsed, recentTools };
+	return { surfaced, read, bytesUsed, recentTools, userTurns, lastUserText };
 }
 
 export function renderRecallBlock(
 	files: RecallFile[],
-	opts: { delivery: "immediate" | "deferred"; model: string; elapsedMs: number; remainingSessionBytes: number },
+	opts: { model: string; elapsedMs: number; remainingSessionBytes: number },
 	now = Date.now(),
 ): RecallBlock | null {
 	const sections: string[] = [];
@@ -201,7 +212,7 @@ export function renderRecallBlock(
 		text,
 		details: {
 			v: 1,
-			delivery: opts.delivery,
+			delivery: "immediate",
 			model: opts.model,
 			files: detailFiles,
 			bytes: byteLength(text),
@@ -215,17 +226,13 @@ export function createRecall(deps: {
 	modelLabel: string;
 	files: () => RecallFile[];
 	cwd: string;
-	deliver: (block: RecallBlock) => void;
 	diagnose?: (message: string) => void;
-	initialUserTurns?: number;
 }): RecallMachine {
-	const stats: RecallStats = { selections: 0, empties: 0, failures: 0, lastReason: null, deliveries: 0 };
+	const stats: RecallStats = { selections: 0, empties: 0, failures: 0, late: 0, lastReason: null, deliveries: 0 };
 	const runDelivered = new Set<string>();
 	const diagnose = deps.diagnose ?? (() => {});
 	let disposed = false;
 	let generation = 0;
-	let userTurns = deps.initialUserTurns ?? 0;
-	let turnsSinceRun = Number.POSITIVE_INFINITY;
 
 	interface RequestState {
 		controller: AbortController;
@@ -248,7 +255,6 @@ export function createRecall(deps: {
 	function assemble(
 		outcome: Extract<SelectorOutcome, { kind: "selected" }>,
 		history: DerivedHistory,
-		delivery: "immediate" | "deferred",
 		pool: RecallFile[],
 	): RecallBlock | null {
 		const byKey = new Map(pool.map((f) => [f.key, f]));
@@ -260,7 +266,6 @@ export function createRecall(deps: {
 		}
 		if (picked.length === 0) return null;
 		return renderRecallBlock(picked, {
-			delivery,
 			model: deps.modelLabel,
 			elapsedMs: outcome.elapsedMs,
 			remainingSessionBytes: RECALL_SESSION_MAX_BYTES - history.bytesUsed,
@@ -294,33 +299,22 @@ export function createRecall(deps: {
 			const isCurrent = () => !disposed && generation === myGen;
 
 			try {
-				userTurns += 1;
-				if (userTurns <= recallWarmupTurns()) {
-					turnsSinceRun += 1;
-					stats.lastReason = "warmup";
+				const derived = deriveHistory(history(), deps.cwd);
+				if (derived.userTurns >= RECALL_BOUNDARY_TURNS) {
+					stats.lastReason = "boundary";
 					return null;
 				}
-				if (turnsSinceRun < recallCooldownTurns()) {
-					turnsSinceRun += 1;
-					stats.lastReason = "cooldown";
-					return null;
-				}
-
 				const query = recallQuery(text);
 				if (query === null) {
 					stats.empties++;
-					turnsSinceRun += 1;
 					return null;
 				}
-				const derived = deriveHistory(history(), deps.cwd);
 				if (derived.bytesUsed >= RECALL_SESSION_MAX_BYTES) {
-					turnsSinceRun += 1;
 					return null;
 				}
 				const candidates = eligible(derived);
 				if (candidates.length === 0) {
 					stats.empties++;
-					turnsSinceRun += 1;
 					return null;
 				}
 
@@ -332,11 +326,16 @@ export function createRecall(deps: {
 				const req: RequestState = { controller, timer: null, cancel: () => resolveCancelled("cancelled") };
 				current = req;
 
-				turnsSinceRun = 0;
 				let selection: Promise<SelectorOutcome>;
 				try {
 					selection = Promise.resolve(
-						deps.selector.select({ query, candidates, recentTools: derived.recentTools, signal: controller.signal }),
+						deps.selector.select({
+							query,
+							candidates,
+							recentTools: derived.recentTools,
+							previousUserMessage: derived.lastUserText ?? undefined,
+							signal: controller.signal,
+						}),
 					).catch((): SelectorOutcome => ({ kind: "failure", reason: "selector_throw", elapsedMs: 0 }));
 				} catch {
 					selection = Promise.resolve({ kind: "failure", reason: "selector_throw", elapsedMs: 0 });
@@ -361,40 +360,15 @@ export function createRecall(deps: {
 
 				if (bounded === "cancelled") return null;
 				if (bounded === "timeout" && timedOut) {
-					// spec v1.2: the selection keeps running and DELIVERS THE MOMENT IT
-					// COMPLETES — the wiring's sendMessage(triggerTurn:false) rides pi's
-					// pending-custom-message queue, flushed at the next turn_end (the
-					// first assistant message's end at the earliest). Never parked, never
-					// discarded; a newer user message aborts it (latest-wins).
-					void selection
-						.then((outcome) => {
-							try {
-								if (!isCurrent()) {
-									if (current === req) current = null;
-									return;
-								}
-								if (current === req) current = null;
-								if (outcome.kind === "selected") {
-									stats.selections++;
-									const block = assemble(outcome, deriveHistory(history(), deps.cwd), "deferred", candidates);
-									if (block) {
-										deps.deliver(block);
-										commitDelivery(block);
-									} else stats.empties++;
-								} else if (outcome.kind === "empty") stats.empties++;
-								else {
-									stats.failures++;
-									stats.lastReason = outcome.reason;
-								}
-							} catch (err) {
-								stats.failures++;
-								stats.lastReason = "deliver_error";
-								diagnose(`deferred delivery failed: ${describeError(err)}`);
-							}
-						})
-						.catch((err: unknown) => {
-							diagnose(`deferred chain rejected: ${describeError(err)}`);
-						});
+					// Task-boundary recall: on timeout the selection is aborted and
+					// DISCARDED — nothing may inject into the run after the prompt
+					// path has given up (the deferred-delivery chain was removed;
+					// a late completion finds no observer and its outcome is dropped).
+					req.controller.abort();
+					if (req.timer !== null) clearTimeout(req.timer);
+					if (current === req) current = null;
+					stats.late++;
+					stats.lastReason = "timeout";
 					return null;
 				}
 				if (req.timer !== null) clearTimeout(req.timer);
@@ -411,7 +385,7 @@ export function createRecall(deps: {
 					return null;
 				}
 				stats.selections++;
-				const block = assemble(outcome, derived, "immediate", candidates);
+				const block = assemble(outcome, derived, candidates);
 				if (block) commitDelivery(block);
 				else stats.empties++;
 				return block;

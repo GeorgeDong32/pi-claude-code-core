@@ -33,7 +33,6 @@ import {
 import goalExtension from "../../extensions/goal/goal.ts";
 import modesExtension from "../../extensions/modes/index.ts";
 import { setupAutomation, type AutomationState } from "../../extensions/memory/automation.ts";
-import { ConsolidationTrigger } from "../../extensions/memory/consolidate.ts";
 import { queueDir } from "../../extensions/memory/queue.ts";
 import { writeActiveGoalFile, readActiveGoalFiles } from "../../extensions/goal/storage/goal-files.ts";
 import { createGoal } from "../../extensions/goal/goal-record.ts";
@@ -225,15 +224,13 @@ describe("SM-02/04 modes (real factory on FakeHost)", () => {
 describe("SM-02/04 memory (real setupAutomation on FakeHost)", () => {
 	function setupMemory(sessionEntries: unknown[], sessionId: string) {
 		const host = new FakeHost();
-		const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0, routed: 0 };
+		const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0 };
 		const agentDir = join(home, ".pi", "agent");
-		const userDir = join(agentDir, "memory-user");
 		const projectsDirStr = join(agentDir, "memory-projects");
-		const trigger = new ConsolidationTrigger({ sendDirective: () => {} });
 		setupAutomation(host.asPi(), {
 			gate: { state: { yielded: false } },
-			dirs: (() => ({ project, user: userDir, projectsDir: projectsDirStr, agentDir })) as never,
-			trigger,
+			dirs: (() => ({ project, projectsDir: projectsDirStr, agentDir })) as never,
+			isDirectiveTurn: () => false,
 			settings: () => ({ automation: true }),
 			state,
 			deps: { complete: (async () => ({ stopReason: "stop", content: [] })) as never },

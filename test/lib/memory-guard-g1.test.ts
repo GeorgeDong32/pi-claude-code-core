@@ -2,18 +2,17 @@
  * Entropy-control G1 guard tests (docs/zh/entropy-control-spec.md).
  *
  * Function-level: guardMemoryToolCall covers [C1] frontmatter validation
- * (same-source with the index), [C2] wrong-directory, [C3] USER-layer
- * misfiling, [C6] child-session write ban, and the secret probe extended
- * to edit's edits[].
+ * (same-source with the index), [C2] wrong-directory, [C3] the retired
+ * USER-layer write ban, [C6] child-session write ban, and the secret probe
+ * extended to edit's edits[].
  *
  * Integration-level: the session_start/agent_end [C5] protected-file
  * baseline (direct fs write bypasses the guard → one UI notice) and the
  * [C3] warn-once dedup.
  */
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { execSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FakeHost, clearCoreGlobals, restoreCoreGlobals, snapshotCoreGlobals } from "../contracts/fake-host.ts";
 import memoryExtension from "../../extensions/memory/index.ts";
@@ -97,7 +96,7 @@ describe("[C1] frontmatter validation — same source as the index", () => {
 		expect(v.block).toBe(false);
 		// the index-side judgment must agree for exactly this content
 		writeFileSync(join(projectMemoryDir(), "ok.md"), content);
-		const indexed = eligibleMemories(userMemoryDir(), projectMemoryDir()).map((f) => f.title);
+		const indexed = eligibleMemories(projectMemoryDir()).map((f) => f.title);
 		expect(indexed).toContain("ok");
 	});
 
@@ -109,10 +108,9 @@ describe("[C1] frontmatter validation — same source as the index", () => {
 });
 
 describe("[C2] memory-shaped file outside both layers (10-03 repro)", () => {
-	it("blocks repo-root memory/x.md carrying memory frontmatter, naming both correct dirs", () => {
+	it("blocks repo-root memory/x.md carrying memory frontmatter, naming the correct dir", () => {
 		const v = guardMemoryToolCall("write", { path: join(project, "memory", "x.md"), content: validMemory("stray", "misplaced") }, env());
 		expect(v.block).toBe(true);
-		expect(v.reason).toContain(userMemoryDir());
 		expect(v.reason).toContain(projectMemoryDir());
 	});
 
@@ -122,50 +120,39 @@ describe("[C2] memory-shaped file outside both layers (10-03 repro)", () => {
 	});
 });
 
-describe("[C3] USER-layer misfiling", () => {
-	// The ~/ form only derives when the repo lives under $HOME (the real
-	// shape: ~/Coding/<repo>), so this group uses a home-anchored root.
-	const gitRoot = (): string => join(home, "code", "myrepo");
-
-	it("blocks a USER entry embedding the git root absolute path without paths:", () => {
-		const content = `---\nname: repo-fact\ndescription: d\nmetadata:\n  type: project\n---\n\nFact about ${gitRoot()}/src/tool.ts.`;
-		const v = guardMemoryToolCall("write", { path: join(userMemoryDir(), "repo-fact.md"), content }, env({ gitRoot: gitRoot() }));
+describe("[C3] the retired USER layer rejects every write", () => {
+	it("blocks a well-formed memory file written into the user dir", () => {
+		const v = guardMemoryToolCall("write", { path: join(userMemoryDir(), "repo-fact.md"), content: validMemory("repo-fact", "d") }, env());
 		expect(v.block).toBe(true);
-		expect(v.reason).toContain("misfiled");
+		expect(v.reason).toContain("retired");
+		expect(v.reason).toContain(projectMemoryDir());
 	});
 
-	it("blocks on the ~/ form of the root path", () => {
-		const tildeRoot = `~${gitRoot().slice(home.length)}`;
-		const content = `---\nname: t\ndescription: d\nmetadata:\n  type: project\n---\n\nSee ${tildeRoot}/docs.`;
-		const v = guardMemoryToolCall("write", { path: join(userMemoryDir(), "t.md"), content }, env({ gitRoot: gitRoot() }));
+	it("blocks an edit to an existing user-layer file (even a no-op-looking edit)", () => {
+		mkdirSync(userMemoryDir(), { recursive: true });
+		const file = join(userMemoryDir(), "old.md");
+		writeFileSync(file, validMemory("old", "pre-retirement"));
+		const v = guardMemoryToolCall("edit", { path: file, edits: [{ oldText: "body", newText: "new body" }] }, env());
 		expect(v.block).toBe(true);
+		expect(v.reason).toContain("retired");
 	});
 
-	it("passes when paths: scopes the entry", () => {
-		const tildeRoot = `~${gitRoot().slice(home.length)}`;
-		const content = `---\nname: scoped\ndescription: d\nmetadata:\n  type: project\npaths: ["${tildeRoot}/**"]\n---\n\nFact about ${gitRoot()}/src.`;
-		const v = guardMemoryToolCall("write", { path: join(userMemoryDir(), "scoped.md"), content }, env({ gitRoot: gitRoot() }));
-		expect(v.block).toBe(false);
-	});
-
-	it("warn-only for a bare short repo name", () => {
-		const content = `---\nname: n\ndescription: d\nmetadata:\n  type: project\n---\n\nUseful ${basename(gitRoot())} trick.`;
-		const v = guardMemoryToolCall("write", { path: join(userMemoryDir(), "n.md"), content }, env({ gitRoot: gitRoot() }));
-		expect(v.block).toBe(false);
-		expect(v.warn).toBeDefined();
+	it("blocks even ordinary prose — the path itself is the violation", () => {
+		const v = guardMemoryToolCall("write", { path: join(userMemoryDir(), "notes.md"), content: "plain doc" }, env());
+		expect(v.block).toBe(true);
 	});
 });
 
 describe("[C6] child sessions never write memory", () => {
-	it("blocks with PI_SUBAGENT_CHILD=1 on both layers", () => {
-		mkdirSync(userMemoryDir(), { recursive: true });
-		const v = guardMemoryToolCall("write", { path: join(userMemoryDir(), "x.md"), content: validMemory("x", "d") }, env({ childSession: true }));
+	it("blocks with PI_SUBAGENT_CHILD=1 on the project layer (the retired layer blocks everyone)", () => {
+		mkdirSync(projectMemoryDir(), { recursive: true });
+		const v = guardMemoryToolCall("write", { path: join(projectMemoryDir(), "x.md"), content: validMemory("x", "d") }, env({ childSession: true }));
 		expect(v.block).toBe(true);
 	});
 
 	it("passes the same write when the flag is unset", () => {
-		mkdirSync(userMemoryDir(), { recursive: true });
-		const v = guardMemoryToolCall("write", { path: join(userMemoryDir(), "x.md"), content: validMemory("x", "d") }, env({ childSession: false }));
+		mkdirSync(projectMemoryDir(), { recursive: true });
+		const v = guardMemoryToolCall("write", { path: join(projectMemoryDir(), "x.md"), content: validMemory("x", "d") }, env({ childSession: false }));
 		expect(v.block).toBe(false);
 	});
 });
@@ -218,16 +205,17 @@ describe("[C5]/warn-once integration through the extension hooks", () => {
 		expect(verdict?.block).toBe(true);
 	});
 
-	it("[C3] the same warn fires once per session through the hook", async () => {
-		const gitRoot = join(home, "code", "hookrepo");
-		mkdirSync(gitRoot, { recursive: true });
-		execSync("git init -q", { cwd: gitRoot }); // gitCanonicalRoot runs rev-parse — needs a real repo
+	it("[C3] a retired-layer write is blocked on every attempt through the hook (no warn-once path remains)", async () => {
 		const host = boot();
-		const ctx = host.makeCtx({ cwd: gitRoot, ui: true });
-		const warnWrite = { path: join(userMemoryDir(), "w.md"), content: `---\nname: w\ndescription: d\nmetadata:\n  type: project\n---\n\nhandy hookrepo trick.` };
-		await host.fire("tool_call", { toolName: "write", input: warnWrite }, ctx);
-		await host.fire("tool_call", { toolName: "write", input: warnWrite }, ctx);
-		const warns = host.notifications.filter((n) => n.includes("paths:"));
-		expect(warns.length).toBe(1);
+		const ctx = host.makeCtx({ cwd: project, ui: true });
+		const retiredWrite = { path: join(userMemoryDir(), "w.md"), content: validMemory("w", "d") };
+		const first = (await host.fire("tool_call", { toolName: "write", input: retiredWrite }, ctx)) as { block?: boolean; reason?: string };
+		const second = (await host.fire("tool_call", { toolName: "write", input: retiredWrite }, ctx)) as { block?: boolean; reason?: string };
+		expect(first.block).toBe(true);
+		expect(second.block).toBe(true);
+		expect(first.reason).toContain("retired");
+		// the old misfiling WARN (userLayerMisfileVerdict) is gone — blocking
+		// is silent now, nothing notifies the UI
+		expect(host.notifications.filter((n) => n.includes("paths:"))).toHaveLength(0);
 	});
 });

@@ -1,3 +1,13 @@
+## Unreleased
+
+### Changed
+
+- **BREAKING — memory 用户层退役（spec 2026-11-23-memory-policy）**：跨项目用户层 `~/.pi/agent/memory/` 不再注入、不再召回、不再写入、不再整合，且无设置开关（此前依赖双层注入/召回的会话行为直接改变）。遗留文件只读保留（pinned 文件仍注入直到迁移完成），guard 直接拒绝任何写入该目录的操作并给迁移指引；`memoryWriteRoots` 只剩项目目录，用户目录失去审批 carve-out；`/memory-import-hermes` 全部落项目层（user 类型段转 `reference`）。跨项目知识应迁移到用户自己的笔记（Obsidian）。`/memory` 面板显示退役状态与迁移提示。
+- **BREAKING — memory 整合改为仅手动**：删除 turn_end 自动整合触发器及其节流/2-per-session/inFlight 状态机与 `ConsolidationTrigger`；`/memory-consolidate` 手动发送 directive（仅项目层，`user` 参数被拒绝并提示退役）。超预算商店在 `/memory` 诊断可见。
+- **memory 召回改为任务边界触发（BREAKING）**：删除 warmup/cooldown 门槛、`PI_CORE_RECALL_{WARMUP,COOLDOWN}_TURNS` 环境变量接缝与 message_end steer 路径；召回只在 session start / compaction 后前 `RECALL_BOUNDARY_TURNS`（2）条真实用户消息上运行（仅 prompt 路径）。超时（默认 `recallWaitMs` 0→**5000**，钳制 1s–15s）= abort + 丢弃，删除延迟投递链（`delivery` 恒为 `"immediate"`，新增 `stats.late`）；候选池排除本会话写入的文件（回声过滤），预算收紧为 ≤3 文件 / 16KB 每会话（原 5 / 60KB）。`RecallDetailsV1` 字段集与队列记录形状不变（P0-CT-08/09）。
+- **memory 会话稳定注入**：policy 块仅在 session start / compaction 计数变化时重建 —— 会话中途的 memory 写入不再翻转 system prompt（保护 KV 缓存）。
+- **memory policy 精简**：单层 policy 块命名真实项目目录；写作指引排除「当前需求/未决问题/待确认事项」；禁止在项目记忆目录之外写 memory。`userLayerSection`/`projectLayerSection`/`USER_INDEX_MAX`/user→project 路由（RV-15）删除。
+
 ## 0.7.0 (2026-11-15)
 
 ### Added

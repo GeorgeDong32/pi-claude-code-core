@@ -16,8 +16,8 @@
  *     on-disk index never leaks into the prompt;
  *   ② layerStats reads the RAW on-disk bytes → needsConsolidation returns
  *     "index N/25000 bytes" (not a synthetic LayerStats — the real file);
- *   ③ turn_end fires exactly one ConsolidationTrigger directive carrying
- *     that reason, via sendMessage(triggerTurn, followUp).
+ *   ③ turn_end stays silent (consolidation is manual-only); the
+ *     /memory-consolidate directive carries that same over-budget reason.
  */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -84,10 +84,9 @@ afterEach(() => {
 });
 
 describe("FX-3 — MEMORY.md hand-edit bypass (>25K, writer skipped)", () => {
-	it("giant hand-written index: injection ≤ lane budget, needsConsolidation counts raw bytes, turn_end fires the directive", async () => {
+	it("giant hand-written index: injection ≤ lane budget, needsConsolidation counts raw bytes, the manual directive carries the reason", async () => {
 		put(dir, "alpha.md", "alpha", "alpha fact");
 		put(dir, "beta.md", "beta", "beta fact");
-		put(udir, "user-pref.md", "user-pref", "cross-project preference");
 		const host = setup();
 		const ctx = host.makeCtx({ cwd: project, ui: true });
 		// session start reconciles both layers (writer writes the derived index,
@@ -103,10 +102,10 @@ describe("FX-3 — MEMORY.md hand-edit bypass (>25K, writer skipped)", () => {
 		const r = (await handler({ systemPrompt: "BASE" }, ctx))!;
 		expect(r.systemPrompt).toBeDefined();
 		expect(r.systemPrompt).not.toContain("BYPASS-MARKER");
-		const indexPart = r.systemPrompt!.slice(r.systemPrompt!.indexOf("User memory index"));
+		const indexPart = r.systemPrompt!.slice(r.systemPrompt!.indexOf("Project memory index"));
 		expect(Buffer.byteLength(indexPart, "utf8")).toBeLessThanOrEqual(MEMORY_INDEX_MAX);
 		expect(indexPart).toContain("[alpha](alpha.md)");
-		expect(indexPart).toContain("[user-pref](user-pref.md)");
+		expect(r.systemPrompt).not.toContain("[user-pref](user-pref.md)"); // user layer retired
 
 		// ② the trigger probe reads the RAW on-disk index bytes
 		const stats = layerStats(dir);
@@ -114,8 +113,11 @@ describe("FX-3 — MEMORY.md hand-edit bypass (>25K, writer skipped)", () => {
 		const reason = needsConsolidation(stats, MEMORY_INDEX_MAX);
 		expect(reason).toBe(`index ${bypassBytes}/${MEMORY_INDEX_MAX} bytes`);
 
-		// ③ turn_end fires ONE consolidation directive carrying that reason
+		// ③ consolidation is manual-only: turn_end never sends; the command
+		// sends ONE directive carrying the same over-budget reason
 		await host.fire("turn_end", { turnIndex: 0, message: { role: "assistant" }, toolResults: [] }, ctx);
+		expect(host.sentMessages.length).toBe(0);
+		await host.commands.get("memory-consolidate")?.("", ctx);
 		expect(host.sentMessages.length).toBe(1);
 		const sent = host.sentMessages[0]!;
 		expect(sent.message.customType).toBe(CONSOLIDATE_DIRECTIVE_TYPE);
@@ -125,11 +127,5 @@ describe("FX-3 — MEMORY.md hand-edit bypass (>25K, writer skipped)", () => {
 		expect(content).toContain(`index ${bypassBytes}/${MEMORY_INDEX_MAX} bytes`);
 		expect(content).toContain(dir);
 		expect(content).toContain("memory_consolidate");
-		// no immediate re-send: the directive turn is still in flight, so the
-		// inFlight guard (checked first in onTurnEnd) blocks this tick; the
-		// 10-turn throttle would also block it — both are active here, and the
-		// inFlight guard alone is pinned in memory-v2-consolidate.test.ts.
-		await host.fire("turn_end", { turnIndex: 1, message: { role: "assistant" }, toolResults: [] }, ctx);
-		expect(host.sentMessages.length).toBe(1);
 	});
 });

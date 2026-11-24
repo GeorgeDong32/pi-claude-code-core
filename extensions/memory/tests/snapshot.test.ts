@@ -87,14 +87,12 @@ test("[C10] files inside a snapshot never surface in the index or recall", () =>
 	write("a.md", valid("a", "alpha"));
 	const snap = snapshotLayer(dir, root);
 	assert.ok(snap !== null);
-	// Isolation is CONSTRUCTIONAL: index/recall only ever scan the two layer
-	// dirs. Pin both halves — (1) the snapshot root lives outside both layers,
+	// Isolation is CONSTRUCTIONAL: index/recall only ever scan the layer
+	// dir. Pin both halves — (1) the snapshot root lives outside the layer,
 	// (2) the real-layer scan never sees the snapshot's copy even though that
 	// copy is a fully valid memory file sitting one path away.
 	assert.ok(!snap!.dir.startsWith(dir), "snapshot root outside the layer");
 	assert.ok(!dir.startsWith(snap!.dir), "layer outside the snapshot root");
-	const emptyUser = mkdtempSync(join(tmpdir(), "g2-empty-"));
-	const titles = eligibleMemories(emptyUser, dir).map((f) => f.title);
+	const titles = eligibleMemories(dir).map((f) => f.title);
 	assert.deepEqual(titles, ["alpha"], "exactly the layer's own file — no snapshot copy");
-	rmSync(emptyUser, { recursive: true, force: true });
 });

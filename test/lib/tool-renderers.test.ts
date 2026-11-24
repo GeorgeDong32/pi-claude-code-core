@@ -123,7 +123,7 @@ describe("TR C — core tool compact rows", () => {
 	});
 
 	it("2: memory_consolidate call + result rows", () => {
-		expect(consolidateCallText({ writes: [{ file: "a.md" }, { file: "b.md" }], deletes: ["c.md"], layer: "user" })).toBe("Memory Consolidate user · 2W/1D");
+		expect(consolidateCallText({ writes: [{ file: "a.md" }, { file: "b.md" }], deletes: ["c.md"] })).toBe("Memory Consolidate · 2W/1D");
 		expect(consolidateResultRows({ details: { written: 2, deleted: 1 } })).toEqual(["applied 2 write(s) · 1 delete(s)"]);
 	});
 

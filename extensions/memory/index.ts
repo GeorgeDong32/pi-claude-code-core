@@ -11,7 +11,6 @@ import { eligibleMemories, listMemoryFiles, scanMemoryDir, scanMemoryDirCached }
 import { reindex } from "./writer.ts";
 import { friendlyProjectHint } from "./paths.ts";
 import { resolveMemoryPaths, sessionsDirFor, gitCanonicalRoot } from "./paths.ts";
-import { scopeMatches } from "./memdir.ts";
 import { buildPolicyInjection, policyCompact } from "./policy.ts";
 import { renderMemoryDiagnostics } from "./diagnostics.ts";
 import { queueInventory } from "./queue.ts";
@@ -27,7 +26,8 @@ import { recallTransparencyLine, sessionRecall } from "./session-recall.ts";
 import { readSessionProjection } from "../modes/session-branch.ts";
 import { renderSessionRecallCall, sessionRecallResultRows, type SessionRecallArgs } from "./renderers.ts";
 import { renderRows } from "../../lib/tool-render.ts";
-import { ConsolidationTrigger, CONSOLIDATE_DIRECTIVE_TYPE, registerConsolidation } from "./consolidate.ts";
+import { registerConsolidation } from "./consolidate.ts";
+
 import { setupAutomation, loadMemorySettings, DEFAULT_RECALL_WAIT_MS, type AutomationState, type MemorySettings } from "./automation.ts";
 import { importFromClaude, importFromHermes, importHermesFull } from "./importers.ts";
 
@@ -42,20 +42,31 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 	let degradedNotified = false;
 	let memoryDirWritable = true;
 	let memorySettings: MemorySettings = { automation: true };
-	const automationState: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0, routed: 0 };
+	const automationState: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0 };
 	let recallMachine: RecallMachine | null = null;
 	let recallModelLabel = "";
 	let recallOffNotified = false;
-	let promptMessagePending = false;
+	/** task-boundary recall echo filter: files written at/after session start
+	 *  never re-enter the candidate pool */
+	let sessionStartedAtMs = 0;
+	/** session-stable injection: the policy block is rebuilt only at session
+	 *  start or after a compaction — mid-session memory writes must not flip
+	 *  the system prompt and kill the KV cache */
+	let injectionCache: { text: string; compactions: number; writable: boolean } | null = null;
+	/** manual consolidation: true from the moment a directive run is queued
+	 *  until agent_settled (automation must not extract from it) + diagnostics
+	 *  breadcrumb */
+	let consolidationDirectiveActive = false;
+	let consolidationLastReason: string | null = null;
 
 	function historyFor(ctx: ExtensionContext): readonly unknown[] {
 		return readSessionProjection(ctx.sessionManager);
 	}
 
-	function countBranchUserTurns(ctx: ExtensionContext): number {
+	function countCompactions(ctx: ExtensionContext): number {
 		let n = 0;
-		for (const m of readSessionProjection(ctx.sessionManager) as Array<{ role?: string }>) {
-			if (m?.role === "user") n += 1;
+		for (const m of historyFor(ctx) as Array<{ role?: string }>) {
+			if (m?.role === "compactionSummary") n += 1;
 		}
 		return n;
 	}
@@ -70,8 +81,8 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 	}
 
 	/** Ensure the machine exists for THIS settings+registry (creating it on
-	 * whichever path needs it first — prompt or steer). Null when recall is
-	 * off (unset/unresolvable recallModel — D3). AR1005-RC-04: rebuilding or
+	 * whichever path needs it first — prompt). Null when recall is off
+	 * (unset/unresolvable recallModel — D3). AR1005-RC-04: rebuilding or
 	 * closing recall disposes the OLD machine first — old and new requests
 	 * must never deliver in parallel. */
 	function ensureRecallMachine(ctx: ExtensionContext): RecallMachine | null {
@@ -104,15 +115,11 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 			recallMachine = createRecall({
 				selector: (extensionDeps.selectorFactory ?? llmSelector)({ model: () => model, registry: () => ctx.modelRegistry as never }),
 				modelLabel: label,
-				files: () => eligibleMemories(userMemoryDir(ctx), memoryDir(ctx), gitCanonicalRoot(ctx.cwd ?? process.cwd()) ?? undefined),
+				// single layer (the user layer is retired) + echo filter:
+				// files written at/after session start never re-enter recall
+				files: () =>
+					eligibleMemories(memoryDir(ctx)).filter((f) => f.mtimeMs < sessionStartedAtMs),
 				cwd: ctx.cwd ?? process.cwd(),
-				initialUserTurns: countBranchUserTurns(ctx),
-				// spec v1.2: immediate delivery the moment a parked selection
-				// completes — pi queues it as a pending custom message and flushes
-				// at the next turn_end (request #2 within the run, next turn's
-				deliver: (block) => {
-					pi.sendMessage(makeRecallMessage(block), { triggerTurn: false });
-				},
 				diagnose: (message) => console.log(`pi-memory: recall ${message}`),
 			});
 		}
@@ -143,6 +150,30 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 		} catch {
 			return [];
 		}
+	}
+
+	/** The policy injection, rebuilt only at session start or after a
+	 *  compaction (session-stable injection — a mid-session memory write
+	 *  must not flip the system prompt and invalidate the prompt cache).
+	 *  Pinned files still read from the retired user dir until migration
+	 *  completes; the index lists the project layer only. */
+	function injectionFor(ctx: ExtensionContext): string {
+		const dir = memoryDir(ctx);
+		if (!memoryDirWritable) return policyCompact(dir);
+		const compactions = countCompactions(ctx);
+		if (injectionCache && injectionCache.compactions === compactions && injectionCache.writable === memoryDirWritable) {
+			return injectionCache.text;
+		}
+		const projectScan = scanMemoryDirCached(dir);
+		const pinned = scanMemoryDirCached(userMemoryDir(ctx)).files.filter((f) => f.entry.pinned);
+		const text =
+			buildPolicyInjection(
+				{ entries: pinned.map((f) => ({ ...f.entry })), files: pinned.map((f) => ({ entry: f.entry, body: f.body })) },
+				projectScan.files.map((f) => ({ ...f.entry })),
+				dir,
+			) + (projectScan.skipped > 0 ? `\n<!-- memory: ${projectScan.skipped} file(s) skipped (invalid frontmatter) -->` : "");
+		injectionCache = { text, compactions, writable: memoryDirWritable };
+		return text;
 	}
 
 	async function recallBlockFor(text: string, ctx: ExtensionContext, waitMs: number): Promise<RecallBlock | null> {
@@ -267,24 +298,26 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 			warnedMisfiles = new Set();
 			bypassNoticeShown = false;
 			consolidationUsedThisSession = false;
+			consolidationDirectiveActive = false;
+			consolidationLastReason = null;
 			baselineProtectedFiles(ctx);
+			sessionStartedAtMs = Date.now();
+			injectionCache = null;
 			snapshotBothLayers(ctx);
 			recallMachine?.dispose();
 			recallMachine = null;
 			recallModelLabel = "";
 			recallOffNotified = false;
-			promptMessagePending = false;
 			gate.probeStatic();
 			memorySettings = loadMemorySettings(join(process.env.HOME ?? home, ".pi", "agent"));
 			automationState.enabled = memorySettings.automation;
-			for (const d of [memoryDir(ctx), userMemoryDir(ctx)]) {
-				try {
-					mkdirSync(d, { recursive: true });
-				} catch {
-				}
+			// user dir intentionally NOT created/reindexed — the layer is retired;
+			// remaining files stay read-only until the migration deletes them
+			try {
+				mkdirSync(memoryDir(ctx), { recursive: true });
+			} catch {
 			}
 			reindex(memoryDir(ctx));
-			reindex(userMemoryDir(ctx));
 			try {
 				accessSync(memoryDir(ctx), fsConstants.W_OK);
 				memoryDirWritable = true;
@@ -304,14 +337,12 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 		try {
 			// pi 1.2.0: before_agent_start also fires for custom-message runs
 			// (sendMessage triggerTurn:true — goal continuation, review directive,
-			// modes refinement) with messageType "custom" and no `prompt`. The
-			// aliased discriminant below keeps `event.prompt` narrowed for the
-			// recall call sites; everything run-scoped in this handler stays
-			// scoped to USER runs so custom runs behave exactly as they did on
-			// 1.1.0 (where the event never fired for them).
+			// memory-consolidation directive, modes refinement) with messageType
+			// "custom" and no `prompt`. Recall runs ONLY on user runs — the task
+			// boundary is a real user message; custom runs get the (stable,
+			// cached) injection but never a selection.
 			const isUserRun = event.messageType === "user";
 			if (isUserRun) recallMachine?.abort();
-			promptMessagePending = isUserRun;
 			const wasYielded = gate.state.yielded;
 			gate.probePrompt(event.systemPrompt ?? "");
 			if (gate.state.yielded !== wasYielded) {
@@ -320,27 +351,9 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 				});
 			}
 			if (gate.state.yielded) return undefined;
-			const dir = memoryDir(ctx);
-			const udir = userMemoryDir(ctx);
+			if (!memoryDirWritable) notifyOnce(ctx, "memory dir not writable — running policy-only");
+			const systemPrompt = `${event.systemPrompt ?? ""}\n\n${injectionFor(ctx)}`;
 			const waitMs = memorySettings.recallWaitMs ?? DEFAULT_RECALL_WAIT_MS;
-			if (!memoryDirWritable) {
-				notifyOnce(ctx, "memory dir not writable — running policy-only");
-				const degradedBlock = isUserRun ? await recallBlockFor(event.prompt, ctx, waitMs) : null;
-				return degradedBlock
-					? { systemPrompt: `${event.systemPrompt ?? ""}\n\n${policyCompact(dir)}`, message: makeRecallMessage(degradedBlock) }
-					: { systemPrompt: `${event.systemPrompt ?? ""}\n\n${policyCompact(dir)}` };
-			}
-			const userScan = scanMemoryDirCached(udir);
-			const projectScan = scanMemoryDirCached(dir);
-			const skippedTotal = userScan.skipped + projectScan.skipped;
-			const root = gitCanonicalRoot(ctx.cwd ?? process.cwd()) ?? undefined;
-			const scopedUserFiles = userScan.files.filter((f) => !f.entry.paths || scopeMatches(root, f.entry.paths));
-			const injection = buildPolicyInjection(
-				{ entries: scopedUserFiles.map((f) => ({ ...f.entry })), files: scopedUserFiles.map((f) => ({ entry: f.entry, body: f.body })) },
-				projectScan.files.map((f) => ({ ...f.entry })),
-				dir,
-			) + (skippedTotal > 0 ? `\n<!-- memory: ${skippedTotal} file(s) skipped (invalid frontmatter) -->` : "");
-			const systemPrompt = `${event.systemPrompt ?? ""}\n\n${injection}`;
 			const block = isUserRun ? await recallBlockFor(event.prompt, ctx, waitMs) : null;
 			return block ? { systemPrompt, message: makeRecallMessage(block) } : { systemPrompt };
 		} catch {
@@ -360,7 +373,6 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 			const verdict: GuardVerdict = guardMemoryToolCall(name, input, {
 				projectDir: memoryDir(ctx),
 				userDir: userMemoryDir(ctx),
-				gitRoot: gitCanonicalRoot(ctx.cwd ?? process.cwd()) ?? undefined,
 				childSession: process.env.PI_SUBAGENT_CHILD === "1",
 			});
 			if (verdict.block) {
@@ -376,57 +388,34 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 		return undefined;
 	});
 
-	const consolidation = new ConsolidationTrigger({
-		sendDirective: (layer, directive) => {
-			pi.sendMessage(
-				{ customType: CONSOLIDATE_DIRECTIVE_TYPE, content: `(${layer} layer) ${directive}`, display: false },
-				{ triggerTurn: true, deliverAs: "followUp" },
-			);
-		},
-	});
 	registerConsolidation(
 		pi,
-		(ctx) => ({ project: memoryDir(ctx), user: userMemoryDir(ctx) }),
-		consolidation,
-		() => {
-			consolidationUsedThisSession = true;
+		(ctx) => ({ project: memoryDir(ctx) }),
+		{
+			onDirectiveSent: (reason) => {
+				consolidationDirectiveActive = true;
+				consolidationLastReason = reason;
+			},
+			onApplied: () => {
+				consolidationUsedThisSession = true;
+			},
 		},
 	);
-	pi.on("turn_end", (event, ctx: ExtensionContext) => {
-		try {
-			if (gate.state.yielded) return;
-			consolidation.onTurnEnd(memoryDir(ctx), userMemoryDir(ctx));
-		} catch {
-		}
-	});
 	pi.on("agent_end", (_event, ctx: ExtensionContext) => {
 		try {
 			checkMassDeletion(ctx);
 			checkProtectedFiles(ctx);
-			promptMessagePending = false;
-		} catch {
-		}
-	});
-	pi.on("message_end", (event, ctx: ExtensionContext) => {
-		try {
-			if (gate.state.yielded) return;
-			const message = (event as { message?: { role?: string; customType?: string } }).message;
-			if (!message || message.role !== "user" || message.customType) return;
-			if (promptMessagePending) {
-				promptMessagePending = false;
-				return;
-			}
-			const text = extractUserText(message);
-			if (text === null) return;
-			const steerMachine = ensureRecallMachine(ctx);
-			if (!steerMachine) return;
-			void steerMachine.onUserMessage(text, () => historyFor(ctx), 0);
 		} catch {
 		}
 	});
 	pi.on("tool_result", (event, ctx: ExtensionContext) => {
 		try {
-			if ((event as { toolName?: string }).toolName === "memory_consolidate") consolidation.settle();
+			if ((event as { toolName?: string }).toolName === "memory_consolidate") {
+				consolidationUsedThisSession = true;
+				// the directive flag stays set: the run continues after the tool
+				// returns (summary turn) and must not feed the extractors —
+				// agent_settled clears it
+			}
 			const e = event as { toolName?: string; input?: Record<string, unknown>; content?: Array<{ type: string; text?: string }> };
 			if (e.toolName === "read" && typeof e.input?.path === "string") {
 				const path = e.input.path;
@@ -453,13 +442,12 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 			recallMachine?.dispose();
 			recallMachine = null;
 			recallModelLabel = "";
-			promptMessagePending = false;
 		} catch {
 		}
 	});
 	pi.on("agent_settled", () => {
 		try {
-			consolidation.settle({ directive: true });
+			consolidationDirectiveActive = false;
 		} catch {
 		}
 	});
@@ -468,9 +456,9 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 		gate,
 		dirs: (ctx) => {
 			const p = resolveMemoryPaths(ctx?.cwd ?? process.cwd(), process.env.HOME ?? home);
-			return { project: p.memoryDir, user: p.userMemoryDir, projectsDir: p.projectsDir, agentDir: p.agentDir };
+			return { project: p.memoryDir, projectsDir: p.projectsDir, agentDir: p.agentDir };
 		},
-		trigger: consolidation,
+		isDirectiveTurn: () => consolidationDirectiveActive,
 		settings: () => memorySettings,
 		state: automationState,
 	});
@@ -550,7 +538,7 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 				userIndexBytes,
 				projectIndexBytes: indexBytes,
 				automation: automationState,
-				consolidation: consolidation.state,
+				consolidation: { lastReason: consolidationLastReason },
 				yielded: { yielded: gate.state.yielded, detectedBy: gate.state.detectedBy },
 				recall: {
 					status: recallMachine ? "on" : "off",
@@ -559,7 +547,7 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 					waitMs: memorySettings.recallWaitMs ?? DEFAULT_RECALL_WAIT_MS,
 					sessionFiles: derived.surfaced.size,
 					sessionBytes: derived.bytesUsed,
-					stats: recallMachine?.stats ?? { selections: 0, empties: 0, failures: 0, lastReason: null, deliveries: 0 },
+					stats: recallMachine?.stats ?? { selections: 0, empties: 0, failures: 0, late: 0, lastReason: null, deliveries: 0 },
 				},
 				misplaced: misplacedUserFiles(udir),
 				queue: queueInventory(resolveMemoryPaths(cctx.cwd ?? process.cwd(), process.env.HOME ?? home).agentDir),
@@ -598,7 +586,7 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 	});
 
 	pi.registerCommand("memory-import-hermes", {
-		description: "Migrate ALL hermes data (USER.md + MEMORY.md + failures.md + this project's store) into the two core layers; a file argument imports that single §-store",
+		description: "Migrate ALL hermes data (USER.md + MEMORY.md + failures.md + this project's store) into the project memory layer; a file argument imports that single §-store",
 		handler: async (args, ctx) => {
 			const cctx = ctx as ExtensionContext;
 			const text: string[] = [];
@@ -611,10 +599,9 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 				const report = importHermesFull({
 					agentDir,
 					projectMemoryDir: memoryDir(cctx),
-					userMemoryDir: userMemoryDir(cctx),
 				});
 				text.push(
-					`memory-import-hermes: migrated ${report.copied} fact(s) — user layer: ${report.routed.user}, project layer: ${report.routed.project}, skipped: ${report.skipped} (idempotent)`,
+					`memory-import-hermes: migrated ${report.copied} fact(s) into the project layer — skipped: ${report.skipped} (idempotent; the user layer is retired, everything lands in the project store)`,
 					...report.notes,
 				);
 			}
@@ -626,17 +613,4 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 			});
 		},
 	});
-}
-
-function extractUserText(message: unknown): string | null {
-	const m = message as { content?: unknown } | undefined;
-	if (!m) return null;
-	if (typeof m.content === "string") return m.content;
-	if (Array.isArray(m.content)) {
-		const texts = (m.content as Array<{ type?: string; text?: string }>)
-			.filter((part) => part.type === "text" && typeof part.text === "string")
-			.map((part) => part.text!);
-		if (texts.length > 0) return texts.join("\n");
-	}
-	return null;
 }

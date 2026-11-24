@@ -836,7 +836,7 @@
 		"outsideWriteCount": 0
 	},
 	"ask/edit memory dir passes (carve-out)": {
-		"result": "allow",
+		"result": "block: edit needs approval: no UI available. on /Users/gd32/.pi/agent/memory/user/notes.md",
 		"uiSelects": [],
 		"notifications": [],
 		"persistedRules": {
