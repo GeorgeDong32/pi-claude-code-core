@@ -99,6 +99,7 @@ describe("bash with background: true", () => {
 		const multi = await start(s, "echo a\necho b");
 		const long = await start(s, `echo ${"x".repeat(300)}`);
 		procs.of(multi).exit(0);
+		await clock.until(() => s.sent.length === 1); // staggered: two exits in one tick are batched into one message
 		procs.of(long).exit(0);
 		await clock.until(() => s.sent.length > 1);
 		const contents = s.sent.map((m) => m.message.content);

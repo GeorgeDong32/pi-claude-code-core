@@ -9,9 +9,19 @@
 // reads the result itself meanwhile (TaskOutput) — the queued message then
 // wakes it for nothing. So `notifyOnce` appends the status row at once but
 // HOLDS the message while `agentBusy`; `agent_settled` flushes it unless the
-// model already read the end (`task.read`), in which case it is dropped.
+// model already read the end, in which case it is dropped.
+//
+// Pending messages are flushed in batches (`flushPending`): everything that
+// came due in one poll tick, or during one run, goes out as ONE message, so N
+// completions never wake the model N times (CC drain parity). Idle: `ready`
+// (row appended only after the send succeeded, CH-6); busy: `held` (row now,
+// message at settle). What the model read itself meanwhile (TaskOutput →
+// `claimCompletion`) has its flags cleared on the spot, so it never flushes.
+// The stall watchdog (`checkStall`) runs on the poller:
+// 45 s without output growth + a prompt-looking last line queues a one-shot
+// `stallPending` nudge on its own channel — it never touches `notified`.
 import { randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -23,7 +33,7 @@ import { type LaunchOptions, sessionLogDir } from "./launch.ts";
 import { appendStatusEntry, STATUS_ENTRY_TYPE } from "./status-entry.ts";
 import { appendLimitMarker, gzipLog, overLogLimit } from "./logs.ts";
 import { locateMarker, type Marker } from "./logview.ts";
-import { sendCompletion } from "./notify.ts";
+import { looksLikePrompt, sendCompletions, sendStall, STALL_THRESHOLD_MS, stallTail } from "./notify.ts";
 import { processPort } from "./port.ts";
 
 const KEY = Symbol.for("cc-core.bg-shell.registry");
@@ -58,10 +68,14 @@ export type Task = {
 	notified: boolean;
 	readFailures: number;
 	waiting?: number;
-	/** completion follow-up held back because the agent was mid-run */
+	/** completion message waiting for the next flush; row already appended (agent was mid-run) */
 	held?: boolean;
-	/** the model read the task's end through TaskOutput */
-	read?: boolean;
+	/** completion message waiting for the next flush; row goes out only once the send succeeded (agent idle) */
+	ready?: boolean;
+	stallPending?: "ready" | "held";
+	stallNotified?: boolean;
+	logSize?: number;
+	grewAt?: number;
 };
 
 type Registry = {
@@ -77,6 +91,8 @@ type Registry = {
 	foreground: Set<ForegroundRun>;
 	/** an agent run is active or queued (agent_start … agent_settled) */
 	agentBusy: boolean;
+	/** inside `poll()`: `notifyOnce` leaves the flush to the tick's end so one tick = one message */
+	polling: boolean;
 };
 
 export type Leftovers = "none" | "stopped" | "stuck";
@@ -91,8 +107,10 @@ export function getRegistry(): Registry {
 		launching: new Set(),
 		foreground: new Set(),
 		agentBusy: false,
+		polling: false,
 	});
 	registry.agentBusy ??= false; // a registry left by an older load (reload) has no flag yet
+	registry.polling ??= false;
 	registry.groups ??= new Set();
 	registry.emptyGroups ??= new Set();
 	registry.launching ??= new Set();
@@ -127,6 +145,8 @@ export async function endSession(): Promise<void> {
 	for (const task of tasks) {
 		task.notified = true;
 		task.held = false;
+		task.ready = false;
+		task.stallPending = undefined;
 	}
 	const pids = new Set(
 		[...registry.groups, ...tasks.map((task) => task.pid)].filter((pid) => !registry.emptyGroups.has(pid)),
@@ -215,6 +235,7 @@ export function makeTask(
 		readPosition: 0,
 		notified: false,
 		readFailures: 0,
+		logSize: 0,
 	};
 }
 
@@ -285,7 +306,9 @@ function checkLogLimits(registry: Registry): void {
 }
 
 function hasPending(registry: Registry): boolean {
-	return [...registry.tasks.values()].some((task) => task.state === "running" || !task.notified);
+	return [...registry.tasks.values()].some(
+		(task) => task.state === "running" || !task.notified || task.held === true || task.ready === true || task.stallPending !== undefined,
+	);
 }
 
 function refresh(registry: Registry, task: Task): void {
@@ -321,6 +344,7 @@ function pollTask(registry: Registry, task: Task): void {
 			killForLogLimit(registry, task).catch((error) => debugError("log-limit-kill", error, taskFields(task)));
 			return;
 		}
+		checkStall(registry, task);
 		if (task.deadline !== undefined && Date.now() >= task.deadline) {
 			debug("deadline", { ...taskFields(task), deadline: task.deadline });
 			killTask(task, "timed out", { notify: true }).catch((error) =>
@@ -345,6 +369,7 @@ export async function killTask(
 			if (!options.notify) {
 				if (!task.notified && registry.pi !== undefined) appendStatusEntry(registry.pi, task);
 				task.notified = true;
+				task.ready = false; // the stop takes over the report
 			}
 			task.clearing ??= stopLeftovers(task).finally(() => {
 				task.clearing = undefined;
@@ -363,6 +388,7 @@ export async function killTask(
 	if (!options.notify) {
 		if (!task.notified && registry.pi !== undefined) appendStatusEntry(registry.pi, task, { state: "killed" });
 		task.notified = true;
+		task.ready = false; // the stop takes over the report
 	}
 	return task.killing;
 }
@@ -446,12 +472,22 @@ async function killForLogLimit(registry: Registry, task: Task): Promise<"killed"
 }
 
 function poll(registry: Registry): void {
-	for (const task of registry.tasks.values()) {
-		try {
-			pollTask(registry, task);
-		} catch (error) {
-			debugError("poll", error, taskFields(task));
+	registry.polling = true;
+	try {
+		for (const task of registry.tasks.values()) {
+			try {
+				pollTask(registry, task);
+			} catch (error) {
+				debugError("poll", error, taskFields(task));
+			}
 		}
+	} finally {
+		registry.polling = false;
+	}
+	try {
+		flushPending();
+	} catch (error) {
+		debugError("flush", error);
 	}
 	if (!hasPending(registry)) stopTimers(registry);
 }
@@ -461,7 +497,7 @@ function gzipIfGone(task: Task): void {
 	if (!processPort().groupAlive(task.pid)) void gzipLog(task).catch((error) => debugError("gzip", error, taskFields(task)));
 }
 
-/** Report the task's end once. Idle: the flag is set before the send and reset when the send throws so a later tick retries; the log is gzipped only after the message really went out (Q21). Busy: the status row goes out now and the follow-up is held for `agent_settled` (see the header). */
+/** Report the task's end once. Busy: the status row goes out now and the message is held for the next flush. Idle: the message goes out in the flush at the tick's end, and only a successful send appends the row (CH-6); a send that throws leaves it pending for a retry. */
 function notifyOnce(registry: Registry, task: Task): void {
 	if ((task.waiting ?? 0) > 0) return;
 	if (task.notified || registry.pi === undefined) return;
@@ -472,42 +508,85 @@ function notifyOnce(registry: Registry, task: Task): void {
 		gzipIfGone(task);
 		return;
 	}
-	task.notified = true;
-	try {
-		sendCompletion(registry.pi, task);
-	} catch (error) {
-		task.notified = false;
-		throw error;
-	}
-	appendStatusEntry(registry.pi, task);
-	gzipIfGone(task);
+	task.ready = true;
+	if (!registry.polling) flushPending();
 }
 
 export function setAgentBusy(busy: boolean): void {
 	getRegistry().agentBusy = busy;
 }
 
-/** `agent_settled`: send the held follow-ups the model did not read itself. A send that throws stays held for the next settle. */
-export function flushHeld(): void {
+/**
+ * Send what came due: stall nudges (one each, only while the task still runs — a finished task's completion
+ * says it), then every pending completion as one message. `held` items wait for the agent to settle; `ready`
+ * items go at once. A send that throws leaves the items pending for the next flush.
+ */
+export function flushPending(): void {
 	const registry = getRegistry();
-	for (const task of registry.tasks.values()) {
-		if (!task.held) continue;
-		if (task.read) {
-			task.held = false;
-			debug("followup-dropped", { ...taskFields(task), reason: "model read the end" });
-			continue;
-		}
-		if (registry.pi === undefined) {
-			task.held = false;
-			continue;
-		}
-		try {
-			sendCompletion(registry.pi, task);
-			task.held = false;
-		} catch (error) {
-			debugError("held-send", error, taskFields(task));
+	const tasks = [...registry.tasks.values()];
+	const sendHeld = !registry.agentBusy;
+	if (registry.pi !== undefined) {
+		for (const task of tasks) {
+			if (task.stallPending === undefined || (task.stallPending === "held" && !sendHeld)) continue;
+			if (task.state !== "running") {
+				task.stallPending = undefined;
+				continue;
+			}
+			try {
+				sendStall(registry.pi, task, stallTail(task));
+				task.stallPending = undefined;
+			} catch (error) {
+				debugError("stall-send", error, taskFields(task));
+			}
 		}
 	}
+	const batch = tasks.filter((task) => pendingCompletion(task, sendHeld));
+	if (batch.length === 0 || registry.pi === undefined) return;
+	try {
+		sendCompletions(registry.pi, batch);
+	} catch (error) {
+		debugError("completion-send", error);
+		return;
+	}
+	for (const task of batch) {
+		if (task.ready) {
+			task.notified = true;
+			appendStatusEntry(registry.pi, task);
+			gzipIfGone(task);
+		}
+		task.ready = false;
+		task.held = false;
+	}
+}
+
+function pendingCompletion(task: Task, sendHeld: boolean): boolean {
+	if (task.held) return sendHeld;
+	return task.ready === true && !task.notified;
+}
+
+/** The watchdog: no output growth for STALL_THRESHOLD_MS and the log's last line looks like an interactive prompt → one nudge per task. */
+function checkStall(registry: Registry, task: Task): void {
+	let size: number;
+	try {
+		size = statSync(task.logPath).size;
+	} catch {
+		return;
+	}
+	const now = Date.now();
+	if (size > (task.logSize ?? 0)) {
+		task.logSize = size;
+		task.grewAt = now;
+		return;
+	}
+	if (now - (task.grewAt ?? task.startedAt) < STALL_THRESHOLD_MS || task.stallNotified) return;
+	const tail = stallTail(task);
+	if (!looksLikePrompt(tail)) {
+		task.grewAt = now; // merely slow: look again in 45 s, not every tick
+		return;
+	}
+	task.stallNotified = true;
+	task.stallPending = registry.agentBusy ? "held" : "ready";
+	debug("stall", { ...taskFields(task), tail: tail.length });
 }
 
 const WAIT_POLL_MS = 250;
@@ -545,10 +624,9 @@ export function claimCompletion(task: Task): void {
 	const registry = getRegistry();
 	if (task.state === "running" && task.killing === undefined) refresh(registry, task);
 	if (task.state === "running" || registry.pi === undefined) return;
-	task.read = true;
+	task.ready = false; // the model got to the end first: no follow-up
 	if (task.held) {
-		// the row is already out; the model got to the end first, so no follow-up
-		task.held = false;
+		task.held = false; // the row is already out
 		return;
 	}
 	task.notified = true;

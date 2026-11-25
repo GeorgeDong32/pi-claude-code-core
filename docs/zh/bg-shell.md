@@ -73,16 +73,43 @@ RPC 降级 `ui.select`；无 UI 打印列表）。`ctrl+shift+b` 把前台运行
   报错两条路径不再追加（模型传占位 waitFor 值时该提示泛滥），且
   `waitFor` 参数说明明确告知不等待时应省略该参数
 
-## agent 忙碌时暂缓 followUp（cc-core 新增，2026-11-24）
+## 待发 followUp：忙时暂缓、按批冲刷（cc-core 新增，2026-11-24）
 
 `followUp` 要等当前 run 结束才投递；30 天会话日志里模型经常在这期间自己
 读了结果（`TaskOutput`），排队的那条消息于是白白唤醒它一轮、多出一行
-`TaskOutput`。现在 `notifyOnce` 仍在 poller 看到退出的瞬间追加状态行，但
-在 `registry.agentBusy`（`agent_start` … `agent_settled`）期间**暂缓**消息；
-`agent_settled`（`flushHeld`）时再发——若模型已读到终态（`claimCompletion`
-置 `task.read`）则直接丢弃。空闲路径与原来逐字节相同（poller tick 即发）。
-暂缓中的发送抛错则留到下一次 settle；`endSession` 丢弃全部暂缓项。测试：
-`tests/held-followup.test.ts`。
+`TaskOutput`。完成消息现在两条规则（`registry.ts` `notifyOnce` /
+`flushPending`，对齐 CC 的 drain 批量）：
+
+- **空闲**：任务置 `ready`，poll tick 末尾的 flush 把这个 tick 内到期的全部
+  完成合成**一条**消息（单任务保持冻结的 BG-MSG-02 文本与 `details`；多任务
+  为 `Background tasks finished (N):` + 每任务一行 `- <id> (<desc>) ·
+  <state> · ran <runtime> · <command>`，`details {id, ids, tasks[], batch:
+  true}`），且**发送成功才追加状态行**（CH-6：没有消息就没有行）。poll 外
+  的 kill 路径立即 flush。
+- **忙碌**（`registry.agentBusy`，`agent_start` … `agent_settled`）：poller
+  看到退出即追加状态行，消息置 `held`，`agent_settled` 把全部 held 项合成
+  一条发出。
+- 无论哪条，模型自己读到了终态（`claimCompletion`）就当场清掉待发消息，
+  不会再为已知信息被唤醒。
+- 发送抛错则保持待发，下一次 flush（tick 或 settle）重试；`endSession`
+  丢弃全部待发；`hasPending` 让 poller 在有待发项时不停。
+
+测试：`tests/held-followup.test.ts`。
+
+## stall 看门狗（cc-core 新增，2026-11-24，对齐 CC LocalShellTask）
+
+后台命令卡在交互提示上，以前只能等 deadline。现在每个 poll tick 对运行中
+的任务检查：日志 45 秒（`STALL_THRESHOLD_MS`）没有增长（有输出增长即重置
+计时）→ 读末尾 1 KiB，**末行**像提示（`(y/n)`、`[y/n]`、`(yes/no)`、
+`Do you|Would you|Shall I|Are you sure|Ready to …?`、`Press any key|Enter`、
+`Continue?`、`Overwrite?`）→ 每任务只发一次提醒，走独立通道
+（`stallPending`，同样忙时暂缓）：`Background task bg-N (desc) appears to be
+waiting for interactive input (no output for 45s).` + tail + `Stop it with
+TaskStop … re-run with piped input … TaskOutput reads more.`，`details
+{id, state: "running", stall: true}`，同一 customType。末行不像提示只重置 45 秒
+计时（慢构建永不上报）。提醒不碰 `notified`——任务结束时完成通知照发；不追加
+状态行；任务在 flush 前已结束则丢弃（完成消息已说明）。测试：
+`tests/stall-watchdog.test.ts`。
 
 ## check 管道退出码守卫（cc-core 新增，2026-11-24）
 

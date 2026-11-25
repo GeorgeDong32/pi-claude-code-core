@@ -85,19 +85,49 @@ the threshold still hard-caps the foreground run.
   placeholder `waitFor` values drowned the agent in it), and the `waitFor`
   schema description tells the model to omit the parameter when not waiting
 
-## Held follow-ups while the agent is busy (cc-core addition, 2026-11-24)
+## Pending follow-ups: held while busy, flushed in batches (cc-core addition, 2026-11-24)
 
 A `followUp` is only delivered once the current run settles, and in 30 days
 of session logs the model often read the result itself meanwhile
 (`TaskOutput`), so the queued message woke it for nothing — an extra turn and
-a second `TaskOutput` row. Now `notifyOnce` still appends the status row the
-moment the poller sees the exit, but HOLDS the message while
-`registry.agentBusy` (`agent_start` … `agent_settled`); `agent_settled`
-(`flushHeld`) sends it unless the model already read the end
-(`task.read`, set by `claimCompletion`), in which case it is dropped. Idle
-behaviour is byte-for-byte the old one (send on the poller tick). A held send
-that throws stays held for the next settle; `endSession` drops everything
-held. Tests: `tests/held-followup.test.ts`.
+a second `TaskOutput` row. Two rules now govern the completion message
+(`registry.ts` `notifyOnce` / `flushPending`, CC drain parity):
+
+- **Idle**: the task is marked `ready`; the flush at the end of the poll tick
+  sends everything that came due in that tick as ONE message (a single task
+  keeps the frozen BG-MSG-02 text and `details`; several go as
+  `Background tasks finished (N):` with one `- <id> (<desc>) · <state> · ran
+  <runtime> · <command>` line each and `details {id, ids, tasks[], batch:
+  true}`), and only a successful send appends the status rows (CH-6: no row
+  without a delivered message). A kill path outside the poll flushes at once.
+- **Busy** (`registry.agentBusy`, `agent_start` … `agent_settled`): the row
+  goes out the moment the poller sees the exit, the message is `held` and
+  `agent_settled` flushes all held items as one message.
+- Either way, a model that read the end itself (`claimCompletion`) clears the
+  pending message on the spot, so nothing wakes it for information it has.
+- A send that throws leaves the items pending for the next flush (tick or
+  settle); `endSession` drops everything pending; `hasPending` keeps the
+  poller alive while anything is pending.
+
+Tests: `tests/held-followup.test.ts`.
+
+## Stall watchdog (cc-core addition, 2026-11-24, CC LocalShellTask parity)
+
+A background command blocked on an interactive prompt used to sit until its
+deadline. On every poll tick, a running task whose log has not grown for 45 s
+(`STALL_THRESHOLD_MS`; output growth restarts the clock) gets its last 1 KiB
+read: if the LAST line looks like a prompt (`(y/n)`, `[y/n]`, `(yes/no)`,
+`Do you|Would you|Shall I|Are you sure|Ready to …?`, `Press any key|Enter`,
+`Continue?`, `Overwrite?`), one nudge per task goes out on its own channel
+(`stallPending`, same hold-while-busy rule): `Background task bg-N (desc)
+appears to be waiting for interactive input (no output for 45s).` + the tail
++ `Stop it with TaskStop … re-run with piped input … TaskOutput reads more.`,
+with `details {id, state: "running", stall: true}` under the same
+customType. A non-prompt tail only resets the 45 s clock (a slow build is
+never reported). The nudge never touches `notified` — the completion still
+goes out when the task ends — appends no status row, and is dropped if the
+task ended before it was flushed (the completion says it). Tests:
+`tests/stall-watchdog.test.ts`.
 
 ## Check-pipeline exit guard (cc-core addition, 2026-11-24)
 

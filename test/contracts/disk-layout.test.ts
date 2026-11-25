@@ -19,7 +19,8 @@ import { GOAL_LEDGER_FILE } from "../../extensions/goal/goal-ledger.ts";
 import { writeFastMode } from "../../extensions/effort/effort.js";
 import { loadQueue, queueDir, writeQueueRecord, type QueueRecord } from "../../extensions/memory/queue.ts";
 import { stateRoot } from "../../extensions/bg-shell/launch.ts";
-import { MESSAGE_TYPE } from "../../extensions/bg-shell/notify.ts";
+import { completionBatchText, MESSAGE_TYPE, stallText } from "../../extensions/bg-shell/notify.ts";
+import type { Task } from "../../extensions/bg-shell/registry.ts";
 
 describe("P0-CT §4.5 frozen disk layout", () => {
 	it("P0-CT-09 (pm): project permissions files live at .pi/projects/<id>/permissions{,.local}.json", () => {
@@ -134,5 +135,44 @@ describe("P0-CT §4.5 frozen disk layout", () => {
 
 	it("BG-MSG-02: completion custom message customType 'cc-core-bg-shell' is frozen (followUp + triggerTurn, details {id, exitCode, state})", () => {
 		expect(MESSAGE_TYPE).toBe("cc-core-bg-shell");
+	});
+
+	it("BG-MSG-02 (batch): N completions wake the model once — one message, one line per task in the frozen order", () => {
+		const task = (id: string, description: string | undefined, state: Task["state"], exitCode: number | undefined, command: string): Task => ({
+			id,
+			description,
+			state,
+			reason: state === "killed" ? "timed out" : undefined,
+			exitCode,
+			command,
+			cwd: "/",
+			logPath: "/dev/null",
+			pid: 1,
+			nonce: "n",
+			scanFrom: 0,
+			startedAt: 0,
+			endedAt: 4_000,
+			readPosition: 0,
+			notified: true,
+			readFailures: 0,
+			logSize: 0,
+		});
+		const text = completionBatchText([task("bg-1", "first", "exited", 0, "echo a"), task("bg-2", undefined, "killed", undefined, "sleep 9")]);
+		expect(text).toBe(
+			"Background tasks finished (2):\n- bg-1 (first) · exited (code 0) · ran 4.0s · echo a\n- bg-2 · killed (timed out) · ran 4.0s · sleep 9\nOutput: read each with TaskOutput (id: bg-1, bg-2).",
+		);
+	});
+
+	it("BG-MSG-02 (stall): the nudge names the id, shows the tail and points at TaskStop/TaskOutput", () => {
+		const task = {
+			id: "bg-7",
+			state: "running",
+			startedAt: 0,
+			command: "sh setup",
+			description: undefined,
+		} as unknown as Task;
+		expect(stallText(task, "Continue?\n")).toBe(
+			"Background task bg-7 appears to be waiting for interactive input (no output for 45s).\nLast output:\nContinue?\n\nThe command is likely blocked on an interactive prompt. Stop it with TaskStop (id: bg-7) and re-run with piped input (e.g. `echo y | command`) or a non-interactive flag if one exists; TaskOutput (id: bg-7) reads more.",
+		);
 	});
 });

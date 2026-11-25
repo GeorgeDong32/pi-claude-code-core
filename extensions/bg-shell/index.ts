@@ -12,9 +12,9 @@ import { debugError, rotateDebugLog } from "./debug.ts";
 import { foregroundRuns, PROMOTE_MS, runForeground } from "./foreground.ts";
 import { GRACE_MS } from "./kill.ts";
 import { cleanupOldLogs } from "./logs.ts";
-import { stateText, taskLine } from "./notify.ts";
+import { STALL_THRESHOLD_MS, stateText, taskLine } from "./notify.ts";
 import { readOutput } from "./output.ts";
-import { attach, awaitTaskEnd, claimCompletion, endSession, flushHeld, getRegistry, killTask, seedNextIdFromBranch, setAgentBusy, setContext, startTask } from "./registry.ts";
+import { attach, awaitTaskEnd, claimCompletion, endSession, flushPending, getRegistry, killTask, seedNextIdFromBranch, setAgentBusy, setContext, startTask } from "./registry.ts";
 
 const BLOCK_DEFAULT_SECONDS = 30;
 const BLOCK_MAX_SECONDS = 600;
@@ -27,7 +27,8 @@ const BACKGROUND_DESCRIPTION =
 	"Read a finished task's output with `TaskOutput` — the notification itself carries none. " +
 	"To wait for something outside this machine, such as CI, background one command that blocks until it is done, " +
 	"such as `gh run watch <run-id> --exit-status` or `gh pr checks <number> --watch`, instead of running `sleep N` and a check yourself. " +
-	`A foreground command still running after ${PROMOTE_MS / 1000} s (unless it starts with \`sleep\`) moves to the background on its own; an explicit \`timeout\` becomes the backgrounded task's deadline.`;
+	`A foreground command still running after ${PROMOTE_MS / 1000} s (unless it starts with \`sleep\`) moves to the background on its own; an explicit \`timeout\` becomes the backgrounded task's deadline. ` +
+	`A background command whose output stalls on what looks like an interactive prompt is reported after ${STALL_THRESHOLD_MS / 1000} s; kill it with TaskStop and re-run with piped input (e.g. \`echo y | command\`).`;
 
 export default function (pi: ExtensionAPI): void {
 	attach(pi);
@@ -219,7 +220,7 @@ export default function (pi: ExtensionAPI): void {
 	});
 	pi.on("agent_settled", () => {
 		setAgentBusy(false);
-		flushHeld();
+		flushPending();
 	});
 	pi.on("session_shutdown", async (event) => {
 		if (event.reason !== "reload") await endSession();

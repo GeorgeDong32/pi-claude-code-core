@@ -44,7 +44,7 @@ type Tool = {
 };
 type Handler = (event: unknown, ctx: unknown) => unknown;
 type Command = { description?: string; handler: (args: string, ctx: unknown) => Promise<void> | void };
-type Sent = { message: { customType: string; content: string; display?: boolean }; options: unknown };
+type Sent = { message: { customType: string; content: string; display?: boolean; details?: Record<string, unknown> }; options: unknown };
 type CustomFactory = (
 	tui: unknown,
 	theme: unknown,

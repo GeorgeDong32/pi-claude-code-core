@@ -112,6 +112,7 @@ for (const reason of ["quit", "new", "resume", "fork"] as const) {
 			const leaves = await start(s, "server &");
 			const clean = await start(s, "true");
 			procs.of(leaves).exit(0, { child: true });
+			await clock.until(() => s.sent.length === 1); // staggered: two exits in one tick are batched into one message
 			procs.of(clean).exit(0);
 			await clock.until(() => s.sent.length === 2);
 			const [left, empty] = [procs.of(leaves), procs.of(clean)];

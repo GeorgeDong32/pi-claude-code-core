@@ -8,6 +8,27 @@ import { sanitize } from "./sanitize.ts";
 
 export const MESSAGE_TYPE = "cc-core-bg-shell";
 const TAIL_LINES = 20;
+/** No output growth for this long + a prompt-looking last line = the task is probably blocked on input. */
+export const STALL_THRESHOLD_MS = 45_000;
+export const STALL_TAIL_BYTES = 1_024;
+const STALL_TAIL_LINES = 5;
+// Last-line patterns that suggest a command is blocked on keyboard input. Only
+// the last line is tested so slow commands that merely print questions earlier
+// stay silent.
+const PROMPT_PATTERNS = [
+	/\(y\/n\)/i,
+	/\[y\/n\]/i,
+	/\(yes\/no\)/i,
+	/\b(?:Do you|Would you|Shall I|Are you sure|Ready to)\b.*\? *$/i,
+	/Press (any key|Enter)/i,
+	/Continue\?/i,
+	/Overwrite\?/i,
+];
+
+export function looksLikePrompt(tail: string): boolean {
+	const lastLine = tail.trimEnd().split("\n").pop() ?? "";
+	return PROMPT_PATTERNS.some((pattern) => pattern.test(lastLine));
+}
 const TAIL_BYTES = 4096;
 const READ_WINDOW = 64 * 1024;
 
@@ -62,15 +83,19 @@ export function taskLine(task: Task): string {
 	return `${who} | ${stateText(task)} | ${runtimeText(task)} | ${oneLine(task.command)}`;
 }
 
+/** `bg-5` or `bg-5 (description)` — the id the model needs, with the label it gave. */
+export function who(task: Task): string {
+	return task.description === undefined || task.description === "" ? task.id : `${task.id} (${task.description})`;
+}
+
 export function oneLine(command: string): string {
 	const line = command.replace(/\s*\n\s*/g, " ⏎ ");
 	return line.length > 200 ? `${line.slice(0, 200)}…` : line;
 }
 
 export function completionText(task: Task): string {
-	const who = task.description === undefined || task.description === "" ? task.id : `${task.id} (${task.description})`;
 	return [
-		`Background task ${who} finished: ${stateText(task)}, ran ${runtimeText(task)}.`,
+		`Background task ${who(task)} finished: ${stateText(task)}, ran ${runtimeText(task)}.`,
 		`Command: ${oneLine(task.command)}`,
 		`Output: read it with TaskOutput (id: ${task.id}).`,
 	].join("\n");
@@ -83,6 +108,64 @@ export function sendCompletion(pi: ExtensionAPI, task: Task): void {
 			content: completionText(task),
 			display: false,
 			details: { id: task.id, exitCode: task.exitCode, state: task.state },
+		},
+		{ deliverAs: "followUp", triggerTurn: true },
+	);
+}
+
+/** One line per task, same id/state/runtime/command fields as the single message (BG-MSG-02 batch form). */
+export function completionBatchText(tasks: Task[]): string {
+	const lines = tasks.map((task) => `- ${who(task)} · ${stateText(task)} · ran ${runtimeText(task)} · ${oneLine(task.command)}`);
+	return [
+		`Background tasks finished (${tasks.length}):`,
+		...lines,
+		`Output: read each with TaskOutput (id: ${tasks.map((task) => task.id).join(", ")}).`,
+	].join("\n");
+}
+
+/** Several completions woken in one turn: one message, so the model is not interrupted N times (CC drain parity). */
+export function sendCompletions(pi: ExtensionAPI, tasks: Task[]): void {
+	if (tasks.length === 1) {
+		sendCompletion(pi, tasks[0]!);
+		return;
+	}
+	pi.sendMessage(
+		{
+			customType: MESSAGE_TYPE,
+			content: completionBatchText(tasks),
+			display: false,
+			details: {
+				id: tasks[0]!.id,
+				ids: tasks.map((task) => task.id),
+				tasks: tasks.map((task) => ({ id: task.id, exitCode: task.exitCode, state: task.state })),
+				batch: true,
+			},
+		},
+		{ deliverAs: "followUp", triggerTurn: true },
+	);
+}
+
+export function stallText(task: Task, tail: string): string {
+	return [
+		`Background task ${who(task)} appears to be waiting for interactive input (no output for ${Math.round(STALL_THRESHOLD_MS / 1000)}s).`,
+		"Last output:",
+		tail.trimEnd(),
+		"",
+		`The command is likely blocked on an interactive prompt. Stop it with TaskStop (id: ${task.id}) and re-run with piped input (e.g. \`echo y | command\`) or a non-interactive flag if one exists; TaskOutput (id: ${task.id}) reads more.`,
+	].join("\n");
+}
+
+export function stallTail(task: Task): string {
+	return logTail(task, STALL_TAIL_LINES, STALL_TAIL_BYTES).text;
+}
+
+export function sendStall(pi: ExtensionAPI, task: Task, tail: string): void {
+	pi.sendMessage(
+		{
+			customType: MESSAGE_TYPE,
+			content: stallText(task, tail),
+			display: false,
+			details: { id: task.id, exitCode: undefined, state: task.state, stall: true },
 		},
 		{ deliverAs: "followUp", triggerTurn: true },
 	);
