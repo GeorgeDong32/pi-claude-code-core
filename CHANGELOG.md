@@ -3,6 +3,7 @@
 ### Added
 
 - **`obs_recall` selection (observation-pack)**: besides byte paging, `filter` (regex over the whole stored result, `context` lines around each match, default 2) and `tail` (last N lines); `offset` pages the selection; selected lines carry their 1-based number; a third protocol line `[selection: …]` reports coverage (`matched=N of M lines`). The placeholder now names the on-disk path of the original. Bad regex / non-positive tail come back as `obs_recall: <reason>` text. First header line and plain-paging `details` unchanged (XPKG-04). Motivation: in 30 days of session logs every recall paged the object start to end (median 2, max 4 round trips).
+- **bg-shell: completion follow-ups are held while the agent is busy**: the status row still appears the moment a background task exits, but the `cc-core-bg-shell` followUp (which pi only delivers after the current run settles anyway) waits for `agent_settled` and is dropped when the model already read the result through `TaskOutput` — no more wake-up turn for information the model already has. Idle behaviour unchanged.
 - **bg-shell check-pipeline exit guard**: when a bash command pipes a test/build/check command (`pnpm test 2>&1 | tail -25` and the like) without setting pipefail, that invocation's shell runs with `-o pipefail` (bash/zsh only), so the reported exit status is the pipeline's, not `tail`'s. Skips `grep -q`-style probes and commands that already set pipefail. 55.6% of check command segments in 30 days of session logs went straight into a pipe.
 
 ### Changed

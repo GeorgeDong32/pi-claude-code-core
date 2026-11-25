@@ -85,6 +85,20 @@ the threshold still hard-caps the foreground run.
   placeholder `waitFor` values drowned the agent in it), and the `waitFor`
   schema description tells the model to omit the parameter when not waiting
 
+## Held follow-ups while the agent is busy (cc-core addition, 2026-11-24)
+
+A `followUp` is only delivered once the current run settles, and in 30 days
+of session logs the model often read the result itself meanwhile
+(`TaskOutput`), so the queued message woke it for nothing — an extra turn and
+a second `TaskOutput` row. Now `notifyOnce` still appends the status row the
+moment the poller sees the exit, but HOLDS the message while
+`registry.agentBusy` (`agent_start` … `agent_settled`); `agent_settled`
+(`flushHeld`) sends it unless the model already read the end
+(`task.read`, set by `claimCompletion`), in which case it is dropped. Idle
+behaviour is byte-for-byte the old one (send on the poller tick). A held send
+that throws stays held for the next settle; `endSession` drops everything
+held. Tests: `tests/held-followup.test.ts`.
+
 ## Check-pipeline exit guard (cc-core addition, 2026-11-24)
 
 `pipefail.ts`: the model writes `pnpm test 2>&1 | tail -25` more often than

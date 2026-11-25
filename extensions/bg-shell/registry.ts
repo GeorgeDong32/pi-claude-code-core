@@ -3,6 +3,13 @@
 // `moduleCache: false`: module state does not survive `/reload`, this does.
 // It holds the 2 s poller, the 250 ms log-limit check, and the current `pi` and
 // context, which each load refreshes.
+//
+// Completion follow-ups while the agent is busy: a `deliverAs: "followUp"`
+// message is only delivered once the current run settles, and the model often
+// reads the result itself meanwhile (TaskOutput) — the queued message then
+// wakes it for nothing. So `notifyOnce` appends the status row at once but
+// HOLDS the message while `agentBusy`; `agent_settled` flushes it unless the
+// model already read the end (`task.read`), in which case it is dropped.
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -51,6 +58,10 @@ export type Task = {
 	notified: boolean;
 	readFailures: number;
 	waiting?: number;
+	/** completion follow-up held back because the agent was mid-run */
+	held?: boolean;
+	/** the model read the task's end through TaskOutput */
+	read?: boolean;
 };
 
 type Registry = {
@@ -64,6 +75,8 @@ type Registry = {
 	emptyGroups: Set<number>;
 	launching: Set<Promise<void>>;
 	foreground: Set<ForegroundRun>;
+	/** an agent run is active or queued (agent_start … agent_settled) */
+	agentBusy: boolean;
 };
 
 export type Leftovers = "none" | "stopped" | "stuck";
@@ -77,7 +90,9 @@ export function getRegistry(): Registry {
 		emptyGroups: new Set(),
 		launching: new Set(),
 		foreground: new Set(),
+		agentBusy: false,
 	});
+	registry.agentBusy ??= false; // a registry left by an older load (reload) has no flag yet
 	registry.groups ??= new Set();
 	registry.emptyGroups ??= new Set();
 	registry.launching ??= new Set();
@@ -109,7 +124,10 @@ export async function endSession(): Promise<void> {
 	stopTimers(registry);
 	while (registry.launching.size > 0) await Promise.all([...registry.launching]);
 	const tasks = [...registry.tasks.values()];
-	for (const task of tasks) task.notified = true;
+	for (const task of tasks) {
+		task.notified = true;
+		task.held = false;
+	}
 	const pids = new Set(
 		[...registry.groups, ...tasks.map((task) => task.pid)].filter((pid) => !registry.emptyGroups.has(pid)),
 	);
@@ -438,10 +456,22 @@ function poll(registry: Registry): void {
 	if (!hasPending(registry)) stopTimers(registry);
 }
 
-/** Report the task's end once: the flag is set before the send, and reset when the send throws so a later tick retries. The log is gzipped only after the message really went out (Q21); a gzip failure leaves the plain log and must not resend the message. */
+/** Gzip the log once nothing of the process is left; a gzip failure leaves the plain log and must not resend anything. */
+function gzipIfGone(task: Task): void {
+	if (!processPort().groupAlive(task.pid)) void gzipLog(task).catch((error) => debugError("gzip", error, taskFields(task)));
+}
+
+/** Report the task's end once. Idle: the flag is set before the send and reset when the send throws so a later tick retries; the log is gzipped only after the message really went out (Q21). Busy: the status row goes out now and the follow-up is held for `agent_settled` (see the header). */
 function notifyOnce(registry: Registry, task: Task): void {
 	if ((task.waiting ?? 0) > 0) return;
 	if (task.notified || registry.pi === undefined) return;
+	if (registry.agentBusy) {
+		task.notified = true;
+		task.held = true;
+		appendStatusEntry(registry.pi, task);
+		gzipIfGone(task);
+		return;
+	}
 	task.notified = true;
 	try {
 		sendCompletion(registry.pi, task);
@@ -450,8 +480,34 @@ function notifyOnce(registry: Registry, task: Task): void {
 		throw error;
 	}
 	appendStatusEntry(registry.pi, task);
-	if (!processPort().groupAlive(task.pid))
-		void gzipLog(task).catch((error) => debugError("gzip", error, taskFields(task)));
+	gzipIfGone(task);
+}
+
+export function setAgentBusy(busy: boolean): void {
+	getRegistry().agentBusy = busy;
+}
+
+/** `agent_settled`: send the held follow-ups the model did not read itself. A send that throws stays held for the next settle. */
+export function flushHeld(): void {
+	const registry = getRegistry();
+	for (const task of registry.tasks.values()) {
+		if (!task.held) continue;
+		if (task.read) {
+			task.held = false;
+			debug("followup-dropped", { ...taskFields(task), reason: "model read the end" });
+			continue;
+		}
+		if (registry.pi === undefined) {
+			task.held = false;
+			continue;
+		}
+		try {
+			sendCompletion(registry.pi, task);
+			task.held = false;
+		} catch (error) {
+			debugError("held-send", error, taskFields(task));
+		}
+	}
 }
 
 const WAIT_POLL_MS = 250;
@@ -485,12 +541,17 @@ export async function awaitTaskEnd(task: Task, ms: number, signal: AbortSignal):
 }
 
 export function claimCompletion(task: Task): void {
-	if (task.notified) return;
+	if (task.notified && !task.held) return;
 	const registry = getRegistry();
 	if (task.state === "running" && task.killing === undefined) refresh(registry, task);
 	if (task.state === "running" || registry.pi === undefined) return;
+	task.read = true;
+	if (task.held) {
+		// the row is already out; the model got to the end first, so no follow-up
+		task.held = false;
+		return;
+	}
 	task.notified = true;
 	appendStatusEntry(registry.pi, task);
-	if (!processPort().groupAlive(task.pid))
-		void gzipLog(task).catch((error) => debugError("gzip", error, taskFields(task)));
+	gzipIfGone(task);
 }

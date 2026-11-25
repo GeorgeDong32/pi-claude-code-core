@@ -73,6 +73,17 @@ RPC 降级 `ui.select`；无 UI 打印列表）。`ctrl+shift+b` 把前台运行
   报错两条路径不再追加（模型传占位 waitFor 值时该提示泛滥），且
   `waitFor` 参数说明明确告知不等待时应省略该参数
 
+## agent 忙碌时暂缓 followUp（cc-core 新增，2026-11-24）
+
+`followUp` 要等当前 run 结束才投递；30 天会话日志里模型经常在这期间自己
+读了结果（`TaskOutput`），排队的那条消息于是白白唤醒它一轮、多出一行
+`TaskOutput`。现在 `notifyOnce` 仍在 poller 看到退出的瞬间追加状态行，但
+在 `registry.agentBusy`（`agent_start` … `agent_settled`）期间**暂缓**消息；
+`agent_settled`（`flushHeld`）时再发——若模型已读到终态（`claimCompletion`
+置 `task.read`）则直接丢弃。空闲路径与原来逐字节相同（poller tick 即发）。
+暂缓中的发送抛错则留到下一次 settle；`endSession` 丢弃全部暂缓项。测试：
+`tests/held-followup.test.ts`。
+
 ## check 管道退出码守卫（cc-core 新增，2026-11-24）
 
 `pipefail.ts`：模型写 `pnpm test 2>&1 | tail -25` 是常态（30 天会话日志里

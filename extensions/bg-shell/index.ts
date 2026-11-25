@@ -14,7 +14,7 @@ import { GRACE_MS } from "./kill.ts";
 import { cleanupOldLogs } from "./logs.ts";
 import { stateText, taskLine } from "./notify.ts";
 import { readOutput } from "./output.ts";
-import { attach, awaitTaskEnd, claimCompletion, endSession, getRegistry, killTask, seedNextIdFromBranch, setContext, startTask } from "./registry.ts";
+import { attach, awaitTaskEnd, claimCompletion, endSession, flushHeld, getRegistry, killTask, seedNextIdFromBranch, setAgentBusy, setContext, startTask } from "./registry.ts";
 
 const BLOCK_DEFAULT_SECONDS = 30;
 const BLOCK_MAX_SECONDS = 600;
@@ -213,6 +213,13 @@ export default function (pi: ExtensionAPI): void {
 		}
 		rotateDebugLog();
 		cleanupOldLogs(getRegistry().tasks.values());
+	});
+	pi.on("agent_start", () => {
+		setAgentBusy(true);
+	});
+	pi.on("agent_settled", () => {
+		setAgentBusy(false);
+		flushHeld();
 	});
 	pi.on("session_shutdown", async (event) => {
 		if (event.reason !== "reload") await endSession();
