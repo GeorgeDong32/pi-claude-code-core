@@ -1,15 +1,3 @@
-/*
- * Smart Compaction host-scaffold + public-surface contracts (SPEC SC §4.1
- * H1/H7/H8/H16, §4.3 S4; contract rows SC-HOST-04/05/06).
- *
- * H16 pins the scaffold recipe itself so W3/W4/W5 integration tests can
- * rely on it; H1 pins the public export set and the exports-map
- * enforcement (bare deep imports of dist internals are rejected);
- * H8/S4 pins SettingsManager.getCompactionSettings modelOverrides
- * resolution ("provider/id" keys with slashes) against pi's own threshold
- * computation, plus the no-write-side-effect property the fallback (S4
- * decision) depends on.
- */
 import { describe, expect, it } from "vitest";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import {
@@ -67,7 +55,6 @@ describe("H16 host scaffold recipe", () => {
 	it("boots a real AgentSession with fauxProvider + ModelRuntime.registerNativeProvider and runs a prompt", async () => {
 		const host = await createCompactionHost({ probe: {} });
 		try {
-			// The REAL implementation class, not a stub (spec §4.4).
 			expect(host.sessionManager instanceof SessionManager).toBe(true);
 			host.faux.setResponses([fauxAssistantMessage("boots fine")]);
 			await host.session.prompt("hello");
@@ -82,7 +69,7 @@ describe("H16 host scaffold recipe", () => {
 		const host = await createCompactionHost({ probe: {} });
 		try {
 			host.faux.setResponses([fauxAssistantMessage("boom", { stopReason: "error", errorMessage: "provider exploded" })]);
-			await host.session.prompt("hello"); // resolves — no throw
+			await host.session.prompt("hello");
 			const turns = host.events.filter((e) => e.name === "turn_end");
 			expect(turns.length).toBe(1);
 			expect(turns[0].stopReason).toBe("error");
@@ -95,8 +82,8 @@ describe("H16 host scaffold recipe", () => {
 
 describe("SC-HOST-06 SettingsManager compaction settings resolution (H8, S4)", () => {
 	it("modelOverrides keys are 'provider/id' (slash included): override > ordinary > built-in default", async () => {
-		// Override wins over ordinary (applyOverrides deep-merges, so each
-		// case gets a fresh host to keep the layers separate).
+		// pi's SettingsManager.applyOverrides deep-merges, so each case gets a
+		// fresh host to keep the override layers separate.
 		const host = await createCompactionHost({
 			model: { contextWindow: 64000, maxTokens: 4096 },
 			probe: {},
@@ -109,18 +96,16 @@ describe("SC-HOST-06 SettingsManager compaction settings resolution (H8, S4)", (
 					reserveTokens: 7000, // ordinary
 					keepRecentTokens: 3000,
 					modelOverrides: {
-						// The key format under test: provider/id with the slash.
 						[`${model.provider}/${model.id}`]: { reserveTokens: 4242 },
 					},
 				},
 			} as never);
 			const settings = host.settingsManager.getCompactionSettings(model);
-			expect(settings.reserveTokens).toBe(4242); // override wins
-			expect(settings.keepRecentTokens).toBe(3000); // ordinary for the other field
+			expect(settings.reserveTokens).toBe(4242);
+			expect(settings.keepRecentTokens).toBe(3000);
 		} finally {
 			host.cleanup();
 		}
-		// No override entry: ordinary wins.
 		const hostB = await createCompactionHost({ model: { contextWindow: 64000 }, probe: {} });
 		try {
 			hostB.settingsManager.applyOverrides({ compaction: { reserveTokens: 8000 } } as never);
@@ -128,7 +113,6 @@ describe("SC-HOST-06 SettingsManager compaction settings resolution (H8, S4)", (
 		} finally {
 			hostB.cleanup();
 		}
-		// Neither: built-in defaults (16384 / 20000 in pi 1.5.0).
 		const hostC = await createCompactionHost({ probe: {} });
 		try {
 			expect(hostC.settingsManager.getCompactionSettings(hostC.session.model!)).toEqual({
@@ -149,9 +133,9 @@ describe("SC-HOST-06 SettingsManager compaction settings resolution (H8, S4)", (
 				compaction: { enabled: true, reserveTokens: 25000, modelOverrides: { [`${model.provider}/${model.id}`]: { reserveTokens: 30000 } } },
 			} as never);
 			const settings = host.settingsManager.getCompactionSettings(model);
-			// shouldCompact is the exact predicate _checkCompaction uses.
+			// shouldCompact is the exact predicate pi's _checkCompaction uses.
 			expect(shouldCompact(69999, 100000, settings)).toBe(false);
-			expect(shouldCompact(70001, 100000, settings)).toBe(true); // 100000 − 30000
+			expect(shouldCompact(70001, 100000, settings)).toBe(true);
 		} finally {
 			host.cleanup();
 		}
@@ -178,7 +162,7 @@ describe("SC-HOST-04 getContextUsage null window (H7)", () => {
 			probe: {
 				captureContextUsage: true,
 				turnEndDraft: (event) => {
-					if (drafted) return undefined; // one compaction for the whole scenario
+					if (drafted) return undefined;
 					drafted = true;
 					return [compactionDraft("SUMMARY usage", event.messageEntryId)];
 				},
@@ -187,15 +171,12 @@ describe("SC-HOST-04 getContextUsage null window (H7)", () => {
 		try {
 			host.faux.setResponses([fauxAssistantMessage("first answer")]);
 			await host.session.prompt("turn one");
-			// After the commit (agent_end was the first post-commit event), the
-			// usage anchor is the pre-compaction assistant → tokens null.
 			const firstPassNames = host.events.map((e) => e.name);
 			const agentEndIndex = firstPassNames.indexOf("agent_end");
 			const usageAtAgentEnd = host.contextUsage[agentEndIndex] as { tokens: number | null; contextWindow: number } | undefined;
 			expect(usageAtAgentEnd).toBeDefined();
 			expect(usageAtAgentEnd!.tokens).toBeNull();
 			expect(usageAtAgentEnd!.contextWindow).toBeGreaterThan(0);
-			// A post-compaction assistant response restores the numeric reading.
 			host.faux.setResponses([fauxAssistantMessage("second answer")]);
 			await host.session.prompt("turn two");
 			const settleIndex = host.events.map((e) => e.name).lastIndexOf("agent_settled");

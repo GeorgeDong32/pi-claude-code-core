@@ -1,10 +1,3 @@
-/**
- * INTERRUPT SAFETY pin (fix 2026-10-02): the goal Esc-to-pause raw-input
- * listener must never steal the user's interrupt. Observed failure: a hung
- * update_goal audit + Esc → the listener ran pauseActiveGoal synchronously
- * inside the TUI input-dispatch loop, breaking the chain before the focused
- * component saw Escape — no way to interrupt a stuck agent. Flat node:test.
- */
 import assert from "node:assert/strict";
 import test from "node:test";
 

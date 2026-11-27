@@ -1,5 +1,3 @@
-// Behaviour tier: `TaskList`, `TaskStop`, deadlines and `/tasks` over the fake
-// process table and fake time.
 import assert from "node:assert/strict";
 import { chmodSync } from "node:fs";
 import { join } from "node:path";
@@ -35,7 +33,6 @@ afterEach(() => {
 });
 after(cleanup);
 
-/** Fake ms a call takes to settle. */
 async function timed(call: Promise<unknown>): Promise<number> {
 	const from = Date.now();
 	await clock.settle(call);
@@ -67,7 +64,7 @@ describe("TaskList", () => {
 		const id = await start(s, "job");
 		await clock.advance(5000);
 		procs.of(id).exit(0);
-		await clock.until(() => s.sent.length > 0); // the poll at 6 s notices
+		await clock.until(() => s.sent.length > 0);
 		await clock.advance(60_000);
 		assert.equal(text(await s.toolCall("TaskList", {})), `${id} | exited (code 0) | 6.0s | job`);
 		assert.match(s.sent[0].message.content, /finished: exited \(code 0\), ran 6\.0s\./);
@@ -164,7 +161,7 @@ describe("TaskStop", () => {
 	it("reports a task that finished but was not yet polled as already finished, and sends no message", async () => {
 		const s = session();
 		const id = await start(s, "exit 2");
-		procs.of(id).exit(2); // no poller tick has run
+		procs.of(id).exit(2);
 		assert.equal(s.sent.length, 0);
 		assert.equal(text(await s.toolCall("TaskStop", { id })), `Task ${id} has already finished: exited (code 2).`);
 		await clock.tick(3);
@@ -241,7 +238,6 @@ describe("a background timeout", () => {
 		await clock.until(() => s.sent.length > 0);
 		assert.equal(proc.groupAlive(), false);
 		assert.deepEqual(proc.signals, ["SIGTERM"]);
-		// The poll at 6 s sends SIGTERM; the group is seen gone 0.1 s later.
 		assert.match(
 			s.sent[0].message.content,
 			new RegExp(`^Background task ${id} finished: killed \\(timed out\\), ran 6\\.1s\\.`),
@@ -258,7 +254,7 @@ describe("a background timeout", () => {
 		const id = await start(s, "trap '' TERM; while :; do sleep 1; done", { timeout: 5 });
 		const proc = procs.of(id);
 		proc.ignoresTerm = true;
-		await clock.advance(8000); // the wrapper died of SIGTERM at 6 s; the group lingers; polls must skip the task
+		await clock.advance(8000);
 		assert.equal(s.sent.length, 0);
 		await clock.until(() => s.sent.length > 0);
 		assert.equal(s.sent.length, 1);
@@ -328,7 +324,7 @@ describe("/tasks", () => {
 		procs.of(id).ignoresTerm = true;
 		s.dialogs.keys = [["x"], [keys.escape]];
 		const command = s.command("tasks");
-		await clock.advance(2500); // a poll runs during the kill and must skip the task
+		await clock.advance(2500);
 		assert.equal(s.sent.length, 0);
 		await clock.settle(command);
 		assert.equal(s.sent.length, 1);
@@ -458,8 +454,6 @@ describe("/tasks", () => {
 	it("says so when there are no tasks", async () => {
 		const s = session();
 		await s.command("tasks");
-		// C2 follow-up: /tasks notices ride the shared bus tail queue now;
-		// the fake host ui.notify only sees them on the legacy cctui leg.
 		assert.deepEqual(
 			(coreBus().snapshot().notifications ?? []).map((n) => n.msg),
 			["No background tasks."],

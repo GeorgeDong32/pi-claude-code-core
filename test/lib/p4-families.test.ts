@@ -1,11 +1,3 @@
-/**
- * P4 tests — rule families (FAM), mcp family + broker mirror (MC),
- * web family (WB). Gate end-to-end cases drive the REAL modes gate through
- * the fake host (first-seen dialog answers via ui.select override); the
- * mirror consistency matrix (P4-MC-04) drives the mirror's pure decide()
- * against the five recorded gate outcomes — uiPrompts≤1 is asserted on the
- * end-to-end cases instead (the matrix has no UI surface by design).
- */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -70,7 +62,6 @@ describe("P4-MC-01 canonicalize + resolve", () => {
 		expect(resolveMcpVerdict("mcp_exa_search", [rule("allow", "mcp_exa_*")])).toBe("allow");
 		expect(resolveMcpVerdict("mcp_exa_search", [])).toBe("ask");
 		expect(resolveMcpVerdict("mcp_exa_search", [rule("allow", "mcp_exa_*"), rule("deny", "mcp_exa_search")])).toBe("deny");
-		// B1: explicit ask is NOT swallowed by a broader allow prefix
 		expect(resolveMcpVerdict("mcp_exa_search", [rule("allow", "mcp_exa_*"), rule("ask", "mcp_exa_search")])).toBe("ask");
 	});
 
@@ -84,7 +75,6 @@ describe("P4-MC-01 canonicalize + resolve", () => {
 describe("P4-WB web family", () => {
 	it("extracts hosts from URL fields only; a query is a search term, not a URL", () => {
 		expect(extractHost({ url: "https://github.com/a/b" })).toBe("github.com");
-		// free-text query must NOT become host governance (review C9)
 		expect(extractHost({ query: "example.com/docs" })).toBeNull();
 		expect(extractHost({ url: 42 })).toBeNull();
 	});
@@ -92,13 +82,11 @@ describe("P4-WB web family", () => {
 	it("preapproved domains allow without rules; rules override; suggest form", () => {
 		const family: RuleFamily = createWebRuleFamily("/nonexistent-home");
 		expect(family.match("mcp_exa_crawl", { url: "https://developer.mozilla.org/" })).toBe("developer.mozilla.org");
-		// S3: a non-mcp tool that merely has a url param stays unclaimed
-		// (P4-FAM-02④ passthrough invariant)
 		expect(family.match("webfetch", { url: "https://developer.mozilla.org/" })).toBeNull();
 		expect(family.resolve("developer.mozilla.org", [])).toBe("allow");
 		expect(family.resolve("evil.example", [])).toBe("ask");
 		expect(family.resolve("evil.example", [rule("deny", "webfetch(domain:evil.example)")])).toBe("deny");
-		expect(family.resolve("github.com", [rule("deny", "webfetch(domain:github.com)")])).toBe("deny"); // rule beats preapproved
+		expect(family.resolve("github.com", [rule("deny", "webfetch(domain:github.com)")])).toBe("deny");
 		expect(family.suggestAllowRule("example.com")).toBe("webfetch(domain:example.com)");
 		expect(BUILTIN_PREAPPROVED.length).toBeGreaterThan(5);
 	});
@@ -123,8 +111,6 @@ describe("P4-FAM-04 gate end-to-end (real modes gate)", () => {
 		host.flags["permission-mode"] = mode;
 		const project = mkdtempSync(join(tmpdir(), "p4-gate-"));
 		host.flags._project = project;
-		// isolate from the real ~/.pi/agent config (the gate reads merged
-		// rules from it; leftover local rules would flip first-seen cases)
 		setConfigPath(join(project, "permission-modes.json"));
 		writeFileSync(join(project, "permission-modes.json"), JSON.stringify({}));
 		setModelsPath(join(project, "model-profiles.json"));
@@ -141,17 +127,15 @@ describe("P4-FAM-04 gate end-to-end (real modes gate)", () => {
 			return "Allow once";
 		};
 		const result = await host.fire("tool_call", { toolName: "mcp__exa__search", input: { query: "x" } }, ctx);
-		expect(result).toBeUndefined(); // Allow once → pass
-		expect(selectCalls).toBe(1); // uiPrompts ≤ 1 (P4-MC-04)
+		expect(result).toBeUndefined();
+		expect(selectCalls).toBe(1);
 		expect(hasSessionGrant("mcp_exa_search")).toBe(false);
 	});
 
 	it("ask mode: Allow for this session grants; later calls pass without prompting", async () => {
 		const { host, ctx } = setupModesWithFamilies("ask");
 		await host.fire("session_start", {}, ctx);
-		// answer the first-seen dialog with option 2
 		const ctx2 = host.makeCtx({ cwd: (host.flags as Record<string, string>)._project, ui: true });
-		// default fake select answers "Block" — verify deny first
 		const denied = await host.fire("tool_call", { toolName: "mcp__exa__search", input: { query: "x" } }, ctx);
 		expect(denied).toMatchObject({ block: true });
 		grantSession("mcp_exa_search");
@@ -162,7 +146,6 @@ describe("P4-FAM-04 gate end-to-end (real modes gate)", () => {
 	it("ask mode: Allow always persists the suggested server-wide rule to disk", async () => {
 		const { host, ctx, project } = setupModesWithFamilies("ask");
 		await host.fire("session_start", {}, ctx);
-		// dialog → "Allow always" writes the suggested GLOBAL rule
 		const { setConfigPath } = await import("../../extensions/modes/config.ts");
 		const globalCfg = join(project, "permission-modes.json");
 		setConfigPath(globalCfg);
@@ -197,7 +180,6 @@ describe("P4-FAM-04 gate end-to-end (real modes gate)", () => {
 		const project = mkdtempSync(join(tmpdir(), "p4-askrule-"));
 		host.flags["permission-mode"] = "ask";
 		const ctx = host.makeCtx({ cwd: project, ui: true });
-		// explicit ASK rule for the canonical id (not a first-seen case)
 		const { addPermissionRule } = await import("../../extensions/modes/permissions-loader.js");
 		const { setConfigPath } = await import("../../extensions/modes/config.ts");
 		const cfg = join(project, "permission-modes.json");
@@ -206,21 +188,18 @@ describe("P4-FAM-04 gate end-to-end (real modes gate)", () => {
 		addPermissionRule({ rule: "mcp_exa_search", behavior: "ask", destination: "global", cwd: project });
 		await host.fire("session_start", {}, ctx);
 
-		// the ask-rule path goes through promptWithPermissionOptions →
-		// "Allow" → applyApprovalDecision("allow") — the funnel must record
 		let selectCalls = 0;
 		(ctx.ui as { select: unknown }).select = async () => {
 			selectCalls++;
 			return "Allow";
 		};
 		const result = await host.fire("tool_call", { toolName: "mcp__exa__search", input: { query: "x" } }, ctx);
-		expect(result).toBeUndefined(); // gate allowed
+		expect(result).toBeUndefined();
 		expect(selectCalls).toBe(1);
 
 		const { getAdjudication } = await import("../../extensions/modes/rule-families.ts");
 		expect(getAdjudication("mcp_exa_search")?.outcome).toBe("allow-once");
 
-		// mirror consistency (P4-MC-04②): gate allowed ⇒ mirror allows
 		const { createBrokerMirror } = await import("../../extensions/mcp-gov/broker.ts");
 		const { hasSessionGrant: hasGrant, getAdjudication: getAdj } = await import("../../extensions/modes/rule-families.ts");
 		const mirror = createBrokerMirror({ present: false }, {
@@ -259,8 +238,6 @@ describe("P4-MC-03/04 broker mirror + consistency matrix", () => {
 	}
 
 	it("five gate outcomes × bypass states stay consistent (uiPrompts ≤ 1, gate owner mirror owner)", () => {
-		// matrix over outcomes: rule-allow / allow-once / session-grant /
-		// classifier-allow / deny
 		const outcomes = ["rule-allow", "allow-once", "session-grant", "classifier-allow", "deny"] as const;
 		for (const outcome of outcomes) {
 			for (const bypass of [false, true]) {
@@ -277,7 +254,6 @@ describe("P4-MC-03/04 broker mirror + consistency matrix", () => {
 				} else {
 					expect(decision).toBe("allow_once");
 				}
-				// gate allow ⇒ mirror allow; gate deny ⇒ tool never reaches the broker
 				if (outcome !== "deny" && !bypass) expect(decision).toBe("allow_once");
 			}
 		}
@@ -327,8 +303,6 @@ describe("P4-FAM-05 session grants lifecycle + visibility", () => {
 		grantSession("mcp_exa_search");
 		expect(hasSessionGrant("mcp_exa_search")).toBe(true);
 		await host.fire("session_shutdown", {}, ctx);
-		// session_shutdown handler clears (2.8.0 handler extended? no — the
-		// grant clear lives in session_start; shutdown keeps the key pin)
 		await host.fire("session_start", {}, ctx);
 		expect(hasSessionGrant("mcp_exa_search")).toBe(false);
 	});
@@ -352,21 +326,18 @@ describe("P4-FAM-05 session grants lifecycle + visibility", () => {
 
 describe("review-2026-09-22-II fixes", () => {
 	it("S5: rule specificity — exact name beats broader prefixes across behaviors", () => {
-		// exact allow beats bare mcp_* deny
 		expect(
 			resolveMcpVerdict("mcp_exa_search", [
 				rule("deny", "mcp_*"),
 				rule("allow", "mcp_exa_search"),
 			]),
 		).toBe("allow");
-		// server-prefix deny beats bare mcp_* allow
 		expect(
 			resolveMcpVerdict("mcp_exa_search", [
 				rule("allow", "mcp_*"),
 				rule("deny", "mcp_exa_*"),
 			]),
 		).toBe("deny");
-		// same tier keeps deny > ask > allow (P4 B1)
 		expect(
 			resolveMcpVerdict("mcp_exa_search", [
 				rule("allow", "mcp_exa_*"),
@@ -402,11 +373,11 @@ describe("review-2026-09-22-II fixes", () => {
 			hasSessionGrant: () => false,
 		});
 		mirror.start();
-		mirror.start(); // double start replaces nothing — still one subscription
+		mirror.start();
 		expect(subscriptions).toBe(1);
 		mirror.stop();
 		expect(subscriptions).toBe(0);
-		mirror.stop(); // idempotent
+		mirror.stop();
 		expect(subscriptions).toBe(0);
 		mirror.start();
 		expect(subscriptions).toBe(1);
@@ -433,18 +404,13 @@ describe("review fix C5: family deny shows the real rule", () => {
 		);
 		expect(verdict.behavior).toBe("deny");
 		if (verdict.behavior === "deny") {
-			expect(verdict.rule).toBe("mcp_exa_*"); // the deny rule, not a suggested allow
+			expect(verdict.rule).toBe("mcp_exa_*");
 			expect(verdict.source).toBe("project");
 		}
 		clearRuleFamilies();
 	});
 });
 
-// ---- SPEC 2026-10-07 P0-1: family-governed MCP in plan (D2b) ----------------
-// T15/T16: family-claimed MCP calls stay USABLE in plan (allow rule / session
-// grant / first-seen Allow), their remote schema params (command/run/cmd/
-// then_run) are NOT treated as local shell (R2 scan boundary), and the same
-// shapes without a family stay denied (D2c fail-closed).
 describe("P0-1 D2: family-governed MCP in plan mode", () => {
 	function setupPlan(perms?: { allow?: string[]; deny?: string[] }, familyKnownServers?: string[]) {
 		createMcpRuleFamily(familyKnownServers ? { knownServers: familyKnownServers } : undefined);
@@ -473,7 +439,6 @@ describe("P0-1 D2: family-governed MCP in plan mode", () => {
 	];
 
 	it("T15: allow rule / session grant / first-seen Allow pass in plan; dangerous-looking remote params are not local shell; Block and deny still reject", async () => {
-		// allow rule
 		{
 			const { host, ctx } = setupPlan({ allow: ["mcp_exa_*"] });
 			await host.fire("session_start", {}, ctx);
@@ -488,7 +453,6 @@ describe("P0-1 D2: family-governed MCP in plan mode", () => {
 			}
 			expect(selectCalls).toBe(0);
 		}
-		// session grant
 		{
 			const { host, ctx } = setupPlan();
 			await host.fire("session_start", {}, ctx);
@@ -496,7 +460,6 @@ describe("P0-1 D2: family-governed MCP in plan mode", () => {
 			const r = await host.fire("tool_call", { toolName: "mcp__exa__search", input: { command: "rm -rf /" } }, ctx);
 			expect(r).toBeUndefined();
 		}
-		// first-seen Allow once
 		{
 			const { host, ctx } = setupPlan();
 			await host.fire("session_start", {}, ctx);
@@ -509,14 +472,12 @@ describe("P0-1 D2: family-governed MCP in plan mode", () => {
 			expect(r).toBeUndefined();
 			expect(selectCalls).toBe(1);
 		}
-		// first-seen Block still rejects
 		{
 			const { host, ctx } = setupPlan();
 			await host.fire("session_start", {}, ctx);
 			const r = await host.fire("tool_call", { toolName: "mcp__exa__search", input: { query: "x" } }, ctx);
 			expect(r).toMatchObject({ block: true });
 		}
-		// deny rule still wins
 		{
 			const { host, ctx } = setupPlan({ deny: ["mcp_exa_search"] });
 			await host.fire("session_start", {}, ctx);
@@ -527,7 +488,6 @@ describe("P0-1 D2: family-governed MCP in plan mode", () => {
 	});
 
 	it("T16: native/direct/proxy shapes with family pass; web-family pre-claim respected; same input without family denied; non-MCP family claim does not exempt the scan; built-in names stay hard-limited", async () => {
-		// native + proxy + direct shapes under an allow rule
 		{
 			const { host, ctx } = setupPlan({ allow: ["mcp_exa_*"] });
 			await host.fire("session_start", {}, ctx);
@@ -537,8 +497,6 @@ describe("P0-1 D2: family-governed MCP in plan mode", () => {
 		{
 			process.env.PI_CORE_MCP_DIRECT_SERVERS = "exa";
 			try {
-				// production assembly passes the env-known servers to the
-				// family (mcp-gov/index.ts) — mirror it for the direct shape
 				const { host, ctx } = setupPlan({ allow: ["mcp_exa_*"] }, ["exa"]);
 				await host.fire("session_start", {}, ctx);
 				expect(await host.fire("tool_call", { toolName: "exa_search", input: { then_run: { command: "x" } } }, ctx)).toBeUndefined();
@@ -546,7 +504,6 @@ describe("P0-1 D2: family-governed MCP in plan mode", () => {
 				delete process.env.PI_CORE_MCP_DIRECT_SERVERS;
 			}
 		}
-		// web family claims FIRST (registered before mcp): preapproved domain allows
 		{
 			clearRuleFamilies();
 			const home = mkdtempSync(join(tmpdir(), "web-p01-"));
@@ -564,7 +521,6 @@ describe("P0-1 D2: family-governed MCP in plan mode", () => {
 			const r = await host.fire("tool_call", { toolName: "mcp_exa_crawl", input: { url: "https://developer.mozilla.org/", command: "search docs" } }, ctx);
 			expect(r).toBeUndefined();
 		}
-		// same MCP-shaped input, NO family registered → denied (D2c)
 		{
 			clearRuleFamilies();
 			const host = new FakeHost();
@@ -580,7 +536,6 @@ describe("P0-1 D2: family-governed MCP in plan mode", () => {
 			expect(r).toMatchObject({ block: true });
 			expect(String((r as { reason?: string }).reason)).toContain("Plan mode: MCP tool");
 		}
-		// a family claiming a NON-MCP tool does not exempt the embedded scan
 		{
 			clearRuleFamilies();
 			const claimingFamily: RuleFamily = {
@@ -604,7 +559,6 @@ describe("P0-1 D2: family-governed MCP in plan mode", () => {
 			expect(r).toMatchObject({ block: true });
 			expect(String((r as { reason?: string }).reason)).toContain("read-only commands only");
 		}
-		// a family claiming the BUILT-IN edit still cannot exempt its hard limit
 		{
 			clearRuleFamilies();
 			const claimingFamily2: RuleFamily = {
@@ -631,7 +585,6 @@ describe("P0-1 D2: family-governed MCP in plan mode", () => {
 	});
 });
 
-// ---- SPEC 2026-10-07 P3-1 S4: settings-JSON reads with stat-fingerprint caches
 describe("P3-1 S4: web-gov override via readJson + cache", () => {
 	it("malformed override warns ONCE and falls back to the builtin list; an unchanged stat fingerprint skips the file re-read", async () => {
 		const home = mkdtempSync(join(tmpdir(), "web-s4-"));
@@ -643,16 +596,14 @@ describe("P3-1 S4: web-gov override via readJson + cache", () => {
 		console.warn = (m: string) => warns.push(m);
 		try {
 			const first = loadPreapprovedDomains(home);
-			expect(first).toEqual(BUILTIN_PREAPPROVED); // fallback, never a throw
+			expect(first).toEqual(BUILTIN_PREAPPROVED);
 			expect(warns.length).toBe(1);
 			const second = loadPreapprovedDomains(home);
 			expect(second).toEqual(BUILTIN_PREAPPROVED);
-			// stat hit → the bad file is not re-parsed: no second warn
 			expect(warns.length).toBe(1);
 		} finally {
 			console.warn = origWarn;
 		}
-		// a stat-visible change (rewrite) invalidates and warns again
 		writeFileSync(file, JSON.stringify({ preapprovedDomains: ["fresh.example"] }));
 		expect(loadPreapprovedDomains(home)).toEqual(["fresh.example"]);
 	});
@@ -679,7 +630,6 @@ describe("P3-1 S4: web-gov override via readJson + cache", () => {
 		const first = readStaticMcpInventory(home);
 		expect(first.servers).toEqual([]);
 		expect(first.sources).toContain("mcp.json (unreadable)");
-		// cached path returns the same verdict without re-reading
 		const second = readStaticMcpInventory(home);
 		expect(second.sources).toContain("mcp.json (unreadable)");
 		writeFileSync(file, JSON.stringify({ mcpServers: { exa: {} } }));
@@ -688,7 +638,6 @@ describe("P3-1 S4: web-gov override via readJson + cache", () => {
 	});
 });
 
-// ---- SPEC 2026-10-07 P3-1 S3 (D6=B): family first-seen with no UI -----------
 describe("P3-1 S3 (D6=B): family first-seen with no UI — fail closed + suggested rule", () => {
 	const prevParent = process.env.PI_SUBAGENT_PARENT_SESSION;
 	const prevChild = process.env.PI_SUBAGENT_CHILD;
@@ -711,7 +660,7 @@ describe("P3-1 S3 (D6=B): family first-seen with no UI — fail closed + suggest
 		setConfigPath(join(project, "permission-modes.json"));
 		writeFileSync(join(project, "permission-modes.json"), JSON.stringify({}));
 		setModelsPath(join(project, "model-profiles.json"));
-		const ctx = host.makeCtx({ cwd: project }); // no ui → hasUI false
+		const ctx = host.makeCtx({ cwd: project });
 		return { host, ctx, project };
 	}
 
@@ -725,7 +674,6 @@ describe("P3-1 S3 (D6=B): family first-seen with no UI — fail closed + suggest
 				/\(mcp_exa_search\) needs approval: no UI available\. .*`mcp_exa_\*`.*parent\/interactive session/,
 			),
 		});
-		// zero grants written: no session grant, no persisted rule
 		expect(hasSessionGrant("mcp_exa_search")).toBe(false);
 		expect(JSON.parse(readFileSync(join(project, "permission-modes.json"), "utf-8"))).toEqual({});
 	});
@@ -739,7 +687,6 @@ describe("P3-1 S3 (D6=B): family first-seen with no UI — fail closed + suggest
 		await host.fire("session_start", {}, ctx);
 		const result = await host.fire("tool_call", { toolName: "mcp__exa__search", input: { query: "x" } }, ctx);
 		expect(result).toMatchObject({ block: true, reason: expect.stringContaining("`mcp_exa_*`") });
-		// the block returned synchronously (no forwarding poll) and wrote nothing
 		expect(existsSync(join(agentDir, "sessions", "permission-modes-forwarding"))).toBe(false);
 	});
 

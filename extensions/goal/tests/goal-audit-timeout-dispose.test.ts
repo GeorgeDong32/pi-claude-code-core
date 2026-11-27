@@ -1,21 +1,3 @@
-/**
- * BH-E6 (spec 2026-11-14-backtest-hardening §4 W-B, reproduce-first): a goal
- * audit timeout must not leak the auditor session when prompt() never
- * settles.
- *
- * pi's AgentSession.abort() only PROMISES that prompt() settles afterwards
- * (verified for pi 1.0.1 per the AU-02 comment in goal-auditor.ts; abort()
- * itself awaits waitForIdle, so a stream that ignores the abort signal hangs
- * both). This test models the violating shape — a session whose prompt()
- * NEVER settles even after abort() — through the same sessionAdapter seam the
- * AU-02 tests use, driven end-to-end through the flow's timeout envelope.
- *
- * Expected behavior: the timeout fires, the flow returns rejected, the
- * auditor session is aborted AND disposed EXACTLY ONCE (the AU-02 finally is
- * the only disposal site — it must run even when the prompt await never
- * settles). On the pre-fix tree the dispose never runs: the flow returns and
- * the session leaks for the rest of the process lifetime.
- */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -34,8 +16,10 @@ function target(): GoalRecord {
 	return { id: "g1", status: "active", autoContinue: true, objective: "ship it", auditAttempts: 1 } as unknown as GoalRecord;
 }
 
-/** A session whose prompt() never settles — NOT even after abort() (the
- * violating shape: a stream that ignores the abort signal). */
+/** A session whose prompt() never settles — NOT even after abort(). pi's
+ * AgentSession.abort() only promises that prompt() settles afterwards
+ * (abort() itself awaits waitForIdle), so a stream that ignores the abort
+ * signal hangs both — this is the violating shape the flow must survive. */
 function neverSettlingSession(log: string[]): AuditorSession {
 	return {
 		subscribe(_listener: (event: unknown) => void) {
@@ -48,7 +32,6 @@ function neverSettlingSession(log: string[]): AuditorSession {
 		},
 		async abort() {
 			log.push("abort");
-			// violating session: abort does NOT settle the pending prompt
 		},
 		dispose() {
 			log.push("dispose");
@@ -81,7 +64,6 @@ test("BH-E6: audit timeout with a never-settling prompt still aborts and dispose
 		});
 		assert.equal(outcome.verdict, "rejected");
 		assert.match(outcome.rejectionText, /timed out/);
-		// let the detached auditor background work settle
 		await new Promise((resolve) => setTimeout(resolve, 50));
 		assert.ok(log.includes("abort"), "the timeout must abort the auditor session");
 		assert.equal(log.filter((c) => c === "dispose").length, 1, `the session must be disposed exactly once (log: ${log.join(" → ")})`);

@@ -1,9 +1,3 @@
-/**
- * B4 (arch) + P1-1 §4.4 (F2/B5): observation-pack self-disable regression
- * pin — same shape as action-fusion's: an old injected host version
- * registers nothing, warns at load time, and publishes the footer line from
- * the first session_start (bus invariant 3). node:test, no nested describe.
- */
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -38,10 +32,9 @@ test("B5 (P1-1): old host self-disables — load-time warn only, footer publishe
 	} finally {
 		console.warn = originalWarn;
 	}
-	assert.equal(handlers.count, 1); // exactly the session_start handler
+	assert.equal(handlers.count, 1);
 	assert.equal(warns.length, 1);
 	assert.match(warns[0] ?? "", /^\[observation-pack\] disabled: pi 0\.85\.0 < 0\.87\.0$/);
-	// load time: zero publishes
 	assert.equal(coreBus().snapshot().revision, 0);
 	assert.equal(coreBus().snapshot().display?.footer, undefined);
 	sessionStart();

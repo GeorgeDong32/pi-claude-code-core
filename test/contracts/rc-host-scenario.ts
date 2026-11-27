@@ -1,19 +1,4 @@
-/*
- * AR1005-RC-HOST scenario (contract AR1005-RC-HOST, spec 2026-10-05 §13/§4).
- *
- * Runs the REAL memory extension inside a REAL ExtensionRunner
- * (pi-coding-agent 1.0.1), parks a recall selection, then invalidates the
- * ctx (what session replacement does) and emits session_shutdown, and only
- * THEN lets the controlled selector complete — the abort-ignoring late
- * result. Expected post-fix behavior: no sendMessage, no history access on
- * the stale ctx, and no unhandled rejection.
- *
- * Runs as an ISOLATED subprocess (spec §4.5: the unhandledRejection probe
- * must not install a permanent process-wide safety net into the shared
- * test process) — spawned by pi-host-semantics.test.ts.
- */
 process.on("unhandledRejection", (reason) => {
-	// The one sanctioned handler, inside this throwaway process only.
 	console.log(`SCENARIO_UNHANDLED:${reason instanceof Error ? reason.message : String(reason)}`);
 	process.exitCode = 2;
 });
@@ -45,7 +30,6 @@ writeFileSync(
 	join(home, ".pi", "agent", "settings.json"),
 	JSON.stringify({ memory: { automation: false, recallModel: "test/sel-1", recallWaitMs: 5000 } }),
 );
-// The project memory layer lives under the HOME projects tree, not <cwd>/memory.
 const projectMemoryDir = resolveMemoryPaths(project, home).memoryDir;
 mkdirSync(projectMemoryDir, { recursive: true });
 writeFileSync(join(projectMemoryDir, "a.md"), "---\nname: a\ndescription: convention\nmetadata:\n  type: project\n---\n\nbody of a");
@@ -77,15 +61,11 @@ const runner = new ExtensionRunner(
 	[extension],
 	runtime,
 	project,
-	// The scenario never touches ctx.sessionManager getters before invalidate;
-	// readSessionProjection defensively handles absence.
 	undefined as never,
 	{ getAll: () => [{ provider: "test", id: "sel-1" }] } as never,
 );
 
 await runner.emit({ type: "session_start" } as never);
-// recall is prompt-path only (task-boundary revision): park the selection
-// on a real user prompt, not a mid-run steer (message_end never selects)
 void runner.emit({
 	type: "before_agent_start",
 	messageType: "user",
@@ -95,11 +75,9 @@ void runner.emit({
 await new Promise((resolve) => setTimeout(resolve, 50));
 console.log(`SCENARIO_SELECTOR_CALLS:${selectorCalls}`);
 
-// Session replacement: ctx getters start throwing from here on.
 runner.invalidate("session replaced (AR1005-RC-HOST scenario)");
 await runner.emit({ type: "session_shutdown", reason: "replaced" } as never);
 
-// The late, abort-ignoring completion — must be dropped silently.
 // (Cast: flow analysis can't see the closure assignment, narrowing to null.)
 (release as ((outcome: SelectorOutcome) => void) | null)?.({ kind: "selected", keys: ["memory/a.md"], elapsedMs: 1 });
 await new Promise((resolve) => setTimeout(resolve, 150));

@@ -1,11 +1,3 @@
-/**
- * P0-CT §4.1 — globalThis capability contracts (P0-CT-01..03).
- *
- * P1 note: when the modes target switches to the core module, these same
- * assertions keep running unchanged — core must keep publishing the legacy
- * `__piPermissionModes` / `__pmWorkingStats` keys until the removal
- * conditions in README.md (P0-CT-10) are met.
- */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearCoreGlobals, restoreCoreGlobals, snapshotCoreGlobals, usageAssistantEntry } from "./fake-host.ts";
 import { setupModes } from "./helpers.ts";
@@ -38,11 +30,8 @@ describe("P0-CT §4.1 globalThis capability channel", () => {
 		expect(cap.version).toBeTypeOf("number");
 		expect(cap.active).toBe(true);
 		expect(typeof cap.mode).toBe("string");
-		// workingStats exists and is string|null (null until message_update computes stats).
 		expect(cap.workingStats === null || typeof cap.workingStats === "string").toBe(true);
 		expect(cap.workingStats).toBeNull();
-		// DC1: mode presentation material (icon/label/role per mode) rides the
-		// projection — single source for downstream UIs.
 		const meta = cap.meta as Record<string, { icon: string; label: string; role: string }> | undefined;
 		expect(meta).toBeDefined();
 		expect(meta!["ask"]!.icon).toBe("●");
@@ -61,9 +50,7 @@ describe("P0-CT §4.1 globalThis capability channel", () => {
 		});
 		await s.host.fire("message_update", {}, ctx);
 
-		// Own working line suppressed…
 		expect(s.host.workingMessageCalls).toHaveLength(0);
-		// …stats published to the versioned key and the legacy key.
 		const cap = g.__piPermissionModes as { workingStats: unknown };
 		expect(typeof cap.workingStats).toBe("string");
 		expect(cap.workingStats).toContain("↑");
@@ -99,7 +86,8 @@ describe("P0-CT §4.1 globalThis capability channel", () => {
 
 	it("P0-CT-03: after session_shutdown the key REMAINS with active:true (pin current behavior) and the forwarding poller stops", async () => {
 		vi.useFakeTimers();
-		// Fresh instance so the poller lifecycle is fully inside fake-timer scope.
+		// vi.getTimerCount() only sees timers registered after useFakeTimers, so
+		// the instance whose poller is measured is created inside this scope.
 		const s2 = setupModes();
 		const ctx = s2.host.makeCtx({ cwd: s2.cwd, ui: true });
 		await s2.host.fire("session_start", {}, ctx);
@@ -113,12 +101,10 @@ describe("P0-CT §4.1 globalThis capability channel", () => {
 
 		await s2.host.fire("session_shutdown", {}, ctx);
 
-		// Key survives; active stays true (publishCapability always writes it).
 		const after = g.__piPermissionModes as { mode: string; active: boolean };
 		expect(after).toBeDefined();
 		expect(after.active).toBe(true);
 		expect(after.mode).toBe(before.mode);
-		// Poller stopped: the interval it registered is gone.
 		expect(vi.getTimerCount()).toBe(timersDuringSession - 1);
 	});
 });

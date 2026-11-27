@@ -1,7 +1,3 @@
-// BG-ENTRY-03: the user-visible task status row — CC task_status attachment
-// parity. Every completion appends a display-only session entry (never sent to
-// the LLM), and the registered renderer draws the CC GenericTaskStatus shape:
-// `⏺ Task "cmd" completed in background` in dim, before the agent's response.
 import assert from "node:assert/strict";
 import { after, afterEach, beforeEach, describe, it } from "node:test";
 
@@ -55,7 +51,7 @@ describe("status entry lifecycle through the real orchestration", () => {
 		const id = await start(s, "sleep 30");
 		await clock.settle(s.toolCall("TaskStop", { id }));
 		await clock.tick(2);
-		assert.equal(s.sent.length, 0); // no completion message on a user stop
+		assert.equal(s.sent.length, 0);
 		assert.ok(s.entries.length >= 1, "a stopped row was appended");
 		assert.equal((s.entries[0]!.data as TaskStatusData).state, "killed");
 	});
@@ -64,10 +60,10 @@ describe("status entry lifecycle through the real orchestration", () => {
 		const s = session();
 		const id = await start(s, "echo one");
 		procs.of(id).write("one\n");
-		procs.of(id).exit(0); // finished, but the poller has not reported it yet
+		procs.of(id).exit(0);
 		await clock.settle(s.toolCall("TaskStop", { id }));
 		await clock.tick(3);
-		assert.equal(s.sent.length, 0); // no completion message on a user stop
+		assert.equal(s.sent.length, 0);
 		assert.equal(s.entries.length, 1, "exactly one status row for the finished task");
 		const data = s.entries[0]!.data as TaskStatusData;
 		assert.notEqual(data.state, "killed");
@@ -80,7 +76,7 @@ describe("status entry lifecycle through the real orchestration", () => {
 		const id = await start(s, "echo one");
 		procs.of(id).write("one\n");
 		procs.of(id).exit(0);
-		await clock.until(() => s.sent.length > 0); // the completion message went out
+		await clock.until(() => s.sent.length > 0);
 		await clock.tick(3);
 		assert.equal(s.entries.length, 1, "the completion appended one row");
 		await clock.settle(s.toolCall("TaskStop", { id }));
@@ -92,30 +88,25 @@ describe("status entry lifecycle through the real orchestration", () => {
 	it("CH-6: two concurrent TaskStops on one running task append exactly one killed row", async () => {
 		const s = session();
 		const id = await start(s, "sleep 30");
-		// The second call joins the kill already in flight; only the first appends.
 		await Promise.all([clock.settle(s.toolCall("TaskStop", { id })), clock.settle(s.toolCall("TaskStop", { id }))]);
 		await clock.tick(3);
-		assert.equal(s.sent.length, 0); // no completion message on a user stop
+		assert.equal(s.sent.length, 0);
 		const rows = s.entries.filter((e) => e.type === STATUS_ENTRY_TYPE);
 		assert.equal(rows.length, 1, "exactly one killed row for the joined kill");
 		assert.equal((rows[0]!.data as TaskStatusData).state, "killed");
 	});
 
 	it("CH-6: after a failed send, a user stop pins the one row to the real end state and no message follows", async () => {
-		// Characterization (no production change): `notifyOnce` rolled `notified`
-		// back when the send threw; the TaskStop that lands before the next poll
-		// tick takes over the report — one row with the true state, and once the
-		// fault clears the poller finds the task reported and stays silent.
 		const s = session();
 		s.faults.failSend = true;
 		const id = await start(s, "echo done");
 		procs.of(id).write("done\n");
 		procs.of(id).exit(0);
-		await clock.until(() => s.faults.sendAttempts >= 1); // the poller tried and failed
+		await clock.until(() => s.faults.sendAttempts >= 1);
 		assert.equal(s.sent.length, 0);
-		assert.equal(s.entries.length, 0); // the row goes out only with a successful send
+		assert.equal(s.entries.length, 0);
 		s.faults.failSend = false;
-		await clock.settle(s.toolCall("TaskStop", { id })); // lands before the next poll tick
+		await clock.settle(s.toolCall("TaskStop", { id }));
 		await clock.tick(3);
 		assert.equal(s.sent.length, 0, "no completion message after the fault cleared");
 		const rows = s.entries.filter((e) => e.type === STATUS_ENTRY_TYPE);
@@ -126,6 +117,6 @@ describe("status entry lifecycle through the real orchestration", () => {
 
 	it("appendStatusEntry is fail-open: a throwing appendEntry never propagates", () => {
 		const pi = { appendEntry: () => { throw new Error("session closed"); } } as never;
-		appendStatusEntry(pi, fakeTask()); // must not throw
+		appendStatusEntry(pi, fakeTask());
 	});
 });

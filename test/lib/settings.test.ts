@@ -1,13 +1,3 @@
-/**
- * P0-LB-01 / P0-LB-04 — lib/settings.ts unit tests.
- * Equivalence cases compare against the old per-package implementations
- * (pi-effort readSettingsObject / writeSettingsObject format) plus
- * boundary cases for the merged never-throw read contract.
- *
- * The retired source package moved to ../archive/repos (2026-09-30); the
- * live old-implementation import became a frozen golden — the concrete
- * expectations below already encode its behaviour.
- */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, statSync, writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -97,7 +87,6 @@ describe("P0-LB-01 writeJsonAtomic", () => {
 	it("leaves the original file untouched and removes the temp file when the write fails", () => {
 		const p = join(dir, "settings.json");
 		writeJsonAtomic(p, { original: true });
-		// Make the target path a directory: rename onto it must fail.
 		rmSync(p);
 		mkdirSync(p);
 		expect(() => writeJsonAtomic(p, { broken: true })).toThrow();

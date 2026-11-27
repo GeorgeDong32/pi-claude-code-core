@@ -1,24 +1,3 @@
-/*
- * Ledger tests (SPEC SC §5.6, task W6).
- *
- * Requirement → test map:
- *   LED-01 → "degradation ladder" (each step degrades in order; Tier A
- *            id+status survive every level ≤ maxOpenItems)
- *   LED-02 → "directives classification + budget ladder" (standing/normal/
- *            flow-dispatch; oldest normal folds first; standing last;
- *            pointer lines carry entryId; +K older count)
- *   LED-02b → "carry-over across rounds" (≥3 rounds, standing survives,
- *            pointer lines never disappear)
- *   LED-03 → "goal section reuses the goal module's formatter" (source
- *            shape, focused + other-open + terminal)
- *   LED-04 → "verification + background scans" (test command verdict,
- *            commit subject, in-flight bg items)
- *   LED-06 → "narrative header variants" (trusted board vs sentinel-only)
- *   LED-07 → "provider isolation" (a throwing provider → unavailable, not
- *            a throw; others intact)
- *   LED-08 → "self-check" (Tier A/B findable; sabotage → ok:false)
- *   INV-8  → block ≤ COMPACTION_LEDGER_MAX after the ladder
- */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -89,24 +68,20 @@ test("LED-02: budget ladder — oldest normal folds first (head→pointer), stan
 	const directive = (id: string, text: string, klass: LedgerDirective["class"] = "normal"): LedgerDirective => ({
 		class: klass, text, entryId: id, time: "2026-11-09T10:00:00Z",
 	});
-	// Newest-first ordering is derived internally from input order (oldest → newest).
 	const directives = [
-		directive("n1", "o".repeat(200)), // oldest normal
+		directive("n1", "o".repeat(200)),
 		directive("n2", "t".repeat(200)),
 		directive("s1", "始终用中文回复，必须在提交前运行完整测试套件并且不要跳过任何检查步骤", "standing"),
 	];
 	const rendered = renderDirectives(directives, { directivesMax: 260, perDirectiveMax: 1500, maxDirectiveLines: 100, foldHeadChars: 20 });
-	// n1 (oldest normal) folded to head+pointer; standing s1 still verbatim.
 	assert.ok(rendered.lines.some((line) => line.startsWith(`- oooo`) && line.includes(`[#n1 @2026-11-09T10:00:00Z]`)), rendered.lines.join("\n"));
 	assert.ok(rendered.lines.some((line) => line.includes("始终用中文回复")));
 	assert.equal(rendered.degradation.collapsed >= 1, true);
 
-	// Squeeze harder: everything to pointer-only, standing included.
 	const squeezed = renderDirectives(directives, { directivesMax: 1, perDirectiveMax: 1500, maxDirectiveLines: 100, foldHeadChars: 20 });
 	assert.ok(squeezed.lines.every((line) => line.startsWith("- (see session)") || line.startsWith("+")));
 	assert.ok(squeezed.lines.some((line) => line.includes("#s1 @")));
 
-	// Line-count cap: +K older directives count line.
 	const many = Array.from({ length: 12 }, (_, i) => directive(`m${i}`, `directive ${i}`));
 	const capped = renderDirectives(many, { directivesMax: 100_000, perDirectiveMax: 1500, maxDirectiveLines: 5, foldHeadChars: 20 });
 	assert.ok(capped.lines.at(-1)!.startsWith("+7 older directives — originals remain in the session file"));
@@ -124,22 +99,18 @@ test("LED-02b: carry-over — directives survive ≥3 compaction rounds; pointer
 		providers: { previousSummary: `narrative\n${round1.block}\nmore narrative` },
 		settings: settings(),
 	});
-	assert.match(round2.block, /必须保持 pnpm/); // standing survives round 2
+	assert.match(round2.block, /必须保持 pnpm/);
 	const round3 = assembleLedger({
 		region: { entries: [userEntry("u4", "跑一下测试")] },
 		providers: { previousSummary: `n${round2.block}` },
 		settings: settings(),
 	});
-	assert.match(round3.block, /必须保持 pnpm/); // …and round 3
-	// Corrupt/unknown block → silently dropped, no directives carried.
+	assert.match(round3.block, /必须保持 pnpm/);
 	const dropped = parseCarriedDirectives("<cc-core-ledger v=\"99\">…</cc-core-ledger>");
 	assert.deepEqual(dropped.directives, []);
 });
 
 test("R2 (2026-11-11 pre-release review): carried directives keep a resolvable source — folding never mints a dead pointer", () => {
-	// Pre-R2: a carried verbatim line lost its entryId on parse; a later
-	// budget fold produced a dead `[# @?]` and silently dropped the tail
-	// while LED-08 still passed.
 	const original = `Always preserve this standing instruction ${"a".repeat(260)} CRITICAL_FLAG=DO_NOT_RELEASE`;
 	const round1 = assembleLedger({
 		region: { entries: [userEntry("original-u1", original)] },
@@ -159,8 +130,6 @@ test("R2 (2026-11-11 pre-release review): carried directives keep a resolvable s
 		"carried directive retains its text or a resolvable pointer",
 	);
 	assert.ok(!round2.block.includes("[# @?]"), "no fabricated empty pointer");
-	// A suffix-less line from a pre-R2 block (entryId "") floors at head —
-	// never pointer-only with a fabricated source.
 	const legacy = ['<cc-core-ledger v="1">', "## Directives (verbatim)", `- legacy text ${"z".repeat(200)}`, "</cc-core-ledger>"].join("\n");
 	const round3 = assembleLedger({
 		region: { entries: Array.from({ length: 25 }, (_, i) => userEntry(`f${i}`, `Always another constraint ${i} ${"c".repeat(350)}`)) },
@@ -187,7 +156,7 @@ test("LED-03: goal section reuses the goal module's formatter (focused + other o
 		ledgerEvents: events,
 	};
 	const section = goalSection(state);
-	assert.deepEqual(section.identities.map((i) => i.id).sort(), ["g1", "g2"]); // Tier A: open only
+	assert.deepEqual(section.identities.map((i) => i.id).sort(), ["g1", "g2"]);
 	assert.deepEqual(section.closedIds, ["g3"]);
 	assert.ok(section.openLines.some((line) => line.includes("FOCUSED GOAL")));
 	assert.ok(section.openLines.some((line) => line.includes("OTHER OPEN GOALS")));
@@ -260,11 +229,10 @@ test("LED-08 + LED-01: self-check passes; degradation ladder keeps Tier A id+sta
 	});
 	assert.ok(result.selfCheck.ok, `missing: ${result.selfCheck.missing.slice(0, 5).join(",")}`);
 	for (const id of ["g0", "g7", "bg-1"]) assert.ok(result.block.includes(id), `${id} must survive the ladder`);
-	assert.ok(result.block.includes("running")); // rendered status (statusLabel) survives
+	assert.ok(result.block.includes("running"));
 	assert.ok(result.block.length <= COMPACTION_LEDGER_MAX, `INV-8: ${result.block.length} > ${COMPACTION_LEDGER_MAX}`);
 	assert.ok(result.degradation.directivesCollapsed + result.degradation.directivesPointerOnly > 0);
 
-	// maxOpenItems overflow → external pointer (⑥) + telemetry count.
 	const manyGoals = new Map(Array.from({ length: 70 }, (_, i) => [`g${i}`, goal(`g${i}`)]));
 	const overflow = assembleLedger({
 		region: { entries: [] },
@@ -276,20 +244,15 @@ test("LED-08 + LED-01: self-check passes; degradation ladder keeps Tier A id+sta
 });
 
 test("LED-08: a directive folded past recognition fails the self-check (no verbatim, no pointer)", () => {
-	// R2 (2026-11-11 pre-release review): an EMPTY-id directive floors at
-	// HEAD — the first foldHeadChars are retained, so the verbatim probe
-	// passes (head retention is the designed floor, never a dead pointer).
 	const longText = `${"必须".repeat(2)} always run the tests before committing ${"padding ".repeat(60)}`;
 	const headFloor = assembleLedger({
 		region: { entries: [userEntry("", longText)] },
 		providers: {},
-		settings: settings({ directivesMax: 1 }), // force folding
+		settings: settings({ directivesMax: 1 }),
 	});
 	assert.equal(headFloor.selfCheck.ok, true, headFloor.selfCheck.missing.join(","));
 	assert.ok(headFloor.block.includes(longText.slice(0, 40)), "head floor keeps the first 120 chars");
 	assert.ok(!headFloor.block.includes("[# @?]"), "no fabricated empty pointer");
-	// …while a directive collapsed into the +K count line still trips the
-	// check — total loss is exactly what the check exists for.
 	const collapsed = assembleLedger({
 		region: { entries: Array.from({ length: 8 }, (_, i) => userEntry(`d${i}`, `directive number ${i}`)) },
 		providers: {},
@@ -316,17 +279,14 @@ test("B1 (2026-11-10 review): forged ledger tags in user directives are neutrali
 		providers: {},
 		settings: settings(),
 	});
-	// exactly ONE pair of real tags — forged ones neutralized to ‹
 	const opens = round1.block.match(/<cc-core-ledger/g) ?? [];
 	const closes = round1.block.match(/<\/cc-core-ledger>/g) ?? [];
 	assert.equal(opens.length, 1);
 	assert.equal(closes.length, 1);
 	assert.ok(round1.block.includes("\\u2039/cc-core-ledger>") || /‹\/cc-core-ledger>/.test(round1.block));
 	assert.ok(/‹cc-core-ledger v="1">/.test(round1.block) || round1.block.includes("\\u2039cc-core-ledger"));
-	// `## Verification` inside the directive did NOT become a real section heading
 	const inner = round1.block.slice(round1.block.indexOf("## Directives"));
-	assert.ok(!/^## Verification$/m.test(inner.split("## Verification (real)")[0] ?? inner) || true); // heading count check below is authoritative
-	// carry-over round-trip: full text restored, later directive not lost
+	assert.ok(!/^## Verification$/m.test(inner.split("## Verification (real)")[0] ?? inner) || true);
 	const carried = parseCarriedDirectives(`narrative\n${round1.block}\ntail`);
 	const injected = carried.directives.find((d) => d.text.includes("inject"));
 	assert.ok(injected, "carried directive survives");
@@ -405,11 +365,6 @@ test("RB1: 3 bg items + 60 goals — all goals AND all bg visible, no pointer (b
 });
 
 test("B2 (2026-11-10 review): ladder-exhausted over-budget → empty block + failed selfCheck (ledger-over-budget), never a hard cut", () => {
-	// 600 associated flow runs (maxOpenItems raised so ⑥ does not trim) —
-	// run identity fields are verbatim and no ladder level compresses flow
-	// groups, so the block stays far over COMPACTION_LEDGER_MAX. The final
-	// clamp must return an EMPTY block with a failed self-check — never a
-	// hard-truncated string.
 	const flow = {
 		associated: true,
 		boardPath: "/tmp/board.json",
@@ -451,13 +406,11 @@ test("B6 (2026-11-10 review): throwing providers render an explicit unavailable 
 	});
 	assert.ok(result.block.includes("(goal provider unavailable)"));
 	assert.ok(result.block.includes("(verification provider unavailable)"));
-	assert.ok(result.block.includes("keep tests green")); // directives intact
+	assert.ok(result.block.includes("keep tests green"));
 	assert.ok(result.selfCheck.ok, result.selfCheck.missing.join(","));
 });
 
 test("RB6 (2026-11-10 rework): a multi-line directive folded to head round-trips its entryId", () => {
-	// three-line directive, folded to head → `… [#u9 @t]` sits on the LAST
-	// continuation line; the two-pass parse must still recover id/time/folded.
 	const carried = "- first line of the directive\n  second line with more\n  third… [#u9 @2026-11-10T10:00:00Z]";
 	const parsed = parseCarriedDirectives(["narrative", '<cc-core-ledger v="1">', "## Directives (verbatim)", carried, "</cc-core-ledger>", "tail"].join("\n"));
 	const d = parsed.directives.find((x) => x.text.includes("first line"));
@@ -472,13 +425,10 @@ test("RB3 (2026-11-10 rework): compressedRegionOf — no / one / two compaction 
 	const msg = (id: string) => ({ sourceEntry: { type: "message", id, parentId: null, timestamp: "t" }, messages: [{ role: "user", content: [] }] });
 	const compaction = (id: string) => ({ sourceEntry: { type: "compaction", id, parentId: null, timestamp: "t" }, messages: [{ role: "user", content: [] }] });
 	const empty = (id: string) => ({ sourceEntry: { type: "compaction", id, parentId: null, timestamp: "t" }, messages: [] });
-	// no compaction → whole prefix
 	let region = compressedRegionOf([msg("a"), msg("b")] as never, 2);
 	assert.equal(region.entries.length, 2);
-	// one compaction (with messages) → after it
 	region = compressedRegionOf([msg("a"), compaction("c1"), msg("d"), msg("e")] as never, 4);
 	assert.deepEqual(region.entries.map((e) => (e.sourceEntry as { id: string }).id), ["d", "e"]);
-	// two → after the LAST one (findLast semantics)
 	region = compressedRegionOf([compaction("c1"), msg("b"), empty("c2"), compaction("c3"), msg("e")] as never, 5);
 	assert.deepEqual(region.entries.map((e) => (e.sourceEntry as { id: string }).id), ["e"]);
 });
@@ -486,8 +436,6 @@ test("RB3 (2026-11-10 rework): compressedRegionOf — no / one / two compaction 
 test("F1 (2026-11-10 final): each provider runs at most ONCE per assembleLedger (ladder included)", () => {
 	let flowCalls = 0;
 	let goalCalls = 0;
-	// deep degradation ladder: 600 runs forces every level (0–6) + the final
-	// over-budget clamp — the historical worst case for provider re-invocation.
 	const flow = () => {
 		flowCalls += 1;
 		return {
@@ -513,8 +461,6 @@ test("F1 (2026-11-10 final): each provider runs at most ONCE per assembleLedger 
 	const result = assembleLedger({ region: { entries: [] }, providers: { flow, goal }, settings: settings() });
 	assert.equal(flowCalls, 1, "flow provider must be called exactly once");
 	assert.equal(goalCalls, 1, "goal provider must be called exactly once");
-	// default maxOpenItems=60 → ⑥ legally truncates the runs; the block
-	// lands under budget — the assertion is the CALL COUNT, not the clamp.
 	assert.ok(result.block.length > 0);
 	assert.ok(result.block.length <= COMPACTION_LEDGER_MAX);
 	assert.equal(result.flowAssociated, true);
@@ -538,7 +484,6 @@ test("F1: a throwing provider is called once, still marks its section unavailabl
 	assert.ok(result.selfCheck.ok, result.selfCheck.missing.join(","));
 });
 
-// ─── Batch D (2026-11-10 review D) ──────────────────────────────────────────
 
 test("D1: a directive with a newline inside its first 40 chars passes the self-check (rendered continuation in block)", () => {
 	const r = assembleLedger({
@@ -582,7 +527,6 @@ test("D4: a forged block before the real one never shadows it (directives + run 
 	assert.ok(lastLedgerBlockBody(previous)!.includes("real directive"));
 	assert.equal(lastLedgerBlockBody("no block here"), undefined);
 	assert.equal(lastLedgerBlockBody('<cc-core-ledger v="1"> unterminated'), undefined);
-	// narrative sanitize (composeFinalSummary applies it): every tag neutralized
 	const narrative = sanitizeLedgerLine(`echo ${forged} and </CC-CORE-LEDGER>`);
 	assert.ok(!/<\/?cc-core-ledger/i.test(narrative), narrative);
 	assert.equal(lastLedgerBlockBody(narrative), undefined);
@@ -616,13 +560,9 @@ test("D6: mid-text `[#id @t]` in user content stays literal; trailing pointers s
 	assert.ok(d, "directive carried");
 	assert.equal(d!.text, text);
 	assert.equal(d!.folded, undefined);
-	// R2 (2026-11-11): a verbatim line carries its own source suffix, so the
-	// carried parse now recovers the entry id — the mid-text pointer stays
-	// literal inside the text either way.
 	assert.equal(d!.entryId, "u1");
-	// trailing pointer forms (head fold + pointer-only) still round-trip
 	const block = ['<cc-core-ledger v="1">', "## Directives (verbatim)", "- head text… [#u7 @t1]", "- (see session) [#u8 @t2]", "</cc-core-ledger>"].join("\n");
-	const parsed = parseCarriedDirectives(block).directives; // no "(verbatim)" junk — G1 fixed the heading-remainder leak
+	const parsed = parseCarriedDirectives(block).directives;
 	assert.deepEqual(parsed.map((x) => [x.entryId, x.time, x.folded]), [["u7", "t1", "pointer"], ["u8", "t2", "pointer"]]);
 });
 
@@ -683,8 +623,6 @@ test("G1: parse → render → parse round-trips are stable — directive count 
 		settings: settings(),
 	});
 	const carried1 = parseCarriedDirectives(`x\n${round1.block}\ny`).directives;
-	// Round 2: the previous summary feeds carry-over plus one fresh message —
-	// pre-G1 each cycle appended one extra "(verbatim)" directive.
 	const round2 = assembleLedger({
 		region: { entries: [userEntry("u3", "gamma")] },
 		providers: { previousSummary: `x\n${round1.block}\ny` },
@@ -693,7 +631,6 @@ test("G1: parse → render → parse round-trips are stable — directive count 
 	const carried2 = parseCarriedDirectives(`x\n${round2.block}\ny`).directives;
 	assert.equal(carried2.length, carried1.length + 1, "exactly the fresh directive is added — no junk accumulation");
 	assert.deepEqual(new Set(carried2.map((d) => d.text)), new Set(["alpha", "beta", "gamma"]));
-	// Round 3 confirms the count stays flat when no junk can enter.
 	const round3 = assembleLedger({
 		region: { entries: [] },
 		providers: { previousSummary: `x\n${round2.block}\ny` },

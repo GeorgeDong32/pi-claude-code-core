@@ -1,9 +1,3 @@
-/*
- * SPEC FUS-10: module tests at the executeMutationThenRun / file-queue
- * interface. Bash is exercised through a stubbed queue+mutation harness; the
- * error semantics (skipped/failed THROW, success APPENDS) are pinned to the
- * upstream token literals.
- */
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -26,7 +20,6 @@ import { resolveToolPath } from "../tool-path.ts";
 
 const passthroughQueue: FileQueueFn = (_path, work) => work();
 
-/** Run pending microtasks (used between fake-clock ticks). */
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 /** The REAL timer, captured before any test enables mock.timers (watchdogs must not depend on mocked time). */
@@ -86,7 +79,6 @@ describe("executeMutationThenRun (FUS-04/10)", () => {
 					queue: passthroughQueue,
 				}),
 			(err) => {
-				// The mutation failure surfaces before the queue's bash stub would run.
 				const message = (err as Error).message;
 				return message.includes("edit failed") && message.includes(THEN_RUN_SKIPPED) && !bashRan;
 			},
@@ -111,8 +103,6 @@ describe("executeMutationThenRun (FUS-04/10)", () => {
 		assert.ok(textOf(result).startsWith("wrote target.txt"));
 		assert.ok(textOf(result).includes(THEN_RUN_SUCCEEDED));
 		assert.ok(textOf(result).includes("content"));
-		// B6: structured outcome on the merged details — the token stays
-		// model-facing, the field is for callers.
 		assert.equal((result.details as { thenRun?: string } | undefined)?.thenRun, "succeeded");
 	});
 
@@ -178,8 +168,6 @@ describe("executeMutationThenRun (FUS-04/10)", () => {
 					signal: undefined,
 					ctx: fakeCtx(),
 					queue: passthroughQueue,
-					// Deterministic seam: the interference lands exactly between the
-					// two hash reads (the old setImmediate timing flaked 1-in-6).
 					yieldForInterference: async () => {
 						await writeFile(file, "interfered\n", "utf8");
 					},
@@ -219,10 +207,6 @@ describe("fallback file queue (FUS-03 adapter #2)", () => {
 	});
 });
 
-// ── AR1005-FU (spec 2026-10-05 §6): the display interpretation of REAL
-// executeMutationThenRun results — structured outcome first, opposite
-// markers in log bodies cannot flip it, production succeeded actually
-// badges, partial shows no terminal state. Baseline red via stash. ──
 import { thenRunStatusRow } from "../renderers.ts";
 import { interpretThenRunResult } from "../outcome.ts";
 
@@ -251,7 +235,6 @@ describe("AR1005-FU display interpretation over real results", () => {
 		const dir = await mkdtemp(join(tmpdir(), "fu-t02-"));
 		const file = join(dir, "log.txt");
 		await writeFile(file, "old\n", "utf8");
-		// the command's own output carries the failed marker as a standalone line
 		const result = await executeMutationThenRun({
 			toolCallId: "fu2",
 			absolutePath: file,
@@ -262,9 +245,9 @@ describe("AR1005-FU display interpretation over real results", () => {
 			ctx: fakeCtx(dir),
 			queue: passthroughQueue,
 		});
-		assert.match(textOf(result), /\[then_run:failed\]/); // the marker really is in the body
+		assert.match(textOf(result), /\[then_run:failed\]/);
 		assert.equal((result.details as unknown as { thenRun?: string }).thenRun, "succeeded");
-		assert.equal(thenRunStatusRow(result, stubTheme), "↳ then_run ✓ ok"); // structure is the authority
+		assert.equal(thenRunStatusRow(result, stubTheme), "↳ then_run ✓ ok");
 	});
 
 	it("FU-T03: real failed and skipped results render their rows", async () => {
@@ -323,7 +306,7 @@ describe("AR1005-FU display interpretation over real results", () => {
 		});
 		const before = JSON.stringify(result);
 		assert.equal(interpretThenRunResult(result), "succeeded");
-		assert.equal(JSON.stringify(result), before); // read-only interpretation
+		assert.equal(JSON.stringify(result), before);
 	});
 });
 
@@ -334,7 +317,6 @@ describe("then_run timeout hardening (BH-R5)", () => {
 		assert.equal(THEN_RUN_DEFAULT_TIMEOUT_SECONDS, 600);
 	});
 
-	/** Bash options whose operations record what the delegate passed and finish at once. */
 	function recordingOps(seen: Array<{ command: string; timeout?: number }>): BashToolOptions {
 		return {
 			operations: {
@@ -384,9 +366,6 @@ describe("then_run timeout hardening (BH-R5)", () => {
 			const dir = await mkdtemp(join(tmpdir(), "fus-r5-hang-"));
 			const file = join(dir, "target.txt");
 			await writeFile(file, "content\n", "utf8");
-			// Hangs like a server: settles only via its own timeout timer (pi's
-			// local shell operations enforce the timeout exactly this way), or via
-			// the test-owned escape hatch so a regression cannot hang the suite.
 			let execStarted = false;
 			let escape!: (error: Error) => void;
 			const hangOps: BashToolOptions = {
@@ -410,7 +389,7 @@ describe("then_run timeout hardening (BH-R5)", () => {
 				ctx: fakeCtx(dir),
 				queue: withFusedFileQueue,
 			});
-			first.catch(() => {}); // the RED path leaves it rejected-but-unobserved
+			first.catch(() => {});
 			// realpath resolves on the thread pool: wait until exec is actually pending.
 			for (let i = 0; i < 10_000 && !execStarted; i += 1) await flush();
 			assert.ok(execStarted, "the then_run command started");
@@ -425,7 +404,7 @@ describe("then_run timeout hardening (BH-R5)", () => {
 			]);
 			const settled = await race;
 			if (settled === "still-pending") {
-				escape(new Error("released by test")); // keep the queue and the suite unstuck
+				escape(new Error("released by test"));
 				assert.fail("BH-R5: the hanging then_run command must be terminated by the 600 s default timeout");
 			}
 			assert.ok(settled instanceof Error);
@@ -436,7 +415,6 @@ describe("then_run timeout hardening (BH-R5)", () => {
 				/belong in a `background: true` bash call/,
 				"the timeout error must point long-running commands at background bash",
 			);
-			// the file's queue is freed: the next fused call on the same file proceeds
 			const seen: Array<{ command: string; timeout?: number }> = [];
 			const second = await executeMutationThenRun({
 				toolCallId: "r5-next",

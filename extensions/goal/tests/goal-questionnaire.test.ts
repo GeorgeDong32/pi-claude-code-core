@@ -105,7 +105,6 @@ test("questionnaire reports blocked (OSC 7501) through the custom options — si
 	const blocked = (multi[0]!.opts as { blocked?: { kind: string; message: string } }).blocked;
 	assert.equal(blocked?.kind, "question");
 	assert.match(blocked?.message ?? "", /^Goal questionnaire: 2 questions — First question\?/);
-	// bare custom call: no overlay options leaked into the blocked path
 	assert.equal((multi[0]!.opts as { overlay?: unknown }).overlay, undefined);
 });
 
@@ -137,7 +136,7 @@ test("questionnaire context and question wrap with a hanging indent", async () =
 		recommended: 0,
 		allowCustom: false,
 	}]);
-	assert.equal(result, null); // stub custom resolves null (cancel path)
+	assert.equal(result, null);
 	const strip = (s: string) => s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "");
 	const plain = (lines ?? []).map(strip);
 	const question = plain.find((l) => l.includes("Confirm Goal Draft"));

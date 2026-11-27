@@ -1,4 +1,3 @@
-/** DC5 §4.3 option C: fallback adapter — yield-to-cctui at the write point. */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { createFallbackAdapter, type FallbackHost } from "../../extensions/ui/fallback.ts";
 import { coreBus, resetCoreBusForTests } from "../../extensions/bus.ts";
@@ -48,7 +47,6 @@ describe("fallback adapter (DC5)", () => {
 		g.__piCcTui = { active: true };
 		adapter.onSnapshot(snap("↑1"));
 		expect(calls).toEqual([]);
-		// Self-heal: key withdrawn → next snapshot writes again.
 		delete g.__piCcTui;
 		adapter.onSnapshot(snap("↑2"));
 		expect(calls).toEqual(["<dim>Working… (↑2)</dim>"]);
@@ -58,7 +56,7 @@ describe("fallback adapter (DC5)", () => {
 		const { host, calls } = fakeHost();
 		const adapter = createFallbackAdapter(host);
 		adapter.onSnapshot(snap("↑1"));
-		adapter.onSnapshot(snap("↑1")); // same stats → no rewrite
+		adapter.onSnapshot(snap("↑1"));
 		adapter.onSnapshot(snap(null));
 		expect(calls).toEqual(["<dim>Working… (↑1)</dim>", undefined]);
 	});
@@ -99,7 +97,7 @@ describe("fallback adapter notifications (DC5b)", () => {
 		const adapter = createFallbackAdapter(host);
 		adapter.startup();
 		g.__piCcTui = { active: true };
-		publishNotification("info", "for-cctui"); // direct-forwarded by notify(), not here
+		publishNotification("info", "for-cctui");
 		expect(notes).toEqual([]);
 		delete g.__piCcTui;
 		publishNotification("info", "back-to-fallback");

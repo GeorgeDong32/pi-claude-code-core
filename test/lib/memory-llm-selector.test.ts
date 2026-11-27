@@ -1,8 +1,3 @@
-/*
- * memory-llm-selector.test.ts — the real llmSelector over a fake CompleteText
- * (spec 2026-10-02-memory-recall-v2 §8 cases 12–15). Model resolution is
- * asserted directly (D3: no session-model fallback).
- */
 import { describe, expect, it } from "vitest";
 
 import type { Api, Model } from "@earendil-works/pi-ai";
@@ -71,8 +66,6 @@ describe("RV llmSelector (spec §8)", () => {
 
 	it("13b: braces inside string values no longer break the span (C4 string-awareness)", async () => {
 		const valid = new Set(["memory/a.md"]);
-		// The old local scanner was not string-aware: the `}` inside the value
-		// ended the span early → parse failure → silent stats.failures bump.
 		expect(parseSelection('{"selected":["memory/a}b","memory/a.md"]}', valid)).toEqual(["memory/a.md"]);
 	});
 
@@ -95,22 +88,19 @@ describe("RV llmSelector (spec §8)", () => {
 	it("15: model resolution — exact provider/id, unique bare id, ambiguous/missing undefined, never the session model", () => {
 		const models = [
 			{ provider: "test", id: "sel-1" },
-			{ provider: "other", id: "sel-1" }, // ambiguous bare id
+			{ provider: "other", id: "sel-1" },
 			{ provider: "test", id: "main" },
 		] as unknown as Model<Api>[];
 		const registry = { getAll: () => models };
 		expect(resolveRecallModel("test/sel-1", registry)).toBe(models[0]);
 		expect(resolveRecallModel("test/main", registry)).toBe(models[2]);
-		expect(resolveRecallModel("sel-1", registry)).toBeUndefined(); // two hits → ambiguous
+		expect(resolveRecallModel("sel-1", registry)).toBeUndefined();
 		expect(resolveRecallModel("nope/x", registry)).toBeUndefined();
 		expect(resolveRecallModel(undefined, registry)).toBeUndefined();
 		expect(resolveRecallModel("test/sel-1", undefined)).toBeUndefined();
 	});
 });
 
-// AR1005-JS-06: connection pins — both memory consumers accept their real
-// payload shapes through the shared extraction while a genuine trailing
-// comma is repaired; string bodies pass through byte-identical.
 describe("JS string fidelity through the memory consumers", () => {
 	it("parseSelection keeps a selected key containing ,} verbatim alongside a real trailing comma", () => {
 		const valid = new Set(["memory/odd,}key.md", "memory/plain.md"]);

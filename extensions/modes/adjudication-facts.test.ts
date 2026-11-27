@@ -1,25 +1,3 @@
-/**
- * adjudication-facts.test.ts — SR-4c raw-facts pin tests.
- *
- * Drives createAdjudicationFacts DIRECTLY (stub deps, no FakeHost, no gate)
- * over a small scenario matrix and pins the RAW field values with literal
- * `toEqual` expectations — no snapshots, no regeneration. The full-gate
- * behavior (decide + interpret over the same facts) stays pinned by
- * test/lib/adjudication-parity.test.ts (golden fixture); this suite pins the
- * fact-collection layer itself so a refactor cannot silently change what the
- * adjudicator sees (cwd / raw input are the only normalized values — the plan
- * reason is rendered from the real plan path of the temp cwd).
- *
- * Design notes:
- * - Rules come from the REAL loader (loadMergedPermissionRules) after
- *   setConfigPath(tmp) — same pattern as the parity harness, so the rule
- *   file format stays exercised, not mocked.
- * - getAutoModeConfig is undefined (classifier-independent scenarios only);
- *   describeTier3Review/isMemoryDirWrite are stubs — their seams are not
- *   under test here.
- * - The MCP family scenario registers the real createMcpRuleFamily() family
- *   (global registry — cleared around every test).
- */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

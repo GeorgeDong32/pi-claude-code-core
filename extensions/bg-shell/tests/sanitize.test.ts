@@ -1,6 +1,3 @@
-// Behaviour tier: what the agent reads is free of ANSI escape codes and control
-// characters other than newline and tab, as with Pi's own `!` bash; the log on
-// disk keeps the command's raw bytes.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -34,7 +31,6 @@ afterEach(() => {
 });
 after(cleanup);
 
-/** Colour, a cleared line with a bell, a carriage-return progress meter, cursor moves, an OSC hyperlink and stray C0 bytes. */
 const RAW =
 	"\x1b[31mred\x1b[0m\tcol\n" +
 	"\x1b[2Kcleared\x07bell\n" +

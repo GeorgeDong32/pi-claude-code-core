@@ -1,9 +1,3 @@
-/**
- * bash-path-check.test.ts — W2/W3/W4/W5 (2026-11-07 handoff): the CC-parity
- * safety-path set, the bash write-target check (W3), the Read/Edit deny
- * extension over bash path commands (W4), and the PI_CORE_BASH_PATH_CHECKS /
- * bashPathChecks switch (W5). Case set follows handoff §7.
- */
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	checkBashDenyHit,
@@ -33,7 +27,6 @@ describe("isCcSafetyPath (W2: CC set ∪ pi extras)", () => {
 	});
 	it(".claude/worktrees is the structural exception", () => {
 		expect(isCcSafetyPath(".claude/worktrees/wt1/a.ts", CWD)).toBe(false);
-		// nested .claude inside a worktree still matches
 		expect(isCcSafetyPath(".claude/worktrees/wt1/.claude/x", CWD)).toBe(true);
 	});
 	it("matches CC dangerous files by filename (exact, case-insensitive)", () => {
@@ -71,7 +64,6 @@ describe("checkBashWriteTargets (W3, bypass gate)", () => {
 	it("sed -i inline edit targets the file argument", () => {
 		expect(checkBashWriteTargets("sed -i '' s/a/b/ ~/.zshrc", CWD)).toMatchObject({ path: "~/.zshrc" });
 		expect(checkBashWriteTargets("sed -i s/a/b/ .bashrc", CWD)).toMatchObject({ path: ".bashrc" });
-		// plain sed is read-only — not a write target
 		expect(checkBashWriteTargets("sed -n 1p ~/.zshrc", CWD)).toBeNull();
 	});
 	it("compound: read-only companions keep the hit; non-read-only cancel it (CC approximation)", () => {
@@ -105,9 +97,6 @@ describe("checkBashDenyHit (W4, all modes)", () => {
 		expect(checkBashDenyHit("ls .git/HEAD", CWD, envDeny)).toMatchObject({ path: ".git/HEAD" });
 	});
 	it("compound commands: any hit denies the whole command", () => {
-		// E1 cd tracking: a cd'ed segment resolves against the cd'ed dir, so
-		// the plain-.env form moved to the cd-free command (x/.env is not the
-		// denied /w/.env); the cd-relative form still hits.
 		expect(checkBashDenyHit("cat a && cat b && cat .env", CWD, envDeny)).toMatchObject({ path: ".env" });
 		expect(checkBashDenyHit("cd x && cat a && cat ../.env", CWD, envDeny)).toMatchObject({ path: "../.env" });
 		expect(checkBashDenyHit("cat a | grep x .env", CWD, envDeny)).toMatchObject({ path: ".env" });
@@ -129,23 +118,14 @@ describe("checkBashDenyHit (W4, all modes)", () => {
 		expect(checkBashDenyHit("cat .env", CWD, [])).toBeNull();
 	});
 	it("BH-S1: single-* deny rules match through the bash W4 reuse", () => {
-		// `Read(./.env.*)` resolves via the shared glob matcher — the same
-		// matcher read/edit/write rules use (BH-S1 fix; previously dead).
 		const star = [denyRule("Read(./.env.*)")];
 		expect(checkBashDenyHit("cat ./.env.local", CWD, star)).toMatchObject({ path: "./.env.local" });
-		// single-* stays within its segment — a nested .env.local does NOT hit
 		expect(checkBashDenyHit("cat ./a/.env.local", CWD, star)).toBeNull();
-		// globstar form keeps matching across directories
 		const globstar = [denyRule("Read(./**/.env.*)")];
 		expect(checkBashDenyHit("cat ./a/.env.local", CWD, globstar)).toMatchObject({ path: "./a/.env.local" });
 	});
 });
 
-// BH-R3 (spec 2026-11-14-backtest-hardening): only -t/--target-directory
-// alters the mv/cp destination; recognized harmless flags are stripped and
-// the bare positional form is analyzed; an UNRECOGNIZED flag escalates to
-// ask (checkBashFlagEscalation) instead of the old outright deny; heredoc
-// bodies piped to ssh execute remotely and skip local path checks.
 describe("BH-R3: mv/cp flag analysis + remote heredoc bodies", () => {
 	const unrelated = [denyRule("Edit(./other)")];
 	const sshRule = [denyRule("Edit(~/.ssh/**)")];
@@ -160,20 +140,15 @@ describe("BH-R3: mv/cp flag analysis + remote heredoc bodies", () => {
 		expect(checkBashDenyHit("cp -R a ~/.ssh/x", CWD, sshRule)).toMatchObject({ path: "~/.ssh/x" });
 	});
 	it("-t / --target-directory destinations are checked", () => {
-		// the destination DIRECTORY itself is the checked path — a dir-exact
-		// rule hits it (globstar `**` semantics need the trailing slash, so a
-		// bare dir never matches `~/.ssh/**`)
 		const dirRule = [denyRule("Edit(~/.ssh)")];
 		expect(checkBashDenyHit("cp -t ~/.ssh src", CWD, dirRule)).toMatchObject({ path: "~/.ssh" });
 		expect(checkBashDenyHit("mv --target-directory=~/.ssh src", CWD, dirRule)).toMatchObject({ path: "~/.ssh" });
 		expect(checkBashDenyHit("mv --target-directory ~/.ssh src", CWD, dirRule)).toMatchObject({ path: "~/.ssh" });
 		expect(checkBashDenyHit("mv -t~/.ssh src", CWD, dirRule)).toMatchObject({ path: "~/.ssh" });
-		// sources still checked alongside the target dir
 		expect(checkBashDenyHit("cp -t /tmp/d ~/.ssh/id_rsa", CWD, sshRule)).toMatchObject({ path: "~/.ssh/id_rsa" });
 	});
 	it("an unrecognized flag escalates to ask, never deny", () => {
 		expect(checkBashDenyHit("mv -z a b", CWD, unrelated)).toBeNull();
-		// S3: the flag escalation is its own shape — flag, not a deny path
 		expect(checkBashDenyScan("mv -z a b", CWD, []).flagAsk).toEqual({ flag: "-z" });
 		expect(checkBashDenyScan("cp -R src dst", CWD, []).flagAsk).toBeNull();
 		expect(checkBashDenyScan("cp -t ~/.ssh src", CWD, []).flagAsk).toBeNull();
@@ -185,9 +160,7 @@ describe("BH-R3: mv/cp flag analysis + remote heredoc bodies", () => {
 	it("local bash -s / sh -s heredoc bodies keep being analyzed", () => {
 		expect(checkBashDenyHit("bash -s <<EOF\nrm ~/.ssh/x\nEOF", CWD, sshRule)).toMatchObject({ path: "~/.ssh/x" });
 		expect(checkBashDenyHit("sh -s <<EOF\nrm ~/.ssh/x\nEOF", CWD, sshRule)).toMatchObject({ path: "~/.ssh/x" });
-		// unfindable closer → nothing stripped (conservative: body analyzed)
 		expect(checkBashDenyHit("ssh host bash -s <<EOF\nrm ~/.ssh/x\nNEVER", CWD, sshRule)).toMatchObject({ path: "~/.ssh/x" });
-		// here-strings are not heredocs — untouched
 		expect(checkBashDenyHit("cat <<<EOF", CWD, sshRule)).toBeNull();
 	});
 });
@@ -232,7 +205,6 @@ describe("P0-2/3 (2026-11-08): quoted literal paths participate", () => {
 		const envDeny = [denyRule("Read(./.env)")];
 		expect(checkBashDenyHit("ssh host 'cat .env'", CWD, envDeny)).toBeNull();
 		expect(checkBashDenyHit('cat "$F"', CWD, envDeny)).toBeNull();
-		// quote with expansion inside stays opaque for W3 too
 		expect(checkBashWriteTargets('rm "$X"/.git/x', CWD)).toBeNull();
 	});
 });
@@ -245,7 +217,6 @@ describe("P1-2 (2026-11-08): mv/cp check ALL positional args", () => {
 	});
 	it("install stays destination-only (not in CC set)", () => {
 		expect(checkBashWriteTargets("install -m 644 x .git/hooks/h", CWD)).toMatchObject({ path: ".git/hooks/h" });
-		// source arg sensitive — not a hit under destination-only semantics
 		expect(checkBashWriteTargets("install -m 644 .git/config /tmp/x", CWD)).toBeNull();
 	});
 });
@@ -263,9 +234,7 @@ describe("P1-3 (2026-11-08): full sed extractor", () => {
 	});
 	it("plain sed (no -i) is read-only — no W3 hit; -e/-f operands routed per CC", () => {
 		expect(checkBashWriteTargets("sed -n 1p ~/.zshrc", CWD)).toBeNull();
-		// -e expression operand is not a file
 		expect(checkBashWriteTargets("sed -i -e s/a/b/ ~/.zshrc", CWD)).toMatchObject({ path: "~/.zshrc" });
-		// W4: -f script FILE is validated against deny rules
 		const envDeny = [denyRule("Edit(./.env)")];
 		expect(checkBashDenyHit("sed -i -f .env.sed .env", CWD, envDeny)).toMatchObject({ path: ".env" });
 		expect(checkBashDenyHit("sed -i -f .env.sed ok.txt", CWD, envDeny)).toBeNull();
@@ -278,9 +247,7 @@ describe("P1-4 (2026-11-08): pi-own protected paths", () => {
 		expect(checkBashProtectedWrite("echo x > ~/.pi/agent/permission-modes.json", CWD)).toMatchObject({ kind: "modes-permissions-file" });
 		expect(checkBashProtectedWrite("rm ~/.pi/agent/settings.json", CWD)).toMatchObject({ kind: "host-settings-file" });
 		expect(checkBashProtectedWrite("tee ~/.pi/agent/rules/r.md", CWD)).toMatchObject({ kind: "global-rules-dir" });
-		// relative project rules dir
 		expect(checkBashProtectedWrite("rm .pi/rules/r.md", CWD)).toMatchObject({ kind: "project-rules-dir" });
-		// read-only reference does not trigger
 		expect(checkBashProtectedWrite("cat ~/.pi/agent/permission-modes.json", CWD)).toBeNull();
 	});
 	it("plain paths stay clean", () => {
@@ -291,9 +258,7 @@ describe("P1-4 (2026-11-08): pi-own protected paths", () => {
 
 describe("review fixes 2026-11-08 (P2#4/#5): post-`--` semantics", () => {
 	it("sed -- stops flag parsing: `sed -- -i s/x/y/ f` has -i as the script", () => {
-		// NOT in-place → no W3 hit
 		expect(checkBashWriteTargets("sed -- -i s/x/y/ f.txt", CWD)).toBeNull();
-		// W4 routes to Read (not Edit) — a Read deny on f.txt hits
 		const envDeny = [denyRule("Read(./f.txt)"), denyRule("Edit(./f.txt)")];
 		const hit = checkBashDenyHit("sed -- -i s/x/y/ f.txt", CWD, envDeny);
 		expect(hit).toMatchObject({ path: "f.txt", rule: "Read(./f.txt)" });
@@ -306,22 +271,14 @@ describe("review fixes 2026-11-08 (P2#4/#5): post-`--` semantics", () => {
 
 describe("review fix 2026-11-08 (P2#6, pinned): compound suppression form", () => {
 	it("a benign redirect segment suppresses the W3 hit on a later segment (documented approximation, bypass-level)", () => {
-		// `echo x > /tmp/log` is non-read-only → cancels the whole check →
-		// `echo y > ~/.zshrc` in the SAME command does not prompt. Pinned as
-		// the accepted trade-off (handoff W3 decision); DEVIATIONS #134③.
 		expect(checkBashWriteTargets("echo x > /tmp/log; echo y > ~/.zshrc", CWD)).toBeNull();
-		// the single-segment form still prompts
 		expect(checkBashWriteTargets("echo y > ~/.zshrc", CWD)).toMatchObject({ path: "~/.zshrc" });
 	});
 });
 
-// E1 (D-CH-4, spec 2026-11-15-cleanup-hardening): literal cd tracking along
-// `&&` chains — a segment's relative paths resolve against the cd'ed
-// directory for every path check (W3/W4/P1-4/flag escalation).
 describe("cd tracking along && chains (E1, D-CH-4)", () => {
 	it("W4: a Read deny rule hits through a cd-relative path (red on base)", () => {
 		const envDeny = [denyRule("Read(./.env)")];
-		// `../.env` resolved against `sub` lands on <cwd>/.env
 		expect(checkBashDenyHit("cd sub && cat ../.env", CWD, envDeny)).toMatchObject({
 			path: "../.env",
 			rule: "Read(./.env)",
@@ -330,7 +287,6 @@ describe("cd tracking along && chains (E1, D-CH-4)", () => {
 
 	it("W4: chained cds accumulate", () => {
 		const envDeny = [denyRule("Read(./.env)")];
-		// sub/a/.. → sub → .. → <cwd>/.env
 		expect(checkBashDenyHit("cd sub && cd a && cat ../../.env", CWD, envDeny)).toMatchObject({
 			path: "../../.env",
 			rule: "Read(./.env)",
@@ -339,7 +295,6 @@ describe("cd tracking along && chains (E1, D-CH-4)", () => {
 
 	it("residual: cd joined by ; / || keeps cwd resolution (no deny widening)", () => {
 		const envDeny = [denyRule("Read(./.env)")];
-		// `../.env` against <cwd> is outside the ./ rule's reach
 		expect(checkBashDenyHit("cd sub; cat ../.env", CWD, envDeny)).toBeNull();
 		expect(checkBashDenyHit("cd sub || cat ../.env", CWD, envDeny)).toBeNull();
 	});
@@ -350,9 +305,6 @@ describe("cd tracking along && chains (E1, D-CH-4)", () => {
 	});
 });
 
-// S2 (spec 2026-11-15-cleanup-hardening): the single-scan entry must yield
-// the same two verdicts the old two-pass API produced. Matrix: deny only /
-// flagAsk only / both / neither.
 describe("checkBashDenyScan (S2 single-scan matrix)", () => {
 	const envDeny = [denyRule("Read(./.env)")];
 	const unrelated = [denyRule("Edit(~/.ssh/**)")];

@@ -1,14 +1,3 @@
-/**
- * P2-BUS-02 — goal/review channels on the capability bus.
- *
- * goal: restoring a focused active goal from session entries publishes
- * active:true; /goal-pause flips paused; the raw globalThis snapshot sees both.
- * review: the pi_review_report tool completing publishes done+lastRunAt
- * (running is published by the /review command path, exercised in
- * P2-REL smoke). Reads duck-type the snapshot directly (D4-READER-REMOVE:
- * the ./types runtime reader is withdrawn; the bus's own snapshot IS the
- * contract surface).
- */
 import { describe, expect, it, beforeEach } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -39,7 +28,6 @@ describe("P2-BUS-02 goal/review channels", () => {
 		const host = new FakeHost();
 		targets.goal.factory(host.asPi());
 		const cwd = mkdtempSync(join(tmpdir(), "bus-goal-"));
-		// the restore path reads the goal pool from disk (.pi/goals)
 		const { ensureDirectory, atomicWriteGoalFile, serializeGoalFile, makeActiveGoalPath, GOALS_DIR } =
 			await import("../../extensions/goal/storage/goal-files.js");
 		const fileCtx = { cwd };

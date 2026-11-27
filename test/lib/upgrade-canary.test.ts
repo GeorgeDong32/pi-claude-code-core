@@ -1,16 +1,3 @@
-/**
- * G1-C7 upgrade canary — run BEFORE upgrading pi
- * (SPEC docs/zh/entropy-control-spec.md Goal 1 [C7], docs/en+zh/upgrade-canary.md).
- *
- * Why this exists: after a pi host upgrade, the two economy mechanisms can
- * degrade SILENTLY — ObservationPack may stop replacing oversized tool
- * results with placeholders (context bloat returns), and Action Fusion may
- * stop recognizing `then_run` (write+verify collapses back into two turns).
- * Neither failure throws; only the token bill and turn count would show it.
- * These tests drive the REAL projection pipeline and the REAL fused write
- * registration, so a host-API semantic change breaks them loudly instead.
- * Not part of the three regular gates (check/test/contracts) — upgrade-only.
- */
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -44,9 +31,6 @@ function fakeCtx(cwd: string): never {
 
 describe("upgrade canary (G1-C7)", () => {
 	it("ObservationPack: a tool result over THRESHOLD_BYTES is projected to a placeholder after FULL_SENDS", async () => {
-		// Breakage means: the projection pipeline (candidate loop → threshold
-		// gate → FULL_SENDS counting → placeholder construction) no longer
-		// replaces large results — context bloat silently returns after upgrade.
 		const bigText = "x".repeat(THRESHOLD_BYTES + 100);
 		const bigBytes = Buffer.byteLength(bigText, "utf8");
 		const message = {
@@ -78,10 +62,6 @@ describe("upgrade canary (G1-C7)", () => {
 	});
 
 	it("Action Fusion: the registered write tool carries then_run in its schema and a then_run call is recognized as fused", async () => {
-		// Breakage means: the re-registered write/edit tools lost the then_run
-		// parameter (schema channel) or executeMutationThenRun no longer merges
-		// the follow-up command into one result (details.thenRun stamp) —
-		// write+verify collapses back into separate bash turns after upgrade.
 		const dir = await mkdtemp(join(tmpdir(), "fus-canary-"));
 		const file = join(dir, "canary.txt");
 		await writeFile(file, "before\n", "utf8");
@@ -129,17 +109,6 @@ describe("upgrade canary (G1-C7)", () => {
 	});
 });
 
-/**
- * SC upgrade canaries (SPEC SC §7.3, task W9): three host semantics the
- * compaction controller's SAFETY depends on. A pi upgrade changing any of
- * them must break loudly here BEFORE the controller misbehaves in production.
- *   H3  — a boundary-draft compaction lands (fromHook), refreshes the next
- *         request's context, and emits NO session_compact/compaction_start
- *   H5  — a later turn_end handler's entries return REPLACES the draft
- *   H12 — a draft at a recoverable length boundary would swallow the native
- *         compact-and-retry (the hazard POL-07 exists to prevent; pinned as
- *         host fact so a change in the recovery predicate re-opens review)
- */
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { compactionDraft, createCompactionHost } from "../contracts/support/compaction-host.ts";
 
@@ -150,7 +119,6 @@ describe("upgrade canary (SC compaction, §7.3)", () => {
 			host.faux.setResponses([fauxAssistantMessage("first answer, decent length"), fauxAssistantMessage("second answer")]);
 			await host.session.prompt("turn one");
 			await host.session.prompt("turn two");
-			// drive a REAL draft commit via the probe's turn_end slot
 			const host2 = await createCompactionHost({
 				probe: {
 					turnEndDraft: (event) =>
@@ -195,7 +163,6 @@ describe("upgrade canary (SC compaction, §7.3)", () => {
 	});
 
 	it("H12: a draft at a recoverable length boundary suppresses the native retry (hazard pinned)", async () => {
-		// Baseline: WITHOUT a draft the recovery runs (3 provider calls).
 		const baseline = await createCompactionHost({
 			settingsOverrides: { compaction: { enabled: true, reserveTokens: 16000, keepRecentTokens: 100 } },
 			probe: {},
@@ -211,9 +178,6 @@ describe("upgrade canary (SC compaction, §7.3)", () => {
 		} finally {
 			baseline.cleanup();
 		}
-		// Hazard: WITH a draft at the length turn_end the retry is swallowed
-		// (1 call, truncated final). If pi changes this predicate, POL-07's
-		// exclusion list must be re-derived (SC-HOST-07 review trigger).
 		const hazard = await createCompactionHost({
 			settingsOverrides: { compaction: { enabled: true, reserveTokens: 16000, keepRecentTokens: 100 } },
 			probe: {

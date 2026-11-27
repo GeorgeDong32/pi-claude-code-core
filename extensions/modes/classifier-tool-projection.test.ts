@@ -25,9 +25,6 @@ describe("toClassifierInput", () => {
 		expect(out.preview).toBe("hello world")
 	})
 
-	// Characterization (plan2 C1): unknown tools project as redacted whole-JSON.
-	// This is the intentional auto-mode face for tools without command fields;
-	// the B1 gate must not change it for field-less unknown tools.
 	it("projects unknown tools as redacted whole-input JSON (default branch)", () => {
 		const input = { path: "src/a.ts", note: "just data" }
 		expect(toClassifierInput("sol_fusion", input)).toBe(

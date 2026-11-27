@@ -1,14 +1,3 @@
-/**
- * Unit tests for `profiles.ts` — pure helpers for the model-profile config
- * stored at `~/.pi/agent/model-profiles.json`.
- *
- * Strategy:
- *   - Pure-function helpers (parseModelId, resolveModelForMode, listProfiles,
- *     getActiveProfileName, profileExists) are tested with plain in-memory data.
- *   - File-touching helpers (loadModelProfiles, ensureModelProfilesConfig) are
- *     tested against a per-test tmpdir by overriding the exported `modelsPath`.
- */
-
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest"
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -30,7 +19,6 @@ import {
 	type ModelProfilesConfig,
 } from "./profiles.ts"
 
-// ---- parseModelId ------------------------------------------------------
 
 describe("parseModelId", () => {
 	it("parses 'provider/model'", () => {
@@ -53,7 +41,6 @@ describe("parseModelId", () => {
 	})
 
 	it("returns null when provider is empty", () => {
-		// "/model" — empty provider part
 		expect(parseModelId("/model")).toBeNull()
 	})
 
@@ -62,7 +49,6 @@ describe("parseModelId", () => {
 	})
 
 	it("parses 'provider/model:' with trailing colon as no thinking level", () => {
-		// trailing colon means "no thinking suffix"; spec says return undefined
 		expect(parseModelId("opencode/big-pickle:")).toEqual({
 			provider: "opencode",
 			model: "big-pickle",
@@ -77,7 +63,6 @@ describe("parseModelId", () => {
 	})
 })
 
-// ---- resolveModelForMode ----------------------------------------------
 
 describe("resolveModelForMode", () => {
 	it("returns undefined for empty config", () => {
@@ -127,11 +112,8 @@ describe("resolveModelForMode", () => {
 	})
 })
 
-// ---- resolveEffortForMode ---------------------------------------------
 
 describe("resolveEffortForMode", () => {
-	// PLAN §3.3 / P1-EF-06 d): no explicit effort → undefined, meaning the
-	// mode switch leaves the thinking level alone (pm 2.8.0 coerced "medium")
 	it("returns undefined when no effort is configured", () => {
 		expect(resolveEffortForMode({}, "ask")).toBeUndefined()
 		expect(
@@ -218,7 +200,6 @@ describe("resolveModelForMode (ModeConfig object entries)", () => {
 	})
 })
 
-// ---- getActiveProfileName ---------------------------------------------
 
 describe("getActiveProfileName", () => {
 	it("returns 'active' when set", () => {
@@ -234,7 +215,6 @@ describe("getActiveProfileName", () => {
 	})
 })
 
-// ---- listProfiles ------------------------------------------------------
 
 describe("listProfiles", () => {
 	it("returns all object-valued keys except 'active'", () => {
@@ -261,7 +241,6 @@ describe("listProfiles", () => {
 	})
 })
 
-// ---- profileExists -----------------------------------------------------
 
 describe("profileExists", () => {
 	it("returns true when name is an object value", () => {
@@ -281,13 +260,11 @@ describe("profileExists", () => {
 	})
 })
 
-// ---- loadModelProfiles (file-touching) ---------------------------------
 
 describe("loadModelProfiles (with tmpfile fixture)", () => {
 	const tmpFile = join(tmpdir(), `pm-test-model-profiles-${Date.now()}.json`)
 
 	beforeEach(() => {
-		// Reset path to point at our per-suite tmp file
 		setModelsPath(tmpFile)
 		try {
 			rmSync(tmpFile)
@@ -331,7 +308,6 @@ describe("loadModelProfiles (with tmpfile fixture)", () => {
 	})
 })
 
-// ---- ensureModelProfilesConfig -----------------------------------------
 
 describe("ensureModelProfilesConfig (with tmpfile fixture)", () => {
 	let tmpFile: string
@@ -339,7 +315,6 @@ describe("ensureModelProfilesConfig (with tmpfile fixture)", () => {
 	let tmpAgentDir: string
 
 	beforeEach(() => {
-		// Unique path per test so concurrent files don't collide
 		const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 		tmpAgentDir = join(tmpdir(), `pm-test-agent-${stamp}`)
 		tmpFile = join(tmpAgentDir, "model-profiles.json")
@@ -356,17 +331,6 @@ describe("ensureModelProfilesConfig (with tmpfile fixture)", () => {
 			/* ignore */
 		}
 		setModelsPath(tmpFile)
-		// Override homedir via env trick: ensureModelProfilesConfig uses homedir().
-		// We can't change homedir() cheaply, so instead we point modelsPath at our
-		// tmp file and stub `ensureModelProfilesConfig` tests via the public API
-		// by relying on the fact that the helper reads modelsPath when it exists
-		// OR creates it under homedir(). To exercise the "no settings" branch we
-		// rely on the fact that the test env does not have a settings.json we
-		// care about; to exercise the "with settings" branch we write a real
-		// settings.json into the real homedir() — but that's invasive.
-		// So instead: ensureModelProfilesConfig is tested for the "file exists"
-		// path (which is what we can reliably exercise in CI without touching
-		// the user's real homedir).
 	})
 
 	afterEach(() => {
@@ -399,24 +363,14 @@ describe("ensureModelProfilesConfig (with tmpfile fixture)", () => {
 	})
 
 	it("creates the file with defaults when missing (no settings.json branch)", () => {
-		// Force the path into our tmp dir. The implementation uses homedir(),
-		// so we can't fully redirect — but for the "exists" branch we already
-		// have coverage. For the "doesn't exist" branch, we test by spying on
-		// writeFileSync indirectly: skip this test in environments where we
-		// can't redirect homedir, and instead verify the function does NOT
-		// throw and returns either {} or a defaults-shaped object.
 		const before = existsSync(tmpFile)
 		const result = ensureModelProfilesConfig()
-		// The function must not throw and must return something object-shaped.
 		expect(typeof result).toBe("object")
 		expect(result).not.toBeNull()
-		// If the file happened to exist in the real path, that's fine — we only
-		// assert no crash.
 		void before
 	})
 })
 
-// ---- resolveModeConfig --------------------------------------------------
 
 describe("resolveModeConfig", () => {
 	it("returns all-defaults for empty config", () => {
@@ -465,7 +419,7 @@ describe("resolveModeConfig", () => {
 	it("falls back to default when active profile has no entry for that mode", () => {
 		const config: ModelProfilesConfig = {
 			active: "custom",
-			custom: { ask: { skills: ["ask-skill"] } },   // no plan entry
+			custom: { ask: { skills: ["ask-skill"] } },
 			default: { plan: { skills: ["fallback-skill"] } },
 		}
 		const result = resolveModeConfig(config, "plan")
@@ -484,7 +438,6 @@ describe("resolveModeConfig", () => {
 	})
 
 	it("ignores string active profile value (not an object)", () => {
-		// Edge case: "active" key is a string pointer, not a profile object
 		const config = { active: "main" } as ModelProfilesConfig
 		const result = resolveModeConfig(config, "ask")
 		expect(result.skills).toEqual(["*"])
@@ -515,7 +468,6 @@ describe("resolveModeConfig", () => {
 	})
 })
 
-// ---- resolveSkillFilter -------------------------------------------------
 
 describe("resolveSkillFilter", () => {
 	it("returns ['*'] when no filter configured", () => {
@@ -560,7 +512,6 @@ describe("resolveSkillFilter", () => {
 	})
 })
 
-// ---- resolveToolFilter --------------------------------------------------
 
 describe("resolveToolFilter", () => {
 	it("returns '*' when no filter configured", () => {
@@ -572,7 +523,6 @@ describe("resolveToolFilter", () => {
 			default: { auto: { tools: ["bash", "write"] } },
 		}
 		const result = resolveToolFilter(config, "auto")
-		// read should be re-injected
 		expect(result).toContain("read")
 		expect(result).toContain("bash")
 		expect(result).toContain("write")
@@ -590,9 +540,9 @@ describe("resolveToolFilter", () => {
 			default: { plan: { tools: ["bash"] } },
 		}
 		const result = resolveToolFilter(config, "plan") as string[]
-		expect(result).toContain("read")    // mandatory
-		expect(result).toContain("bash")    // user's choice
-		expect(result.length).toBe(2)       // read + bash
+		expect(result).toContain("read")
+		expect(result).toContain("bash")
+		expect(result.length).toBe(2)
 	})
 
 	it("deduplicates when read is already in the user's list", () => {

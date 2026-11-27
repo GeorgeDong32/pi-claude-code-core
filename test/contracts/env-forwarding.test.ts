@@ -1,6 +1,3 @@
-/**
- * P0-CT §4.2 — env / subagent-forwarding contracts (P0-CT-04..06).
- */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -61,7 +58,6 @@ describe("P0-CT §4.2 env / subagent forwarding", () => {
 		expect(existsSync(requestsDir)).toBe(true);
 		const files = readdirSync(requestsDir);
 		expect(files.length).toBe(1);
-		// responses dir is pre-created for the parent to answer into
 		expect(existsSync(join(sessionDir, "responses"))).toBe(true);
 	});
 

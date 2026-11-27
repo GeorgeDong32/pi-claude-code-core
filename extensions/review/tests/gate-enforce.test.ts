@@ -1,6 +1,3 @@
-/**
- * Tests for src/gate-enforce.ts: dedupe, threshold, verdict, dispositions.
- */
 import { strict as assert } from "node:assert";
 import { describe, test } from "node:test";
 
@@ -56,9 +53,6 @@ describe("filterByThreshold", () => {
 	});
 
 	test("missing confidence defaults to neutral 5, not silently dropped", () => {
-		// Field regression: shape-adapted issues arrived without confidence and
-		// `undefined >= floor` filtered out every one of them — a systematic
-		// false-negative source (real majors killed).
 		const noConf = {
 			...issue({ file: "a.ts", confidence: 9, severity: "major" }),
 			confidence: undefined,

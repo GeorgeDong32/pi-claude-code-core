@@ -1,20 +1,3 @@
-/**
- * BH-R1 (spec 2026-11-14-backtest-hardening §4 W-B): a run that ends with a
- * provider error (assistant stopReason "error") must not re-queue the sisyphus
- * continuation forever. Two consecutive error terminations pause the goal
- * THROUGH the lifecycle pause verb (pauseReason "provider error: <first 120
- * chars>", suggested action → /goal resume); any non-error termination resets
- * the per-goal consecutive-error counter. The aborted branch keeps its
- * existing user-pause behavior.
- *
- * Backtest evidence (spec §1 R1): Air 2,241 provider errors / 13h / 111M
- * tokens logged; local 675 errors / 2.6h — the continuation loop re-queued on
- * every error with no backoff.
- *
- * Harness: the shared FakeHost (test/contracts/fake-host.ts) — on-disk goal
- * fixture + event fire, asserting the persisted record and the sent
- * continuations, same shape as goal-hijack.test.ts.
- */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -62,7 +45,6 @@ function diskGoal(cwd: string, objective: string): void {
 	writeActiveGoalFile({ cwd }, createGoal({ objective, autoContinue: true, sisyphus: true }, Date.UTC(2026, 10, 14)));
 }
 
-/** agent_end payload whose last assistant message ended with the given stopReason. */
 function runEnd(stopReason: string, errorMessage?: string): unknown {
 	return {
 		messages: [
@@ -81,7 +63,6 @@ function runEnd(stopReason: string, errorMessage?: string): unknown {
 const PROVIDER_ERROR = "429 quota exceeded: rate limit reached for requests";
 
 async function settle(): Promise<void> {
-	// the continuation loop dispatches on a 0–50ms timer; give it a beat
 	await new Promise((resolve) => setTimeout(resolve, 60));
 }
 
@@ -93,13 +74,11 @@ test("BH-R1: two consecutive provider errors pause the goal; no third continuati
 		await settle();
 		const baseline = f.continuationCount();
 
-		// first error: the loop may retry once (count < 2 → continuation queued)
 		await f.host.fire("agent_end", runEnd("error", PROVIDER_ERROR), f.ctx);
 		await settle();
 		assert.equal(f.diskGoal()?.status, "active", "first error must NOT pause the goal");
 		assert.equal(f.continuationCount(), baseline + 1, "first error still re-queues the continuation");
 
-		// second consecutive error: pause THROUGH the lifecycle pause verb
 		await f.host.fire("agent_end", runEnd("error", PROVIDER_ERROR), f.ctx);
 		await settle();
 		const paused = f.diskGoal();
@@ -127,7 +106,7 @@ test("BH-R1: error → success → error does NOT pause (counter resets on non-e
 
 		await f.host.fire("agent_end", runEnd("error", PROVIDER_ERROR), f.ctx);
 		await settle();
-		await f.host.fire("agent_end", runEnd("stop"), f.ctx); // successful termination resets the counter
+		await f.host.fire("agent_end", runEnd("stop"), f.ctx);
 		await settle();
 		await f.host.fire("agent_end", runEnd("error", PROVIDER_ERROR), f.ctx);
 		await settle();
@@ -149,14 +128,12 @@ test("BH-R1: a provider-error pause is resumable via /goal resume; the error cou
 		await f.host.fire("session_start", { reason: "new" }, f.ctx);
 		await settle();
 
-		// auto-pause on two consecutive errors
 		await f.host.fire("agent_end", runEnd("error", PROVIDER_ERROR), f.ctx);
 		await settle();
 		await f.host.fire("agent_end", runEnd("error", PROVIDER_ERROR), f.ctx);
 		await settle();
 		assert.equal(f.diskGoal()?.status, "paused");
 
-		// /goal resume: the resume verb clears the pause fields and re-activates
 		const resume = f.host.commands.get("goal-resume");
 		assert.ok(resume, "/goal resume command registered");
 		await resume("", f.ctx as never);
@@ -167,11 +144,9 @@ test("BH-R1: a provider-error pause is resumable via /goal resume; the error cou
 		assert.equal(resumed?.pauseSuggestedAction, undefined, "resume clears the suggested action");
 		assert.equal(resumed?.stopReason, undefined, "resume clears stopReason");
 
-		// fresh counter: ONE further error must NOT immediately re-pause
 		await f.host.fire("agent_end", runEnd("error", PROVIDER_ERROR), f.ctx);
 		await settle();
 		assert.equal(f.diskGoal()?.status, "active", "one error after resume must not re-pause (counter is fresh)");
-		// and the guard still works after the resume: the next consecutive error does
 		await f.host.fire("agent_end", runEnd("error", PROVIDER_ERROR), f.ctx);
 		await settle();
 		assert.equal(f.diskGoal()?.status, "paused", "the second consecutive error after resume pauses again");

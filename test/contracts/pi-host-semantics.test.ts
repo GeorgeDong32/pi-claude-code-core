@@ -1,13 +1,3 @@
-/*
- * Host-semantics contract tests (SPEC CON-01).
- *
- * Positioning (per spec review): ①② pin CORE registration behaviour on the
- * extended fake host; the real pi 0.87 host semantics (load-time snapshot,
- * projection adoption) are additionally proven by the TST-04 sandbox run
- * recorded in the spec appendix. ③④ assert directly against the real
- * installed pi package, so a pi upgrade that drops/renames either export
- * turns this file red before anything else.
- */
 import { describe, expect, it } from "vitest";
 import {
 	VERSION,
@@ -49,7 +39,6 @@ describe("pi host semantics the economy modules depend on (CON-01)", () => {
 
 	it("③ withFileMutationQueue is a callable export of the real pi package", async () => {
 		expect(typeof withFileMutationQueue).toBe("function");
-		// Serializes per canonical path: second work starts after first settles.
 		const order: number[] = [];
 		const first = withFileMutationQueue("/tmp/con-a", async () => {
 			await new Promise((r) => setTimeout(r, 20));
@@ -74,12 +63,6 @@ describe("pi host semantics the economy modules depend on (CON-01)", () => {
 	});
 });
 
-/*
- * CON-03: per-message fail-open through the real module factory on the
- * extended fake host (SPEC OBS-08). A broken store keeps every candidate's
- * original bytes in the projection; a healthy store replaces them from the
- * request after FULL_SENDS.
- */
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -100,7 +83,6 @@ describe("observation-pack context projection (CON-03)", () => {
 		const host = new FakeHost();
 		targets["observation-pack"].factory(host.piObject() as never);
 		const root = await mkdtemp(join(tmpdir(), "con03-"));
-		// OBS-03 topology: <sessionDir>/observation-pack/<sessionId>/objects.
 		await mkdir(join(root, "observation-pack", "sess-1"), { recursive: true });
 		await writeFile(join(root, "observation-pack", "sess-1", "objects"), "blocks the directory", "utf8");
 		const ctx = host.makeCtx({ cwd: root, sessionDir: root, sessionId: "sess-1" });
@@ -139,33 +121,22 @@ describe("observation-pack context projection (CON-03)", () => {
 			}
 		}
 		expect(sawPlaceholder).toBe(true);
-		// obs_recall got registered alongside.
 		const names = (host.piObject() as { getAllTools: () => Array<{ name: string }> }).getAllTools().map((t) => t.name);
 		expect(names).toContain("obs_recall");
 	});
 });
 
-/*
- * CON-04: assembly-order contract — observation-pack must own the FINAL
- * context handler slot (after modes/memory). Pinned through the real
- * assembly default export on the extended fake host.
- */
 import coreExtension from "../../extensions/index.ts";
 
 describe("assembly order (CON-04)", () => {
 	it("observation-pack owns the FINAL context handler slot after modes and memory", async () => {
 		const host = new FakeHost();
-		// Snapshot the chain BEFORE the assembly to know how many handlers
-		// earlier modules contributed.
 		(host.piObject() as { on: (e: string, h: Handler) => () => void }).on("context", () => undefined);
 		const before = (host.handlers.get("context")! as Handler[]).length;
 		await coreExtension(host.piObject() as never);
 		const contextHandlers = host.handlers.get("context")! as Handler[];
 		expect(contextHandlers.length).toBeGreaterThan(before);
 
-		// The LAST handler is observation-pack's: firing it alone replaces a
-		// large tool result past FULL_SENDS — the projection-owner behaviour
-		// ASM-01 exists to guarantee.
 		const root = await mkdtemp(join(tmpdir(), "con04-"));
 		const ctx = host.makeCtx({ cwd: root, sessionDir: root, sessionId: "sess-con04" });
 		const text = Array.from({ length: 400 }, (_, i) => `row-${i}-${"y".repeat(40)}`).join("\n");
@@ -187,15 +158,6 @@ describe("assembly order (CON-04)", () => {
 	});
 });
 
-/*
- * ⑥ (附记 A.1 ①, spec 2026-10-02-memory-recall-v2): RV-06 dedup + /memory
- * diagnostics derive recall state from ctx.sessionManager.buildSessionProjection()
- * reading details.files[].key / details.bytes. If a pi upgrade ever strips or
- * reshapes `details` on custom messages in the projection, recall silently
- * degrades to duplicate injections with no error anywhere — this pin turns
- * that red at the contract gate instead. Asserted against the REAL installed
- * pi package export.
- */
 import { buildSessionProjection } from "@earendil-works/pi-coding-agent";
 
 describe("RV host semantics (2026-10-02-memory-recall-v2)", () => {
@@ -239,13 +201,6 @@ describe("RV host semantics (2026-10-02-memory-recall-v2)", () => {
 	});
 });
 
-// ── AR1005-RC-HOST (spec 2026-10-05 §13/§4): session teardown must cancel
-// old recall work and absorb late failures. Runs the REAL memory extension
-// inside a REAL ExtensionRunner in an ISOLATED subprocess (the unhandled
-// rejection probe must not install a process-wide net into the shared test
-// process). The scenario pins the exact defect reproduced at baseline
-// 76e933a: a late selector completion after invalidate() read the stale
-// ctx inside a void'd promise chain → unhandledRejection. ──
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -264,18 +219,12 @@ describe("AR1005-RC-HOST recall teardown (2026-10-05-core-architecture-reliabili
 			throw new Error(`scenario exited ${result.status}:\n${out.slice(0, 3000)}`);
 		}
 		expect(out).toContain("SCENARIO_SELECTOR_CALLS:1");
-		expect(out).toContain("SCENARIO_SENT:0"); // the late result delivered nothing
-		expect(out).not.toContain("SCENARIO_UNHANDLED"); // and crashed nothing
+		expect(out).toContain("SCENARIO_SENT:0");
+		expect(out).not.toContain("SCENARIO_UNHANDLED");
 		expect(out).toContain("SCENARIO_DONE");
 	});
 });
 
-// ── AR1005-FU-HOST (spec 2026-10-05 §13): the renderer render facts the
-// action-fusion UI adapter depends on. Type-level pin against the REAL
-// installed package — if a pi upgrade drops/renames either field this file
-// stops compiling at the contracts gate (bun run check) before anything
-// else; the runtime fallbacks for missing fields are covered by the
-// structurally-missing stand-ins in test/lib/tool-renderers.test.ts. ──
 // Deep-path import via relative resolution (node enforces the package "exports"
 // map for bare deep specifiers; these types are not re-exported at the root).
 import type { ToolRenderContext, ToolRenderResultOptions } from "../../node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.js";
@@ -294,34 +243,10 @@ describe("AR1005-FU-HOST renderer render facts (2026-10-05-core-architecture-rel
 	});
 });
 
-// ── AR1005-RU-HOST (spec 2026-10-05 §13): the turn lifecycle the rules
-// activation budget depends on — turn_start fires once per turn and every
-// tool call within a turn shares it. The fact is a property of pi's real
-// run loop (agent-session fires turn_start at turn boundaries); it cannot
-// be exercised automatically without a full model-driven run, so per spec
-// §13.2 this is a registered todo with the Phase 4 host-acceptance target.
-// Manual verification steps (executed and recorded at Phase 4):
-//   1. start a real pi session in a throwaway project with a rule file
-//      carrying `globs: ["src/**/*.ts"]`;
-//   2. send one user message that triggers TWO read/edit tool calls on
-//      matching paths — both activations must land in the SAME turn
-//      (pi's pending-steer queue flushes them together at turn_end);
-//   3. send a second user message triggering another matching call —
-//      exactly one turn_start must have separated the two batches.
 describe("AR1005-RU-HOST turn lifecycle (2026-10-05-core-architecture-reliability)", () => {
 	it.todo("⑨ real run loop: one turn_start per turn; tool calls within a turn share it (Phase 4 host acceptance — manual steps in the comment above) — EXECUTED PASS 2026-11-15 SR host batch (real pi 1.5.2 TUI via rex, GLM-5.3-flash: two reads in one message share one turn_start; next message's call lands after a fresh before_agent_start→turn_start; evidence ~/.cache/pi-core-acceptance/2026-11-15/run/host-todos); todo retained: not automatable in-suite");
 });
 
-// ── AR1005-ST-HOST (spec 2026-10-05 §13): the host facts the modes
-// working-stats cache depends on. The leaf-identity half is pinned against
-// the REAL SessionManager below (an appended committed entry moves
-// getLeafId and appears in getBranch — that is what invalidates the cache
-// key). The message_end-vs-append ordering was adjudicated on a real run
-// loop (2026-11-15 SR host batch, pi 1.5.2): append happens BEFORE
-// message_end fires — the opposite of the assumption this todo originally
-// registered under; the todo below records the evidence. Correctness is
-// unaffected either way: the modes wiring marks the snapshot dirty on
-// multiple events, so the cache never relied on the ordering alone. ──
 import { SessionManager as RealSessionManager } from "@earendil-works/pi-coding-agent";
 import { mkdtempSync, rmSync } from "node:fs";
 
@@ -335,8 +260,8 @@ describe("AR1005-ST-HOST branch identity (2026-10-05-core-architecture-reliabili
 			const leafBefore = sm.getLeafId();
 			const branchBefore = sm.getBranch().length;
 			sm.appendMessage({ role: "assistant", content: [{ type: "text", text: "ok" }] } as never);
-			expect(sm.getLeafId()).not.toBe(leafBefore); // the key moved
-			expect(sm.getBranch().length).toBe(branchBefore + 1); // and the branch grew
+			expect(sm.getLeafId()).not.toBe(leafBefore);
+			expect(sm.getBranch().length).toBe(branchBefore + 1);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -345,19 +270,9 @@ describe("AR1005-ST-HOST branch identity (2026-10-05-core-architecture-reliabili
 	it.todo("⑪ real run loop: message_end vs SessionManager append ordering (Phase 4 host acceptance) — ADJUDICATED 2026-11-15 SR host batch (real pi 1.5.2 TUI via rex, GLM-5.3-flash): 11/11 message_end moments had getLeafId() already including the message and getBranch() already +1 — append happens BEFORE message_end fires, inverting the assumption this todo was registered under; the modes cache marks dirty on multiple events by design, so correctness never relied on the ordering (README row corrected). Evidence ~/.cache/pi-core-acceptance/2026-11-15/run/host-todos; todo retained: not automatable in-suite");
 });
 
-/* ── PI12-BAS-HOST (pi 1.2.0 upgrade batch, 2026-10-14) ──
- * pi ≥1.2.0 fires before_agent_start for idle sendMessage(triggerTurn:true)
- * runs too; the event is a union on messageType. Core's adaptation relies on:
- * user variant carries `prompt`, custom variant does NOT, both share the base
- * (systemPrompt / systemPromptOptions) and the same handler-result type.
- * The pins below are compile-time (the contracts tsc pass turns red if a
- * future pi reshapes the union) plus runtime shape markers. The FIRING half
- * (idle sendMessage(triggerTurn:true) runs actually fire the event) is
- * source-verified against the installed dist (agent-session.js: user ~1663,
- * custom ~1840) but not runtime-automated — Phase 4 host acceptance, same
- * class as todos ⑨/⑪: breakpoint/log a live goal-continuation session. */
 import type { BeforeAgentStartEvent } from "@earendil-works/pi-coding-agent";
 
+// pi ≥1.2.0: before_agent_start also fires for idle sendMessage(triggerTurn:true) runs; the event is a union on messageType — user carries `prompt`, custom does not, both share systemPrompt/systemPromptOptions.
 describe("PI12-BAS-HOST before_agent_start union (pi 1.2.0 upgrade batch 2026-10-14)", () => {
 	it("⑫ the event is a union on messageType — user carries prompt, custom does not, both share the base", () => {
 		type UserEvent = Extract<BeforeAgentStartEvent, { messageType: "user" }>;
@@ -376,13 +291,10 @@ describe("PI12-BAS-HOST before_agent_start union (pi 1.2.0 upgrade batch 2026-10
 			systemPromptOptions: {} as CustomEvent["systemPromptOptions"],
 			message: { role: "custom", content: [{ type: "text", text: "directive" }], customType: "pi-x-directive", display: false, timestamp: Date.now() } as CustomEvent["message"],
 		};
-		// custom must NOT carry prompt — if a future pi adds it, the expect-error
-		// below goes unused and the contracts tsc pass turns red (the memory
-		// gating may then be revisited)
 		// @ts-expect-error — property `prompt` does not exist on the custom variant
 		const leaked: string | undefined = custom.prompt;
 		expect(leaked).toBeUndefined();
-		expect(user.prompt).toBe("user text"); // runtime marker: same objects we type-asserted
+		expect(user.prompt).toBe("user text");
 		expect([user.messageType, custom.messageType]).toEqual(["user", "custom"]);
 	});
 });
@@ -390,10 +302,6 @@ describe("PI12-BAS-HOST before_agent_start union (pi 1.2.0 upgrade batch 2026-10
 import type { SessionBeforeCompactEvent, SessionCompactEvent, SessionCompactFailedEvent } from "@earendil-works/pi-coding-agent";
 
 describe("CB1 cherry-batch1 host semantics (spec docs/en/cherry-batch1-spec.md)", () => {
-	// B3-ANCHOR (registered in README): pin pi-ai's estimate anchor
-	// invalidation criterion — a synthetic prefix (a newer-timestamped
-	// message EARLIER in array order) invalidates an older usage anchor;
-	// a fresh usage assistant restores it.
 	it("B3-ANCHOR: estimateContextTokens invalidates usage anchors behind newer synthetic prefixes and restores on fresh usage", async () => {
 		const est = await import("@earendil-works/pi-ai/utils/estimate");
 		const usage = (totalTokens: number) => ({
@@ -416,53 +324,28 @@ describe("CB1 cherry-batch1 host semantics (spec docs/en/cherry-batch1-spec.md)"
 			content: [{ type: "text" as const, text }],
 			timestamp: ts,
 		});
-		// ① synthetic prefix BEFORE the usage assistant in array order →
-		// the older-timestamped usage anchor is invalidated.
 		const seq1 = [user(2000, "compaction summary"), assistant(1000, usage(9500))];
 		const r1 = (est as { estimateContextTokens(c: unknown[]): { lastUsageIndex: number | null } }).estimateContextTokens(seq1 as never);
 		expect(r1.lastUsageIndex).toBeNull();
-		// ② a fresh usage assistant after the prefix restores the anchor.
 		const seq2 = [...seq1, assistant(3000, usage(100))];
 		const r2 = (est as { estimateContextTokens(c: unknown[]): { lastUsageIndex: number | null } }).estimateContextTokens(seq2 as never);
 		expect(r2.lastUsageIndex).toBe(2);
 	});
 
-	// B1-TRUNC (registered in README): behavior pin — a truncated
-	// (stopReason=length) assistant message's toolCalls all FAIL. The
-	// guard lives in pi's agent loop (unexported bundle internals), so we
-	// pin the observable message-level fact: a length message carrying
-	// toolCalls is marked failed by the host pipeline. The extension-side
-	// notice is pinned in modes' FakePi suite; this contract guards the
-	// HOST half against upstream drift.
 	it.todo("B1-TRUNC: host fails all toolCalls of a stopReason=length message (failToolCallsFromTruncatedMessage behavior) — needs a real-session injection scenario; target Phase: next pi-upgrade contract batch (P0-CT-13)");
 });
 
 describe("CB2 cherry-batch2 host semantics (spec docs/en/cherry-batch2-spec.md)", () => {
-	// CB2-B6 (registered): AgentEndEvent currently has NO willRetry field.
-	// COMPILE-TIME pin (keyof-extends): a runtime `in` probe on a sample
-	// could never see type-level additions. The red light turns on only in
-	// `bun run check`'s contracts tsc pass (vitest/esbuild do not typecheck).
 	it("B6-C1: AgentEndEvent has no willRetry field (compile-time keyof pin)", () => {
 		type AgentEndEventLike = import("@earendil-works/pi-coding-agent").AgentEndEvent extends never ? never : keyof import("@earendil-works/pi-coding-agent").AgentEndEvent;
 		const keys: AgentEndEventLike[] = ["type", "messages"] as AgentEndEventLike[];
-		// The compile-time assertion lives in the const below: if upstream
-		// adds willRetry, HasWillRetry becomes true and the assignment fails
-		// the check gate (tsc), turning this contract red.
 		type HasWillRetry = "willRetry" extends keyof import("@earendil-works/pi-coding-agent").AgentEndEvent ? true : false;
 		const _pinAgentEndHasNoWillRetry: false = null as unknown as HasWillRetry;
 		void _pinAgentEndHasNoWillRetry;
-		// runtime mirror (informational only — the type pin above is the contract)
 		expect(keys).not.toContain("willRetry");
 	});
 
-	// CB2-B6: the compaction events DO carry willRetry (overflow-retry
-	// semantics) — the data source a future activation review would use.
 	it("B6-C2: the three compaction events declare willRetry", async () => {
-		// Structural presence probe against declared shapes via a sample cast.
-		// The samples MUST stay MINIMAL ({type, willRetry} only): adding the
-		// other required fields would make the cast tolerate a willRetry
-		// removal (both directions assignable) and silently kill the pin.
-		// (the types are imported at module top level):
 		const compactSample = { type: "session_compact", willRetry: false } as SessionCompactEvent;
 		const beforeSample = { type: "session_before_compact", willRetry: false } as SessionBeforeCompactEvent;
 		const failedSample = { type: "session_compact_failed", willRetry: false } as SessionCompactFailedEvent;

@@ -24,15 +24,11 @@ describe("extractEmbeddedCommandInputs", () => {
 	})
 
 	it("excludes only the shell tools' primary command field", () => {
-		// bash/powershell input.command is the primary command, governed by the
-		// full tier ladder — the gate must not double-handle it.
 		expect(extractEmbeddedCommandInputs("bash", { command: "rm -rf /" })).toEqual([])
 		expect(extractEmbeddedCommandInputs("powershell", { command: "Get-ChildItem" })).toEqual([])
-		// ...but their OTHER command fields are still embedded commands.
 		expect(
 			extractEmbeddedCommandInputs("bash", { command: "ls", then_run: "curl http://x" }),
 		).toEqual([{ field: "then_run", command: "curl http://x" }])
-		// edit/write `command` field is NOT primary — still extracted.
 		expect(
 			extractEmbeddedCommandInputs("edit", { path: "a", command: "npm test" }),
 		).toEqual([{ field: "command", command: "npm test" }])
@@ -68,8 +64,6 @@ describe("extractEmbeddedCommandInputs", () => {
 		expect(extractEmbeddedCommandInputs("t", { script: "rm -rf /" })).toEqual([])
 	})
 
-	// FUS-SHAPE (SPEC 2026-10-07 P0-1): action-fusion registers the REAL
-	// `then_run: { command, ... }` object — tests must use that shape.
 	it("then_run object with a .command string is extracted (FUS-SHAPE)", () => {
 		expect(
 			extractEmbeddedCommandInputs("edit", { path: "a.ts", then_run: { command: "npm install x" } }),

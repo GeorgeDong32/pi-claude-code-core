@@ -1,6 +1,3 @@
-// Behaviour tier: the ctrl+shift+b shortcut and the 2 s background hint, over
-// the fake process table and fake time. The commands here are names no shell
-// knows, so a red run never starts anything real.
 import assert from "node:assert/strict";
 import { after, afterEach, beforeEach, describe, it } from "node:test";
 
@@ -33,18 +30,14 @@ afterEach(() => {
 });
 after(cleanup);
 
-/** Let the call get as far as launching, and return its fake process. */
 async function launched() {
 	await clock.until(() => procs.all.length > 0);
 	return procs.all[0];
 }
 
-/** The widget records for the hint key, in order. */
 const hint = (s: Session) => s.widgets.filter((w) => w.key === HINT_KEY);
-/** Whether the hint is currently shown: the last record for the key is the text. */
 const shown = (s: Session) => hint(s).at(-1)?.content?.[0] === HINT_TEXT;
 
-/** Wrap the mocked timer globals to track which timer and interval ids are still pending, and what each is for. */
 function trackTimers() {
 	const pending = new Map<unknown, string>();
 	const originals = {
@@ -72,7 +65,6 @@ function trackTimers() {
 		originals.clearTimeout(id as never);
 	}) as typeof clearTimeout;
 	return {
-		/** The labels of every timer or interval still pending. */
 		pending: () => [...pending.values()],
 		restore: () => {
 			globalThis.setInterval = originals.setInterval;
@@ -294,8 +286,6 @@ describe("the hint timer", () => {
 			assert.equal(shown(s), true);
 			s.shortcut("ctrl+shift+b");
 			await clock.settle(call);
-			// The task's poller (an interval) legitimately outlives the call; the
-			// hint's setTimeout and the promotion timer must both be gone.
 			assert.equal(
 				track.pending().filter((label) => label.startsWith("timeout")).length,
 				0,

@@ -26,7 +26,6 @@ type Entry = {
 	data?: unknown
 }
 
-/** Reference implementation: brute-force sum in branch order. */
 function bruteForce(branch: Entry[]): BranchStatsState["accum"] {
 	const acc = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }
 	for (const e of branch) {
@@ -42,7 +41,6 @@ function bruteForce(branch: Entry[]): BranchStatsState["accum"] {
 	return acc
 }
 
-/** Deterministic PRNG (mulberry32) so failures reproduce from the seed. */
 function mulberry32(seed: number): () => number {
 	let a = seed >>> 0
 	return () => {
@@ -59,7 +57,6 @@ function randomEntry(rnd: () => number): Entry {
 	const kind = rnd()
 	idCounter++
 	if (kind < 0.55) {
-		// assistant with random usage (floats included for cost exactness)
 		return {
 			type: "message",
 			id: `e${idCounter}`,
@@ -88,7 +85,6 @@ function randomEntry(rnd: () => number): Entry {
 	if (kind < 0.97) {
 		return { type: "custom", id: `e${idCounter}`, customType: "modes", data: {} }
 	}
-	// occasional id-less entry (defensive shape)
 	return { type: "message", message: { role: "assistant" } }
 }
 
@@ -103,23 +99,19 @@ describe("accumulateBranchStats property: incremental === brute force", () => {
 			for (let step = 0; step < steps; step++) {
 				const op = rnd()
 				if (op < 0.6) {
-					// append-only growth (message_end / toolResult boundaries)
 					const n = 1 + Math.floor(rnd() * 3)
 					for (let i = 0; i < n; i++) branch.push(randomEntry(rnd))
 				} else if (op < 0.75) {
-					// fork: keep a random prefix, then extend with fresh entries
 					const k = Math.floor(rnd() * (branch.length + 1))
 					branch = branch.slice(0, k)
 					for (let i = 0; i < 1 + Math.floor(rnd() * 3); i++) {
 						branch.push(randomEntry(rnd))
 					}
 				} else if (op < 0.9) {
-					// navigate back to a strictly shorter prefix (no new entries)
 					if (branch.length > 0) {
 						branch = branch.slice(0, Math.floor(rnd() * branch.length))
 					}
 				} else {
-					// switchSession: brand-new branch from scratch
 					branch = []
 					for (let i = 0; i < 1 + Math.floor(rnd() * 3); i++) {
 						branch.push(randomEntry(rnd))
@@ -164,13 +156,11 @@ describe("accumulateBranchStats property: incremental === brute force", () => {
 			{ type: "message", id: "x2", message: { role: "assistant", usage: { output: 7 } } },
 		]
 		expect(accumulateBranchStats(b1, state).output).toBe(7)
-		// Same length, different tail id (fork sibling): must not trust prefix.
 		const b2: Entry[] = [
 			{ type: "message", id: "x1", message: { role: "user", content: "1" } },
 			{ type: "message", id: "y9", message: { role: "assistant", usage: { output: 3 } } },
 		]
 		expect(accumulateBranchStats(b2, state).output).toBe(3)
-		// Shorter branch (navigate back): full recompute.
 		const b3: Entry[] = [
 			{ type: "message", id: "x1", message: { role: "user", content: "1" } },
 		]

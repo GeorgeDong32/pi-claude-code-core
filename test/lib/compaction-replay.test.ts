@@ -1,15 +1,3 @@
-/**
- * Replay tool tests (SPEC SC §7.2, task W2) — the `--self-check` layer as a
- * vitest suite: metric math pinned on synthetic fixtures (INV-7: no real
- * session content anywhere near the repo).
- *
- * Requirement → test map:
- *   回放 AC → extract/simulate/aggregate correctness (crossing counting,
- *             precommit accounting, M1 ∈ [0,1], waste counting, scheme
- *             equivalence classes)
- *   --self-check → selfCheck() passes and mirrors these assertions
- *   O1/O2 对比 → every registered scheme produces M1/M3b/M10 fields
- */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -59,11 +47,10 @@ describe("replay pipeline on synthetic fixtures", () => {
 		const result = simulateSession(session, 250_000, "fixed-ratio");
 		expect(result.crossings).toBe(1);
 		expect(result.computesStarted).toBeGreaterThanOrEqual(1);
-		// Aggregates stay in range; cut metrics exist (the fixture HAS messages).
 		const agg = aggregate([result]);
 		expect(agg.m1_thresholdPrecommitRate).toBeGreaterThanOrEqual(0);
 		expect(agg.m1_thresholdPrecommitRate).toBeLessThanOrEqual(1);
-		expect(agg.m3_tailFloorRate).toBe(1); // every cut kept ≥ keep (CUT-02 by construction)
+		expect(agg.m3_tailFloorRate).toBe(1);
 	});
 
 	it("burst session-b: idle gaps + toolUse turns still produce legal simulations", () => {
@@ -98,8 +85,6 @@ describe("replay pipeline on synthetic fixtures", () => {
 
 	it("INV-7: the replay script source emits no per-session identifiers", () => {
 		const source = readFileSync(join(__dirname, "..", "..", "scripts", "compaction-replay.mjs"), "utf-8");
-		// The report object may only carry aggregate keys (spot-check the
-		// report construction does not embed file paths / session ids).
 		expect(source).not.toMatch(/files:\s*\[.*file/);
 		expect(source).toContain("aggregates only");
 	});

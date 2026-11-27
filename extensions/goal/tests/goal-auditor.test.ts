@@ -78,8 +78,6 @@ test("buildGoalAuditorPrompt demands semantic approval markers", () => {
 	assert.match(prompt, /Generated a VitePress scaffold/);
 });
 
-// ---------- prompt guardrails + timeout config (spec 2026-10-04-goal-audit-hang-fix §4.2) ----------
-
 test("buildGoalAuditorPrompt forbids home/cloud-storage scans and long-running processes", () => {
 	const prompt = buildGoalAuditorPrompt({ goal: goal(), completionSummary: "c", detailedSummary: "d" });
 	assert.match(prompt, /project working directory|project directory/);
@@ -103,17 +101,11 @@ test("parseGoalAuditorConfig parses auditTimeoutMs with clamping and fallbacks",
 	assert.deepEqual(parseGoalAuditorConfig({ auditTimeoutMs: 0 }), {});
 });
 
-// ── AR1005-AU-02 (spec 2026-10-05 §5): the auditor session's full remaining
-// lifecycle is covered by try/finally — cancel-during-creation, prompt
-// cancellation, subscribe/unsubscribe failures all dispose exactly once.
-// Driven through the controlled sessionAdapter seam (production adapter =
-// the real createAgentSession). Baseline red evidence via stash. ──
 import { runGoalCompletionAuditor, type AuditorSession } from "../goal-auditor.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 interface CallLog { calls: string[] }
 
-/** Controlled session with call-sequence recording and gated prompt. */
 function fakeSession(log: CallLog, opts: { promptHangs?: boolean; subscribeThrows?: boolean; unsubscribeThrows?: boolean; disposeThrows?: boolean } = {}) {
 	let resolvePrompt: (() => void) | null = null;
 	const session: AuditorSession & { releasePrompt: () => void } = {
@@ -171,13 +163,13 @@ test("AU-T03: cancel during creation — no prompt, dispose exactly once, error 
 		}),
 	});
 	await new Promise((r) => setTimeout(r, 5));
-	controller.abort(); // cancelled WHILE the session is being created
+	controller.abort();
 	await new Promise((r) => setTimeout(r, 5));
 	(releaseOpen as ((s: { session: AuditorSession }) => void) | null)?.({ session });
 	const result = await outcome;
 	assert.ok(!result.approved);
 	assert.equal(result.error, "Auditor aborted.");
-	assert.deepEqual(log.calls, ["subscribe", "unsubscribe", "dispose"]); // NO prompt
+	assert.deepEqual(log.calls, ["subscribe", "unsubscribe", "dispose"]);
 });
 
 test("AU-T04: cancel during prompt — session.abort called, prompt settles, dispose+unsubscribe exactly once", { timeout: 3000 }, async () => {
@@ -194,10 +186,10 @@ test("AU-T04: cancel during prompt — session.abort called, prompt settles, dis
 	});
 	await new Promise((r) => setTimeout(r, 5));
 	assert.deepEqual(log.calls, ["subscribe", "prompt"]);
-	controller.abort(); // mid-prompt
+	controller.abort();
 	const result = await outcomePromise;
 	assert.deepEqual(log.calls, ["subscribe", "prompt", "abort", "unsubscribe", "dispose"]);
-	assert.ok(!result.approved); // aborted prompt produces no approval
+	assert.ok(!result.approved);
 });
 
 test("AU-T06a: subscribe throws — dispose still runs, error outcome, no prompt", async () => {
@@ -212,21 +204,20 @@ test("AU-T06a: subscribe throws — dispose still runs, error outcome, no prompt
 	});
 	assert.ok(!result.approved);
 	assert.match(result.error ?? "", /subscribe boom/);
-	assert.deepEqual(log.calls, ["dispose"]); // disposed despite the subscribe failure
+	assert.deepEqual(log.calls, ["dispose"]);
 });
 
 test("AU-T06b: unsubscribe throws — dispose still ran first, primary result unmasked", async () => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "au-t06b-"));
 	const log: CallLog = { calls: [] };
 	const session = fakeSession(log, { unsubscribeThrows: true });
-	session.subscribe(() => {}); // warm: not needed, adapter drives real flow below
+	session.subscribe(() => {});
 	const result = await runGoalCompletionAuditor({
 		ctx: auCtx(dir),
 		goal: goal(),
 		detailedSummary: "s",
 		sessionAdapter: async () => ({ session }),
 	});
-	// the run itself completes (output empty → disapproved), unsubscribe failure skipped nothing
 	assert.deepEqual(log.calls.filter((c) => c !== "subscribe" && c !== "unsubscribe"), ["prompt", "dispose"]);
 	assert.ok(!result.approved);
 });
@@ -250,7 +241,7 @@ test("AU-T05: signal already aborted after a late creation — cleanup only, no 
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "au-t05-"));
 	const log: CallLog = { calls: [] };
 	const controller = new AbortController();
-	controller.abort(); // the flow already timed out before this auditor invocation
+	controller.abort();
 	const session = fakeSession(log);
 	const result = await runGoalCompletionAuditor({
 		ctx: auCtx(dir),
@@ -259,7 +250,7 @@ test("AU-T05: signal already aborted after a late creation — cleanup only, no 
 		signal: controller.signal,
 		sessionAdapter: async () => ({ session }),
 	});
-	assert.ok(!result.approved); // late work can never produce passed
+	assert.ok(!result.approved);
 	assert.equal(result.error, "Auditor aborted.");
 	assert.ok(!log.calls.includes("prompt"));
 	assert.deepEqual(log.calls, ["subscribe", "unsubscribe", "dispose"]);

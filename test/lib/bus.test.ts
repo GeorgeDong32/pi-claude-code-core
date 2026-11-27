@@ -1,11 +1,3 @@
-/**
- * Bus write-side contracts (P1-BUS-01, 03, 05, 06, 08, 10).
- *
- * Read-side (reader total matrix P1-BUS-07, subpath types) lives in
- * bus-types.test.ts — the two files deliberately do NOT import each other's
- * system under test, so the compatibility-shim removal paths stay
- * independent (P1-BUS-09; see test/contracts/README.md registry).
- */
 import { describe, expect, it, beforeEach } from "vitest";
 
 import {
@@ -29,8 +21,6 @@ describe("P1-BUS-01 snapshot shape", () => {
 		expect((globalThis as Record<string, unknown>).__piClaudeCodeCore).toBe(snap);
 		expect(Object.isFrozen(snap)).toBe(true);
 		expect(Object.isFrozen(snap.modes)).toBe(true);
-		// DC5 (P1-BUS-10 v2): the ONE function-valued field is the data-carried
-		// subscription point; everything else stays JSON-pure data.
 		expect(snap.version).toBe(2);
 		expect(typeof snap.onChange).toBe("function");
 		const { onChange, ...data } = snap;
@@ -65,10 +55,7 @@ describe("P1-BUS-01 snapshot shape", () => {
 		bus.dispose();
 		expect(g.__piClaudeCodeCore).toBeUndefined();
 		expect(g.__piClaudeCodeCoreCmd).toBeUndefined();
-		// legacy projection remains exactly as last published
 		expect(g.__piPermissionModes).toEqual({ version: 1, active: true, mode: "ask", workingStats: "↑1", meta: undefined });
-		// DC5 gating: the legacy stats key is written only for a live CCTUI
-		// (its consumer) — absent here by design (P0-CT-02 negative).
 		expect(g.__pmWorkingStats).toBeUndefined();
 	});
 });
@@ -87,8 +74,6 @@ describe("P1-BUS-03/05 single publish point + legacy derivation", () => {
 			mode: snap.modes.mode,
 			workingStats: snap.modes.workingStats,
 		});
-		// DC5: without a live CCTUI the legacy stats key stays unset even when
-		// the publish carries stats (always-full snapshot + presence-gated write).
 		expect(g.__pmWorkingStats).toBeUndefined();
 		g.__piCcTui = { active: true };
 		bus.publish({ modes: { mode: "auto", workingStats: "↑1" } });
@@ -130,10 +115,10 @@ describe("P1-BUS-06 snapshot invariants", () => {
 		const modes = { mode: "plan" as const, planPhase: "executing" as const, workingStats: null };
 		const s1 = bus.publish({ modes });
 		const s2 = bus.publish({ effort: { level: "low", source: "profile" } });
-		expect(s2.modes).toBe(s1.modes); // structural sharing
+		expect(s2.modes).toBe(s1.modes);
 		expect(s2.effort).toEqual({ level: "low", source: "profile" });
 		const s3 = bus.publish({ modes: { mode: "ask", workingStats: null } });
-		expect(s3.modes).not.toBe(s1.modes); // whole replacement, not deep merge
+		expect(s3.modes).not.toBe(s1.modes);
 		expect(s3.modes.planPhase).toBeUndefined();
 	});
 
@@ -150,13 +135,11 @@ describe("P1-BUS-06 snapshot invariants", () => {
 
 	it("patch union rejects partial channels at compile time (spike shape holds)", () => {
 		const bus = createCoreBus();
-		// Whole-channel patches compile and publish.
 		const ok: CorePatch = { modes: { mode: "auto", workingStats: null } };
 		expect(bus.publish(ok).modes.mode).toBe("auto");
 	});
 });
 
-// ---- SPEC 2026-10-07 P1-1: snapshot.instance (XPKG-03, B1) ------------------
 describe("P1-1 instance identity", () => {
 	it("B1: two createCoreBus() instances differ; one bus keeps a constant instance across publishes; the initial snapshot carries it", () => {
 		const a = createCoreBus();
@@ -180,6 +163,6 @@ describe("P1-1 instance identity", () => {
 		const forged = a.publish({ instance: "forged" } as unknown as Parameters<typeof a.publish>[0]);
 		expect(forged.instance).toBe(id);
 		a.dispose();
-		expect(a.snapshot().instance).toBe(id); // terminal state, same id
+		expect(a.snapshot().instance).toBe(id);
 	});
 });

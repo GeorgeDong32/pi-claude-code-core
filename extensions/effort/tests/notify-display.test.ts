@@ -1,27 +1,3 @@
-/**
- * Real-entry notification display regression (2026-10-08 follow-up §2).
- *
- * createEffortUi().notify is the ONLY notification path every effort
- * business call funnels through (pinned-warning, unknown level, command
- * feedback). These tests wire that real entry to the REAL capability bus
- * and the REAL display consumers, pinning: every NEW notification shows
- * exactly once, in every wiring a user can actually have.
- *
- *   core-only  — the real fallback adapter (extensions/ui/fallback.ts)
- *                owns the display; wired exactly like modes' session_start
- *                does (host.notify IS ctx.ui.notify, one recorder = one
- *                on-screen occurrence).
- *   modern TUI — cctui live declaring notificationsConsumer diffes the
- *                queue itself (mirror of the TUI core-bus client channel:
- *                attach fast-forward + id diff); nothing else may display.
- *   legacy TUI — cctui live without the declaration: the direct
- *                ctx.ui.notify leg is the display (version negotiation).
- *   headless   — no display surface; the queue still records the item.
- *
- * Identity is the queue id, never the text: two notifications with the
- * same message must BOTH display — text dedup is not an acceptable mask
- * for a dual write.
- */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { coreBus, resetCoreBusForTests } from "../../bus.ts";
@@ -40,7 +16,6 @@ function setPresence(key: { active: true; notificationsConsumer?: boolean } | un
 	else delete g.__piCcTui;
 }
 
-/** Fake pi context: every ctx.ui.notify call is one on-screen occurrence. */
 function makeCtx(hasUI: boolean): { ctx: EffortCtxLike; displays: Display[] } {
 	const displays: Display[] = [];
 	const ctx: EffortCtxLike = {
@@ -56,7 +31,6 @@ function makeCtx(hasUI: boolean): { ctx: EffortCtxLike; displays: Display[] } {
 	return { ctx, displays };
 }
 
-/** Real core-only consumer, wired the way modes' session_start wires it. */
 function startFallback(displays: Display[]): UiAdapter {
 	const adapter = createFallbackAdapter({
 		hasUI: true,
@@ -68,7 +42,6 @@ function startFallback(displays: Display[]): UiAdapter {
 	return adapter;
 }
 
-/** Mirror of the modern cctui consumer: attach fast-forward + id diff. */
 function attachCctuiConsumer(shown: Display[]): () => void {
 	const queueNow = () => coreBus().snapshot().notifications ?? [];
 	let lastSeen = queueNow().length ? queueNow()[queueNow().length - 1]!.id : 0;
@@ -118,7 +91,7 @@ test("core-only: same-text notifications keep displaying (id, not text, is ident
 		const adapter = startFallback(displays);
 		try {
 			ui.notify(ctx, "Effort changed: low -> high", "info");
-			ui.notify(ctx, "Effort changed: low -> high", "info"); // repeatable warning
+			ui.notify(ctx, "Effort changed: low -> high", "info");
 			assert.equal(displays.length, 2);
 			assert.deepEqual(displays[0], displays[1]);
 			assert.deepEqual(queueMsgs(), ["Effort changed: low -> high", "Effort changed: low -> high"]);
@@ -136,13 +109,13 @@ test("modern TUI consumer: queue-only display, no direct write", () => {
 	setPresence({ active: true, notificationsConsumer: true });
 	try {
 		const { ctx, displays } = makeCtx(true);
-		const adapter = startFallback(displays); // core still wires it; it must yield
+		const adapter = startFallback(displays);
 		const cctui: Display[] = [];
 		const detach = attachCctuiConsumer(cctui);
 		try {
 			ui.notify(ctx, "Effort changed: low -> high", "info");
 			assert.deepEqual(cctui, [["Effort changed: low -> high", "info"]]);
-			assert.deepEqual(displays, []); // neither the fallback nor a direct write
+			assert.deepEqual(displays, []);
 		} finally {
 			detach();
 			adapter.shutdown();
@@ -199,12 +172,10 @@ test("handover: cctui off mid-session — the next notification displays once, n
 			assert.deepEqual(cctui, [["while the TUI owns the screen", "info"]]);
 			assert.deepEqual(displays, []);
 
-			// /claude-tui off: the TUI clears its presence key AND detaches
-			// its bus subscription; the fallback re-owns the display.
 			detach();
 			setPresence(undefined);
 			ui.notify(ctx, "after the TUI stepped away", "info");
-			assert.deepEqual(displays, [["after the TUI stepped away", "info"]]); // once, no replay of the first
+			assert.deepEqual(displays, [["after the TUI stepped away", "info"]]);
 		} finally {
 			detach();
 			adapter.shutdown();

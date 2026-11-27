@@ -1,8 +1,3 @@
-/**
- * memory-queue-drain.test.ts — SPEC 2026-10-07 P2-3 §5 D-T1/D-T2: the drain
- * orchestration is directly testable WITHOUT the hook harness — ports are
- * injected, the queue protocol is the real one on a real temp dir.
- */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -96,7 +91,6 @@ describe("drainQueue direct (D-T1)", () => {
 		const result = await drainQueue(cap(), ports({ complete: async () => failCompletion as never }));
 		expect(result.summaries[0]!.lastError).toContain("dropped after");
 		expect(recordFiles()).toEqual([]);
-		// attempts left → pending
 		stage("dt1d");
 		const result2 = await drainQueue(cap(), ports({ complete: async () => failCompletion as never }));
 		expect(result2.summaries[0]!.lastError).toBeUndefined();
@@ -118,11 +112,11 @@ describe("drainQueue direct (D-T1)", () => {
 		const result = await drainQueue(cap(), ports({ complete: async () => { called++; return okCompletion([]); } }));
 		expect(result.summaries).toHaveLength(0);
 		expect(called).toBe(0);
-		expect(recordFiles()).toHaveLength(1); // released back, untouched by us
+		expect(recordFiles()).toHaveLength(1);
 		stage("expired", { savedAt: Date.now() - 8 * 24 * 3600_000 });
 		const result2 = await drainQueue(cap(), ports());
 		expect(result2.drops.some((d) => d.includes("expired"))).toBe(true);
-		expect(recordFiles()).toHaveLength(1); // only the foreign one remains
+		expect(recordFiles()).toHaveLength(1);
 	});
 
 	it("blacklisted keys are skipped without a completion call", async () => {
@@ -139,19 +133,13 @@ describe("drainQueue direct (D-T1)", () => {
 
 describe("cap order (review R2 on the fix)", () => {
 	it("beyond QUEUE_DRAIN_MAX, surplus records STAY ready — never stranded as this-pid claims", async () => {
-		// savedAt must be RELATIVE to now: a fixed calendar date silently ages
-		// past QUEUE_MAX_AGE_MS (7d) and the whole batch drops as expired before
-		// the cap is reached — this fixture time-bombed exactly that way from
-		// 2026-10-14 (staged at 2026-10-07).
 		for (let i = 0; i < 7; i++) stage(`cap-${i}`, { savedAt: Date.now() - 60_000 + i });
 		let completions = 0;
 		const result = await drainQueue(cap(), ports({ complete: async () => { completions++; return { ok: true as const, ops: [], stopReason: "stop", content: [] }; } }));
-		expect(result.summaries).toHaveLength(5); // QUEUE_DRAIN_MAX
-		expect(completions).toBe(5); // the cap counted records that reached the LLM lane
+		expect(result.summaries).toHaveLength(5);
+		expect(completions).toBe(5);
 		const files = recordFiles();
 		expect(files).toHaveLength(2);
-		// the untouched surplus is still a consumable record shape (ready or
-		// pending — NOT a claim stranded under our pid)
 		expect(files.every((f) => f.endsWith(".json") || f.includes(".pending."))).toBe(true);
 		expect(files.some((f) => f.includes(".claim."))).toBe(false);
 	});
@@ -160,20 +148,15 @@ describe("cap order (review R2 on the fix)", () => {
 describe("reclaim path through drainQueue (review P2 regression)", () => {
 	it("a dead claim recovered BY drainQueue itself never nests suffixes; release lands on a clean pending name", async () => {
 		stage("rcv");
-		// forge a dead-owner claim past the TTL (pid 999999 does not exist →
-		// the default signal probe says dead)
 		const ready = readdirSync(queueDir(agentDir)).find((f) => f.endsWith(".json"))!;
 		const nonce = "deadbeef-0000-4000-8000-000000000000";
 		const foreignName = `${ready}.claim.999999.${Date.now() - 11 * 60_000}.${nonce}`;
 		require("node:fs").renameSync(join(queueDir(agentDir), ready), join(queueDir(agentDir), foreignName));
-		// drain through the real orchestration: the internal recovery hands the
-		// reclaimed token DIRECTLY into validation (no re-claim → no nesting)
 		const result = await drainQueue(cap(), ports({ complete: async () => ({ ok: false as const, reason: "provider_error" }) as never }));
 		expect(result.summaries).toHaveLength(1);
 		const files = recordFiles();
 		expect(files).toHaveLength(1);
-		expect(files[0]).toMatch(/^rcv-\d+\.json\.pending\.[0-9a-f-]{36}$/); // NO nested .claim. inside
-		// and the record content survived with its attempts bumped
+		expect(files[0]).toMatch(/^rcv-\d+\.json\.pending\.[0-9a-f-]{36}$/);
 		const rec = JSON.parse(readFileSync(join(queueDir(agentDir), files[0]!), "utf-8")) as { attempts: number };
 		expect(rec.attempts).toBe(1);
 	});
@@ -181,8 +164,6 @@ describe("reclaim path through drainQueue (review P2 regression)", () => {
 
 describe("applyOpsOutcome parity (D-T2)", () => {
 	it("runOps' summary and the drain's summary agree for the same ops on equal fresh dirs", async () => {
-		// two PARALLEL fresh dirs — applying the same add twice into ONE dir
-		// would trivially disagree (the second is a duplicate skip)
 		const dirsA = { project: join(home, "projA") };
 		const dirsB = { project: join(home, "projB") };
 		const runOpsOutcome = applyMemoryOps(OPS, dirsA);
@@ -190,7 +171,6 @@ describe("applyOpsOutcome parity (D-T2)", () => {
 		expect(viaShared.applied).toBe(runOpsOutcome.applied);
 		expect(viaShared.error).toBe(runOpsOutcome.error);
 		expect(viaShared.skipped).toEqual(runOpsOutcome.skipped);
-		// empty ops: both count zero, no timestamps involved
 		expect(applyOpsOutcome([], { d: { project: "", projectsDir, agentDir }, model: undefined, registry: undefined as never, projectKey: undefined, complete: undefined }).applied).toBe(0);
 	});
 });

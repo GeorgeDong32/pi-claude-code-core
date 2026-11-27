@@ -1,6 +1,3 @@
-/**
- * plan file/text tests — carved from utils.test.ts (arch review C3).
- */
 import { describe, expect, it, beforeEach } from "vitest";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, symlinkSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -39,7 +36,6 @@ Plan:
 	it("skips very short items", () => {
 		const msg = `Plan:\n1. ok\n2. This is a real step\n`;
 		const items = extractTodoItems(msg);
-		// very short items may be filtered; depends on threshold (we filter < 3 chars after cleaning)
 		const texts = items.map((i) => i.text);
 		expect(texts.some((t) => t.includes("real step"))).toBe(true);
 	});
@@ -159,9 +155,6 @@ describe("plan helpers", () => {
 	})
 })
 
-// SR-4b: the single shared isAssistant/getText pair (plan-session.ts + index.ts
-// both consume it now). Bodies are pinned verbatim — see the `textOf` note in
-// plan.ts for why this is NOT merged with compaction's textOf.
 describe("assistant message helpers (SR-4b)", () => {
 	it("isAssistantMessage: array content → true", () => {
 		expect(isAssistantMessage({ role: "assistant", content: [{ type: "text", text: "hi" }] })).toBe(true);
@@ -193,7 +186,6 @@ describe("assistant message helpers (SR-4b)", () => {
 	});
 
 	it("assistantMessageText: text block missing text yields an empty segment", () => {
-		// map produces [undefined, "a"]; join("\n") stringifies undefined as ""
 		expect(
 			assistantMessageText({
 				role: "assistant",

@@ -1,13 +1,3 @@
-/*
- * Settings tests (SPEC SC §5.10 ST-02 + ST-03 env part, task W1).
- *
- * Requirement → test map:
- *   ST-02 → "defaults on missing file", "malformed file → defaults + warn",
- *            "valid custom file round-trips", "invalid ratio group reverts
- *            together", "per-field out-of-range falls back"
- *   ST-03 (env) → "PI_CORE_COMPACTION overrides / invalid ignored"
- * File layout is frozen by SC-CFG-01; env by SC-ENV-01 (contracts table).
- */
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -44,8 +34,6 @@ test("ST-02: missing file → defaults, no warns", () => {
 });
 
 test("default takeover is ON (user-approved 2026-11-10, DEVIATIONS SC-1 recovery clause ②)", () => {
-	// pins the shipping default: a user override, not a gate pass — M1=0.52
-	// replay fact stands; PI_CORE_COMPACTION=shadow is the one-line rollback.
 	assert.equal(DEFAULT_COMPACTION_CORE_SETTINGS.mode, "on");
 });
 
@@ -96,17 +84,16 @@ test("ST-02: valid custom file round-trips every layer", () => {
 	assert.deepEqual(settings.standingPatterns, ["immer", "niemals"]);
 	assert.equal(settings.ledger.rexFlow.enabled, false);
 	assert.equal(settings.ledger.rexFlow.boardPath, "/tmp/board.json");
-	assert.equal(settings.weights.user, 70); // per-key override…
-	assert.equal(settings.weights.runClosed, 100); // …others keep defaults
+	assert.equal(settings.weights.user, 70);
+	assert.equal(settings.weights.runClosed, 100);
 	assert.equal(settings.lambda, 5);
 });
 
 test("ST-02/POL-02: invalid ratio group reverts together with one warn", () => {
 	setCompactionSettingsPath(
-		pointAt(JSON.stringify({ precomputeRatio: 0.9, applyRatio: 0.8 })), // p ≥ a: invalid
+		pointAt(JSON.stringify({ precomputeRatio: 0.9, applyRatio: 0.8 })),
 	);
 	const { settings, warned } = loadCompactionSettings({});
-	// Whole group reverted — the valid-looking applyRatio too.
 	assert.equal(settings.precomputeRatio, DEFAULT_COMPACTION_CORE_SETTINGS.precomputeRatio);
 	assert.equal(settings.applyRatio, DEFAULT_COMPACTION_CORE_SETTINGS.applyRatio);
 	assert.equal(warned.length, 1);
@@ -131,7 +118,7 @@ test("ST-02: per-field out-of-range or mistyped values fall back", () => {
 	assert.equal(settings.minNarrativeChars, DEFAULT_COMPACTION_CORE_SETTINGS.minNarrativeChars);
 	assert.equal(settings.summaryModel, null);
 	assert.deepEqual(settings.standingPatterns, ["ok"]);
-	assert.equal(settings.refusedCooldownTurns, 0); // 0 is allowed (min-inclusive)
+	assert.equal(settings.refusedCooldownTurns, 0);
 	assert.equal(settings.weights.user, DEFAULT_COMPACTION_CORE_SETTINGS.weights.user);
 });
 
@@ -140,7 +127,7 @@ test("ST-03 (env): PI_CORE_COMPACTION overrides the file; invalid values ignored
 	assert.equal(loadCompactionSettings({ PI_CORE_COMPACTION: "off" }).settings.mode, "off");
 	assert.equal(loadCompactionSettings({ PI_CORE_COMPACTION: "shadow" }).settings.mode, "shadow");
 	assert.equal(loadCompactionSettings({ PI_CORE_COMPACTION: "on" }).settings.mode, "on");
-	assert.equal(loadCompactionSettings({}).settings.mode, "on"); // no env → file
+	assert.equal(loadCompactionSettings({}).settings.mode, "on");
 	const bogus = loadCompactionSettings({ PI_CORE_COMPACTION: "yes" });
 	assert.equal(bogus.settings.mode, "on");
 	assert.equal(bogus.warned.length, 1);

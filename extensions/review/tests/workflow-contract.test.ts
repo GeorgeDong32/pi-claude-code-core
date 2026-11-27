@@ -1,18 +1,3 @@
-/**
- * Workflow contract tests — pin the generated workflowScript API shape that
- * pi-subagents validates. These tests guard against the real failures
- * observed during PR #18689 (agent-fetch) review and the follow-up P0:
- *
- *  - invalid `chatProgress` enum value (rejected by pi-subagents schema)
- *  - reviewer model inheritance leaked into explicit model overrides
- *  - free-text output treated as a successful reviewer result
- *  - gate consuming Markdown text instead of structured objects
- *  - "exactly one subagent call" + single workflowScript + fresh context +
- *    async:false + inline gate inside the same script
- *  - raw paths leaking into the workflowScript as UNQUOTED JS (SyntaxError:
- *    Invalid regular expression flags) — paths must be JSON.stringify'd
- *    inline so the final script parses as valid JS (see assertScriptParses).
- */
 import { strict as assert } from "node:assert";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -29,35 +14,17 @@ const WORKSPACE = "/private/var/folders/ab/pi-review-ws-123/cherry-studio-18689"
 const MANIFEST = "/tmp/pi-review-contract/.pi/pi-review/runs/r1/manifest.json";
 const DIFF = "/tmp/pi-review-contract/.pi/pi-review/runs/r1/change.diff";
 
-/**
- * Extract the workflowScript from the directive. Since v0.7.2 the script is
- * presented as a template literal (backticks) with no escaping — the main
- * agent copies it verbatim (the 2026-08-25 PR 19395 incident: the old
- * double-escaped JSON string form made the copy/unescape step produce
- * `workflowScript must be valid JavaScript` three times).
- */
 function scriptOf(d: string): string {
 	const m = d.match(/workflowScript: `\n([\s\S]*?)\n`,\s*\n\s*async: false/);
 	assert.ok(m, "expected a workflowScript template-literal block in the directive");
 	return m[1]!;
 }
 
-/**
- * P0 regression (real run failure): the script must **parse as valid JS**.
- * The old buildReviewDirective emitted unquoted paths (`cwd: /var/...`)
- * which the JS engine parsed as a RegExp literal → `SyntaxError: Invalid
- * regular expression flags` at subagent() call time. We assert every cwd / diff
- * / manifest occurrence is a properly JSON-quoted string.
- */
 function assertScriptParses(script: string): void {
-	// Every path-bearing field must be a quoted string literal.
 	for (const field of ["cwd:", "toolBudget:", "turnBudget:"]) {
 		assert.match(script, new RegExp(`${field} `), `script should contain ${field}`);
 	}
-	// cwd values must be JSON strings (backtick-adjacent), never bare /path.
 	assert.doesNotMatch(script, /cwd: \/[A-Za-z_]/);
-	// And the overall script must be parseable JS (async wrapper permits
-	// top-level await inside the body). `new Function` only parses — never runs.
 	const wrapped = `(async () => {\n${script}\n})`;
 	new Function(wrapped); // eslint-disable-line no-new-func -- parse-only check
 }
@@ -122,26 +89,22 @@ describe("buildReviewDirective — pi-subagents API contract", () => {
 	test("exactly one subagent tool call (no per-reviewer fallback path)", () => {
 		const d = buildReviewDirective(baseInput());
 		const script = scriptOf(d);
-		// The reviewer array must be bound to a local before the return
-		// object — the gate IIFE and `reviewersShaped` reference it (a bare
-		// object property would throw `reviewers is not defined`).
 		assert.match(script, /\nconst reviewers = await runs\.all\(\[/);
 		assert.match(script, /return \{\n  reviewers,/);
 		const runsAll = (script.match(/runs\.all\(\[/g) ?? []).length;
 		assert.equal(runsAll, 1, "workflowScript must invoke runs.all once");
 		const runsRunGate = (script.match(/runs\.run\('gate'/g) ?? []).length;
 		assert.equal(runsRunGate, 1, "workflowScript must invoke runs.run('gate') once");
-		// v0.8.1: proxy providers report bare model ids that fail upstream's
+		// Proxy providers report bare model ids that fail pi-subagents'
 		// strict model verification — the gate launch is wrapped in try/catch
 		// with a one-shot inherit-model retry under a different key.
 		assert.equal((script.match(/runs\.run\('gate-fallback'/g) ?? []).length, 1, "one fallback launch");
 		assert.match(script, /try \{\n  gateRun = await runs\.run\('gate'/);
 		assert.match(script, /\} catch \(gateLaunchError\) \{\n  gateRun = await runs\.run\('gate-fallback'/);
-		// v0.8.2: the fallback keeps the configured thinking level via the
-		// child `thinking` param (child params consume it as an override).
+		// The fallback keeps the configured thinking level via the child
+		// `thinking` param — pi-subagents child params consume it as an override.
 		const dThink = buildReviewDirective(baseInput({ gateThinking: "low" }));
 		assert.match(scriptOf(dThink), /gate-fallback[\s\S]{0,320}thinking: "low",/);
-		// Without a thinking config, no thinking line is emitted.
 		assert.doesNotMatch(script, /\n\s{4}thinking: /);
 		assert.doesNotMatch(script, /runs\.run\('rulesheriff'/);
 		assert.doesNotMatch(script, /runs\.run\('bugbot'/);
@@ -153,9 +116,6 @@ describe("buildReviewDirective — pi-subagents API contract", () => {
 		assert.match(d, /async: false/);
 		assert.match(d, /context: "fresh"/);
 		assert.match(d, /timeoutMs: \d+/);
-		// v0.7.2: the script is presented as an unescaped template literal
-		// (the double-escaped JSON string form broke the main agent's copy).
-		// E12: shared task consts (baseTask…) are hoisted above the fan-out.
 		assert.match(d, /workflowScript: `\n\n?const baseTask = \[/);
 		assert.match(d, /const reviewers = await runs\.all\(\[/);
 	});
@@ -164,19 +124,14 @@ describe("buildReviewDirective — pi-subagents API contract", () => {
 		const d = buildReviewDirective(baseInput());
 		const script = scriptOf(d);
 		assertScriptParses(script);
-		// cwd values are the actual workspace path, JSON-quoted.
 		assert.match(script, new RegExp(`cwd: ${JSON.stringify(WORKSPACE)}`));
 	});
 
 	test("v0.7.2: the script is presented verbatim inside a template literal (no escaping for the main agent to undo)", () => {
 		const d = buildReviewDirective(baseInput());
 		const script = scriptOf(d);
-		// Template-literal safety: the script must never contain a backtick or
-		// ${ — a single one would corrupt the directive presentation.
 		assert.doesNotMatch(script, /[`$]/);
-		// The full script body appears in the directive unescaped.
 		assert.ok(d.includes(script), "directive must embed the raw script text");
-		// And the literal is a template literal, not a JSON string.
 		assert.doesNotMatch(d, /workflowScript: "/);
 	});
 
@@ -231,8 +186,6 @@ describe("buildReviewDirective — pi-subagents API contract", () => {
 	});
 
 	test("per-child cwd is passed so reviewer can reach target repo", () => {
-		// Real failure (PR #18689): reviewers had cwd === plugin repo, so
-		// history-context / code-comments saw no relevant files.
 		const reviewers = defaultReviewers();
 		const d = buildReviewDirective(
 			baseInput({
@@ -246,25 +199,17 @@ describe("buildReviewDirective — pi-subagents API contract", () => {
 		);
 		const script = scriptOf(d);
 		const cwdOccurrences = script.split(`cwd: ${JSON.stringify(WORKSPACE)}`).length - 1;
-		// One cwd per reviewer + two for the gate (primary + inherit fallback).
 		assert.equal(cwdOccurrences, reviewers.length + 2, "every reviewer + gate launches must set cwd to the target workspace");
 	});
 
 	test("v0.8: NO child declares outputSchema (Markdown-first contract)", () => {
 		const d = buildReviewDirective(baseInput());
 		const script = scriptOf(d);
-		// The structured-output tool contract was too fragile in the field
-		// ("Missing structured_output call" after budget wrap-ups). Reviewers
-		// return Markdown; the gate ends with a fenced JSON verdict block.
 		assert.doesNotMatch(script, /outputSchema/, "no child may declare outputSchema");
 		assert.doesNotMatch(script, /REVIEWER_SCHEMA|GATE_SCHEMA/, "schema consts must be gone");
 	});
 
 	test("RUNTIME: evaluating the script with stub runs returns the full object (no ReferenceError)", async () => {
-		// Real failure: the old script used `return { reviewers: await runs.all(...) }`
-		// which never bound a `reviewers` variable, so the gate IIFE and
-		// `reviewersShaped` threw `ReferenceError: reviewers is not defined`
-		// and the subagent harness surfaced it as a null workflow return.
 		const d = buildReviewDirective(baseInput());
 		const script = scriptOf(d);
 		const stubOutput = (key: string) => ({
@@ -379,12 +324,6 @@ describe("pi-subagents ≥0.55 read-only task classification", () => {
 		return false;
 	}
 
-	/**
-	 * Extract every task text from the script by EXECUTING it with a
-	 * capturing stub `runs` (E12: shared task lines are hoisted into
-	 * script-level consts, so the old regex over `task: [` literals no
-	 * longer sees the full prompt — the runtime join is the truth).
-	 */
 	async function taskLiteralsOf(script: string): Promise<string[]> {
 		const out: string[] = [];
 		const runs = {
@@ -406,7 +345,6 @@ describe("pi-subagents ≥0.55 read-only task classification", () => {
 		const d = buildReviewDirective(baseInput());
 		const script = scriptOf(d);
 		const tasks = await taskLiteralsOf(script);
-		// One runtime task per reviewer + one gate task.
 		assert.ok(tasks.length >= defaultReviewers().length + 1, `expected >= ${defaultReviewers().length + 1} task literals, got ${tasks.length}`);
 		for (const t of tasks) {
 			assert.ok(isBlankReadOnly(t), `task must carry a blanket read-only declaration: ${t.slice(0, 90)}…`);
@@ -424,26 +362,19 @@ describe("pi-subagents ≥0.55 read-only task classification", () => {
 	});
 
 	test("FALSE_POSITIVE_GUIDANCE carries no bare write verbs (the 'did not modify' regression)", () => {
-		// Real failure: "Pre-existing issues on lines the author did not
-		// modify" — the bare "modify" hit GENERAL_IMPLEMENTATION_PATTERNS and
-		// got the read-only gate rejected by pi-subagents 0.55.0.
+		// pi-subagents 0.55.0's read-only classifier rejects a gate whose task
+		// text contains bare write verbs ("modify" hit GENERAL_IMPLEMENTATION_PATTERNS).
 		assert.doesNotMatch(FALSE_POSITIVE_GUIDANCE, /\b(implement|edit|modify|refactor|update|remove|replace|delete|create)\b/i);
 	});
 
 	test("P0: no nested async functions (pi-subagents AST walker rejects them)", () => {
-		// Real failure (2026-08-26 session): the gate was launched as
-		// `gate: await (async () => {...})()`. Every copy that survived the
-		// syntax stage then died at upstream AST validation — "workflowScript
-		// does not support nested async functions". The upstream walker
-		// (scripted-workflow.ts) rejects async functions outside its wrapper.
-		// Our generator is fully controlled output, so ANY occurrence of the
-		// `async` keyword in the script is a violation (the runtime wraps the
-		// body in an async IIFE itself; sync arrows for .map() are fine).
+		// pi-subagents' AST walker (scripted-workflow.ts) rejects async
+		// functions outside its async-IIFE wrapper, so ANY occurrence of the
+		// `async` keyword in the script is a violation; sync arrows for
+		// .map() are fine.
 		const d = buildReviewDirective(baseInput());
 		const script = scriptOf(d);
 		assert.doesNotMatch(script, /\basync\b/, "workflowScript must not contain any async functions");
-		// And the gate launch is top-level (wrapped in a try/catch with a
-		// one-shot fallback since v0.8.1).
 		assert.match(script, /^let gateRun;$/m);
 		assert.doesNotMatch(script, /gate: await/);
 	});
@@ -482,7 +413,6 @@ describe("buildReviewDirective — directive copy", () => {
 });
 
 describe("E12 — shared task-line dedup + directive length ceiling", () => {
-	/** Execute the script with a capturing stub `runs`; return key → task. */
 	async function capturedTasks(script: string): Promise<Array<{ key: string; task: string }>> {
 		const out: Array<{ key: string; task: string }> = [];
 		const runs = {

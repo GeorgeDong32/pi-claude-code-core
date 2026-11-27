@@ -1,6 +1,3 @@
-/**
- * bash-analysis tests — carved from utils.test.ts (arch review C3).
- */
 import { describe, expect, it } from "vitest";
 import { classifyBashTiers, isAutoApprovableBash, isAutoFallbackBash, isSafeCommand } from "./bash-analysis.ts";
 
@@ -25,12 +22,11 @@ describe("isSafeCommand", () => {
 	});
 
 	it("rejects safe-prefixed commands that contain destructive content", () => {
-		// safe pattern + destructive = not safe
 		expect(isSafeCommand("ls && rm -rf /")).toBe(false)
 		expect(isSafeCommand("ls; python -c \"open('/tmp/x','w').write('x')\"")).toBe(
 			false,
 		)
-		expect(isSafeCommand("echo hi > out.txt")).toBe(false) // redirect
+		expect(isSafeCommand("echo hi > out.txt")).toBe(false)
 	})
 
 	it("rejects empty / whitespace-only strings", () => {
@@ -87,7 +83,6 @@ describe("isAutoFallbackBash", () => {
 		expect(isAutoFallbackBash("cargo test")).toBe(true)
 	})
 
-	// Adjudication ③ (2026-09-12): whitelist extended with dev-server script names.
 	it("allows dev-server script names on the extended whitelist", () => {
 		expect(isAutoFallbackBash("npm run dev")).toBe(true)
 		expect(isAutoFallbackBash("npm run start")).toBe(true)
@@ -175,7 +170,6 @@ describe("isAutoFallbackBash", () => {
 	})
 });
 
-// Adjudicated 2026-09-12 — see docs/bash-risk-adjudication-2026-09-12.md.
 
 describe("isAutoApprovableBash (bash-risk adjudication 2026-09-12)", () => {
 	it("keeps hook-free, reversible git ops in tier 2", () => {
@@ -196,7 +190,6 @@ describe("isAutoApprovableBash (bash-risk adjudication 2026-09-12)", () => {
 		expect(isAutoApprovableBash("git rebase main")).toBe(false)
 		expect(isAutoApprovableBash("git cherry-pick abc123")).toBe(false)
 		expect(isAutoApprovableBash("git revert abc123")).toBe(false)
-		// restore / checkout -- <path> can discard uncommitted work.
 		expect(isAutoApprovableBash("git restore .")).toBe(false)
 		expect(isAutoApprovableBash("git checkout -- src/app.ts")).toBe(false)
 	})
@@ -207,7 +200,6 @@ describe("isAutoApprovableBash (bash-risk adjudication 2026-09-12)", () => {
 		expect(isAutoApprovableBash("npm run dev")).toBe(true)
 		expect(isAutoApprovableBash("pnpm run start")).toBe(true)
 		expect(isAutoApprovableBash("yarn run preview")).toBe(true)
-		// Non-whitelisted scripts fall to tier-3 classifier review.
 		expect(isAutoApprovableBash("npm run deploy")).toBe(false)
 		expect(isAutoApprovableBash("pnpm run destroy-production")).toBe(false)
 	})
@@ -218,7 +210,6 @@ describe("isAutoApprovableBash (bash-risk adjudication 2026-09-12)", () => {
 		expect(isAutoApprovableBash("mv notes.txt ~/")).toBe(false)
 		expect(isAutoApprovableBash("cp src.ts /etc/passwd-copy")).toBe(false)
 		expect(isAutoApprovableBash("mkdir /tmp/escape")).toBe(false)
-		// cwd-relative workflow ops stay tier-2.
 		expect(isAutoApprovableBash("mkdir build-out")).toBe(true)
 		expect(isAutoApprovableBash("cp a.ts b.ts")).toBe(true)
 	})
@@ -233,7 +224,6 @@ describe("isAutoApprovableBash (bash-risk adjudication 2026-09-12)", () => {
 	})
 })
 
-// One tokenization pass must not change either verdict (plan A4).
 
 describe("classifyBashTiers equivalence (plan A4)", () => {
 	const sampleCommands = [
@@ -261,7 +251,6 @@ describe("classifyBashTiers equivalence (plan A4)", () => {
 	})
 })
 
-// Adjudicated 2026-09-12 — see docs/bash-risk-adjudication-2026-09-12.md.
 
 describe("isSafeCommand tier-1 bypass fixes (bash-risk adjudication 2026-09-12)", () => {
 	it("no longer treats env-prefixed commands as read-only", () => {
@@ -287,10 +276,6 @@ describe("isSafeCommand tier-1 bypass fixes (bash-risk adjudication 2026-09-12)"
 	})
 })
 
-// E1 (D-CH-4, spec 2026-11-15-cleanup-hardening): plan-mode read-only
-// widening — redirects to /dev/null are not writes, `git -C <literal>` with
-// a safe subcommand is a read, and a literal `cd <dir>` segment inside an
-// `&&` chain is safe. The path-check side tracks the cd (bash-path-check).
 describe("isSafeCommand plan-mode read-only widening (E1, D-CH-4)", () => {
 	it("treats redirects to exactly /dev/null as non-writes", () => {
 		expect(isSafeCommand("ls 2>/dev/null")).toBe(true)
@@ -307,9 +292,7 @@ describe("isSafeCommand plan-mode read-only widening (E1, D-CH-4)", () => {
 		expect(isSafeCommand("ls >/dev/nullx")).toBe(false)
 		expect(isSafeCommand("ls 2>/dev/null >out.txt")).toBe(false)
 		expect(isSafeCommand("ls >/dev/null/foo")).toBe(false)
-		// Review P1 (CH batch): quote juxtaposition concatenates onto the
-		// redirect target — the shell writes /dev/null"leak" as the file
-		// `/dev/nullleak`, so a following quote must defeat the strip.
+		// shell quote juxtaposition concatenates onto the redirect target: /dev/null"leak" writes the file /dev/nullleak, so a following quote must defeat the strip.
 		expect(isSafeCommand(`echo hi >/dev/null"leak"`)).toBe(false)
 		expect(isSafeCommand(`ls >>/dev/null'x'`)).toBe(false)
 	})

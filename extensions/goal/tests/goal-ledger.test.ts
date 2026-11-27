@@ -25,7 +25,6 @@ function cleanup(ctx: GoalLedgerContext): void {
   try {
     fs.rmSync(ctx.cwd, { recursive: true, force: true });
   } catch {
-    // ignore
   }
 }
 
@@ -61,9 +60,7 @@ test("readGoalLedger caches by mtime and appendGoalEvent invalidates (C1)", () =
   appendGoalEvent(ctx, ev("g1"));
   const first = readGoalLedger(ctx);
   assert.deepEqual(first.events.map((e) => ("goalId" in e ? e.goalId : "?")), ["g1"]);
-  // same file, same mtime → shared object (the prompt hook reads up to 3x/turn)
   assert.equal(readGoalLedger(ctx), first);
-  // append drops the entry even in the same millisecond
   appendGoalEvent(ctx, ev("g2"));
   const second = readGoalLedger(ctx);
   assert.notEqual(second, first);
@@ -285,6 +282,5 @@ test("reconstructGoalLedger handles repeated pause and resume events", () => {
   assert.ok(g1);
   assert.equal(g1?.latestStatus, "complete");
   assert.equal(g1?.completedAt, "2024-01-01T00:00:06.000Z");
-  // goal_resumed clears pauseReason, so latestPauseReason should be undefined
   assert.equal(g1?.latestPauseReason, undefined);
 });

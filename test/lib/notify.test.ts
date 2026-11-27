@@ -1,13 +1,7 @@
-/**
- * DC3 §4.1: notification tail queue contract — monotonic ids, cap 20,
- * newest last, frozen snapshot invariant, no ACK.
- */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { coreBus, resetCoreBusForTests } from "../../extensions/bus.ts";
 import { publishNotification, notify } from "../../extensions/ui/notify.ts";
 
-// The queue lives on the shared bus singleton (that is the runtime
-// contract), so tests reset it rather than injecting instances.
 beforeEach(() => resetCoreBusForTests());
 afterEach(() => resetCoreBusForTests());
 
@@ -47,7 +41,6 @@ describe("notification tail queue (DC3)", () => {
 		} finally {
 			delete (globalThis as Record<string, unknown>).__piCcTui;
 		}
-		// No cctui: the fallback adapter owns the display; no direct write.
 		notify(ctxLike, "quiet", "warning");
 		expect(coreBus().snapshot().notifications!.map((n) => n.msg)).toEqual(["hello", "quiet"]);
 		expect(seen).toHaveLength(1);
@@ -69,11 +62,10 @@ describe("notification forward negotiation (DC5b cctui half)", () => {
 		try {
 			notify(ctxLike, "queue-only", "info");
 			expect(coreBus().snapshot().notifications!.map((n) => n.msg)).toContain("queue-only");
-			expect(seen).toHaveLength(0); // its own consumer diffs the queue
+			expect(seen).toHaveLength(0);
 		} finally {
 			delete (globalThis as Record<string, unknown>).__piCcTui;
 		}
-		// Same live key WITHOUT the declaration (older cctui): forward stays.
 		(globalThis as Record<string, unknown>).__piCcTui = { active: true };
 		try {
 			notify(ctxLike, "legacy-leg", "info");

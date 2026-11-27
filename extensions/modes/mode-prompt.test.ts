@@ -1,6 +1,3 @@
-/**
- * mode-prompt injection + skills-filter tests — carved from utils.test.ts (arch review C3).
- */
 import { describe, expect, it } from "vitest";
 import { join, dirname } from "node:path";
 import { filterSkillsFromPrompt, injectModePrompt, resolveModePrompt } from "./mode-prompt.ts";
@@ -64,14 +61,10 @@ describe("filterSkillsFromPrompt", () => {
 			"writing-plans",
 		])
 
-		// Should still contain the allowed skills
 		expect(result).toContain("brainstorming")
 		expect(result).toContain("writing-plans")
-		// Should NOT contain the filtered skill
 		expect(result).not.toContain("systematic-debugging")
-		// Should still contain non-skill content
 		expect(result).toContain("Available tools")
-		// Wrapper tags should still be present (we don't strip <available_skills>)
 		expect(result).toContain("<available_skills>")
 		expect(result).toContain("</available_skills>")
 	})
@@ -85,7 +78,6 @@ describe("filterSkillsFromPrompt", () => {
 		expect(result).not.toContain("brainstorming")
 		expect(result).not.toContain("systematic-debugging")
 		expect(result).toContain("Available tools")
-		// Wrapper stays — caller can decide what to do with empty <available_skills>
 		expect(result).toContain("<available_skills>")
 		expect(result).toContain("</available_skills>")
 	})
@@ -105,8 +97,6 @@ describe("filterSkillsFromPrompt", () => {
 	})
 
 	it("preserves description and location of kept skills", () => {
-		// Ensure we don't accidentally keep just the <name> and lose
-		// the description/location lines.
 		const result = filterSkillsFromPrompt(multiSkillPrompt, ["brainstorming"])
 		expect(result).toContain("Use before any creative work")
 		expect(result).toContain("/home/user/.pi/agent/skills/brainstorming/SKILL.md")
@@ -188,7 +178,6 @@ describe("filterSkillsFromPrompt", () => {
 			"</available_skills>",
 		].join("\n")
 		const result = filterSkillsFromPrompt(prompt, ["a", "c"])
-		// Should keep a and c, remove b
 		expect(result).toContain("<name>a</name>")
 		expect(result).toContain("<name>c</name>")
 		expect(result).not.toContain("<name>b</name>")
@@ -225,10 +214,6 @@ describe("filterSkillsFromPrompt", () => {
 	})
 
 	it("does NOT match the Agent Skills spec attribute format (regression guard)", () => {
-		// The bug from v1.1.4: regex matched `<skill name="...">` instead of
-		// pi's actual `<skill><name>...</name>...</skill>` schema. This guard
-		// ensures the filter does NOT silently pass through skills just
-		// because the prompt uses an unrelated format.
 		const attrFormatPrompt = [
 			"<available_skills>",
 			'<skill name="brainstorming" location="/x">',
@@ -240,21 +225,12 @@ describe("filterSkillsFromPrompt", () => {
 			"</available_skills>",
 		].join("\n")
 		const result = filterSkillsFromPrompt(attrFormatPrompt, ["brainstorming"])
-		// We document the v1.1.5 behavior: the regex is keyed on the <skill>
-		// wrapper + child <name> element, so the attribute format is treated
-		// as opaque non-matching content. The skill NAMES happen to still be
-		// substring-matched by `not.toContain`, but the OUTER <skill name=...>
-		// wrappers remain intact. This guards against a regression where the
-		// regex silently expands to swallow the wrong format.
 		expect(result).toContain('<skill name="brainstorming"')
 		expect(result).toContain('<skill name="writing-plans"')
 	})
 
 	it("matches the EXACT output of pi's formatSkillsForPrompt (integration)", () => {
-		// Verbatim copy of the format emitted by `@earendil-works/
-		// pi-coding-agent/dist/core/skills.js:formatSkillsForPrompt`.
-		// If pi ever changes this schema, this test must be updated FIRST,
-		// then the regex in utils.ts.
+		// Verbatim copy of the format emitted by `@earendil-works/pi-coding-agent/dist/core/skills.js:formatSkillsForPrompt`.
 		const realFormatPrompt = [
 			"",
 			"",
@@ -289,19 +265,15 @@ describe("filterSkillsFromPrompt", () => {
 			"writing-plans",
 		])
 
-		// Allowed skills present
 		expect(result).toContain("<name>brainstorming</name>")
-		// Disallowed skills removed
 		expect(result).not.toContain("<name>systematic-debugging</name>")
 		expect(result).not.toContain("<name>caveman</name>")
 		expect(result).not.toContain(
 			"/home/user/.pi/agent/skills/systematic-debugging/SKILL.md",
 		)
-		// Non-skill content preserved
 		expect(result).toContain("The following skills provide specialized instructions")
 		expect(result).toContain("Current date: 2026-06-29")
 		expect(result).toContain("Current working directory: /home/user/proj")
-		// Wrapper tags preserved (caller decides what to do with empty)
 		expect(result).toContain("<available_skills>")
 		expect(result).toContain("</available_skills>")
 	})

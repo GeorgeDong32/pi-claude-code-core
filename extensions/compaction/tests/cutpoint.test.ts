@@ -1,16 +1,3 @@
-/*
- * Cutpoint tests (SPEC SC §5.4, task W1).
- *
- * Requirement → test map:
- *   CUT-01 → "CUT-01 seeded property: legality" (≥2000 seeded sessions)
- *   CUT-02 → "CUT-02 tail floor + native-equivalent fallback"
- *   CUT-03 → "CUT-03 preference/tie-breaks/determinism"
- *   CUT-05 → "CUT-05 giant single turn → legal split cut"
- *   CUT-06 → "CUT-06 10k entries ≤ 1s"
- *   CUT-07 → "CUT-07 throwing signal counts 0"
- *   CUT-08 → "CUT-08 seeded property: capacity-first" (≥2000 seeded sessions)
- * All fixtures synthetic (INV-7).
- */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -57,7 +44,6 @@ function params(over: Partial<CutpointParams> = {}): CutpointParams {
 	};
 }
 
-/** Random synthetic session: user/assistant/tool interleavings + oddities. */
 function randomSession(rng: () => number): ProjectedEntry[] {
 	const length = 8 + Math.floor(rng() * 32);
 	const entries: ProjectedEntry[] = [];
@@ -65,7 +51,7 @@ function randomSession(rng: () => number): ProjectedEntry[] {
 	if (rng() < 0.2) entries.push(stateOnlyEntry("usage"));
 	for (let i = 0; i < length; i += 1) {
 		const roll = rng();
-		const size = 40 + Math.floor(rng() * 3600); // 10..900 tokens via chars/4
+		const size = 40 + Math.floor(rng() * 3600);
 		const text = "x".repeat(size * 4);
 		if (roll < 0.25) {
 			entries.push(userEntry(text));
@@ -77,7 +63,6 @@ function randomSession(rng: () => number): ProjectedEntry[] {
 		} else if (roll < 0.9) {
 			entries.push(stateOnlyEntry(pick(rng, ["usage", "label"])));
 		} else {
-			// consecutive assistants (no user in between)
 			entries.push(assistantEntry(text, { toolCalls: 1 }));
 			entries.push(toolResultEntry("r".repeat(size * 4)));
 			entries.push(assistantEntry(text));
@@ -112,7 +97,6 @@ test("CUT-01 seeded property: legality over 2000 random sessions (never toolResu
 		if (result.status === "ok" || result.status === "native-equivalent") {
 			assertLegalCut(entries, result.cut.firstKeptEntryIndex, label);
 			if (suffix[0] >= keep) {
-				// Session big enough: the cut must respect the keep floor.
 				assert.ok(result.cut.tailTokens >= keep, `${label}: tail ${result.cut.tailTokens} < keep ${keep}`);
 			}
 			assert.equal(result.cut.firstKeptEntryId, entries[result.cut.firstKeptEntryIndex].sourceEntry.id, `${label}: id mismatch`);
@@ -121,8 +105,6 @@ test("CUT-01 seeded property: legality over 2000 random sessions (never toolResu
 });
 
 test("CUT-02: tail floor in every result; window-empty falls back to native-equivalent", () => {
-	// Window collapsed to a single token value (150) that no suffix hits
-	// (suffix values here: 400/300/200/100) → fallback.
 	const entries = [
 		userEntry("x".repeat(400)),
 		assistantEntry("y".repeat(400)),
@@ -137,7 +119,6 @@ test("CUT-02: tail floor in every result; window-empty falls back to native-equi
 	assert.ok(result.cut.tailTokens >= 1);
 	assertLegalCut(entries, result.cut.firstKeptEntryIndex, "cut-02 fallback");
 
-	// Wide window: every ok result keeps at least `keep`.
 	for (let seed = 1; seed <= 50; seed += 1) {
 		const rng = mulberry32(seed + 10_000);
 		const session = randomSession(rng);
@@ -147,7 +128,6 @@ test("CUT-02: tail floor in every result; window-empty falls back to native-equi
 });
 
 test("CUT-03: highest class wins; same class → closest to native; ties → older index; deterministic", () => {
-	// Fixture (token sizes): u0=100, a1=100, u2=100, a3(tool)=100, tr4=100, a5=100.
 	const u0 = userEntry("u".repeat(400));
 	const a1 = assistantEntry("a".repeat(400));
 	const u2 = userEntry("u".repeat(400));
@@ -155,17 +135,11 @@ test("CUT-03: highest class wins; same class → closest to native; ties → old
 	const tr4 = toolResultEntry("r".repeat(400));
 	const a5 = assistantEntry("z".repeat(400));
 	const entries = [u0, a1, u2, a3, tr4, a5];
-	// suffix: u0=600 a1=500 u2=400 a3=300 tr4=200 a5=100; native (keep=100) → a5.
 	const winner = selectCut(entries, params({ keepRecentTokens: 100 }));
 	assert.equal(winner.status, "ok");
-	// Candidate cuts: a1 (user boundary after u0, tail 500) vs a3 (user
-	// boundary after u2, tail 300). Same class; a3 is closer to native(100).
 	assert.equal(winner.cut.firstKeptEntryId, a3.sourceEntry.id);
 	assert.equal(winner.cut.boundaryClass, "user");
 
-	// Equal-WEIGHT tie broken by distance to the native tail: a git-commit
-	// boundary right at the native cut beats an equally-weighted user boundary
-	// further away (native = a5, tail 100).
 	const gitCommitAtLast: BoundarySignal = {
 		name: "git-commit",
 		weight: (ctx) => (ctx.index === 4 ? 1 : 0),
@@ -173,12 +147,9 @@ test("CUT-03: highest class wins; same class → closest to native; ties → old
 	const tieWeights = { ...params().weights, user: 80, "git-commit": 80 } as Record<string, number>;
 	const tied = selectCut(entries, params({ keepRecentTokens: 100, signals: [gitCommitAtLast], weights: tieWeights }));
 	assert.equal(tied.status, "ok");
-	// cut@5 (tail 100, dist 0, weight 80) vs cut@3 (user, tail 300, dist 200):
-	// equal class weight — the closer-to-native cut@5 must win.
 	assert.equal(tied.cut.firstKeptEntryIndex, 5);
 	assert.equal(tied.cut.boundaryClass, "git-commit");
 
-	// Determinism: identical input → identical output (deep).
 	const again = selectCut(entries, params({ keepRecentTokens: 100, signals: [gitCommitAtLast], weights: tieWeights }));
 	assert.deepEqual(tied, again);
 });
@@ -200,14 +171,12 @@ test("CUT-05: 4 user entries over a giant single turn still yields a legal split
 		const start = entries[result.cut.turnStartIndex];
 		assert.equal(start.messages[0].role, "user", "turn start must be a user-role entry");
 		for (let i = result.cut.turnStartIndex; i < result.cut.firstKeptEntryIndex; i += 1) {
-			// No other turn start between the split point and its turn start.
 			const role = entries[i].messages[0]?.role;
 			if (i > result.cut.turnStartIndex) {
 				assert.ok(role !== "user", "inner user entry would be its own turn start");
 			}
 		}
 	} else {
-		// Cutting at a turn start is also legal (no split needed).
 		assert.equal(entries[result.cut.firstKeptEntryIndex].messages[0].role, "user");
 	}
 });
@@ -238,14 +207,12 @@ test("CUT-07: a throwing signal counts 0 and never affects the others", () => {
 	const entries = [userEntry("u".repeat(400)), assistantEntry("a".repeat(400))];
 	const verdict = bestBoundarySignal([throwing], { entries, index: 0, idleGapMs: 600_000 }, { "run-closed": 100 });
 	assert.deepEqual(verdict, { name: "none", weight: 0 });
-	// With the generic signals alongside, the user boundary still fires.
 	const mixed = bestBoundarySignal(
 		[throwing, { name: "user", weight: () => 1 }],
 		{ entries, index: 0, idleGapMs: 600_000 },
 		{ "run-closed": 100, user: 80 },
 	);
 	assert.deepEqual(mixed, { name: "user", weight: 80 });
-	// selectCut tolerates a throwing signal without propagating.
 	const result = selectCut(entries, params({ keepRecentTokens: 50, signals: [throwing] }));
 	assert.ok(result.status === "ok" || result.status === "native-equivalent");
 });
@@ -258,8 +225,6 @@ test("CUT-08: capacity-first property — semantic candidates outside tailMax ar
 		const entries = randomSession(rng);
 		const suffix = suffixTokenSums(entries);
 		const keep = 100 + Math.floor(rng() * 1_000);
-		// 15% of seeds: tailMax strictly below keep (→ infeasible branch);
-		// otherwise a window from tight to wide exercising the capacity filter.
 		const tailMax = rng() < 0.15 ? keep - Math.floor(rng() * 400) - 1 : keep + Math.floor(rng() * 8_000);
 		const result = selectCut(
 			entries,

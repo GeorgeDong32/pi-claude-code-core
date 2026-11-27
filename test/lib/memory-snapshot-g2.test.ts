@@ -1,8 +1,3 @@
-/**
- * Entropy-control G2 [C14] post-check integration: un-consolidated mass
- * deletion vs this session's start snapshot surfaces ONE notice at
- * agent_end; a normal consolidation run stays silent (docs/zh/entropy-control-spec.md).
- */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -47,8 +42,6 @@ describe("G2-C14 mass-deletion post-check", () => {
 	it("three fs-deleted files (no memory_consolidate) trigger the notice naming the snapshot location", async () => {
 		const host = boot();
 		const ctx = host.makeCtx({ cwd: project, ui: true });
-		// project memory dir for this cwd: seeded via the real path derivation —
-		// plant files through the layer the extension itself resolves.
 		const { resolveMemoryPaths } = await import("../../extensions/memory/paths.ts");
 		const layer = resolveMemoryPaths(project, home);
 		mkdirSync(layer.memoryDir, { recursive: true });

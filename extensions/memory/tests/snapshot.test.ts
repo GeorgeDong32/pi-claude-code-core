@@ -1,11 +1,3 @@
-/**
- * Entropy-control G2 snapshot tests ([C9]/[C10]) — docs/zh/entropy-control-spec.md.
- *
- * Snapshots are full copies of a memory layer into a sidecar OUTSIDE the
- * memory dir, deduped against the newest by content hash, rotated to
- * SNAPSHOT_KEEP, fail-open, and invisible to the index/recall by
- * construction (non-recursive scan + different root).
- */
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -63,7 +55,6 @@ test("[C9] rotation keeps SNAPSHOT_KEEP, evicting the oldest", () => {
 	const stamps: string[] = [];
 	for (let i = 1; i <= SNAPSHOT_KEEP + 1; i++) {
 		write("a.md", valid("a", `v${i}`));
-		// force distinct manifest.at ordering even within one second
 		const snap = snapshotLayer(dir, root, () => new Date(Date.UTC(2020, 0, 1, 0, 0, i)));
 		assert.ok(snap !== null, `snapshot ${i} taken`);
 		stamps.push(snap!.manifest.at);
@@ -77,7 +68,6 @@ test("[C9] rotation keeps SNAPSHOT_KEEP, evicting the oldest", () => {
 test("[C9] snapshot failure is fail-open (unwritable root → null, no throw)", () => {
 	write("a.md", valid("a", "alpha"));
 	const bad = join(home, "no", "such", "root", "deeper");
-	// snapshotLayer mkdirs recursively — use a FILE as the root parent to break it
 	writeFileSync(join(home, "blocker"), "x");
 	const brokenRoot = join(home, "blocker", "snapshots");
 	assert.equal(snapshotLayer(dir, brokenRoot), null);
@@ -87,10 +77,6 @@ test("[C10] files inside a snapshot never surface in the index or recall", () =>
 	write("a.md", valid("a", "alpha"));
 	const snap = snapshotLayer(dir, root);
 	assert.ok(snap !== null);
-	// Isolation is CONSTRUCTIONAL: index/recall only ever scan the layer
-	// dir. Pin both halves — (1) the snapshot root lives outside the layer,
-	// (2) the real-layer scan never sees the snapshot's copy even though that
-	// copy is a fully valid memory file sitting one path away.
 	assert.ok(!snap!.dir.startsWith(dir), "snapshot root outside the layer");
 	assert.ok(!dir.startsWith(snap!.dir), "layer outside the snapshot root");
 	const titles = eligibleMemories(dir).map((f) => f.title);

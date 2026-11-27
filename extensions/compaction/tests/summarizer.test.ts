@@ -1,17 +1,3 @@
-/*
- * Summarizer tests (SPEC SC §5.5 SUM-03/05/06/07/08, task W3).
- *
- * Requirement → test map:
- *   SUM-03 → "wrapper classifies / injects / collapses retries"
- *   SUM-05 → "validation failure retries once hardened, then refuses"
- *   SUM-06 → "resolveSummaryModel: null/unknown/window/session"
- *   SUM-07 → "aborted signal short-circuits without transport calls"
- *   SUM-08 → "prompt carries closed-id non-re-narration instructions"
- *   SUM-09 → classification is pinned by SC-HOST-09 (contracts) + W1
- *            validate ⑨; runtime degrade wiring lands with W4 index.
- * Transport is a scripted double (never a network call). Synthetic usage
- * objects carry `cost` (W0 fixture fact #2).
- */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -107,10 +93,8 @@ test("SUM-03: wrapper classifies both call shapes, injects maxTokens, drops reas
 	if (!outcome.ok) return;
 	assert.deepEqual(outcome.subCalls.map((call) => call.kind), ["history", "turn-prefix"]);
 	assert.equal(captured.length, 2);
-	// Injection (S3 mechanics): the transport sees maxTokens and no reasoning.
 	assert.equal(captured[0].options.maxTokens, 2048);
 	assert.equal("reasoning" in captured[0].options, false);
-	// SUM-09 anchors (mirrors SC-HOST-09): the two prompt shapes.
 	assert.ok(captured[0].userText.startsWith("<conversation>"));
 	assert.ok(captured[1].userText.startsWith("# Conversation"));
 });
@@ -131,13 +115,11 @@ test("SUM-05: reasoning-only history fails validation → hardened retry succeed
 	const captured: Captured[] = [];
 	const good = "## History\n- proper narrative with real content\n\n## State\n- stable";
 	const prefixOk = () => assistantOf("## Prefix\n- p");
-	// Attempt 1: history reasoning-only + prefix ok. Attempt 2: both ok.
 	const outcome = await run([() => reasoningOnly(4000), prefixOk, () => assistantOf(good), prefixOk], captured);
 	assert.equal(outcome.ok, true);
 	if (!outcome.ok) return;
 	assert.equal(outcome.retried, true);
-	assert.equal(captured.length, 4); // split ⇒ 2 sub-calls per attempt
-	// SUM-08 hardened text rides attempt 2's history prompt (index 2).
+	assert.equal(captured.length, 4);
 	assert.match(captured[2].userText, /MUST output a complete summary/);
 	assert.doesNotMatch(captured[0].userText, /MUST output a complete summary/);
 });
@@ -216,6 +198,5 @@ test("SUM-06: resolveSummaryModel — null/unknown → session; small window →
 	const direct = resolveSummaryModel("zai/glm-4.6", registry, 60_000, session);
 	assert.equal(direct.model, bigModel as unknown as Model<Api>);
 	assert.equal(direct.fallbackToSession, false);
-	// No registry → session model, no fallback flag.
 	assert.equal(resolveSummaryModel("zai/glm-4.6", undefined, 60_000, session).model, session);
 });

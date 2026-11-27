@@ -1,7 +1,3 @@
-/**
- * Tests for src/review-run.ts — plugin-side diff acquisition + target source
- * workspace + manifest so reviewer children point at the RIGHT repo.
- */
 import { strict as assert } from "node:assert";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -23,7 +19,6 @@ type FakeCmd = (cmd: string, args: string[], opts: FakeCmdOpts) => Promise<{
 	stdout: string;
 	stderr: string;
 	exitCode: number;
-	/** T4/S5: fakes simulating a run-cmd timeout set this field. */
 	timedOut?: boolean;
 }>;
 
@@ -47,7 +42,6 @@ function setup() {
 	return sandbox;
 }
 
-/** Fake gh/git where `gh pr diff` returns a small diff. */
 function fakeCmd(
 	plan: Record<string, (args: string[], opts: FakeCmdOpts) => { stdout: string; stderr: string; exitCode: number }>,
 ): FakeCmd {
@@ -62,11 +56,6 @@ function fakeCmd(
 	};
 }
 
-/** S1: ONE shared injector — the old PAIR of adapters (each with its own
- *  injected fake) folds into one fake with fallback semantics: the primary
- *  fake answers commands it knows (a miss is the EMPTY result — stdout "",
- *  stderr "", exitCode 1 — with no diagnostic text); anything else falls to
- *  the secondary. Explicit failures carry stderr text and never fall. */
 function ghThenGit(primary: FakeCmd, fallback: FakeCmd): FakeCmd {
 	return async (cmd, args, opts) => {
 		const r = await primary(cmd, args, opts);
@@ -133,12 +122,9 @@ describe("prepareRun — PR cross-repo workspace", () => {
 		assert.deepEqual(m.changedFiles, ["src/a.ts"]);
 		assert.ok(existsSync(m.diffPath));
 		assert.match(readFileSync(m.diffPath, "utf-8"), /\+added/);
-		// Reviewer cwd placeholders must point at the target workspace.
 		assert.match(prepared!.directiveText, new RegExp(m.workspacePath));
 		assert.match(prepared!.directiveText, /pi_review_report/);
 		assert.match(prepared!.directiveText, /chatProgress: "auto"/);
-		// prepareWorkspace ran for real (only its subprocesses were faked) —
-		// drop the scratch clone it allocated.
 		rmSync(dirname(m.workspacePath), { recursive: true, force: true });
 	});
 
@@ -171,7 +157,6 @@ describe("prepareRun — PR cross-repo workspace", () => {
 	test("clean tree falls back to vs-default diff", async () => {
 		const cwd = setup();
 		const diff = "diff --git a/y b/y\n--- a/y\n+++ b/y\n@@ -1 +1 @@\n-old\n+new2\n";
-		// Dirty → but status empty, so the else branch runs.
 		setRunCmd(
 			ghThenGit(
 				fakeCmd({
@@ -202,9 +187,8 @@ describe("prepareRun — PR cross-repo workspace", () => {
 	test("does not write project permissions.local.json", () => {
 		const cwd = setup();
 		const permsFile = join(cwd, ".pi", "projects", "x", "permissions.local.json");
-		readFileSync; // noop reference
+		readFileSync;
 		assert.equal(existsSync(permsFile), false);
-		// The .pi/pi-review/runs dir is the ONLY thing created.
 		assert.equal(existsSync(join(cwd, ".pi", "pi-review", "runs")), false);
 	});
 });
@@ -213,8 +197,6 @@ describe("prepareRun — local base fetch ceiling (D-FX-1)", () => {
 	const DIFF = "diff --git a/y b/y\n--- a/y\n+++ b/y\n@@ -1 +1 @@\n-old\n+new2\n";
 	const FETCH_TIMEOUT_NOTE = "git fetch timed out after 15000ms";
 
-	/** Clean-tree git plan whose base fetch fails with the given result.
-	 *  Captures the fetch call's opts so the ceiling/env wiring is pinned. */
 	function cleanTreeWithFailingFetch(
 		fetchResult: { stdout: string; stderr: string; exitCode: number; timedOut?: boolean },
 		fetchOptsCapture: FakeCmdOpts[],
@@ -238,8 +220,6 @@ describe("prepareRun — local base fetch ceiling (D-FX-1)", () => {
 		const cwd = setup();
 		const fetchOpts: FakeCmdOpts[] = [];
 		setRunCmd(ghThenGit(
-			// T4/S5: the fake simulating a timeout sets the structured field
-			// (the stderr note stays for humans; it is no longer the signal).
 			cleanTreeWithFailingFetch({ stdout: "", stderr: FETCH_TIMEOUT_NOTE, exitCode: 1, timedOut: true }, fetchOpts),
 			async () => ({ stdout: "", stderr: "", exitCode: 0 }),
 		));
@@ -252,7 +232,6 @@ describe("prepareRun — local base fetch ceiling (D-FX-1)", () => {
 		assert.match(m.diffWarning!, /timed out after 15000ms/);
 		assert.match(m.diffWarning!, /possibly-stale origin\/main/);
 		assert.ok(!m.diffWarning!.includes(" failed "));
-		// The fetch opts wiring: hard ceiling + no credential prompts.
 		assert.equal(fetchOpts.length, 1);
 		assert.equal(fetchOpts[0].timeoutMs, 15_000);
 		assert.equal(fetchOpts[0].env?.GIT_TERMINAL_PROMPT, "0");
@@ -275,7 +254,6 @@ describe("prepareRun — local base fetch ceiling (D-FX-1)", () => {
 		assert.ok(m.diffWarning);
 		assert.match(m.diffWarning!, /failed — diffing against possibly-stale origin\/main/);
 		assert.ok(!m.diffWarning!.includes("timed out"));
-		// The failure path passes the same ceiling/env opts.
 		assert.equal(fetchOpts.length, 1);
 		assert.equal(fetchOpts[0].timeoutMs, 15_000);
 		assert.equal(fetchOpts[0].env?.GIT_TERMINAL_PROMPT, "0");
@@ -333,7 +311,6 @@ describe("prepareRun — PR command ceilings (FX-5)", () => {
 					};
 				}
 				if (args[0] === "pr" && args[1] === "diff") {
-					// T4/S5: the fake sets the structured timeout field.
 					return { stdout: "", stderr: "gh pr diff timed out after 60000ms", exitCode: 1, timedOut: true };
 				}
 				return { stdout: "", stderr: "no", exitCode: 1 };
@@ -367,7 +344,6 @@ describe("loadManifestFor", () => {
 			createdAt: Date.now(),
 		};
 		const runDir = join(cwd, ".pi", "pi-review", "runs", runId);
-		// Simulate the write path used by prepareRun by writing it directly.
 		const { ensureRunDir, writeManifest } = await import("../src/review-report.js");
 		ensureRunDir(cwd, runId);
 		writeManifest(runDir, manifest);
@@ -446,7 +422,6 @@ describe("prepareRun — lite + adaptive routing", () => {
 		assert.equal(roster.some((r) => r.id === "security-review"), false);
 		assert.equal(roster.some((r) => r.id === "rulesheriff"), false);
 		assert.equal(roster.some((r) => r.id === "history-context"), false);
-		// Code-comments is also skipped for docs-only.
 		assert.equal(roster.some((r) => r.id === "code-comments"), false);
 	});
 
@@ -499,7 +474,6 @@ describe("prepareRun — config wiring (round-2 adversarial findings)", () => {
 		const prepared = await prepareRun({ cwd, input: PR });
 		assert.ok(prepared);
 		assert.doesNotMatch(prepared!.directiveText, /runs\.run\('gate'/);
-		// Full roster still fans out (not the lite single-lane shape).
 		assert.ok((prepared!.manifest.reviewerIds?.length ?? 0) >= 4, "full roster expected");
 		assert.match(prepared!.directiveText, /gate disabled in config/);
 		rmSync(dirname(prepared!.manifest.workspacePath), { recursive: true, force: true });
@@ -541,7 +515,6 @@ describe("prepareRun — config wiring (round-2 adversarial findings)", () => {
 	test("oversize untracked files get a placeholder hunk + warning, no content (R3)", async () => {
 		const cwd = setup();
 		writeFileSync(join(cwd, "tracked.ts"), "a\n");
-		// 1.1 MB — over the 1_000_000-byte untracked cap.
 		const big = "x".repeat(1_100_000);
 		writeFileSync(join(cwd, "huge-data.txt"), big);
 		setRunCmd(
@@ -641,10 +614,8 @@ describe("gh pr diff is the single diff authority (user decision 2026-08-25)", (
 							exitCode: 0,
 						};
 					}
-					// pr diff fails (auth, network, missing gh…)
 					return { stdout: "", stderr: "gh: auth required", exitCode: 1 };
 				},
-				// Even a perfectly working local git must NOT be consulted.
 				"git fetch": () => {
 					throw new Error("git must not be called for a PR diff");
 				},
@@ -712,7 +683,6 @@ describe("gh pr diff is the single diff authority (user decision 2026-08-25)", (
 			}
 			if (cmd === "git" && args[0] === "rev-parse" && args.includes("HEAD")) {
 				calls++;
-				// First clone lands on the stale head; the retry converges.
 				return { stdout: `${calls === 1 ? "STALE" : "GOOD"}\n`, stderr: "", exitCode: 0 };
 			}
 			return { stdout: "", stderr: "", exitCode: 0 };
@@ -853,24 +823,18 @@ describe("cleanup mechanisms", () => {
 
 export type { FakeCmd };
 void writeFileSync;
-// ── AR1005-RV (spec 2026-10-05 §11): rule discovery targets the FINAL
-// workspace, not the caller's cwd. The fake clone handler receives the
-// cloneDir as args[3] and plants the target repo's rule files there —
-// through the REAL prepareRun, asserting the manifest (not just directive
-// substrings). Baseline red via stash. ──
 
 function rvDiff(): string {
 	return [
 		"diff --git a/src/a.ts b/src/a.ts",
 		"--- a/src/a.ts",
 		"+++ b/src/a.ts",
-		"@@" + " -1 +1,2 @@", // (avoid editor lint on decorators)
+		"@@" + " -1 +1,2 @@",
 		" line",
 		"+added",
 	].join("\n");
 }
 
-/** Fake gh for a PR target (view + diff). */
 function rvGh(diff: string): FakeCmd {
 	return fakeCmd({
 		gh: (args) => {
@@ -883,14 +847,12 @@ function rvGh(diff: string): FakeCmd {
 	});
 }
 
-/** Fake workspace cmds; `plant(cloneDir)` seeds the target repo's rules on clone. */
 function rvWorkspaceCmd(plant: (cloneDir: string, cloneIndex: number) => void, opts: { headSha?: string } = {}) {
 	let clones = 0;
 	return async (cmd: string, args: string[]) => {
 		if (cmd === "gh" && args[0] === "repo" && args[1] === "clone") return { stdout: "", stderr: "no gh", exitCode: 1 };
 		if (cmd === "git" && args[0] === "clone") {
 			clones += 1;
-			// git clone args: [clone, --depth, 50, url, cloneDir] — args[4] is the dir
 			const cloneDir = args[4]!;
 			mkdirSync(cloneDir, { recursive: true });
 			plant(cloneDir, clones);
@@ -968,9 +930,6 @@ describe("AR1005-RV — target-workspace rule discovery", () => {
 
 	test("RV-T04: the FIRST workspace is replaced by the HEAD-mismatch retry → rulePaths from the FINAL workspace", async () => {
 		const cwd = setup();
-		// S1: ONE injector — the final fake below (set after resetRunCmd) must
-		// itself carry the gh pr view/diff answers the old separate
-		// review-report channel used to provide (rvGh's payload).
 		const diff = rvDiff();
 		let revParseCalls = 0;
 		setRunCmd(async (cmd: string, args: string[]) => {
@@ -981,7 +940,6 @@ describe("AR1005-RV — target-workspace rule discovery", () => {
 			if (cmd === "git" && args[0] === "clone") {
 				const cloneDir = args[4]!;
 				mkdirSync(cloneDir, { recursive: true });
-				// the FINAL (retried) workspace carries the rules
 				writeRuleFile(cloneDir, "CLAUDE.md", "final workspace rules");
 				return { stdout: "", stderr: "", exitCode: 0 };
 			}
@@ -989,7 +947,6 @@ describe("AR1005-RV — target-workspace rule discovery", () => {
 			if (cmd === "git" && args[0] === "checkout") return { stdout: "", stderr: "", exitCode: 0 };
 			if (cmd === "git" && args[0] === "rev-parse") {
 				revParseCalls += 1;
-				// first workspace reports the moved head; the retry matches the diff head
 				const sha = revParseCalls === 1 ? "ccc" : "bbb";
 				return { stdout: sha + "\n", stderr: "", exitCode: 0 };
 			}
@@ -1004,7 +961,6 @@ describe("AR1005-RV — target-workspace rule discovery", () => {
 	test("RV-T05: local-git and diff-file targets keep the cwd-as-workspace behavior (caller rules still apply)", async () => {
 		const cwd = setup();
 		writeRuleFile(cwd, "AGENTS.md");
-		// local-git: fake a git repo with a dirty tree
 		setRunCmd(fakeCmd({
 			git: (args) => {
 				if (args[0] === "status") return { stdout: " M src/a.ts\n", stderr: "", exitCode: 0 };

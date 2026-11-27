@@ -1,9 +1,3 @@
-/**
- * classifier-retry.test.ts — deterministic replacements for the AR1005-R3
- * flaky wall-clock test (SPEC 2026-10-07 P2-1 Step 3): attempts × timeoutMs,
- * timer release on every exit, and abort-listener cleanup are asserted on a
- * FAKE clock — zero real timers, zero real elapsed-time assertions.
- */
 import { describe, expect, it } from "vitest";
 import {
 	runClassifierAttempts,
@@ -44,7 +38,7 @@ describe("runClassifierAttempts (the visible retry layer)", () => {
 		expect(out.attempts).toBe(3);
 		expect(String(out.error)).toContain("boom 3");
 		expect(tries).toEqual([1, 2, 3]);
-		expect(retries.map(([n]) => n)).toEqual([1, 2]); // no retry hook after the last
+		expect(retries.map(([n]) => n)).toEqual([1, 2]);
 	});
 
 	it("returns the first success without further attempts", async () => {
@@ -97,17 +91,12 @@ describe("classifyToolCall on the injected clock (replaces index.test.ts:1149)",
 		}).then((o: Outcome) => {
 			outcome = o;
 		});
-		// Drive the loop by hand: let the attempt reach the transport, fire
-		// its timeout, let the rejection settle, repeat. Zero real-time
-		// assertions — setImmediate is scheduling only.
 		for (let i = 0; i < 12 && outcome === undefined; i++) {
 			await new Promise((r) => setImmediate(r));
 			clock.advance(40);
 			await new Promise((r) => setImmediate(r));
 		}
 		await settled;
-		// deterministic: exactly 3 transport calls, each with the per-attempt
-		// timeout and SDK retries disabled
 		expect(calls.length).toBe(3);
 		for (const c of calls) {
 			expect(c.maxRetries).toBe(0);
@@ -115,8 +104,6 @@ describe("classifyToolCall on the injected clock (replaces index.test.ts:1149)",
 		}
 		expect(outcome!.ok).toBe(false);
 		expect(String(outcome!.error)).toContain("timed out");
-		// timer discipline: every scheduled timeout was cleared before the
-		// call returned (no leaked fake timers)
 		expect(clock.timers.length).toBe(3);
 		expect(clock.timers.every((t) => t.cleared)).toBe(true);
 	}, 20_000);
@@ -125,8 +112,6 @@ describe("classifyToolCall on the injected clock (replaces index.test.ts:1149)",
 		invalidateClassifierVerdictCache();
 		const calls: Array<Record<string, unknown>> = [];
 		const clock = fakeClassifierClock();
-		// Manually advance between attempts — with a REAL clock this test
-		// would hang forever; the injected one makes the timeout explicit.
 		const p = (async () => {
 			try {
 				await classifyToolCall({
@@ -142,7 +127,6 @@ describe("classifyToolCall on the injected clock (replaces index.test.ts:1149)",
 				return String(e);
 			}
 		})();
-		// let the attempt reach the transport, then fire the timeout
 		await new Promise((r) => setImmediate(r));
 		clock.advance(40);
 		expect(await p).toContain("timed out");
@@ -155,7 +139,7 @@ describe("real clock defaults", () => {
 		expect(realClassifierClock.now()).toBeGreaterThanOrEqual(0);
 		const h = realClassifierClock.setTimer(() => {}, 60_000);
 		expect(h).toBeDefined();
-		realClassifierClock.clearTimer(h); // no throw
+		realClassifierClock.clearTimer(h);
 	});
 });
 
@@ -191,8 +175,6 @@ describe("abort-listener release (review P3-6)", () => {
 					clock,
 				}) as Promise<unknown>,
 		});
-		// reach the transport, fire the timeout — the finally must remove the
-		// parent listener even on the timeout exit path
 		await new Promise((r) => setImmediate(r));
 		clock.advance(40);
 		const outcome = (await outcomeP) as { ok: boolean; error?: unknown };

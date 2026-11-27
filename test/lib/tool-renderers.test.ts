@@ -1,8 +1,3 @@
-/*
- * tool-renderers.test.ts — TR A/B/C presentation units
- * (spec 2026-10-02-core-tool-renderers §5) over stub themes; pure text
- * helpers asserted directly, component wrappers by identity/instance.
- */
 import { describe, expect, it } from "vitest";
 
 import {
@@ -47,7 +42,6 @@ describe("TR A — obs_recall renderers", () => {
 		const page = PAGE();
 		const pageText = (page.content as Array<{ type: string; text: string }>)[0]!.text;
 		expect(stripProtocolHeader(pageText, page.details as never)).not.toContain("[obs_recall id=");
-		// details absent (error path) → honest fallback keeps the text as-is
 		expect(stripProtocolHeader("raw text\n[chunk_bytes=x", {} as never)).toBe("raw text\n[chunk_bytes=x");
 	});
 
@@ -60,7 +54,7 @@ describe("TR A — obs_recall renderers", () => {
 		const collapsed = renderRecallResult(PAGE(), {}, theme, undefined);
 		expect(collapsed).toBeInstanceOf(RecallRows);
 		const again = renderRecallResult(PAGE(), {}, theme, collapsed);
-		expect(again).toBe(collapsed); // F5 discipline: clear+rebuild, same instance
+		expect(again).toBe(collapsed);
 		const expanded = renderRecallResult(PAGE(), { expanded: true }, theme, undefined);
 		expect(expanded).not.toBe(collapsed);
 	});
@@ -86,8 +80,6 @@ describe("TR B — then_run badges", () => {
 	it("2: command badge wraps and carries the command", () => {
 		const wrapped = withThenRunBadge({ tag: "builtin" } as never, { then_run: { command: "bun run check" } }, theme);
 		expect(wrapped).not.toHaveProperty("tag");
-		// (wrapped is a Container; asserting identity difference + no throw is
-		// the component-level contract, the badge text lives in thenRunStatusRow)
 	});
 
 	it("3: status row — ok / failed / skipped coloring roles", () => {
@@ -111,7 +103,7 @@ describe("TR B — then_run badges", () => {
 describe("TR C — core tool compact rows", () => {
 	it("1: session_recall call + result rows", () => {
 		expect(sessionRecallCallText({ query: "  memory   recall accuracy " })).toBe(`Session Recall "memory recall accuracy"`);
-		expect(sessionRecallCallText({ query: "这是一条非常长的记忆召回精确率统计报告分析结果与改进方案" })).toContain("…"); // >24 chars clips
+		expect(sessionRecallCallText({ query: "这是一条非常长的记忆召回精确率统计报告分析结果与改进方案" })).toContain("…");
 		expect(sessionRecallCallText({ query: "x".repeat(40), since: "-7d" })).toContain("[-7d]");
 		const rows = sessionRecallResultRows({
 			content: [{ type: "text", text: "session_recall: 3 hit(s)\n\n[--Users-x--/s.jsonl:12] user:\nsome text" }],
@@ -133,19 +125,13 @@ describe("TR C — core tool compact rows", () => {
 	});
 });
 
-// ── AR1005-FU-02 (spec 2026-10-05 §6): zero-wrap for plain tools even when
-// the body carries a marker; legacy replay (succeeded / ok alias); no
-// mid-line substring matching. Baseline red via stash. ──
 describe("FU — then_run render facts (AR1005)", () => {
 	it("FU-T04: args present without then_run → builtin component untouched even if the body contains a marker", () => {
 		const base = { tag: "builtin" } as never;
 		const markerBody = { content: [{ type: "text", text: `output mentions ${"[then_run:failed]"} in a log line` }] };
 		expect(withThenRunStatus(base, markerBody, theme, { args: {} })).toBe(base);
 		expect(withThenRunStatus(base, markerBody, theme, { args: { then_run: { command: "" } } })).toBe(base);
-		// and no status row either way
 		expect(thenRunStatusRow(markerBody, theme, { args: {} })).toBeNull();
-		// args unknown (old host) → legacy marker-scan behavior retained
-		// (line-anchored markers still badge; mid-line prose never does)
 		const lineAnchored = { content: [{ type: "text", text: "output log:\n[then_run:failed] exit 1" }] };
 		expect(thenRunStatusRow(lineAnchored, theme)).toBe("↳ then_run ✗ failed");
 	});
@@ -153,9 +139,7 @@ describe("FU — then_run render facts (AR1005)", () => {
 	it("FU-T06: legacy replay — ok alias and succeeded line both show the success badge without metadata", () => {
 		expect(thenRunStatusRow({ content: [{ type: "text", text: "done\n[then_run:ok] exit 0" }] }, theme)).toBe("↳ then_run ✓ ok");
 		expect(thenRunStatusRow({ content: [{ type: "text", text: "[then_run:succeeded]\nall checks passed" }] }, theme)).toBe("↳ then_run ✓ ok");
-		// structured authority: unknown field values are not coerced to success
 		expect(thenRunStatusRow({ content: [{ type: "text", text: "plain" }], details: { thenRun: "banana" } }, theme)).toBeNull();
-		// FU-T02 core: a structured success with the OPPOSITE marker in the log body stays a success
 		expect(
 			thenRunStatusRow(
 				{ content: [{ type: "text", text: "wrote\n[then_run:failed]\n(the command echoed it)" }], details: { thenRun: "succeeded" } },

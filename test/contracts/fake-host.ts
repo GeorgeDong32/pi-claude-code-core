@@ -1,22 +1,3 @@
-/**
- * Contract-suite fake host (P0-CT-12).
- *
- * Instantiates extension factories from the REAL packages (P0: the four
- * source packages; P1+: core modules via targets.ts) without booting pi.
- * Shape follows pm's index.test.ts `createFakePi` (plan2 C1 pattern), with
- * the recording surface the contracts need:
- *
- *   - event registry + async fire()
- *   - appendEntry / sendMessage / command / shortcut / flag registries
- *   - setStatus / setWidget call log (P0-CT-07)
- *   - setWorkingMessage call log (P0-CT-02 suppression)
- *   - env snapshot/restore + controllable globalThis cleanup (P0-CT-01..03)
- *
- * The four factories type their `pi` parameter against different installed
- * versions of ExtensionAPI, so `asPi()` intentionally crosses types at the
- * call site; runtime structure is what the contracts pin.
- */
-
 export type Handler = (...args: any[]) => unknown;
 type CommandHandler = (args: string, ctx: any) => unknown | Promise<unknown>;
 
@@ -35,21 +16,12 @@ export interface SentMessage {
 
 export interface FakeCtxOptions {
 	cwd: string;
-	/** Present = hasUI true and ctx.ui methods callable. */
 	ui?: boolean;
 	sessionEntries?: unknown[];
-	/** Session dir/id served by the fake ctx.sessionManager (FAKEHOST-01). */
 	sessionDir?: string;
 	sessionId?: string;
-	/** Messages served by ctx.sessionManager.buildSessionProjection()
-	 * (FAKEHOST-02: memory recall v2 derives session state from the
-	 * projection — history-thunk tests inject synthetic transcripts here). */
 	projectionMessages?: unknown[];
-	/** Overrides ctx.hasPendingMessages() (FAKEHOST-02: recall v2 delivery
-	 * treats steer/followUp text queue as "turn continues"). Default false. */
 	hasPendingMessages?: boolean;
-	/** Overrides ctx.isIdle() (default false). GH-03: goal continuations send
-	 * immediately only when idle — the hijack repro needs an idle ctx. */
 	idle?: boolean;
 }
 
@@ -62,7 +34,6 @@ export const CORE_GLOBAL_KEYS = [
 	"__piClaudeCodeCoreCmd",
 ] as const;
 
-/** Remove every capability key a core module (or a consumer) may publish. */
 export function clearCoreGlobals(): void {
 	const g = globalThis as Record<string, unknown>;
 	for (const key of CORE_GLOBAL_KEYS) delete g[key];
@@ -81,7 +52,6 @@ export function restoreCoreGlobals(snapshot: Record<string, unknown>): void {
 	for (const [key, value] of Object.entries(snapshot)) g[key] = value;
 }
 
-/** Save the given env vars (plus a fixed contract-relevant set). */
 export function snapshotEnv(extra: string[] = []): Record<string, string | undefined> {
 	const keys = new Set([
 		...extra,
@@ -112,18 +82,11 @@ export class FakeHost {
 	readonly appendEntries: Array<{ type: string; data: unknown }> = [];
 	readonly sentMessages: SentMessage[] = [];
 	readonly userMessages: Array<{ text: string; opts?: unknown }> = [];
-	/** setActiveTools call history (GH-04 assertions). */
 	readonly activeToolsCalls: string[][] = [];
 	readonly notifications: string[] = [];
-	/**
-	 * ToolInfo list merged into getAllTools(); tests may mutate before firing.
-	 * Registered tools are projected alongside so `registerTool` overrides are
-	 * observable through getAllTools (FAKEHOST-01).
-	 */
 	readonly toolInfos: Array<{ name: string; sourceInfo?: unknown }> = [];
 	private thinkingLevel = "off";
 
-	/** Fresh command context wired to this host's recording surface. */
 	makeCtx(opts: FakeCtxOptions): Record<string, unknown> {
 		const host = this;
 		const ui = opts.ui
@@ -160,17 +123,13 @@ export class FakeHost {
 				getBranch: () => opts.sessionEntries ?? [],
 				getEntries: () => opts.sessionEntries ?? [],
 				getGitBranch: () => "",
-				// FAKEHOST-01: observation-pack derives its store root from these.
 				getSessionDir: () => opts.sessionDir ?? "",
 				getSessionId: () => opts.sessionId ?? "",
-				// FAKEHOST-02: recall v2 derives dedup/budget/read state from the
-				// projection's message list.
 				buildSessionProjection: () => ({ messages: opts.projectionMessages ?? [] }),
 			},
 		};
 	}
 
-	/** The fake ExtensionAPI object handed to a factory. */
 	piObject(): Record<string, unknown> {
 		const host = this;
 		return {
@@ -209,8 +168,7 @@ export class FakeHost {
 			},
 			getActiveTools: () => ["read", "edit", "write", "bash", "grep", "find"],
 			getAllTools: () => {
-				// Same-name registration wins, mirroring pi's definitionRegistry
-				// override semantics (FAKEHOST-01).
+				// Same-name registration wins, mirroring pi's definitionRegistry override semantics.
 				const registered = new Map(
 					[...host.tools.values()].map((tool) => [
 						tool.name,
@@ -254,7 +212,6 @@ export class FakeHost {
 		return this.piObject() as never;
 	}
 
-	/** Invoke every handler registered for an event, awaiting async ones. */
 	async fire(event: string, payload: unknown, ctx: Record<string, unknown>): Promise<unknown> {
 		let last: unknown;
 		for (const handler of this.handlers.get(event) ?? []) {
@@ -264,18 +221,15 @@ export class FakeHost {
 		return last;
 	}
 
-	/** Slots seen in setStatus calls, excluding undefined-valued cleanup writes. */
 	statusSlotsSet(): Set<string> {
 		return new Set(this.statusCalls.map((c) => c.slot));
 	}
 
-	/** All setStatus calls that were cleanup writes (value === undefined). */
 	cleanupStatusSlots(): Set<string> {
 		return new Set(this.statusCalls.filter((c) => c.value === undefined).map((c) => c.slot));
 	}
 }
 
-/** Assistant message with usage — feeds pm's working-stats computation. */
 export function usageAssistantEntry(input = 1200, output = 300): unknown {
 	return {
 		type: "message",

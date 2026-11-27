@@ -1,12 +1,3 @@
-/**
- * interpret.test.ts — SPEC 2026-10-07 P2-1 §5: the INTERPRET half against a
- * recording port set. Every Decision kind must reach the right port with the
- * right arguments, and effects must fire in the recorded order (track ->
- * family note -> auto denial reset). The ports themselves wrap the real gate
- * functions; their internal behavior (dialog five choices, forwarding
- * approved/denied/timeout, compliance injection) is covered end-to-end by
- * the FakePi suite and the parity golden — here we pin the DISPATCH.
- */
 import { describe, expect, it } from "vitest";
 import { interpretDecision, type InterpretPorts } from "./interpret.ts";
 import type { BlockShape, Decision, ToolCallRequest } from "./adjudicate.ts";

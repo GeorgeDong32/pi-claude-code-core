@@ -1,16 +1,3 @@
-/*
- * State/runtime tests (SPEC SC §5.2/§5.10 ST-01/ST-05, task W3).
- *
- * Requirement → test map:
- *   ST-01 → telemetry entry shape + every outcome path (refused/applied/
- *            discarded), display-only type name, INV-7 (no summary text)
- *   APP-05 → onProposed fires before (intent, no entryId); onReconciled
- *            committed fires after exactly once WITH the real entryId; lost
- *            never fires after (snapshot voided, INV-5)
- *   APP-08 → conflict-edit accumulation degrades to shadow at the threshold
- *   ST-05 → degrade is sticky until session reset
- *   SUM-07 → stale-generation compute results are dropped
- */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -53,14 +40,12 @@ function snapshot(generation = 0): PrecomputedSnapshot {
 	};
 }
 
-/** Drive the runtime to phase "ready" via the policy boundary path. */
 function driveToReady(rt: SessionRuntime) {
 	const decision = rt.onBoundary({ type: "boundary", P: 0.7, applySafe: true, isApplyPoint: false, prechecksPassed: true, feasibility: { feasible: true, effectiveSummaryTokens: 12000, expectedGrowth: 3000, tailMax: 9000000, neededTn: 107000 }, mayCompute: true });
 	assert.equal(decision.action.type, "start-computing");
 	rt.onComputeSucceeded(snapshot(rt.state.generation), { computeMs: 12 });
 }
 
-/** Drive the runtime to phase "proposed" via the policy boundary path. */
 function driveToProposed(rt: SessionRuntime, nonce = "n-1") {
 	let decision = rt.onBoundary({ type: "boundary", P: 0.7, applySafe: true, isApplyPoint: false, prechecksPassed: true, feasibility: { feasible: true, effectiveSummaryTokens: 12000, expectedGrowth: 3000, tailMax: 9000000, neededTn: 107000 }, mayCompute: true });
 	assert.equal(decision.action.type, "start-computing");
@@ -107,11 +92,11 @@ test("APP-05/ST-01: committed — before (intent, no entryId) then after exactly
 	rt.onReconciled(committed, { midRun: false, summaryChars: 500, tokensBefore: 90_000, estPostTokens: 42_000, applyMs: 8, cutClass: "user" });
 	assert.equal(after.length, 1);
 	assert.equal(after[0].entryId, "real-entry-1");
-	assert.equal(rt.snapshot, null); // INV-5: consumed
+	assert.equal(rt.snapshot, null);
 	assert.equal(emitted.length, 1);
 	assert.equal(emitted[0].outcome, "applied");
 	assert.equal(emitted[0].estPostTokens, 42_000);
-	assert.ok(!JSON.stringify(emitted[0]).includes("x".repeat(50))); // INV-7: no summary text
+	assert.ok(!JSON.stringify(emitted[0]).includes("x".repeat(50)));
 	assert.equal(rt.state.phase, "idle");
 });
 
@@ -133,15 +118,15 @@ test("APP-08/ST-05: conflict-edit audits accumulate and degrade at conflictEditD
 	assert.equal(rt.degraded, false);
 	driveToProposed(rt, "n-2");
 	rt.onReconciled({ status: "committed", entryId: "e2", conflictEdits: 1 }, { midRun: false, summaryChars: 10 });
-	assert.equal(rt.degraded, true); // 2 ≥ 2
+	assert.equal(rt.degraded, true);
 });
 
 test("SUM-07: a stale-generation compute success is dropped (no ready transition)", () => {
 	const { rt } = runtime();
 	const decision = rt.onBoundary({ type: "boundary", P: 0.7, applySafe: true, isApplyPoint: false, prechecksPassed: true, feasibility: { feasible: true, effectiveSummaryTokens: 1, expectedGrowth: 1, tailMax: 1e9, neededTn: 1 }, mayCompute: true });
 	assert.equal(decision.action.type, "start-computing");
-	rt.onSessionReset(); // generation bumps — the in-flight compute is stale
-	rt.onComputeSucceeded(snapshot(0)); // old generation
+	rt.onSessionReset();
+	rt.onComputeSucceeded(snapshot(0));
 	assert.equal(rt.state.phase, "idle");
 	assert.equal(rt.snapshot, null);
 });
@@ -153,7 +138,6 @@ test("SUM-05: compute failure refuses with cooldown + telemetry; repeated refusa
 	assert.equal(rt.state.phase, "refused");
 	assert.equal(emitted[0].outcome, "refused");
 	assert.equal(rt.degraded, false);
-	// Second refusal crosses degradeAfterRefusals=2.
 	rt.state = { ...rt.state, phase: "computing" };
 	rt.onComputeFailed("validation");
 	assert.equal(rt.degraded, true);
@@ -178,8 +162,6 @@ test("ST-05 degrade is sticky across boundaries until reset", () => {
 	assert.equal(rt.degraded, false);
 });
 
-// Seam-level wiring sanity for the notify callbacks used above (SM-02
-// mechanics already covered in test/lib/compaction-seam.test.ts).
 test("runtime notify callbacks route through the real seam when wired", () => {
 	resetCompactionSeam();
 	const seen: string[] = [];
@@ -188,9 +170,7 @@ test("runtime notify callbacks route through the real seam when wired", () => {
 		after: () => seen.push("after"),
 	});
 	const { rt } = runtime({
-		// Reuse the class with the REAL seam functions:
 	});
-	// Rebuild with seam functions:
 	const rt2 = new SessionRuntime({
 		settings: { ...DEFAULT_COMPACTION_CORE_SETTINGS },
 		emitTelemetry: () => {},
@@ -206,11 +186,8 @@ test("runtime notify callbacks route through the real seam when wired", () => {
 
 test("A2 rework R4: onServed — from ready → idle + served telemetry; non-ready phase unchanged", () => {
 	const mk = () => runtime();
-	// non-ready: served is a no-op on the phase — start from computing AND
-	// proposed (idle would not distinguish the old unconditional impl)
 	for (const phase of ["computing", "proposed"] as const) {
 		const { rt } = mk();
-		// drive to proposed (which passes through computing) or stop at computing
 		const d = rt.onBoundary({ type: "boundary", P: 0.7, applySafe: true, isApplyPoint: false, prechecksPassed: true, feasibility: { feasible: true, effectiveSummaryTokens: 12000, expectedGrowth: 3000, tailMax: 9000000, neededTn: 107000 }, mayCompute: true });
 		assert.equal(d.action.type, "start-computing");
 		if (phase === "proposed") {
@@ -221,7 +198,6 @@ test("A2 rework R4: onServed — from ready → idle + served telemetry; non-rea
 		rt.onServed();
 		assert.equal(rt.state.phase, phase, `served must not move a ${phase} phase`);
 	}
-	// ready → idle via the policy served event + snapshot cleared + telemetry
 	{
 		const { rt, emitted } = mk();
 		driveToReady(rt);
@@ -236,27 +212,26 @@ test("A2 rework R4: onServed — from ready → idle + served telemetry; non-rea
 
 test("A3 rework R3: onOverridden — telemetry every occurrence, degrade at OVERRIDE_DEGRADE_AFTER, phase back to ready, reset clears", () => {
 	const { rt, emitted } = runtime();
-	driveToProposed(rt, "ov-1"); // D7.2: only a live proposal can be overridden
+	driveToProposed(rt, "ov-1");
 	rt.onOverridden({ summaryChars: 900 });
-	assert.equal(rt.state.phase, "ready"); // BLK-2(a): back to ready, fresh nonce slot
-	assert.equal(rt.degraded, false); // 1 < 2
+	assert.equal(rt.state.phase, "ready");
+	assert.equal(rt.degraded, false);
 	assert.ok(emitted.some((e) => e.outcome === "discarded" && e.reason === "overridden" && e.origin === "precompute"));
-	// back to proposed from ready (snapshot survived the override)
 	const again = rt.onBoundary({ type: "boundary", P: 0.8, applySafe: true, isApplyPoint: true, prechecksPassed: true, feasibility: { feasible: true, effectiveSummaryTokens: 12000, expectedGrowth: 3000, tailMax: 9000000, neededTn: 107000 }, mayCompute: true, proposalNonce: "ov-2" });
 	assert.equal(again.action.type, "propose");
 	rt.onProposed({ midRun: false, summaryChars: 800 });
 	rt.onOverridden({ summaryChars: 800, estPostTokens: 1200 });
-	assert.equal(rt.degraded, true); // 2 >= 2 — degraded
-	assert.equal(emitted.filter((e) => e.reason === "overridden").length, 2); // APP-08: EVERY occurrence writes telemetry
+	assert.equal(rt.degraded, true);
+	assert.equal(emitted.filter((e) => e.reason === "overridden").length, 2);
 	rt.onSessionReset();
-	assert.equal(rt.degraded, false); // counters cleared
+	assert.equal(rt.degraded, false);
 });
 
 test("A3/R5: conflictEditTotal reset leak — 1 + reset + 1 does NOT degrade (cross-session leak fixed)", () => {
 	const { rt } = runtime();
-	rt.noteConflictEdits(1); // session A: 1/2
+	rt.noteConflictEdits(1);
 	rt.onSessionReset();
-	rt.noteConflictEdits(1); // session B: fresh counter — must NOT reach 2
+	rt.noteConflictEdits(1);
 	assert.equal(rt.degraded, false);
 });
 
@@ -268,7 +243,7 @@ test("B5 (2026-11-10 review): infeasible / apply-error / fellthrough telemetry (
 	rt.onApplyError();
 	rt.onFellthrough("deadline");
 	rt.onFellthrough("aborted");
-	assert.equal(rt.state.phase, phaseBefore); // telemetry-only
+	assert.equal(rt.state.phase, phaseBefore);
 	const outcomes = emitted.map((e) => `${e.outcome}:${e.reason}`);
 	assert.ok(outcomes.includes("infeasible:pol-09:needTn=123456"));
 	assert.ok(outcomes.includes("infeasible:pol-09"));
@@ -291,8 +266,6 @@ test("D7.2 (2026-11-10 review D): onOverridden outside phase proposed → no tel
 });
 
 test("D3 (2026-11-10 review D): computing + onComputeFailed(\"no-threshold\") leaves computing (refused + cooldown)", () => {
-	// index.ts#launchCompute now calls onComputeFailed("no-threshold") when
-	// thresholdOf() yields tn === null instead of returning silently.
 	const { rt, emitted } = runtime();
 	const d = rt.onBoundary({ type: "boundary", P: 0.7, applySafe: true, isApplyPoint: false, prechecksPassed: true, feasibility: { feasible: true, effectiveSummaryTokens: 1, expectedGrowth: 1, tailMax: 1e9, neededTn: 1 }, mayCompute: true });
 	assert.equal(d.action.type, "start-computing");

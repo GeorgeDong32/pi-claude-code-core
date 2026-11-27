@@ -38,8 +38,7 @@ describe("pi-compat probes (SPEC CMP)", () => {
 			mutationQueue: undefined,
 		});
 		expect(noQueue.mutationQueue).toBe(false);
-		// B4: mutationQueue is diagnostics-only (FUS-03: the official queue
-		// deadlocks as the outer layer, so it gates nothing) — never a problem.
+		// pi's official mutationQueue deadlocks as the outer layer, so core treats it as diagnostics-only
 		expect(noQueue.problems).toEqual([]);
 
 		const brokenFactory = probePiCompat({
@@ -54,7 +53,7 @@ describe("pi-compat probes (SPEC CMP)", () => {
 		const compat = probePiCompat({ version: "0.87.1" });
 		expect(compat.versionOk).toBe(true);
 		expect(compat.problems).toEqual([]);
-		expect(compat.toolFactories).toBe(false); // recorded as a fact, not a problem
+		expect(compat.toolFactories).toBe(false);
 	});
 
 	it("degradeEconomyModule warns once, publishes the footer, signals stop (B4)", () => {
@@ -70,7 +69,6 @@ describe("pi-compat probes (SPEC CMP)", () => {
 		expect(healthy).toBe(false);
 		expect(notified).toEqual(["[action-fusion] disabled: pi 0.85.0 < 0.87.0"]);
 		expect(footers).toEqual(["action-fusion requires pi >=0.87.0"]);
-		// healthy compat passes through untouched
 		const ok = probePiCompat({ version: "0.87.1" });
 		expect(degradeEconomyModule({ compat: ok, label: "x", publish: () => {} })).toBe(true);
 	});

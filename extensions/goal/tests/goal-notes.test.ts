@@ -1,11 +1,3 @@
-/*
- * goal-notes.test.ts — /goal-resume trailing note (one-shot resume note) +
- * /goal-note standing note (goal-notes, 2026-10-02 user request, no spec).
- *
- * The wiring in goal.ts is thin (stage → promptFor carries → sendFollowUp
- * consumes); the semantic contract lives here at the pure seams:
- * record round-trip + prompt injection.
- */
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -56,7 +48,6 @@ test("continuationPrompt: carries userNote + resumeNote only when present", () =
 	const both = continuationPrompt(goal({ userNote: "note A" }), "note R");
 	assert.match(both, /<user_note>\nnote A/);
 	assert.match(both, /<resume_note>\nnote R/);
-	// the resume note rides the objective block region, before the audit guidance
 	assert.ok(both.indexOf("<resume_note>") < both.indexOf("completion audit"));
 });
 
@@ -65,7 +56,6 @@ test("goalPrompt: standing note rides the initial goal prompt", () => {
 	assert.match(goalPrompt(goal({ userNote: "note A" })), /<user_note>\nnote A/);
 });
 
-/* ── pause/abort/clear trailing notes (goal-notes batch 2) ── */
 import { pauseReasonLabel } from "../goal-core.ts";
 
 test("pauseReasonLabel: user-prefixed vs agent reasons", () => {

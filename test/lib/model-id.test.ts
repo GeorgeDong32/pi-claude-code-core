@@ -1,14 +1,6 @@
-/**
- * P0-LB-02 / P0-LB-04 — lib/model-id.ts unit tests.
- * The equivalence table mirrors pm 2.8.0 profiles.ts parseModelId outputs
- * (field-name mapping: model→modelId, thinkingLevel→effort). The retired
- * package moved to ../archive/repos (2026-09-30); its frozen outputs are
- * encoded as explicit goldens below.
- */
 import { describe, expect, it } from "vitest";
 import { modelIdentityKey, parseModelId } from "../../lib/model-id.ts";
 
-/** Frozen pm 2.8.0 outputs (null where the old parser returned null). */
 const PM_GOLDENS: Record<string, null | { provider: string; model: string; thinkingLevel?: string }> = {
 	"anthropic/claude-opus-4": { provider: "anthropic", model: "claude-opus-4" },
 	"anthropic/claude-opus-4:high": { provider: "anthropic", model: "claude-opus-4", thinkingLevel: "high" },
@@ -81,10 +73,6 @@ describe("P0-LB-02 parseModelId boundaries", () => {
 	});
 });
 
-// S6 (spec 2026-11-15-cleanup-hardening): the shared model-identity key —
-// the provider+id pair the host's modelsAreEqual compares. Consumers:
-// extensions/effort (FX-2 switch detection) and modes/profile-apply (BH-E4
-// same-model skip).
 describe("S6 modelIdentityKey", () => {
 	it("joins provider and id with the NUL separator", () => {
 		expect(modelIdentityKey({ provider: "anthropic", id: "claude-opus-4" })).toBe(
@@ -108,7 +96,6 @@ describe("S6 modelIdentityKey", () => {
 		expect(modelIdentityKey({ provider: "a", id: "m" })).not.toBe(
 			modelIdentityKey({ provider: "b", id: "m" }),
 		);
-		// profile-apply's parsed-fields shape vs the live model object
 		expect(
 			modelIdentityKey({ provider: "a", id: "m" }),
 		).toBe(modelIdentityKey({ provider: "a", id: "m" }));

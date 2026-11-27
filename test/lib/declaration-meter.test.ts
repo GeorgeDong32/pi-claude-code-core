@@ -1,9 +1,3 @@
-/**
- * B4 (cherry-batch3 spec) declaration meter + /core exposure tests.
- * Fixtures are SELF-MADE with statically expected byte lengths (the recon
- * numbers belong to the recon report only); MCP names use the as-declared
- * `mcp__<server>__<tool>` form.
- */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,8 +6,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createDeclarationMeter } from "../../extensions/mcp-gov/declaration-meter.ts";
 
 afterEach(() => {
-	// restore the test HOME seam (code-review R1 P2: the old version deleted
-	// a variable nothing ever set and leaked PI_B4_TEST_HOME across files)
 	delete process.env.PI_B4_TEST_HOME;
 });
 
@@ -99,8 +91,8 @@ describe("B4-F2 /core exposure wiring (switchExposure behavior via module import
 			expect(result).toMatch(/reload|restart/);
 			const after = JSON.parse(readFileSync(globalPath, "utf8"));
 			expect(after.mcpServers.exa.exposure).toBe("codemode");
-			expect(after.mcpServers.other.env.TOKEN).toBe("secret"); // unrelated server verbatim
-			expect(after.topLevelUnknown).toEqual({ keep: true }); // unknown top-level key survives
+			expect(after.mcpServers.other.env.TOKEN).toBe("secret");
+			expect(after.topLevelUnknown).toEqual({ keep: true });
 			expect(readdirSync(join(home, ".pi", "agent")).filter((f) => f.includes(".tmp"))).toEqual([]);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
@@ -124,22 +116,18 @@ describe("B4-F2 /core exposure wiring (switchExposure behavior via module import
 			mkdirSync(projDir, { recursive: true });
 			const ctx = { cwd: projDir } as never;
 
-			// bad tier
 			const badTier = switchExposure(["exposure", "exa", "bogus"], ctx);
 			expect(badTier).toContain("unknown tier");
 			expect(readFileSync(globalPath, "utf8")).toBe(original);
-			// unknown server
 			const badServer = switchExposure(["exposure", "nope", "codemode"], ctx);
 			expect(badServer).toContain("not found");
 			expect(readFileSync(globalPath, "utf8")).toBe(original);
 
-			// alias normalizes to codemode and lands on disk as "codemode"
 			const aliased = switchExposure(["exposure", "exa", "codemode-deferred"], ctx);
 			expect(aliased).toContain("codemode");
 			const afterAlias = JSON.parse(readFileSync(globalPath, "utf8"));
 			expect(afterAlias.mcpServers.exa.exposure).toBe("codemode");
 
-			// project-level override refuses to write the global file
 			writeFileSync(globalPath, original);
 			mkdirSync(join(projDir, ".pi"), { recursive: true });
 			writeFileSync(
@@ -161,11 +149,9 @@ describe("B4-F2 /core exposure wiring (switchExposure behavior via module import
 			const agentDir = join(dir, "home", ".pi", "agent");
 			mkdirSync(agentDir, { recursive: true });
 			process.env.PI_B4_TEST_HOME = join(dir, "home");
-			// missing
 			const missing = switchExposure(["exposure", "exa", "codemode"], { cwd: dir } as never);
 			expect(missing).toContain("not found");
 			expect(existsSync(join(agentDir, "mcp.json"))).toBe(false);
-			// malformed
 			writeFileSync(join(agentDir, "mcp.json"), "{not json");
 			const malformed = switchExposure(["exposure", "exa", "codemode"], { cwd: dir } as never);
 			expect(malformed).toContain("not found");

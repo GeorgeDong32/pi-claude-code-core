@@ -153,7 +153,6 @@ describe("permission-forwarding", () => {
 			timeoutMs: 150,
 			pollIntervalMs: 20,
 		});
-		// Later legitimate response after forged one was discarded
 		setTimeout(() => {
 			void writeForwardedResponse(agentDir, "parent-forge", {
 				id,
@@ -403,8 +402,6 @@ describe("permission-forwarding", () => {
 });
 
 
-// ---- mtime short-circuit (plan2 A1d) --------------------------------------
-
 describe("forwarding poller: mtime short-circuit", () => {
 	it("empty untouched dir ticks cost zero full scans; a new request bumps mtime and scans", async () => {
 		const agentDir = mkdtempSync(join(tmpdir(), "pm-fwd-a1d-"));
@@ -417,12 +414,9 @@ describe("forwarding poller: mtime short-circuit", () => {
 			pollIntervalMs: 5,
 		});
 		poller.start();
-		// settle: first tick performs one full scan of the (empty) dir
 		await vi.waitFor(() => expect(poller.scanCount).toBe(1), { timeout: 1000, interval: 5 });
-		// untouched dir: many ticks, still one full scan (mtime short-circuit)
 		await new Promise((r) => setTimeout(r, 120));
 		expect(poller.scanCount).toBe(1);
-		// a request lands (atomic rename bumps dir mtime): next tick scans
 		const { id } = await writeForwardedRequest({
 			agentDir,
 			targetSessionId: "parent-a1d",

@@ -1,24 +1,3 @@
-/**
- * FX-3 (SPEC 2026-11-14-followup-small-fixes) — the hand-written-index bypass.
- *
- * Writer-side evidence already pinned elsewhere: writer.ts caps the
- * generated index at MEMORY_INDEX_MAX (memory-writer.test.ts), injection
- * clamps per lane (memory-v2-storage lane-budget test, synthetic entries),
- * and the auto-trigger test exercises the COUNT threshold (205 files).
- * None of them covers the residual risk: the model "consolidates" by
- * directly editing MEMORY.md, bypassing the writer entirely.
- *
- * This file drives the REAL hook chain against a >25K hand-written
- * MEMORY.md (mtime newest, dir cache hot — the mid-session bypass state)
- * and pins three properties:
- *   ① injection stays ≤ the lane budget — the index derives from the .md
- *     files only (memdir.isMemoryFile excludes MEMORY.md), the giant
- *     on-disk index never leaks into the prompt;
- *   ② layerStats reads the RAW on-disk bytes → needsConsolidation returns
- *     "index N/25000 bytes" (not a synthetic LayerStats — the real file);
- *   ③ turn_end stays silent (consolidation is manual-only); the
- *     /memory-consolidate directive carries that same over-budget reason.
- */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -52,14 +31,11 @@ function put(d: string, file: string, title: string, description = "d"): void {
 	invalidateMemDirCache(d);
 }
 
-/** The bypass: a direct MEMORY.md write with no writer involvement —
- * >MEMORY_INDEX_MAX bytes, a unique leak-marker, no writer WARNING line.
- * Returns the exact byte length for the ②/③ assertions. */
 function handWriteGiantIndex(d: string): number {
 	mkdirSync(d, { recursive: true });
 	const row = "- [bypass-row](bypass.md) — BYPASS-MARKER filler row padding the index past the lane budget ........\n";
 	const body = `# Project memory index (hand-edited)\n\n${row.repeat(320)}`;
-	writeFileSync(join(d, "MEMORY.md"), body); // raw writeFileSync — deliberately NOT writeDocument/reindex
+	writeFileSync(join(d, "MEMORY.md"), body);
 	return Buffer.byteLength(body, "utf8");
 }
 
@@ -89,15 +65,10 @@ describe("FX-3 — MEMORY.md hand-edit bypass (>25K, writer skipped)", () => {
 		put(dir, "beta.md", "beta", "beta fact");
 		const host = setup();
 		const ctx = host.makeCtx({ cwd: project, ui: true });
-		// session start reconciles both layers (writer writes the derived index,
-		// dir cache goes hot) — the state the mid-session bypass starts from
 		await host.fire("session_start", {}, ctx);
-		// the model edits MEMORY.md directly, bypassing the writer
 		const bypassBytes = handWriteGiantIndex(dir);
 		expect(bypassBytes).toBeGreaterThan(MEMORY_INDEX_MAX);
 
-		// ① injection: index sections stay within the lane; the giant
-		// on-disk index (and its marker) never leaks into the prompt
 		const handler = host.handlers.get("before_agent_start")![0] as (e: unknown, c: unknown) => Promise<{ systemPrompt?: string }>;
 		const r = (await handler({ systemPrompt: "BASE" }, ctx))!;
 		expect(r.systemPrompt).toBeDefined();
@@ -105,16 +76,13 @@ describe("FX-3 — MEMORY.md hand-edit bypass (>25K, writer skipped)", () => {
 		const indexPart = r.systemPrompt!.slice(r.systemPrompt!.indexOf("Project memory index"));
 		expect(Buffer.byteLength(indexPart, "utf8")).toBeLessThanOrEqual(MEMORY_INDEX_MAX);
 		expect(indexPart).toContain("- alpha — ");
-		expect(r.systemPrompt).not.toContain("- user-pref — "); // user layer retired
+		expect(r.systemPrompt).not.toContain("- user-pref — ");
 
-		// ② the trigger probe reads the RAW on-disk index bytes
 		const stats = layerStats(dir);
-		expect(stats.indexBytes).toBe(bypassBytes); // still the hand-written size — nothing repaired it mid-session
+		expect(stats.indexBytes).toBe(bypassBytes);
 		const reason = needsConsolidation(stats, MEMORY_INDEX_MAX);
 		expect(reason).toBe(`index ${bypassBytes}/${MEMORY_INDEX_MAX} bytes`);
 
-		// ③ consolidation is manual-only: turn_end never sends; the command
-		// sends ONE directive carrying the same over-budget reason
 		await host.fire("turn_end", { turnIndex: 0, message: { role: "assistant" }, toolResults: [] }, ctx);
 		expect(host.sentMessages.length).toBe(0);
 		await host.commands.get("memory-consolidate")?.("", ctx);

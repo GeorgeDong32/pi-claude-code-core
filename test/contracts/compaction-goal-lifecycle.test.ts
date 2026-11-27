@@ -1,8 +1,3 @@
-/**
- * SM-03 / APP-05: boundary compaction must neither lose goal continuation
- * nor add a checkpoint. Real AgentSession, goal and controller; only summary
- * generation is stubbed. Stop each fixture at its first checkpoint response.
- */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai";
 import type { AgentBeforeSettleEvent, ExtensionError, TurnEndEvent } from "@earendil-works/pi-coding-agent";
@@ -25,14 +20,6 @@ vi.mock("../../extensions/compaction/summarizer.ts", async (original) => ({
 	},
 }));
 
-// T_n=18K: prime near 10K (precompute), target near 12K (apply), below native.
-// The controller thresholds are ratios of the request size, so the first prompt
-// is tuned per goal state to land the next request on the apply threshold:
-// the session's system message differs by state (active goal block + goal
-// tools vs none). Recalibrated for the goal tools diet v2 (the lifecycle tools
-// left the declared list: about -3.4K chars with an active goal, -1.5K without).
-// If a prompt diet moves the boundary again, these three numbers are the place
-// to look before suspecting the controller.
 const FIRST_PROMPT_CHARS: Record<GoalState, number> = { active: 27_400, autoContinueOff: 27_400, complete: 28_500, none: 30_000 };
 const SETTINGS = {
 	mode: "on", targetPostRatio: 0.25, precomputeRatio: 0.45, applyRatio: 0.6,
@@ -77,7 +64,6 @@ async function runGoal(path: Path, state: GoalState = "active") {
 		probe: { registerTestTool: true },
 		extraFactories: [(pi) => {
 			pi.on("session_start", (_event, ctx) => {
-				// Suppress startup continuation; enable it only for the target run.
 				if (state !== "none") writeActiveGoalFile(ctx, createGoal({
 					objective: "=== Goal ===\nObjective: finite compaction review",
 					autoContinue: false, sisyphus: true,
@@ -86,7 +72,7 @@ async function runGoal(path: Path, state: GoalState = "active") {
 			pi.on("before_agent_start", (_event, ctx) => {
 				if (!target) return;
 				runs++;
-				if (runs > 2) ctx.abort(); // Hard bound even if continuation regresses.
+				if (runs > 2) ctx.abort();
 				if (runs > 1) {
 					const goal = readActiveGoalFiles(ctx)[0];
 					if (goal) writeActiveGoalFile(ctx, { ...goal, autoContinue: false });
@@ -108,7 +94,6 @@ async function runGoal(path: Path, state: GoalState = "active") {
 				if (path === "overridden" && proposals.length === 1) return { entries: [] };
 			};
 			pi.on("turn_end", async (event) => {
-				// Finish compute after this apply point, making before_settle win.
 				if (target && path === "beforeSettle") releaseSummary();
 				await Promise.resolve();
 				return observeProposal(event);
@@ -116,7 +101,7 @@ async function runGoal(path: Path, state: GoalState = "active") {
 			pi.on("agent_before_settle", observeProposal);
 			pi.on("agent_end", async () => {
 				if (target && path === "stop" && state === "active" && runs === 1) {
-					await sleep(90); // Exercise the goal timer's busy retry.
+					await sleep(90);
 					slowEndCheckpoints = timeline.filter((event) => event === "checkpoint").length;
 				}
 			});
@@ -154,7 +139,7 @@ async function runGoal(path: Path, state: GoalState = "active") {
 		}));
 		await host.session.prompt("t".repeat(6000));
 		await vi.waitFor(() => expect(settled).toBe(state === "active" ? 2 : 1), { timeout: 2000, interval: 10 });
-		await sleep(120); // More than two idle retries: no delayed surplus checkpoint.
+		await sleep(120);
 		const branch = host.sessionManager.getBranch();
 		const committedIds = branch.filter((entry) => entry.type === "compaction").map((entry) => entry.id);
 		const checkpoints = branch.filter((entry) => entry.type === "custom_message"

@@ -1,7 +1,3 @@
-/**
- * test/lib/truncation-verdict.test.ts — [cherry-batch1 B1-1/B1-2] the dual
- * verdict table + the recovery-policy copy (spec §B1 test matrix).
- */
 import { describe, expect, it } from "vitest";
 
 import { boundedRecoveryPolicy, classifyLengthStop } from "../../lib/truncation-verdict.ts";
@@ -45,7 +41,7 @@ describe("boundedRecoveryPolicy (B1-2)", () => {
 	it("context-clamp → guidance copy with the maxTokens hedge", () => {
 		const p = boundedRecoveryPolicy("context-clamp");
 		expect(p.userNotice).toMatch(/context/);
-		expect(p.userNotice).toMatch(/maxTokens/); // the hedge for mis-verdicts
+		expect(p.userNotice).toMatch(/maxTokens/);
 		expect(p.isQuota).toBe(false);
 	});
 
