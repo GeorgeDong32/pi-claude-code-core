@@ -140,8 +140,11 @@ prompt path).
   through it, not keep their own grant state.
 - The effort side-effect of mode profiles goes through `lib/effort-owner.ts`
   (never `pi.setThinkingLevel` directly).
-- `PERMISSION_MODES_INHERITED_MODE` is consumed here, produced by
-  pi-subagents — do not write it from core. It is honored only together with
+- `PERMISSION_MODES_INHERITED_MODE` is produced and consumed by core, not by
+  pi-subagents: the parent publishes the current mode into its own process
+  environment (`publishInheritedPermissionMode` in `mode-inherit.ts`, called
+  from the profile apply paths), and child pi processes inherit it with the
+  environment. It is honored only in a subagent child, i.e. together with
   `PI_SUBAGENT_CHILD=1` (`applyInheritedModeForChild`), the same fail-closed
   rule as approval forwarding: an env var alone never grants a mode.
 - Legacy key writes (`writeLegacyAliases`) happen in the same synchronous

@@ -125,8 +125,7 @@ fail-closed,但 block reason 现在原样携带该 family 给出的建议 allow
   授权状态。
 - 模式 profile 触发的 effort 副作用走 `lib/effort-owner.ts`(绝不直接调
   `pi.setThinkingLevel`)。
-- `PERMISSION_MODES_INHERITED_MODE` 此处只消费,由 pi-subagents 生产——
-  core 不得写入。
+- `PERMISSION_MODES_INHERITED_MODE` 由 core 自己生产和消费,不是 pi-subagents:父进程把当前模式写进自己的进程环境(`mode-inherit.ts` 的 `publishInheritedPermissionMode`,profile 应用路径调用),子 pi 进程随环境继承。
   仅当 `PI_SUBAGENT_CHILD=1` 同设时才生效(`applyInheritedModeForChild`),与审批转发同一条 fail-closed 规则:单独的 env 不授予任何模式。
 - legacy 键写入(`writeLegacyAliases`)与总线发布在同一同步批次内完成。
 
