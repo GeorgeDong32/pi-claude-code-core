@@ -23,6 +23,8 @@
 - **命令**:`/core` 面板。
 - **env**:`PI_CORE_MCP_DIRECT_SERVERS` —— 允许认领裸工具名的 server id
   逗号列表(如 `exa`);native `mcp__…` 命名始终可用。
+- **env(测试接缝)**:`PI_B4_TEST_HOME` —— 覆盖 `/core exposure` 写入用的
+  home 目录(仅测试)。
 - **特异度阶梯**:精确规则 > server 前缀 > 裸 `mcp_*`(S5)。
 
 ## 不变量与坑

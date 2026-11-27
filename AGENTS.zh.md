@@ -8,8 +8,8 @@
 `@georgedong32/pi-claude-code-core` —— [pi coding agent](https://github.com/earendil-works/pi-coding-agent)
 的统一核心扩展包。一个 npm 包,经单一扩展入口(`extensions/index.ts`)装配
 **十四个模块**:权限模式、effort、goal、review、rules、memory、mcp-gov、
-web-gov、action-fusion、observation-pack、bg-shell、能力总线
-(capability bus)、智能压缩控制器(compaction)与 UI 适配层。
+web-gov、action-fusion、observation-pack、bg-shell、能力总线、智能压缩控制器
+(compaction)与 UI 适配层。
 
 pi 对每个 manifest 条目只加载一个工厂(见 `package.json` 的 `pi` 字段):
 `extensions/index.ts` 的默认导出按固定顺序依次调用各模块工厂,共享同一个
@@ -17,45 +17,21 @@ pi 对每个 manifest 条目只加载一个工厂(见 `package.json` 的 `pi` �
 
 ## 常用命令
 
-| 命令 | 作用 |
-|---|---|
-| `pnpm install` | 安装依赖(pnpm 是本仓库的包管理器) |
-| `pnpm run check` | 统一 tsc 门:两遍——主工程(`tsconfig.json`)+ 契约工程(`tsconfig.contracts.json`)。必须 exit 0。 |
-| `pnpm run test` | 单元测试,**按框架分流**:vitest 跑 `test/lib/` + `extensions/modes/`(就近摆放),node:test(经 tsx)跑 `extensions/{effort,goal,review,action-fusion,observation-pack,compaction}/tests/` |
-| `pnpm run contracts` | 跨包契约套件(`test/contracts/`,独立 vitest config)。钉住 globalThis 键、env 变量、status 槽、session entry 类型、磁盘布局。 |
-| `pnpm exec vitest run test/lib/upgrade-canary.test.ts --config vitest.config.ts` | 升级金丝雀——升 Pi 前先跑（ObservationPack 占位符 + then_run 融合识别） |
+- `pnpm install` —— 安装依赖(pnpm 是本仓库的包管理器)。
+- `pnpm run check` —— lint + 两遍 tsc(主工程与契约工程)。
+- `pnpm run test` —— 单元测试,按框架分流:vitest 跑 `test/lib/` 与 `extensions/modes/`(就近摆放),node:test(经 tsx)跑 `extensions/{effort,goal,review,action-fusion,observation-pack,bg-shell,compaction}/tests/`。
+- `pnpm run contracts` —— 跨包契约套件(`test/contracts/`)。
 
-三项全绿才算完成。测试一律走 script 入口(`scripts/run-tests.mjs`、
-`scripts/check.mjs`),不要直接调 vitest/tsc。
+**三项门禁全绿(exit 0)才算完成。** 测试一律走 script 入口(`scripts/run-tests.mjs`、
+`scripts/check.mjs`),不要直接调 vitest/tsc。升 Pi 之前先跑升级金丝雀:
+`pnpm exec vitest run test/lib/upgrade-canary.test.ts --config vitest.config.ts`。
 
 ## 仓库布局
 
-```
-extensions/
-  index.ts           # 装配入口 —— 按序排列的模块工厂流水线
-  bus.ts             # 能力总线(globalThis.__piClaudeCodeCore)
-  modes/             # 权限模式:ask/plan/auto/bypass(P1)
-  effort/            # 思考档位控制:/effort /fast、alt+t(P1)
-  goal/              # goal 生命周期 + sisyphus 循环(P2,fork 自 capyup/pi-goal)
-  review/            # 扇出代码评审:/review(P2)
-  rules/             # 规则注入:/rules(P3)
-  memory/            # 双层记忆 + 回溯(P3)
-  web-gov/           # webfetch(domain:host) 规则族(P4)
-  mcp-gov/           # MCP 规则族 + broker 镜像 + /core 面板(P4)
-  action-fusion/     # write/edit + then_run 融合(economy,移植自 SoL-Pi)
-  observation-pack/  # 大工具结果投影 + obs_recall(economy)
-  compaction/        # 智能压缩控制器:后台预压 + 边界 draft 提议 + 台账(SC)
-  ui/                # 呈现适配层:cctui 优先 + core 兜底
-lib/                 # 共享原语 —— 禁止反向依赖 extensions/
-test/lib/            # lib 与跨模块接线的 vitest 套件
-test/contracts/      # 契约套件(见 test/contracts/README.md 契约表)
-test/spikes/         # 一次性探针
-types/               # 发布的 `./types` 子路径(纯类型:手工维护 .d.mts;运行时 reader 已按 D4=B 撤除)
-scripts/             # check.mjs(tsc 门)、run-tests.mjs(按框架测试入口)
-docs/                # 架构文档(en/ + zh/ 双语分文件)
-```
-
-各模块详见 [docs/zh/](docs/zh) —— 从 [docs/zh/architecture.md](docs/zh/architecture.md) 开始。
+`extensions/` 下每个模块一个目录,装配顺序见 `extensions/index.ts`。共享原语在
+`lib/`,vitest 套件在 `test/lib/`,契约套件在 `test/contracts/`(其 `README.md`
+即契约表),发布的类型在 `types/`,各模块架构文档在 `docs/en/` 与 `docs/zh/`。
+从 [docs/zh/architecture.md](docs/zh/architecture.md) 开始。
 
 ## 硬性不变量(不得破坏)
 
@@ -75,7 +51,9 @@ docs/                # 架构文档(en/ + zh/ 双语分文件)
 4. **规则族接缝**:治理类规则族经 `modes/rule-families.ts` 的
    `registerRuleFamily` 注册。web-gov 在装配顺序上先于 mcp-gov,URL 类调用
    优先命中域名规则。`mcp-gov/family.ts#canonicalizeMcpTool` 是「是否为
-   MCP 形态工具」的唯一权威——复用它,不要重新实现。
+   MCP 形态工具」的唯一权威——复用它,不要重新实现。其纯形态核心在
+   `lib/mcp-shape.ts`,与 modes 的 plan 门禁共用(arch B1);用权威函数或
+   lib 核心,不要再写第二份形态测试。
 5. **上下文预算**(`lib/context-budget.ts`):rules 40K / memory index 25K /
    dynamic steer 8K 字符。生产方必须按此钳制。
 6. **契约套件规程**:任何跨包表面变更,先在 `test/contracts/README.md`
@@ -105,34 +83,12 @@ docs/                # 架构文档(en/ + zh/ 双语分文件)
   `DEVIATIONS.md`——它是唯一台账。各模块实施状态见 `PROGRESS.md`。
 - **Changelog**:用户可见的变更在 `CHANGELOG.md` 对应版本段下补条目。
 
-## 关键环境变量(core 消费)
+## 参考
 
-| 变量 | 模块 | 作用 |
-|---|---|---|
-| `PI_CORE_EFFORT` | effort | 思考档位硬钉;置位期间显式写入被拒绝 |
-| `PI_CORE_COMPACTION` | compaction | 控制器模式覆盖:`off` \| `shadow` \| `on`(SC ST-03;优先于 core-compaction.json) |
-| `PI_CORE_BASH_PATH_CHECKS` | modes | W3/W4/P0-1/P1-4 bash 路径检查开关:`all`(默认)\|`safety`(W3 弹窗+allow 收紧+保护路径弹窗)\|`deny`(仅 W4)\|`off`;覆盖 `bashPathChecks` 配置键,免 `/reload` 生效(env 仅对新进程生效) |
-| `PI_CORE_MCP_DIRECT_SERVERS` | mcp-gov | 允许认领裸工具名的 server id(如 `exa`) |
-| `PERMISSION_MODES_INHERITED_MODE` | modes | 子代理模式继承(pi-subagents 生产,此处只消费;须与 `PI_SUBAGENT_CHILD=1` 同设才生效) |
-| `PERMISSION_MODES_CLASSIFIER_DEBUG` | modes | auto 模式分类器调试日志 |
-| `PI_GOAL_AUTO_CONFIRM` | goal | 自动确认 goal 提案 |
-
+core 消费的环境变量与写盘文件按模块记在 `docs/en/`(各模块文档列自己的;磁盘
+布局由契约套件钉住,P0-CT-09——这些路径视为冻结)。一条容易漏的规则:
+`PERMISSION_MODES_INHERITED_MODE` 须与 `PI_SUBAGENT_CHILD=1` 同设才生效。
 `PI_SUBAGENT_*` 系列由 pi-subagents 生产;core 只读取。
-
-## 磁盘落点
-
-| 路径 | 归属 |
-|---|---|
-| `~/.pi/agent/permission-modes.json` | modes 权限 |
-| `~/.pi/agent/core-economy.json` | economy 开关(`actionFusion` / `observationPack`) |
-| `~/.pi/agent/pi-core-web.json` | web-gov 预批准域名覆盖 |
-| `~/.pi/agent/sessions/permission-modes-forwarding/sessions/<id>/` | 审批转发(pm ↔ pi-subagents) |
-| `<cwd>/.pi/goals/` | goal 状态 |
-| `~/.pi/agent/pi-review.json`(配置) + `<cwd>/.pi/pi-review/runs/<runId>/` | review |
-| `<sessionDir>/observation-pack/<sessionId>/` | observation-pack 原文 |
-| `~/.pi/agent/core-compaction.json` | 压缩控制器设置(SC ST-02) |
-
-以上路径由契约套件钉住(P0-CT-09)——视为冻结。
 
 ## 遇到阻塞时
 

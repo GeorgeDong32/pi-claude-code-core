@@ -26,6 +26,8 @@ Three duties, assembled in `index.ts`:
 - **Command**: `/core` panel.
 - **Env**: `PI_CORE_MCP_DIRECT_SERVERS` — comma-separated server ids allowed
   to claim bare tool names (e.g. `exa`); native `mcp__…` naming always works.
+- **Env (test seam)**: `PI_B4_TEST_HOME` — overrides the home dir for
+  `/core exposure` writes (tests only).
 - **Specificity ladder**: exact rule > server prefix > bare `mcp_*` (S5).
 
 ## Invariants & gotchas

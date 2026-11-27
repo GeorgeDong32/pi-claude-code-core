@@ -9,8 +9,8 @@
 [pi coding agent](https://github.com/earendil-works/pi-coding-agent). One npm
 package that assembles **fourteen modules** behind a single extension entry
 (`extensions/index.ts`): permission modes, effort, goal, review, rules, memory,
-mcp-gov, web-gov, action-fusion, observation-pack, bg-shell, the capability bus, the
-compaction controller, and the UI adapter layer.
+mcp-gov, web-gov, action-fusion, observation-pack, bg-shell, the capability
+bus, the compaction controller, and the UI adapter layer.
 
 pi loads exactly one factory per manifest entry (see the `pi` field in
 `package.json`): the default export of `extensions/index.ts` invokes each
@@ -18,47 +18,23 @@ module factory in a fixed order with the same `ExtensionAPI` instance.
 
 ## Commands
 
-| Command | What it does |
-|---|---|
-| `pnpm install` | Install dependencies (pnpm is the package manager) |
-| `pnpm run check` | Unified tsc gate — two passes: main project (`tsconfig.json`) + contract suite (`tsconfig.contracts.json`). Must be exit 0. |
-| `pnpm run test` | Unit tests, **per-framework**: vitest for `test/lib/` + `extensions/modes/` (colocated), node:test via tsx for `extensions/{effort,goal,review,action-fusion,observation-pack,bg-shell,compaction}/tests/` |
-| `pnpm run contracts` | Cross-package contract suite (`test/contracts/`, own vitest config). Pins globalThis keys, env vars, status slots, session entry types, disk layout. |
-| `pnpm exec vitest run test/lib/upgrade-canary.test.ts --config vitest.config.ts` | 升级金丝雀——升 Pi 前先跑（ObservationPack 占位符 + then_run 融合识别） |
+- `pnpm install` — dependencies (pnpm is the package manager).
+- `pnpm run check` — lint plus two tsc passes (main project and the contract suite).
+- `pnpm run test` — unit tests, per framework: vitest for `test/lib/` and `extensions/modes/` (colocated), node:test via tsx for `extensions/{effort,goal,review,action-fusion,observation-pack,bg-shell,compaction}/tests/`.
+- `pnpm run contracts` — the cross-package contract suite (`test/contracts/`).
 
-All three must be green before a change is considered done. Tests are run via
-the script entries (`scripts/run-tests.mjs`, `scripts/check.mjs`), not by
-invoking vitest/tsc directly.
+**All three gates must be exit 0 before a change is considered done.** Run tests
+through the script entries (`scripts/run-tests.mjs`, `scripts/check.mjs`), never
+by invoking vitest/tsc directly. Before upgrading pi, run the upgrade canary:
+`pnpm exec vitest run test/lib/upgrade-canary.test.ts --config vitest.config.ts`.
 
-## Repository layout
+## Layout
 
-```
-extensions/
-  index.ts           # assembly entry — ordered module factory line
-  bus.ts             # capability bus (globalThis.__piClaudeCodeCore)
-  modes/             # permission modes: ask/plan/auto/bypass (P1)
-  effort/            # thinking-level control: /effort /fast, alt+t (P1)
-  goal/              # goal lifecycle + sisyphus loop (P2, fork of capyup/pi-goal)
-  review/            # fan-out code review: /review (P2)
-  rules/             # rules injection: /rules (P3)
-  memory/            # two-layer memory + recall (P3)
-  web-gov/           # webfetch(domain:host) rule family (P4)
-  mcp-gov/           # MCP rule family + broker mirror + /core panel (P4)
-  action-fusion/     # write/edit + then_run fusion (economy, ported from SoL-Pi)
-  observation-pack/  # large tool-result projection + obs_recall (economy)
-  bg-shell/          # background shell tasks + /tasks panel (vendored pi-bg-bash)
-  compaction/        # smart compaction controller: background precompute + boundary drafts (SC)
-  ui/                # presentation adapters: cctui primary + core fallback
-lib/                 # shared primitives — must NOT import from extensions/
-test/lib/            # vitest suites for lib/ and cross-module wiring
-test/contracts/      # contract suite (see test/contracts/README.md table)
-test/spikes/         # throwaway spikes
-types/               # published `./types` subpath (type-only: hand-maintained .d.mts; runtime reader withdrawn D4=B)
-scripts/             # check.mjs (tsc gate), run-tests.mjs (per-framework test entry)
-docs/                # architecture documentation (en/ + zh/)
-```
-
-Per-module docs live in [docs/en/](docs/en) / [docs/zh/](docs/zh) — start with
+One directory per module under `extensions/`, assembled in the order given by
+`extensions/index.ts`. Shared primitives live in `lib/`, vitest suites in
+`test/lib/`, the contract suite in `test/contracts/` (its `README.md` is the
+contract table), published types in `types/`, architecture docs per module in
+`docs/en/` and `docs/zh/`. Start with
 [docs/en/architecture.md](docs/en/architecture.md).
 
 ## Hard invariants (do not break)
@@ -125,37 +101,14 @@ Per-module docs live in [docs/en/](docs/en) / [docs/zh/](docs/zh) — start with
 - **Changelog**: user-visible changes get a `CHANGELOG.md` entry under the
   unreleased/next version heading.
 
-## Key environment variables (consumed by core)
+## Reference
 
-| Variable | Module | Effect |
-|---|---|---|
-| `PI_CORE_EFFORT` | effort | Hard pin on thinking level; explicit writes are refused while set |
-| `PI_CORE_BASH_PATH_CHECKS` | modes | W3/W4/P0-1/P1-4 bash path-check switch: `all` (default) \| `safety` (W3 prompts + allow-rule hardening + protected-path prompts) \| `deny` (W4 only) \| `off`; overrides the `bashPathChecks` config key, applies without `/reload` (env applies to new processes only) |
-| `PI_CORE_MCP_DIRECT_SERVERS` | mcp-gov | Server ids allowed to claim bare tool names (e.g. `exa`) |
-| `PERMISSION_MODES_INHERITED_MODE` | modes | Subagent mode inheritance (produced by pi-subagents, only consumed here; honored only together with `PI_SUBAGENT_CHILD=1`) |
-| `PERMISSION_MODES_CLASSIFIER_DEBUG` | modes | Debug logging for the auto-mode classifier |
-| `PI_GOAL_AUTO_CONFIRM` | goal | Auto-confirm goal proposals |
-| `CC_CORE_BG_DEBUG` / `CC_CORE_BG_{PROMOTE,GRACE,LOG_LIMIT}_*` | bg-shell | Debug log + test seams for promote/grace/log-limit thresholds |
-| `PI_B4_TEST_HOME` | mcp-gov | Test seam: overrides the home dir for `/core exposure` writes (tests only) |
-| `PI_CORE_COMPACTION` | compaction | Controller mode override: `off` \| `shadow` \| `on` (SC ST-03; wins over core-compaction.json) |
-
-`PI_SUBAGENT_*` variables are produced by pi-subagents; core only reads them.
-
-## Where things land on disk
-
-| Path | Owner |
-|---|---|
-| `~/.pi/agent/permission-modes.json` | modes permissions |
-| `~/.pi/agent/core-economy.json` | economy switches (`actionFusion` / `observationPack`) |
-| `~/.pi/agent/pi-core-web.json` | web-gov preapproved-domain override |
-| `~/.pi/agent/memory-queue/` | memory pending-extraction queue (shutdown 写 / session_start drain) |
-| `~/.pi/agent/sessions/permission-modes-forwarding/sessions/<id>/` | approval forwarding (pm ↔ pi-subagents) |
-| `<cwd>/.pi/goals/` | goal state |
-| `~/.pi/agent/pi-review.json` (config) + `<cwd>/.pi/pi-review/runs/<runId>/` | review |
-| `<sessionDir>/observation-pack/<sessionId>/` | observation-pack originals |
-| `~/.pi/agent/core-compaction.json` | compaction controller settings (SC ST-02) |
-
-These are pinned by the contract suite (P0-CT-09) — treat them as frozen.
+The environment variables core consumes and the files it writes are documented
+per module in `docs/en/` (each module doc lists its own; the disk layout is
+pinned by the contract suite, P0-CT-09 — treat those paths as frozen). One rule
+that is easy to miss: `PERMISSION_MODES_INHERITED_MODE` is honored only together
+with `PI_SUBAGENT_CHILD=1`. `PI_SUBAGENT_*` variables are produced by
+pi-subagents; core only reads them.
 
 ## If blocked
 
