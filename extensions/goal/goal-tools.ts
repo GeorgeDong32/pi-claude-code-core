@@ -26,6 +26,7 @@ import {
 	buildGoalCreatedReport,
 	validateGoalAbort,
 	validateGoalCompletion,
+	validateNoDraftingPhase,
 	validatePauseGoal,
 } from "./goal-policy.ts";
 import type { GoalLifecycle } from "./goal-lifecycle.ts";
@@ -71,9 +72,8 @@ pi.registerTool(defineTool({
 	description: "Get the current pi goal for this session: objective, status, auto-continue, usage, and local file paths.",
 	promptSnippet: "Read the active pi goal state for the current session.",
 	promptGuidelines: [
-		"Use get_goal when you need the current goal before deciding whether to continue or mark it complete.",
-		"Before marking a goal complete, compare every explicit requirement with concrete evidence from the workspace/session.",
-		"If the returned goal has sisyphus mode on, you must execute strictly step-by-step in the order written in the objective; do not skip, combine, or rush steps, and stop to ask the user when blocked or unclear.",
+		"Call get_goal for the current goal; goal actions run from codemode (tools.update_goal / tools.pause_goal / tools.abort_goal).",
+		"Before marking complete, compare every requirement with concrete evidence.",
 	],
 	parameters: Type.Object({}),
 	async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
@@ -90,7 +90,7 @@ pi.registerTool(defineTool({
 			}
 		}
 		const lifecycleHint = view && (view.status === "active" || view.status === "paused")
-			? "\nLifecycle tools: if evidence proves the objective is satisfied, call update_goal({status: \"complete\"}); if blocked, call pause_goal({reason, suggestedAction?}); if abandoned/obsolete/unsafe, call abort_goal({reason}). For file or shell work, use the normal work tools directly (write/read/bash/edit); do not call get_goal repeatedly just to look for tools."
+			? "\nGoal actions run from codemode scripts: if evidence proves the objective is satisfied, call tools.update_goal({status: \"complete\", completionSummary}); if blocked, call tools.pause_goal({reason, suggestedAction}) and stop; if the user abandons it or it is obsolete/unsafe, call tools.abort_goal({reason}) and stop. For file or shell work, use the normal work tools directly (write/read/bash/edit); do not call get_goal repeatedly just to look for tools."
 			: "";
 		const text = view
 			? `${detailedSummary(view)}${lifecycleHint}${nudge}${otherCount > 0 ? `\nOther open goals: ${otherCount} (human can run /goal-list or /goal-focus)` : ""}`
@@ -144,22 +144,18 @@ pi.registerTool(defineTool({
 pi.registerTool(defineTool({
 	name: PROPOSE_DRAFT_TOOL_NAME,
 	label: "Propose Goal Draft",
-	description: "During /goals or /sisyphus intent discussion, propose the goal draft to the user. The user sees a full plain-text confirmation report and chooses Confirm (creates the goal) or Continue Chatting (returns control to you to refine). REPLACES create_goal during discussion-based creation.",
-	promptSnippet: "Propose the drafted goal to the user with a full plain-text Confirm / Continue Chatting dialog.",
+	description: "Propose the goal draft in a /goals or /sisyphus discussion (Confirm creates it; Continue Chatting refines).",
+	promptSnippet: "Propose the drafted goal for Confirm / Continue Chatting.",
 	promptGuidelines: [
-		"Call propose_goal_draft when a /goals or /sisyphus intent discussion has enough information to write a concrete goal. Ask a focused question only when the request is still ambiguous.",
-		"If an answer exposes ambiguity, keep interviewing the user — do not propose prematurely.",
-		"The user will see a full plain-text draft report plus a [Confirm] / [Continue Chatting] choice. Confirm creates the goal; Continue Chatting returns control to you to ask follow-up questions.",
-		"If the tool returns 'continue chatting', ask the user what they want changed. Do NOT propose again immediately with the same content; iterate based on their feedback first.",
-		"The sisyphus field must match the user's confirmation focus: /sisyphus -> sisyphus=true, /goals -> sisyphus=false. The schema enforces this; mismatched proposals are REJECTED.",
-		"For sisyphus goals, preserve the user's requested ordered style and completion standard. Do not add reconnaissance/preflight steps, merge steps, reorder steps, or change the mode without explicit user confirmation.",
-		"create_goal is rejected; propose_goal_draft is the confirmation path. This is intentional — the user wants explicit say in goal creation.",
+		"sisyphus must match the discussion: /sisyphus -> true, /goals -> false (schema-enforced).",
+		"Sisyphus goals: keep the user's ordered steps and done criteria verbatim.",
+		"On 'continue chatting', ask what to change before proposing again.",
+		"create_goal is rejected on purpose: this is the only confirmation path.",
 	],
 	parameters: Type.Object({
-		objective: Type.String({ description: "Full goal text. For Sisyphus goals this MUST include the user's numbered steps + per-step done criteria, taken faithfully from the user's input." }),
-		autoContinue: Type.Optional(Type.Boolean({ description: "Whether pi should keep sending continuation prompts until complete. Default true." })),
-		sisyphus: Type.Optional(Type.Boolean({ description: "Must equal true for /sisyphus discussion, false for /goals discussion. Schema-enforced via B1 gate." })),
-		draftId: Type.Optional(Type.String({ description: "Deprecated compatibility field. It is accepted but ignored; current goal confirmation no longer depends on hidden draft ids." })),
+		objective: Type.String({ description: "Full goal text (sisyphus: numbered steps + done criteria)." }),
+		autoContinue: Type.Optional(Type.Boolean({ description: "Keep sending continuation prompts until complete (default true)." })),
+		sisyphus: Type.Optional(Type.Boolean({ description: "true for /sisyphus, false for /goals." })),
 	}),
 	executionMode: "sequential",
 	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -168,7 +164,6 @@ pi.registerTool(defineTool({
 			hasUnfinishedGoal: (() => { const g = lifecycle.focused(); return !!g && g.status !== "complete"; })(),
 			objective: params.objective,
 			sisyphus: params.sisyphus,
-			draftId: params.draftId,
 		});
 		if (!validation.ok) {
 			if (validation.clearDrafting) {
@@ -245,17 +240,8 @@ pi.registerTool(defineTool({
 pi.registerTool(defineTool({
 	name: "update_goal",
 	label: "Update Goal",
-	description: "Mark the current active or paused pi goal complete when the objective is actually achieved.",
-	promptSnippet: "Mark the active or paused pi goal complete when the objective is achieved.",
-	promptGuidelines: [
-		"Use update_goal with status=complete only when the pi goal objective has actually been achieved and no required work remains.",
-		"Before calling update_goal, summarize the evidence you believe proves completion; the tool will launch an independent pi auditor agent to inspect the workspace and judge the claim.",
-		"The auditor is authoritative: completion is archived only if the auditor report ends with <approved/>. If it ends with <disapproved/> or no approval marker, update_goal is rejected and the goal remains open.",
-		"Do not call update_goal merely because work is stopping, substantial progress was made, or tests passed without covering every requirement.",
-		"Do not use update_goal=complete as an escape hatch when you are blocked. If you are blocked, call pause_goal({reason, suggestedAction?}) instead so the user can intervene.",
-		"For sisyphus goals, do not mark complete until every numbered step has been executed and individually verified against its done criterion.",
-		"When the objective lists numbered criteria ([C1]…[Cn]), cover every criterion in the completion summary — one [Cn]-tagged line each with file:line and test evidence.",
-	],
+	exposure: "codemode" as const,
+	description: "Mark the current active or paused pi goal complete; launches the independent completion auditor.",
 	parameters: Type.Object({
 		status: StringEnum([COMPLETE_STATUS] as const, { description: "Set to complete only when the objective is achieved." }),
 		completionSummary: Type.Optional(Type.String({ description: "Concise completion claim and evidence summary passed to the independent auditor agent." })),
@@ -264,6 +250,8 @@ pi.registerTool(defineTool({
 	async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 		reconcileFocusedGoalFromDisk(ctx);
 		if (params.status !== COMPLETE_STATUS) throw new Error("update_goal only supports status=complete.");
+		const draftingGate = validateNoDraftingPhase(lifecycle, "update_goal");
+		if (!draftingGate.ok) return { content: [{ type: "text", text: draftingGate.message }], details: goalDetails(lifecycle.focused()) };
 		const completionGate = validateGoalCompletion({ goal: lifecycle.focused(), runningGoalId: getRunningGoalId() });
 		if (!completionGate.ok) {
 			return {
@@ -357,16 +345,8 @@ pi.registerTool(defineTool({
 pi.registerTool(defineTool({
 	name: "pause_goal",
 	label: "Pause Goal",
-	description: "Pause the active pi goal and report a blocker to the user. The user must /goal-resume, /goal-tweak, or /goal-clear before work continues.",
-	promptSnippet: "Pause the active pi goal and report a concrete blocker so the user can intervene.",
-	promptGuidelines: [
-		"Use pause_goal when you have hit a real blocker that you cannot resolve with one more reasonable next step: missing credentials, ambiguous or contradictory spec, a file or permission you cannot access, a sisyphus step whose precondition is not in the plan, or any irreversible / dangerous operation that requires explicit user approval.",
-		"Do NOT use pause_goal to escape a merely hard problem; first try one concrete next step. Do not use pause_goal as a softer substitute for update_goal=complete \u2014 if the objective is achieved, complete it; if it is not, do not complete it.",
-		"Never silently invent a workaround, fake completion, or quietly redefine the objective. Pause and report instead.",
-		"Always pass a concrete one-sentence reason. When you know how the user can unblock you, pass suggestedAction (e.g. 'Set FOO_API_KEY env var and /goal-resume', or 'Use /goal-tweak to insert a precondition step before step 3').",
-		"After pause_goal returns, stop. Do not call other tools in the same turn.",
-		"For sisyphus goals: if any step is unclear, blocked, fails, or seems wrong, pause_goal is the correct action \u2014 do not skip the step or invent a workaround.",
-	],
+	exposure: "codemode" as const,
+	description: "Pause the active pi goal with a concrete blocker reason; the user resumes via /goal-resume.",
 	parameters: Type.Object({
 		reason: Type.String({ description: "One-sentence concrete blocker description. Plain language, not an apology." }),
 		suggestedAction: Type.Optional(Type.String({ description: "Optional concrete suggestion for how the user can unblock (e.g. command to run, value to provide, /goal-tweak hint)." })),
@@ -376,6 +356,8 @@ pi.registerTool(defineTool({
 		reconcileFocusedGoalFromDisk(ctx);
 		const reason = params.reason.trim();
 		if (!reason) throw new Error("pause_goal requires a non-empty reason.");
+		const draftingGate = validateNoDraftingPhase(lifecycle, "pause_goal");
+		if (!draftingGate.ok) return { content: [{ type: "text", text: draftingGate.message }], details: goalDetails(lifecycle.focused()) };
 		const pauseGate = validatePauseGoal({ goal: lifecycle.focused(), runningGoalId: getRunningGoalId(), reason });
 		if (!pauseGate.ok) {
 			return {
@@ -414,14 +396,8 @@ pi.registerTool(defineTool({
 pi.registerTool(defineTool({
 	name: ABORT_GOAL_TOOL_NAME,
 	label: "Abort Goal",
+	exposure: "codemode" as const,
 	description: "Abort the current active or paused pi goal and archive it without marking it complete.",
-	promptSnippet: "Abort the current pi goal only when the user asks to abandon it or the objective is obsolete/impossible.",
-	promptGuidelines: [
-		"Use abort_goal only when the user explicitly asks to abandon/cancel the current goal, or when the goal is impossible, obsolete, or unsafe to continue and should not be marked complete.",
-		"Do not use abort_goal as a substitute for update_goal(status=complete). If the objective is achieved, complete it instead.",
-		"Do not use abort_goal for ordinary blockers that the user can resolve; use pause_goal({reason, suggestedAction?}) for that case.",
-		"Always pass a concrete one-sentence reason. After abort_goal returns, stop and do not call other tools in the same turn.",
-	],
 	parameters: Type.Object({
 		reason: Type.String({ description: "One-sentence reason for abandoning the current goal. Plain language, not an apology." }),
 	}),
@@ -430,6 +406,8 @@ pi.registerTool(defineTool({
 		reconcileFocusedGoalFromDisk(ctx);
 		const reason = params.reason.trim();
 		if (!reason) throw new Error("abort_goal requires a non-empty reason.");
+		const draftingGate = validateNoDraftingPhase(lifecycle, "abort_goal");
+		if (!draftingGate.ok) return { content: [{ type: "text", text: draftingGate.message }], details: goalDetails(lifecycle.focused()) };
 		const abortGate = validateGoalAbort({ goal: lifecycle.focused(), runningGoalId: getRunningGoalId(), reason });
 		if (!abortGate.ok) {
 			return {
@@ -500,16 +478,8 @@ pi.registerTool(defineTool({
 pi.registerTool(defineTool({
 	name: TWEAK_APPLY_TOOL_NAME,
 	label: "Apply Goal Tweak",
-	description: "Atomically apply a /goal-tweak revision to the active goal. The ONLY way to modify an active goal's objective. Only available during a /goal-tweak drafting flow.",
-	promptSnippet: "Apply the revised goal objective produced by a /goal-tweak drafting interview.",
-	promptGuidelines: [
-		"Only call apply_goal_tweak inside a /goal-tweak drafting flow (the prompt makes that explicit). It is rejected at any other time.",
-		"newObjective must be the FULL revised objective text, formatted the same way as the original (=== Goal === or === Sisyphus Goal === block). Do NOT pass a diff or partial patch; pass the whole new objective.",
-		"For Sisyphus goals: preserve the Sisyphus style and ordered-plan wording unless the user explicitly asks to remove it.",
-		"changeSummary is a one-sentence description of WHAT changed (for the activity log and pause messages).",
-		"Do NOT use write/edit/bash to modify the active goal file directly. apply_goal_tweak is the only sanctioned channel.",
-		"After apply_goal_tweak returns, stop. Do not begin new task work in the same turn. The system will queue the next continuation.",
-	],
+	exposure: "codemode" as const,
+	description: "Atomically apply a /goal-tweak revision to the active goal (only during a /goal-tweak interview).",
 	parameters: Type.Object({
 		newObjective: Type.String({ description: "The complete revised objective text. For Sisyphus goals, preserve the Sisyphus style unless the user explicitly changes it." }),
 		changeSummary: Type.String({ description: "One-sentence description of what was changed (used in UI notification and tweak log)." }),

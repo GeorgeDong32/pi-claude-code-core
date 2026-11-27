@@ -155,7 +155,7 @@ export async function runCompletionAudit(args: CompletionAuditArgs): Promise<Com
 		const head = timedOut
 			? `Goal audit timed out after ${Math.round(timeoutMs / 1000)}s. The goal remains active.`
 			: "Goal audit aborted by user. The goal remains active.";
-		const rejectionText = [head, "", "No completion verdict was reached. You may call update_goal again to re-run the audit."].join("\n");
+		const rejectionText = [head, "", "No completion verdict was reached. You may call tools.update_goal again (codemode) to re-run the audit."].join("\n");
 		try {
 			appendGoalEvent(args.ctx, {
 				type: "audit_result",

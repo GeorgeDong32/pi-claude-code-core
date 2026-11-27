@@ -26,6 +26,14 @@ vi.mock("../../extensions/compaction/summarizer.ts", async (original) => ({
 }));
 
 // T_n=18K: prime near 10K (precompute), target near 12K (apply), below native.
+// The controller thresholds are ratios of the request size, so the first prompt
+// is tuned per goal state to land the next request on the apply threshold:
+// the session's system message differs by state (active goal block + goal
+// tools vs none). Recalibrated for the goal tools diet v2 (the lifecycle tools
+// left the declared list: about -3.4K chars with an active goal, -1.5K without).
+// If a prompt diet moves the boundary again, these three numbers are the place
+// to look before suspecting the controller.
+const FIRST_PROMPT_CHARS: Record<GoalState, number> = { active: 27_400, autoContinueOff: 27_400, complete: 28_500, none: 30_000 };
 const SETTINGS = {
 	mode: "on", targetPostRatio: 0.25, precomputeRatio: 0.45, applyRatio: 0.6,
 	summaryTokenEstimate: 200, keepSlackTokens: 1500,
@@ -125,7 +133,7 @@ async function runGoal(path: Path, state: GoalState = "active") {
 	});
 	try {
 		host.faux.setResponses([fauxAssistantMessage("p".repeat(600))]);
-		await host.session.prompt("r".repeat(state === "none" ? 30_000 : 24_000));
+		await host.session.prompt("r".repeat(FIRST_PROMPT_CHARS[state]));
 		expect(host.sessionManager.getBranch().filter((entry) => entry.type === "compaction")).toHaveLength(0);
 		const goal = readActiveGoalFiles({ cwd: host.cwd })[0];
 		if (goal) writeActiveGoalFile({ cwd: host.cwd }, {

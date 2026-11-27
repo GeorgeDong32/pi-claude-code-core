@@ -23,7 +23,12 @@ is audited complete.
 - **Tools**: `propose_goal_draft`, `create_goal`, `goal_question`,
   `goal_questionnaire`, `get_goal`, `update_goal`, `pause_goal`,
   `abort_goal`, `step_complete`, `apply_goal_tweak` (names in
-  `goal-tool-names.ts`; the active-tool set varies with goal status).
+  `goal-tool-names.ts`). Declared to the model: only `get_goal` and
+  `propose_goal_draft` (plus the work tools). The six lifecycle tools
+  carry `exposure: "codemode"` — nothing in the tool list, callable from
+  codemode scripts as `tools.update_goal(...)` etc.; `create_goal` and the
+  legacy `step_complete` stay hidden. The declared set is the same in every
+  goal state (goal tools diet v2).
 - **Widget/status**: `goal` widget + `goal` status slot (contract P0-CT-07/08);
   `goal` channel on the bus (objective, status, sisyphus flag, token/time
   usage).
@@ -66,6 +71,17 @@ is audited complete.
   its report approves; do not bypass it on `update_goal`.
 - Pause is the structured way out of blockers; abort only for
   user-requested/obsolete/impossible goals.
+- **Stable declared set**: `syncGoalTools` never adds or removes a goal
+  lifecycle tool by goal status or phase (it only guarantees the work tools,
+  `get_goal` and `propose_goal_draft`, and keeps the hidden pair out); it
+  re-runs every turn and is idempotent because plan mode restores its entry
+  snapshot on exit. The drafting-phase rules that visibility used to enforce
+  are execute-time gates: `validateNoDraftingPhase` (complete / pause / abort
+  refused during a confirmation or /goal-tweak interview) and
+  `validateDraftingInterview` (the question tools answer only inside one).
+  Every injected prompt names the codemode call form; a bare `update_goal(...)`
+  call is not a declared tool. `"deferred"` exposure is not an option here:
+  pi registers `tool_search` inactive (see `docs/en/memory.md`).
 - Upstream fork files must keep their provenance notes — check `FORK.md`
   before rewriting forked logic.
 

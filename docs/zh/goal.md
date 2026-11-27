@@ -21,7 +21,10 @@
 - **工具**:`propose_goal_draft`、`create_goal`、`goal_question`、
   `goal_questionnaire`、`get_goal`、`update_goal`、`pause_goal`、
   `abort_goal`、`step_complete`、`apply_goal_tweak`(名字在
-  `goal-tool-names.ts`;可用工具集随 goal 状态变化)。
+  `goal-tool-names.ts`)。声明给模型的只有 `get_goal` 与 `propose_goal_draft`
+  (外加工作工具)。六个生命周期工具是 `exposure: "codemode"`——不进工具清单,
+  codemode 脚本里 `tools.update_goal(...)` 调用;`create_goal` 与 legacy 的
+  `step_complete` 保持 hidden。任何 goal 状态下声明集都相同(goal 工具瘦身 v2)。
 - **Widget/status**:`goal` widget + `goal` status 槽(契约 P0-CT-07/08);
   总线 `goal` 通道(objective、status、sisyphus 标志、token/时间用量)。
 - **磁盘**:`<cwd>/.pi/goals/` —— 状态、台账、归档(布局冻结,P0-CT-09;
@@ -62,6 +65,7 @@
 - 完成度审计是权威的:只有其报告批准才归档完成;不得在 `update_goal` 上
   绕过它。
 - 阻塞时走结构化的 pause;abort 只用于用户要求放弃/目标过时/不可能完成。
+- **声明集恒定**:`syncGoalTools` 不再按 goal 状态或阶段增删生命周期工具(只保证工作工具、`get_goal`、`propose_goal_draft` 在集合里、hidden 两个不在);每轮重跑且幂等,因为 plan 模式退出时会恢复进入时的快照。过去靠可见性执行的起草期规则改为执行层门禁:`validateNoDraftingPhase`(确认或 /goal-tweak 起草期间拒绝 complete / pause / abort)与 `validateDraftingInterview`(提问工具只在起草类访谈内应答)。所有注入提示都写 codemode 调用形式;裸名 `update_goal(...)` 不是声明工具。这里不能用 `"deferred"`:pi 的 `tool_search` 默认注册为 inactive(见 `docs/zh/memory.md`)。
 - fork 来的上游文件必须保留出处注释——重写 fork 逻辑前先看 `FORK.md`。
 
 ## 测试

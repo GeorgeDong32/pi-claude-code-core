@@ -5,6 +5,7 @@ import { Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth, visib
 
 import { truncateText } from "./goal-core.ts";
 import { QUESTIONNAIRE_TOOL_NAME, QUESTION_TOOL_NAME } from "./goal-tool-names.ts";
+import { validateDraftingInterview } from "./goal-policy.ts";
 import {
 	availableDialogHeight,
 	clampScrollOffset,
@@ -470,19 +471,18 @@ export async function showProposalDialog(
 	});
 }
 
-export function registerQuestionnaireTools(pi: ExtensionAPI): void {
+/** `phase` reads the lifecycle's drafting state: the question tools exist for
+ * the confirmation and /goal-tweak interviews only (the boundary visibility
+ * used to enforce before they became codemode-exposed). */
+export function registerQuestionnaireTools(
+	pi: ExtensionAPI,
+	phase: () => { confirmationIntent: unknown; tweakDraftingFor: unknown },
+): void {
 	pi.registerTool(defineTool({
 		name: QUESTION_TOOL_NAME,
 		label: "goal_question",
-		description:
-			"Ask the user a focused single question through pi-goal's built-in goal_question UI. " +
-			"This is the single-question alias for goal_questionnaire and is allowed during drafting.",
-		promptSnippet: "Ask the user a focused question with optional choices.",
-		promptGuidelines: [
-			"Use goal_question when exactly one user decision is required before proceeding.",
-			"During drafting this is allowed; it returns user Q&A into the conversation and is not task execution.",
-			"Prefer concise options. Use allowFreeText=false only when the user must pick from fixed choices.",
-		],
+		description: "Ask the user one focused question with optional choices (goal interviews only).",
+		exposure: "codemode" as const,
 		parameters: Type.Object({
 			question: Type.String({ description: "Question to ask the user." }),
 			context: Type.Optional(Type.String({ description: "Short context explaining why the answer is needed." })),
@@ -492,6 +492,13 @@ export function registerQuestionnaireTools(pi: ExtensionAPI): void {
 		}),
 		executionMode: "sequential",
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const interview = validateDraftingInterview(phase(), QUESTION_TOOL_NAME);
+			if (!interview.ok) {
+				return {
+					content: [{ type: "text", text: interview.message }],
+					details: { questions: [], answers: [], cancelled: true, answer: undefined },
+				};
+			}
 			if (!ctx.hasUI) {
 				return {
 					content: [{ type: "text", text: "Headless mode: the question was recorded, but no interactive UI answer was collected. If the original request is already fully specified, proceed with the documented/default assumption; otherwise ask the user in final text and stop." }],
@@ -536,17 +543,8 @@ export function registerQuestionnaireTools(pi: ExtensionAPI): void {
 	pi.registerTool(defineTool({
 		name: QUESTIONNAIRE_TOOL_NAME,
 		label: "goal_questionnaire",
-		description:
-			"Ask the user one or more questions via pi-goal's built-in goal_questionnaire UI. " +
-			"Use this during drafting when you need structured grill/Q&A before propose_goal_draft; " +
-			"batch related questions into one call. Returns Q&A records in the conversation history.",
-		promptSnippet: "Ask the user one or more structured questions with choices and optional free-text answers.",
-		promptGuidelines: [
-			"Use goal_questionnaire when a user decision or missing requirement blocks a concrete draft.",
-			"During /goals or /sisyphus intent discussion, goal_questionnaire is allowed when structured Q&A helps produce a concrete draft.",
-			"Prefer 1-3 focused questions. Batch related choices in one questionnaire call instead of repeatedly interrupting the user.",
-			"Use recommended to mark the best default choice when there is one. Set allowCustom=false only for strict binary/choice prompts such as confirmation.",
-		],
+		description: "Ask the user 1-3 structured questions with choices in one batch (goal interviews only).",
+		exposure: "codemode" as const,
 		parameters: Type.Object({
 			questions: Type.Array(
 				Type.Object({
@@ -562,6 +560,13 @@ export function registerQuestionnaireTools(pi: ExtensionAPI): void {
 		}),
 		executionMode: "sequential",
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const interview = validateDraftingInterview(phase(), QUESTIONNAIRE_TOOL_NAME);
+			if (!interview.ok) {
+				return {
+					content: [{ type: "text", text: interview.message }],
+					details: { questions: [], answers: [], cancelled: true },
+				};
+			}
 			if (!ctx.hasUI) {
 				return {
 					content: [{ type: "text", text: "Headless mode: the questions were recorded, but no interactive UI answers were collected. If the original request is already fully specified, proceed with documented/default assumptions; otherwise ask the user in final text and stop." }],

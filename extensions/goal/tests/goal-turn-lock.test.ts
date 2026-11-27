@@ -94,12 +94,14 @@ test("L6 (CORE-05): a throwing sendMessage resets confirmationIntent and restore
 	}
 });
 
-test("L6 control: a SUCCESSFUL draft start keeps the drafting tool set", async () => {
+test("L6 control: a SUCCESSFUL draft start leaves the declared tool set unchanged (goal tools diet: question tools are codemode-exposed)", async () => {
 	const f = setupWithPi();
 	try {
+		const before = [...(f.host.activeToolsCalls.at(-1) ?? [])].sort().join(",");
 		await f.host.commands.get("goal")!("fix the bug", f.ctx as never);
 		const last = f.host.activeToolsCalls[f.host.activeToolsCalls.length - 1]!;
-		assert.ok(last.includes(QUESTION_TOOL_NAME), "drafting phase exposes goal_question");
+		assert.equal([...last].sort().join(","), before, "a draft start must not move the declared tool list (prefix stability)");
+		assert.equal((f.host.tools.get(QUESTION_TOOL_NAME) as { exposure?: string } | undefined)?.exposure, "codemode");
 	} finally {
 		f.cleanup();
 	}

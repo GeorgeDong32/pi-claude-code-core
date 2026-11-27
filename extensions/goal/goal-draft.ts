@@ -11,7 +11,6 @@ export interface DraftProposalInput {
 	hasUnfinishedGoal: boolean;
 	objective: string;
 	sisyphus?: boolean;
-	draftId?: string;
 }
 
 export type DraftProposalValidation =
@@ -80,7 +79,7 @@ export function goalDraftingPrompt(topic: string, focus: GoalDraftingFocus): str
 	const commonProtocol = [
 		"Confirmation protocol:",
 		"- Treat this as a lightweight conversation with the user, not a separate long-running runtime phase.",
-		"- If the topic is vague, ask one focused question with a recommended default. Use goal_question or goal_questionnaire when a structured answer would help, but plain conversation is acceptable.",
+		"- If the topic is vague, ask one focused question with a recommended default. For structured answers call tools.goal_question or tools.goal_questionnaire from a codemode script (1-3 focused questions in one batch; `recommended` marks the best default), but plain conversation is acceptable.",
 		"- Targeted read-only research is allowed when it helps define a better goal contract; do not start implementation before confirmation.",
 		"- If the topic is already concrete, you may proceed directly to propose_goal_draft.",
 		"- The goal contract should make the objective, success criteria, boundaries, constraints, and blocker rule explicit.",

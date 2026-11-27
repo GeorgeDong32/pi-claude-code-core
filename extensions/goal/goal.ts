@@ -91,34 +91,20 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 
 	const goalExecutionWorkTools = ["read", "bash", "edit", "write"] as const;
 
+	/** Declared-set contract (goal tools diet v2): the work tools, get_goal and
+	 * propose_goal_draft are always declared; create_goal (user must confirm via
+	 * propose_goal_draft) and the legacy step_complete stay hidden; every other
+	 * goal tool is codemode-exposed and never declared, so goal state never
+	 * moves the tool list. Re-run every turn and idempotent: plan mode restores
+	 * its entry snapshot on exit, and a same-set call does not touch the cache. */
 	function syncGoalTools(): void {
 		try {
 			const active = new Set(pi.getActiveTools());
 			for (const name of goalExecutionWorkTools) active.add(name);
-			active.delete(QUESTION_TOOL_NAME);
-			active.delete(QUESTIONNAIRE_TOOL_NAME);
-			for (const name of ACTIVE_GOAL_TOOL_NAMES) active.delete(name);
-			const phase = lifecycle.confirmationIntent !== null ? "drafting" : lifecycle.tweakDraftingFor !== null ? "tweakDrafting" : "normal";
-			const lifecycleTools = lifecycleToolNamesForGoalStatus(lifecycle.focused()?.status, phase);
-			for (const name of lifecycleTools) active.add(name);
-			active.delete(SISYPHUS_STEP_TOOL_NAME);
-			const tweakGateGoal = lifecycle.focused();
-			if (tweakGateGoal && lifecycle.tweakDraftingFor === tweakGateGoal.id) {
-				active.add(TWEAK_APPLY_TOOL_NAME);
-				active.add(QUESTION_TOOL_NAME);
-				active.add(QUESTIONNAIRE_TOOL_NAME);
-			} else {
-				active.delete(TWEAK_APPLY_TOOL_NAME);
-			}
-			active.add(PROPOSE_DRAFT_TOOL_NAME);
-			// create_goal stays hidden — hard invariant: user must confirm via propose_goal_draft.
 			active.delete(CREATE_GOAL_TOOL_NAME);
-			if (lifecycle.confirmationIntent !== null) {
-				active.add(QUESTION_TOOL_NAME);
-				active.add(QUESTIONNAIRE_TOOL_NAME);
-			} else if (lifecycle.focused()?.status === "active") {
-				for (const name of goalExecutionWorkTools) active.add(name);
-			}
+			active.delete(SISYPHUS_STEP_TOOL_NAME);
+			active.add("get_goal");
+			active.add(PROPOSE_DRAFT_TOOL_NAME);
 			pi.setActiveTools(Array.from(active));
 		} catch {}
 	}
@@ -436,7 +422,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 
 
 
-	registerQuestionnaireTools(pi);
+	registerQuestionnaireTools(pi, () => lifecycle);
 
 	registerGoalTools(pi, {
 		lifecycle,
@@ -706,7 +692,9 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			} catch {
 			}
 			return {
-				systemPrompt: `${currentSystemPrompt()}\n\n[PI GOAL PAUSED goalId=${current.id}]\n${untrustedObjectiveBlock(current)}${pauseExtras.join("\n")}${auditorExtra}\n\nThe goal is paused. Do not autonomously continue substantive work unless the user resumes it with /goal-resume. If the user explicitly asks to finish or abandon the paused goal, or the objective is already satisfied based on available evidence, you may call update_goal(status=complete) or abort_goal without resuming. Do not call pause_goal again.`,
+				systemPrompt: `${currentSystemPrompt()}\n\n[PI GOAL PAUSED goalId=${current.id}]\n${untrustedObjectiveBlock(current)}${pauseExtras.join("\n")}${auditorExtra}\n\nGoal lifecycle actions (tools.update_goal, tools.pause_goal, tools.abort_goal, tools.apply_goal_tweak, goal_question, goal_questionnaire) are codemode tools: call them from a codemode script, e.g. await tools.pause_goal({ reason, suggestedAction }); a direct call by bare name is not a declared tool.
+
+The goal is paused. Do not autonomously continue substantive work unless the user resumes it with /goal-resume. If the user explicitly asks to finish or abandon the paused goal, or the objective is already satisfied based on available evidence, you may call update_goal(status=complete) or abort_goal without resuming. Do not call pause_goal again.`,
 			};
 		}
 		const activeGoalNarrowed = lifecycle.focused();

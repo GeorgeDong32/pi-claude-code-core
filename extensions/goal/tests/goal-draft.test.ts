@@ -106,17 +106,6 @@ test("validateGoalDraftProposal allows fully-specified requests without mandator
 	}
 });
 
-test("validateGoalDraftProposal ignores deprecated draftId compatibility field", () => {
-	const proposal = validateGoalDraftProposal({
-		intent: intent({ focus: "goal" }),
-		hasUnfinishedGoal: false,
-		objective: "=== Goal ===\nObjective: x",
-		sisyphus: false,
-		draftId: "stale-draft-id",
-	});
-	assert.deepEqual(proposal, { ok: true, objective: "=== Goal ===\nObjective: x", expectedSisyphus: false });
-});
-
 test("validateGoalDraftProposal keeps Sisyphus as a focus flag, not a step-count gate", () => {
 	const proposed = validateGoalDraftProposal({
 		intent: intent(),
