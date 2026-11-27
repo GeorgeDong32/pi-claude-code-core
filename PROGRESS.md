@@ -1,5 +1,14 @@
 # PROGRESS
 
+## 2026-11-28 注释清扫批（no-comments sweep，三批）
+
+- **来源**：用户选定 `no-comments` skill（pstack Comment Sicko），决定文件头整坨丢掉；spec `~/.factory/specs/2026-11-28-no-comments-sweep.md`（删 D1–D5 / 留 K1–K5 / suppression / 报告格式）。
+- **做法**：判断写进 spec，子代理用 `glm-5.3-flash` 逐文件照做（`worktree: true` 隔离、并发 2、每组独立 `/tmp/sweep-<key>/`）；父级用 TypeScript printer 去注释对比 HEAD 审计每一份 diff，再按关键词人工过删除行。第一波用 Comment Sicko 原提示 + 强模型 6 个只成 3 个（429 / 共享 /tmp 互踩 / 30 分钟超时），之后全部改为 spec + Flash。
+- **结果**：342 个文件、净 −6,697 行（纯注释行 7,194 → 628）；全部纯注释改动（printer 等价逐文件成立）。父级恢复了子代理删过头的：8 行来源声明（SoL-Pi / Claude Code port）、`effort/index.ts` 的 `service_tier` 代理方言约束、`compaction-replay.mjs` 里被测试当标记的「aggregates only」。
+- **约定与门禁**：AGENTS.md / zh 把「文件头注释即文档」换成「不写文件头、不写叙述」；`scripts/lint-comments.mjs` 加 `file-header` 规则（首个注释块 > 8 行即红，自测过 9 行红 / 2 行 + 独立块绿）、扫描扩到 `test/`、ALLOW 从 60 条缩到 1 条（pi-host-semantics 的 `@ts-expect-error`）。
+- **顺带更正**：`docs/{en,zh}/modes.md` 对 `PERMISSION_MODES_INHERITED_MODE` 的描述说反了（实际 core 自己写、子进程继承）。
+- **未做/后续**：子代理报告里约 60 条 `MUST KILL` 重构候选（注释删掉后代码自己说不清的点）与 REVIEW 保留项未逐条处理；SoL-Pi MIT port 没有集中的第三方声明文件（待用户定）；有头真机只做加载/基本回合抽验。
+
 ## 2026-11-27 goal 工具瘦身批（context diet 第二批：codemode 暴露 + 声明集恒定）
 
 - **来源**：用户提议「goal 工具只留简短描述、经 codemode 暴露」；spec `~/.factory/specs/2026-11-27-goal-tools-diet.md`（v1 合并方案被 reviewer REJECT：改名要动全部注入文本、收益只在 active 期约 1.5K；v2 改为 codemode 暴露，采纳其 C0 注入文本 / B 阶段门禁搬执行层 / 成本含 promptSnippet 三条）。

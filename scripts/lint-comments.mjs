@@ -1,72 +1,17 @@
 #!/usr/bin/env node
+// Comment-hygiene lint (no-comments policy): banners, dates, sermon markers,
+// suppressions, commented-out code and long file headers. Zero dependencies;
+// part of `pnpm run check`. ALLOW entries exempt REVIEW-kept comments only.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
 const ROOT = join(import.meta.dirname, "..");
-const SCANDIRS = ["extensions", "lib", "types", "scripts"];
-const SKIP_PATH = [/\.test\.ts$/, /\/tests?\//, /\/test\//, /\/node_modules\//, /\/archive\//];
+const SCANDIRS = ["extensions", "lib", "types", "scripts", "test"];
+const SKIP_PATH = [/\/node_modules\//, /\/archive\//, /test\/spikes\//];
 
 const ALLOW = [
 { file: "extensions/action-fusion/then-run.ts", includes: "2026-11-14" },
-	{ file: "extensions/bg-shell/index.ts", includes: "2026-11-14" },
-	{ file: "extensions/bus.ts", includes: "2026-10-07" },
-	{ file: "extensions/bus.ts", includes: "2026-11-14" },
-	{ file: "extensions/compaction/policy.ts", includes: "2026-11-10" },
-	{ file: "extensions/compaction/state.ts", includes: "2026-11-10" },
-	{ file: "extensions/effort/index.ts", includes: "2026-10-13" },
-	{ file: "extensions/goal/goal-auditor.ts", includes: "2026-10-04" },
-	{ file: "extensions/goal/goal-auditor.ts", includes: "2026-10-05" },
-	{ file: "extensions/goal/goal-auditor.ts", includes: "2026-11-14" },
-	{ file: "extensions/goal/goal-lifecycle.ts", includes: "2026-10-07" },
-	{ file: "extensions/goal/goal-lifecycle.ts", includes: "2026-10-09" },
-	{ file: "extensions/goal/prompts/goal-prompts.ts", includes: "2026-10-03" },
-	{ file: "extensions/memory/automation.ts", includes: "2026-10-03" },
-	{ file: "extensions/memory/consolidate.ts", includes: "2026-10-18" },
-	{ file: "extensions/memory/guard.ts", includes: "2026-11-14" },
-	{ file: "extensions/memory/llm.ts", includes: "2026-10-03" },
-	{ file: "extensions/memory/llm.ts", includes: "2026-11-15" },
-	{ file: "extensions/memory/paths.ts", includes: "2026-10-03" },
-	{ file: "extensions/memory/queue-drain.ts", includes: "2026-10-07" },
-	{ file: "extensions/memory/queue-drain.ts", includes: "2026-11-14" },
-	{ file: "extensions/memory/queue.ts", includes: "2026-10-03" },
-	{ file: "extensions/memory/queue.ts", includes: "2026-10-07" },
-	{ file: "extensions/memory/writer.ts", includes: "2026-10-07" },
-	{ file: "extensions/modes/auto-engine.ts", includes: "2026-10-18" },
-	{ file: "extensions/modes/auto-engine.ts", includes: "2026-11-15" },
-	{ file: "extensions/modes/bash-path-check.ts", includes: "2026-11-07" },
-	{ file: "extensions/modes/bash-path-check.ts", includes: "2026-11-08" },
-	{ file: "extensions/modes/bash-path-check.ts", includes: "2026-11-14" },
-	{ file: "extensions/modes/bash-path-check.ts", includes: "2026-11-15" },
-	{ file: "extensions/modes/bash-permission-match.ts", includes: "2026-11-08" },
-	{ file: "extensions/modes/cc-import.ts", includes: "2026-11-02" },
-	{ file: "extensions/modes/config.ts", includes: "2026-11-14" },
-	{ file: "extensions/modes/fusion-tools.ts", includes: "2026-10-07" },
-	{ file: "extensions/modes/interpret.ts", includes: "2026-10-07" },
-	{ file: "extensions/modes/loop-guard.ts", includes: "2026-10-20" },
-	{ file: "extensions/modes/loop-guard.ts", includes: "2026-11-02" },
-	{ file: "extensions/modes/plan-gate.ts", includes: "2026-10-07" },
-	{ file: "extensions/modes/profile-apply.ts", includes: "2026-10-03" },
-	{ file: "extensions/modes/working-stats.ts", includes: "2026-10-05" },
-	{ file: "extensions/observation-pack/index.ts", includes: "2026-11-14" },
-	{ file: "extensions/observation-pack/projection.ts", includes: "2026-10-03" },
-	{ file: "extensions/observation-pack/projection.ts", includes: "2026-11-14" },
-	{ file: "extensions/observation-pack/renderers.ts", includes: "2026-10-02" },
-	{ file: "extensions/review/index.ts", includes: "2026-11-15" },
-	{ file: "extensions/review/src/directive.ts", includes: "2026-08-26" },
-	{ file: "extensions/review/src/directive.ts", includes: "2026-08-27" },
-	{ file: "extensions/review/src/directive.ts", includes: "2026-11-15" },
-	{ file: "extensions/review/src/report-tool.ts", includes: "2026-09-03" },
-	{ file: "extensions/rules/activation.ts", includes: "2026-10-05" },
-	{ file: "extensions/ui/cc-panels.ts", includes: "2026-10-20" },
-	{ file: "extensions/ui/cc-rows.ts", includes: "2026-10-20" },
-	{ file: "extensions/ui/footer-lines.ts", includes: "2026-10-07" },
-	{ file: "extensions/web-gov/index.ts", includes: "2026-11-14" },
-	{ file: "lib/json-lift.ts", includes: "2026-10-03" },
-	{ file: "lib/json-lift.ts", includes: "2026-10-05" },
-	{ file: "lib/pi-compat.ts", includes: "2026-10-07" },
-	{ file: "lib/rule-text.ts", includes: "2026-09-22" },
-	{ file: "lib/settings.ts", includes: "2026-11-15" },
-	{ file: "lib/tool-render.ts", includes: "2026-10-02" },
+	{ file: "test/contracts/pi-host-semantics.test.ts", includes: "@ts-expect-error" },
 ];
 
 const RULES = [
@@ -76,6 +21,20 @@ const RULES = [
 	{ name: "sermon-marker", re: /\b(IMPORTANT|do not remove|do NOT remove|DO NOT REMOVE)\b/ },
 	{ name: "commented-out-code", re: /^\s*(const |let |var |return |import |export |function |class |await |console\.)/ },
 ];
+
+// A file header is the first comment block, before any code line. Short ones
+// survive (a license or provenance line, a single external gotcha); long ones
+// are the narration headers the no-comments sweep removed.
+const HEADER_MAX_LINES = 8;
+function headerLineCount(src) {
+	let count = 0;
+	for (const line of src.split("\n")) {
+		if (line.trim() === "") { if (count > 0) break; continue; }
+		if (/^\s*(\/\/|\/\*|\*)/.test(line)) { count++; continue; }
+		break;
+	}
+	return count;
+}
 
 function* commentLines(src) {
 	let i = 0;
@@ -138,6 +97,10 @@ for (const abs of files) {
 	const rel = relative(ROOT, abs);
 	if (SKIP_PATH.some((re) => re.test(rel))) continue;
 	const src = readFileSync(abs, "utf8");
+	const headerLen = headerLineCount(src);
+	if (headerLen > HEADER_MAX_LINES) {
+		violations.push(`${rel}:1 [file-header] ${headerLen} comment lines before the first code line`);
+	}
 	for (const c of commentLines(src)) {
 		const norm = c.text.replace(/\s+/g, " ");
 		const exempted = ALLOW.some((a) => a.file === rel && norm.includes(a.includes));

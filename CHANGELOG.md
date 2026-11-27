@@ -14,6 +14,8 @@
 
 ### Changed
 
+- **注释大清扫（no-comments sweep，spec 2026-11-28-no-comments-sweep）**：`extensions/`、`lib/`、`types/`、`scripts/` 与全部测试共 **342 个文件、净 −6,697 行**（这些文件里的纯注释行从 7,194 降到 628）——文件头（spec ID + 设计决策块）、票号/日期/审查轮、步骤旁白、`IMPORTANT` / `do not remove` 类说教、只解释我们自己代码的注释。保留：license 与来源声明（vendored pi-bg-bash 版权、SoL-Pi / Claude Code port 行）、代码表达不了的外部约束（pi 的 `moduleCache: false`、`entry_appended` 对扩展不可见、dash 不认 `pipefail` 等）、公共 API 契约文档（`types/index.d.mts`）。零代码改动（TypeScript printer 去注释后逐文件与改前相同）。AGENTS.md 约定从「文件头注释即文档」改为「不写文件头、不写叙述；不变量写在 docs/ 和契约测试里」；`scripts/lint-comments.mjs` 新增「文件头超过 8 行」规则、扫描范围扩到 `test/`、日期豁免表从 60 条缩到 1 条。顺带更正 `docs/{en,zh}/modes.md`：`PERMISSION_MODES_INHERITED_MODE` 由 core 自己写入（父进程环境），不是 pi-subagents 生产的。
+
 - **memory 索引紧凑化（context diet v3）**：索引行从 `- [slug](slug.md) — description` 改为 `- slug — description`（slug 即文件名主干，policy 写明 `<dir>/<slug>.md` 或 `memory_lookup`），描述原样不截、超 80 字符的行尾标 `⚠`；policy 加三行「知识地图」（仓库事实 / 过去会话 / 额外知识根 → `knowledge_search`）。本机项目记忆实测（组装注入里的索引节）：改前行格式 14.9K；存量重写后仍用旧格式 10.6K；换新行格式 8.4K 字符。
 - **memory 写侧规矩**：`description` 至多 `DESCRIPTION_MAX`（80）字符、名词短语带主题关键词 —— `store.ts` 在 add / 带新 description 的 replace 上拒收超长项（reason 明示），`automation` 在落盘前先做一次有界改写（`rewriteTooLongDescriptions`，按 index 回填，仍超长或不合法则不改）；描述必须单行（含换行的 add / replace 拒收）；抽取 prompt 与 policy 模板同步写明上限；`/memory-consolidate` 的写入同样过上限检查；会话开始发现存量违规时 notify 一次列出条目。importers 与手写文件不经 store，靠 ⚠ 标记与该提示兜底。
 

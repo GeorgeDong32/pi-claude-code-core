@@ -88,9 +88,14 @@ contract table), published types in `types/`, architecture docs per module in
   (vitest). Don't mix frameworks inside one suite directory.
 - **Tabs for indentation** (matches the existing codebase; `.editorconfig`-less
   repo, follow surrounding style).
-- **Header comments are documentation**: every module file opens with a block
-  comment stating its spec IDs and design decisions. When you change behavior,
-  update the header and the matching doc in `docs/`.
+- **No file headers, no narration**: a source file starts with its code.
+  Invariants and design decisions live in `docs/` (bilingual, kept in sync)
+  and in the contract suite, not in comments. A comment survives only when it
+  states a license or provenance, an external constraint the code cannot
+  express (name the external thing: pi host, platform, protocol), or a public
+  API contract. `scripts/lint-comments.mjs` (part of `pnpm run check`) rejects
+  banners, dates, sermon markers, suppressions, commented-out code and long
+  file headers. When you change behavior, update the matching doc in `docs/`.
 - **English code comments**; project log docs (`PROGRESS.md`, `DEVIATIONS.md`,
   `OPEN-QUESTIONS.md`) are Chinese. Architecture docs are bilingual, split by
   language under `docs/en/` and `docs/zh/` — keep both sides in sync when

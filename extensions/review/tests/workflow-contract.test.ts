@@ -26,7 +26,7 @@ function assertScriptParses(script: string): void {
 	}
 	assert.doesNotMatch(script, /cwd: \/[A-Za-z_]/);
 	const wrapped = `(async () => {\n${script}\n})`;
-	new Function(wrapped); // eslint-disable-line no-new-func -- parse-only check
+	new Function(wrapped); // parse-only check
 }
 
 function fakeTarget(overrides: Partial<ReviewTarget> = {}): ReviewTarget {
@@ -226,7 +226,7 @@ describe("buildReviewDirective — pi-subagents API contract", () => {
 				output: "## Synthesis\nstub gate\n\n```json\n{\"status\":\"ok\",\"verdict\":\"approve\",\"issues\":[],\"dispositions\":[]}\n```",
 			}),
 		};
-		const fn = new Function("runs", `return (async () => {\n${script}\n})();`); // eslint-disable-line no-new-func
+		const fn = new Function("runs", `return (async () => {\n${script}\n})();`);
 		const result = await fn(runs);
 		assert.ok(result && typeof result === "object", "script must return an object");
 		assert.ok(Array.isArray(result.reviewers), "reviewers must be an array");
@@ -336,7 +336,7 @@ describe("pi-subagents ≥0.55 read-only task classification", () => {
 				return { ok: true, error: undefined, output: "" };
 			},
 		};
-		const fn = new Function("runs", `return (async () => {\n${script}\n})();`); // eslint-disable-line no-new-func
+		const fn = new Function("runs", `return (async () => {\n${script}\n})();`);
 		await fn(runs);
 		return out;
 	}
@@ -422,7 +422,7 @@ describe("E12 — shared task-line dedup + directive length ceiling", () => {
 			},
 			run: async (_key: string, _params: { task: string }) => ({ ok: true, error: undefined, output: "" }),
 		};
-		const fn = new Function("runs", `return (async () => {\n${script}\n})();`); // eslint-disable-line no-new-func
+		const fn = new Function("runs", `return (async () => {\n${script}\n})();`);
 		await fn(runs);
 		return out;
 	}

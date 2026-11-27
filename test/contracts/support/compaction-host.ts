@@ -1,13 +1,9 @@
 /*
  * Host-faithful compaction test scaffold.
- *
- * compat.registerFauxProvider
- * does NOT work here (ModelRuntime reports "no API implementation").
- *
- * - session.prompt() does NOT throw on provider errors (stopReason:"error"
- *   only) — tests must assert stopReason / faux.state.callCount instead.
- * - faux responses may be factories, which is how tests capture the context
- *   of each provider request.
+ * compat.registerFauxProvider does NOT work here (ModelRuntime reports "no API implementation").
+ * session.prompt() does NOT throw on provider errors (stopReason:"error" only): assert
+ * stopReason / faux.state.callCount instead. Faux responses may be factories; that is how
+ * tests capture each provider request's context.
  */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

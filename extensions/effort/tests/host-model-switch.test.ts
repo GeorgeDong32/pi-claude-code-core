@@ -1,13 +1,9 @@
 /**
- * Manual host model switches
- * (/model command, ctrl+p cycling — any path that does NOT go through the
- * modes profile bracket) reset the thinking level INSIDE the switch:
- *
- *   AgentSession.setModel / _cycleScopedModel / _cycleAvailableModel:
- *     1. agent.state.model = newModel          (synchronous)
- *     2. setThinkingLevel(switch default)      — emits thinking_level_select
- *       synchronously from inside the switch
- *     3. await _emitModelSelect(...)           — model_select arrives last
+ * Manual host model switches (/model, ctrl+p — anything outside the modes
+ * profile bracket) reset the thinking level INSIDE the switch:
+ *   1. agent.state.model = newModel   (synchronous)
+ *   2. setThinkingLevel(switch default) — emits thinking_level_select synchronously
+ *   3. await _emitModelSelect(...)    — model_select arrives last
  */
 import test from "node:test";
 import assert from "node:assert/strict";
