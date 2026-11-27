@@ -104,8 +104,8 @@ describe("FX-3 — MEMORY.md hand-edit bypass (>25K, writer skipped)", () => {
 		expect(r.systemPrompt).not.toContain("BYPASS-MARKER");
 		const indexPart = r.systemPrompt!.slice(r.systemPrompt!.indexOf("Project memory index"));
 		expect(Buffer.byteLength(indexPart, "utf8")).toBeLessThanOrEqual(MEMORY_INDEX_MAX);
-		expect(indexPart).toContain("[alpha](alpha.md)");
-		expect(r.systemPrompt).not.toContain("[user-pref](user-pref.md)"); // user layer retired
+		expect(indexPart).toContain("- alpha — ");
+		expect(r.systemPrompt).not.toContain("- user-pref — "); // user layer retired
 
 		// ② the trigger probe reads the RAW on-disk index bytes
 		const stats = layerStats(dir);

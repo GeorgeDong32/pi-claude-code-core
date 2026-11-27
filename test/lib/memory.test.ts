@@ -173,7 +173,7 @@ describe("P3-ME-03 policy injection", () => {
 		expect(prompt.startsWith("BASE")).toBe(true);
 		// exactly one memory-policy block, plus the index
 		expect(prompt.split("<memory-policy>").length - 1).toBe(1);
-		expect(prompt).toContain("[alpha](a.md) — first");
+		expect(prompt).toContain("alpha (a.md) — first");
 		// path-mismatch fix (2026-10-03): the injected policy names the REAL
 		// project-layer directory, never the literal `<project>/memory/`
 		expect(prompt).toMatch(/PROJECT memory at \/\S*\/memory/);
@@ -437,7 +437,7 @@ describe("P3-ME-09 chmod-verified writability", () => {
 			))!;
 			// policy-only: no index rows (they derive from the unwritable dir)
 			expect(r.systemPrompt).toContain("<memory-policy>");
-			expect(r.systemPrompt).not.toContain("[alpha](a.md)");
+			expect(r.systemPrompt).not.toContain("(a.md)");
 			expect(host.notifications.some((n) => n.includes("policy-only"))).toBe(true);
 		} finally {
 			chmodSync(dir, 0o755);

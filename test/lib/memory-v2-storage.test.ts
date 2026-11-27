@@ -135,7 +135,7 @@ describe("V2-M1 policy injection (single layer)", () => {
 		expect(r.systemPrompt!.split("<memory-policy>").length - 1).toBe(1);
 		// pinned files render as always-active blocks (### title), not index rows
 		const pinnedAt = r.systemPrompt!.indexOf("### prefers-中文");
-		const projAt = r.systemPrompt!.indexOf("[build-flow](p1.md)");
+		const projAt = r.systemPrompt!.indexOf("build-flow (p1.md) — ");
 		expect(pinnedAt).toBeGreaterThan(-1);
 		expect(projAt).toBeGreaterThan(-1);
 		expect(pinnedAt).toBeLessThan(projAt);
@@ -223,8 +223,8 @@ describe("V2-M1 regression — single-layer behaviors", () => {
 		const handler = host.handlers.get("before_agent_start")![0] as (e: unknown, c: unknown) => Promise<{ systemPrompt?: string }>;
 		const r = (await handler({ systemPrompt: "BASE" }, ctx))!;
 		expect(r.systemPrompt).not.toContain("Pinned memories");
-		expect(r.systemPrompt).not.toContain("[unpinned](u1.md)"); // unpinned retired-dir files stay out
-		expect(r.systemPrompt).toContain("[build-flow](p1.md)");
+		expect(r.systemPrompt).not.toContain("(u1.md)"); // unpinned retired-dir files stay out
+		expect(r.systemPrompt).toContain("build-flow (p1.md) — ");
 	});
 
 	it("buildPolicyInjection keeps one <memory-policy> block", () => {

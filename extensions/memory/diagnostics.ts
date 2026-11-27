@@ -18,6 +18,7 @@ export interface MemoryDiagnosticsInput {
 		flushes: number;
 		lastFlush?: string | null;
 		opsApplied: number;
+		descRewritten?: number;
 		lastError?: string | null;
 	};
 	readonly consolidation: { lastReason?: string | null };
@@ -41,7 +42,7 @@ export function renderMemoryDiagnostics(input: MemoryDiagnosticsInput): string {
 	const lines = [
 		`user memory (RETIRED 2026-11-24 — pending migration): ${input.userDir} — files: ${input.userScan.entries.length}, skipped: ${input.userScan.skipped}, index: ${input.userIndexBytes} bytes (not injected, not recalled)`,
 		`project memory: ${input.projectDir} — files: ${input.projectScan.entries.length}, skipped: ${input.projectScan.skipped}, index: ${input.projectIndexBytes}/${MEMORY_INDEX_MAX} bytes`,
-		`automation: ${a.enabled ? "on" : "off"} — reviews ${a.reviews}${a.lastReview ? ` (last: ${a.lastReview})` : ""}, corrections ${a.corrections}${a.lastCorrection ? ` (last: ${a.lastCorrection})` : ""}, flushes ${a.flushes}${a.lastFlush ? ` (last: ${a.lastFlush})` : ""}, ops applied ${a.opsApplied}`,
+		`automation: ${a.enabled ? "on" : "off"} — reviews ${a.reviews}${a.lastReview ? ` (last: ${a.lastReview})` : ""}, corrections ${a.corrections}${a.lastCorrection ? ` (last: ${a.lastCorrection})` : ""}, flushes ${a.flushes}${a.lastFlush ? ` (last: ${a.lastFlush})` : ""}, ops applied ${a.opsApplied}, descriptions rewritten ${a.descRewritten ?? 0}`,
 		...(input.queue
 			? [
 					`pending-extraction queue: ${input.queue.records} record(s), ${input.queue.bytes}B/${QUEUE_DIR_MAX_BYTES / 1024}KB${input.queue.oldestSavedAt ? ` (oldest ${Math.max(0, Math.floor((Date.now() - input.queue.oldestSavedAt) / 86_400_000))}d)` : ""} — drained by the next same-project session; a plaintext copy of session tails (≤7d)`,

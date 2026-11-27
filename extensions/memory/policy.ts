@@ -4,6 +4,14 @@ import { MEMORY_INDEX_MAX } from "../../lib/context-budget.ts";
 export const PINNED_TOTAL_MAX = 2_000;
 export const PINNED_MAX_FILES = 5;
 
+/** Descriptions are the index rows and the recall match surface: a noun
+ * phrase with the topic keywords, never a sentence. Enforced on every write
+ * path (store.ts ops, policy guidance); the index marks violators. */
+export const DESCRIPTION_MAX = 80;
+export function descriptionTooLong(description: string): boolean {
+	return description.length > DESCRIPTION_MAX;
+}
+
 export const POLICY_MARKER = "<memory-policy";
 
 /**
@@ -18,23 +26,30 @@ export function policyCompact(projectMemoryDir: string): string {
 You have persistent PROJECT memory at ${projectMemoryDir} — facts about this
 repository: paths, workflows, conventions, lessons that only apply here.
 Scan the index below before relying on an assumption; when a listed memory
-is relevant, read its file (path in the index line) first. Write project
-memories HERE, exactly at this path — NOT in a memory/ directory inside the
-repository (that location is never read).
+is relevant, read its file first: <this dir>/<slug>.md, or call
+memory_lookup(name). Write project memories HERE, exactly at this path —
+NOT in a memory/ directory inside the repository (that location is never
+read).
+
+Where to look for what: this repository's facts → the index below /
+memory_lookup; earlier sessions of this project →
+knowledge_search(scope: "sessions"); other knowledge roots your settings
+list (notes vaults) → knowledge_search(scope: "roots").
 
 Writing memories: create plain markdown files with a frontmatter block:
 
 \`\`\`
 ---
 name: short-kebab-slug
-description: one-line summary used for recall
+description: noun phrase, at most 80 characters, with the topic keywords (used for recall)
 metadata:
   type: project | feedback | reference
   pinned: true          # optional — always-active instruction (use sparingly)
 ---
 
-Facts, then "Why:" / "How to apply:" lines for guidance-type memories. Link
-related memories with [[their-slug]].
+Conclusion first, then "Why:" / "How to apply:" lines for guidance-type
+memories; under 10 lines, no task log. Link related memories with
+[[their-slug]].
 \`\`\`
 
 Save only what cannot be read from the repo, environment or git history and
@@ -42,7 +57,9 @@ will still matter later. Do not save task progress, current state, secrets,
 or the user's current requirements, open questions and pending
 confirmations — those live in the conversation, not in memory. Never write
 memory outside ${projectMemoryDir}: the cross-project user layer is retired,
-and cross-project knowledge belongs in the user's own notes.
+and cross-project knowledge belongs in the user's own notes. A row marked
+⚠ has an over-long description: rewrite it as a noun phrase when you touch
+that memory.
 
 Both the directory and the MEMORY.md index already exist — write files
 directly, and never edit MEMORY.md by hand (it is derived). Merging,
@@ -58,7 +75,13 @@ function cappedRows(
 	const rows: string[] = [];
 	let size = 0;
 	for (const e of entries) {
-		const row = `- [${e.title}](${e.file}) — ${e.description}`;
+		// One slug per row, never a repeated markdown link: the row names the
+		// file stem (so <dir>/<slug>.md resolves). Imported files whose name
+		// differs from the stem (fingerprint suffixes) show the file in
+		// parentheses so both stay greppable.
+		const stem = e.file.replace(/\.md$/, "");
+		const slug = e.title && e.title !== stem ? `${e.title} (${e.file})` : stem;
+		const row = `- ${slug} — ${e.description}${descriptionTooLong(e.description) ? " ⚠" : ""}`;
 		const rowBytes = Buffer.byteLength(row, "utf8");
 		if (size + rowBytes > maxBytes) break;
 		rows.push(row);

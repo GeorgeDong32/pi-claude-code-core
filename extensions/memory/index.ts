@@ -11,7 +11,9 @@ import { eligibleMemories, listMemoryFiles, scanMemoryDir, scanMemoryDirCached }
 import { reindex } from "./writer.ts";
 import { friendlyProjectHint } from "./paths.ts";
 import { resolveMemoryPaths, sessionsDirFor, gitCanonicalRoot } from "./paths.ts";
-import { buildPolicyInjection, policyCompact } from "./policy.ts";
+import { buildPolicyInjection, descriptionTooLong, DESCRIPTION_MAX, policyCompact } from "./policy.ts";
+import { knowledgeSearch, lookupTool, searchTool } from "./lookup.ts";
+import { appendMemoryStatsEntry, emptyCounters, MEMORY_STATS_ENTRY_TYPE, type MemoryStatsCounters } from "./stats-entry.ts";
 import { renderMemoryDiagnostics } from "./diagnostics.ts";
 import { queueInventory } from "./queue.ts";
 import { byteLength, createRecall, deriveHistory, freshnessHeader, type RecallBlock, type RecallMachine } from "./recall.ts";
@@ -24,7 +26,17 @@ import { createHash } from "node:crypto";
 import { InjectionGate } from "./yield.ts";
 import { recallTransparencyLine, sessionRecall } from "./session-recall.ts";
 import { readSessionProjection } from "../modes/session-branch.ts";
-import { renderSessionRecallCall, sessionRecallResultRows, type SessionRecallArgs } from "./renderers.ts";
+import {
+	knowledgeSearchResultRows,
+	memoryLookupResultRows,
+	renderKnowledgeSearchCall,
+	renderMemoryLookupCall,
+	renderSessionRecallCall,
+	sessionRecallResultRows,
+	type KnowledgeSearchArgs,
+	type MemoryLookupArgs,
+	type SessionRecallArgs,
+} from "./renderers.ts";
 import { renderRows } from "../../lib/tool-render.ts";
 import { registerConsolidation } from "./consolidate.ts";
 
@@ -43,6 +55,18 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 	let memoryDirWritable = true;
 	let memorySettings: MemorySettings = { automation: true };
 	const automationState: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0 };
+	const stats: MemoryStatsCounters = emptyCounters();
+	let descWarned = false;
+	/** Bytes of the index section of the current injection (probe only). */
+	function indexBytesFor(ctx: ExtensionContext): { bytes: number; rows: number } {
+		const text = injectionFor(ctx);
+		const at = text.indexOf("# Project memory index");
+		const section = at >= 0 ? text.slice(at) : "";
+		return { bytes: byteLength(section), rows: (section.match(/^-/gm) ?? []).length };
+	}
+	function descriptionViolations(dir: string): string[] {
+		return scanMemoryDir(dir).entries.filter((e) => descriptionTooLong(e.description)).map((e) => e.file.replace(/\.md$/, ""));
+	}
 	let recallMachine: RecallMachine | null = null;
 	let recallModelLabel = "";
 	let recallOffNotified = false;
@@ -297,6 +321,8 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 		try {
 			warnedMisfiles = new Set();
 			bypassNoticeShown = false;
+			descWarned = false;
+			Object.assign(stats, emptyCounters());
 			consolidationUsedThisSession = false;
 			consolidationDirectiveActive = false;
 			consolidationLastReason = null;
@@ -318,6 +344,19 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 			} catch {
 			}
 			reindex(memoryDir(ctx));
+			if (!descWarned) {
+				const violations = descriptionViolations(memoryDir(ctx));
+				if (violations.length > 0) {
+					descWarned = true;
+					if (ctx?.hasUI) {
+						sharedNotify(
+							ctx,
+							`${violations.length} memory description(s) exceed ${DESCRIPTION_MAX} chars — rewrite them as noun phrases when touched: ${violations.slice(0, 4).join(", ")}${violations.length > 4 ? ", …" : ""}`,
+							"warning",
+						);
+					}
+				}
+			}
 			try {
 				accessSync(memoryDir(ctx), fsConstants.W_OK);
 				memoryDirWritable = true;
@@ -355,6 +394,7 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 			const systemPrompt = `${event.systemPrompt ?? ""}\n\n${injectionFor(ctx)}`;
 			const waitMs = memorySettings.recallWaitMs ?? DEFAULT_RECALL_WAIT_MS;
 			const block = isUserRun ? await recallBlockFor(event.prompt, ctx, waitMs) : null;
+			if (block) stats.recallInjections++;
 			return block ? { systemPrompt, message: makeRecallMessage(block) } : { systemPrompt };
 		} catch {
 			return undefined;
@@ -407,6 +447,18 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 			checkProtectedFiles(ctx);
 		} catch {
 		}
+		try {
+			const index = indexBytesFor(ctx);
+			appendMemoryStatsEntry(pi, {
+				v: 1,
+				indexBytes: index.bytes,
+				indexRows: index.rows,
+				descTooLong: descriptionViolations(memoryDir(ctx)).length,
+				...stats,
+				descRewritten: automationState.descRewritten ?? 0,
+			});
+		} catch {
+		}
 	});
 	pi.on("tool_result", (event, ctx: ExtensionContext) => {
 		try {
@@ -420,6 +472,7 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 			if (e.toolName === "read" && typeof e.input?.path === "string") {
 				const path = e.input.path;
 				if ([userMemoryDir(ctx), memoryDir(ctx)].some((d) => path === d || path.startsWith(`${d}/`))) {
+					stats.memoryReads++;
 					const header = (() => {
 						try {
 							return freshnessHeader(statSync(path).mtimeMs, readFileSync(path, "utf8"));
@@ -466,6 +519,7 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 	pi.registerTool(defineTool({
 		name: "session_recall",
 		label: "Session Recall",
+		exposure: "deferred",
 		description:
 			"Search past pi sessions for this project (read-only). AND-matched query over user/assistant text. Returns matching excerpts with file/line pointers.",
 		parameters: Type.Object({
@@ -509,6 +563,31 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 		renderResult: (result, _options, theme) =>
 			renderRows(sessionRecallResultRows(result), theme as never),
 	}));
+	pi.registerTool({
+		...lookupTool(memoryDir, () => {
+			stats.lookups++;
+		}),
+		renderCall: (args, theme) => renderMemoryLookupCall(args as MemoryLookupArgs, theme as never),
+		renderResult: (result, _options, theme) => renderRows(memoryLookupResultRows(result), theme as never),
+	});
+	pi.registerTool({
+		...searchTool(
+			(ctx) => ({
+				home,
+				memoryDir: memoryDir(ctx),
+				searchRoots: memorySettings.searchRoots,
+				sessionSearch: async (input) => {
+					const r = await sessionRecall({ ...input, home });
+					return { hits: r.hits, scannedFiles: r.scannedFiles };
+				},
+			}),
+			() => {
+				stats.searches++;
+			},
+		),
+		renderCall: (args, theme) => renderKnowledgeSearchCall(args as KnowledgeSearchArgs, theme as never),
+		renderResult: (result, _options, theme) => renderRows(knowledgeSearchResultRows(result), theme as never),
+	});
 
 	pi.registerCommand("memory", {
 		description: "Show memory status (two layers: file counts, skipped files, index sizes)",

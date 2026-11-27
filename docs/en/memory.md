@@ -33,7 +33,7 @@ importers land everything in the project layer.
 | `tool_call` | `guardMemoryToolCall` (G1 verdicts; BH-R2: the secret probe is memory-layer-scoped and scans only the incoming text — write's `content`, edit's `edits[].newText`); any write into the retired user dir is blocked outright; read suppression is history-derived (RV-07) |
 | `tool_result` | Stale-read staleness note |
 | `agent_settled` | Consolidation directive-turn flag cleared (automation accounting reopens) |
-| `registerTool` | `session_recall`, `memory_consolidate` |
+| `registerTool` | `session_recall` (deferred), `memory_lookup` (deferred), `knowledge_search` (deferred), `memory_consolidate` |
 | `registerCommand` | `/memory` (incl. recall status + retired-layer notice), `/memory-consolidate` (manual-only, project layer), `/memory-import-claude`, `/memory-import-hermes` |
 
 **No `message_end` / `turn_end` recall or consolidation** — recall is
@@ -98,6 +98,8 @@ selector call within the same boundary budget.
 | `queue.ts` | Pending-extraction queue (spec 2026-10-07 P0-3 single-rename ownership protocol): shutdown stages the unextracted tail as ONE atomic JSON record under `~/.pi/agent/memory-queue/`; the next same-project `session_start` drains it in the background. BH-E2: expiry precedes routing skips; the shutdown handler runs ZERO LLM |
 | `importers.ts` | Claude / Hermes import; everything lands in the project layer (user-typed sections become `reference`); never overwrites local edits |
 | `store.ts`, `llm.ts`, `paths.ts` | V2 storage (atomic write primitive invalidates the scan cache), the single LLM lane, path resolution (`memoryWriteRoots` = project dir only — the retired user dir has no approval carve-out). `MemoryLayer` stays on the frozen MemoryOp shape; user-layer ops are skipped with an explicit reason |
+| `lookup.ts` | On-demand half of the context diet: `memory_lookup(name)` (full text of one memory; name passes the write-side file-name whitelist) and `knowledge_search(query, scope)` — case-insensitive substring search over the memory dir, the `memory.searchRoots` setting and/or past sessions (via `session-recall.ts`); ≤2000 files scanned, ≤20 hits, hit lines only — never file bodies |
+| `stats-entry.ts` | `cc-core-memory-stats`: one display-only entry per agent run with the context-diet counters (index bytes/rows, over-long descriptions, memory reads, lookup/search calls, recall injections, rewritten descriptions) — the data for the index A/B |
 | `session-recall.ts` | Cross-session recall (`session_recall` tool): async bounded scan — ≤200 files, ≤1MB bounded partial reads, ≤8MB total, transparency footer |
 
 ## Invariants & gotchas
@@ -117,6 +119,18 @@ selector call within the same boundary budget.
   discard — never reinstate late delivery.
 - **Session-stable injection**: never rebuild the policy block on a memory
   write; the rebuild keys are session start and the compaction count only.
+- **Compact index, on-demand detail (context diet v3)**: index rows are
+  `- slug — description` (the slug is the file stem, not repeated as a link).
+  Descriptions are noun phrases of at most `DESCRIPTION_MAX` (80) characters:
+  `store.ts` rejects longer ones on every write path, `llm.ts` runs one
+  bounded rewrite first so a review's other facts survive, the index marks
+  violators with `⚠` and `/memory` reports the count. `memory_lookup` and
+  `knowledge_search` carry `exposure: "deferred"` — nothing in the tool list
+  until `tool_search` activates them (codemode can call them regardless).
+  `memory.searchRoots` (settings.json, absolute dirs, default `[]`) is the
+  only way to point `knowledge_search` at a notes vault; core never assumes a
+  vault path. The `cc-core-memory-stats` entry is the probe: compare
+  memory-read + lookup + search counts per session before/after the diet.
 - **Zero-LLM shutdown (spec 2026-10-03)**: `session_shutdown` only stages a
   queue record; extraction happens later on the drain lane.
 - **Queue ownership protocol (spec 2026-10-07 P0-3)**: one staged record is

@@ -228,8 +228,8 @@ describe("V2-M commands + diagnostics", () => {
 		expect(content).toContain("run /memory-import-hermes");
 		// steady-state surface: exactly these commands
 		expect([...host.commands.keys()].sort()).toEqual(["memory", "memory-consolidate", "memory-import-claude", "memory-import-hermes"]);
-		// tools: session_recall + memory_consolidate
-		expect([...host.tools.keys()].sort()).toEqual(["memory_consolidate", "session_recall"]);
+		// tools: session_recall + memory_consolidate + the two deferred on-demand tools
+		expect([...host.tools.keys()].sort()).toEqual(["knowledge_search", "memory_consolidate", "memory_lookup", "session_recall"]);
 	});
 });
 

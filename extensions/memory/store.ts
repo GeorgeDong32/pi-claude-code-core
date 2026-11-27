@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { isValidMemoryType, listMemoryFiles, slugify, splitFrontmatter } from "./memdir.ts";
 import { removeDocument, reindex, serializeMemoryDocument, writeDocument } from "./writer.ts";
 import { findSecret } from "./guard.ts";
+import { DESCRIPTION_MAX, descriptionTooLong } from "./policy.ts";
+export const DESCRIPTION_TOO_LONG_REASON = `description exceeds ${DESCRIPTION_MAX} characters — rewrite as a noun phrase with the topic keywords`;
 
 export const MEMORY_FILE_BODY_MAX = 8 * 1024;
 export const MEMORY_FILE_TOTAL_MAX = MEMORY_FILE_BODY_MAX + 2048;
@@ -114,6 +116,10 @@ export function applyMemoryOps(
 				outcome.skipped.push({ file: op.file, action: op.action, reason: `invalid type "${op.type}"` });
 				continue;
 			}
+			if (descriptionTooLong(op.description)) {
+				outcome.skipped.push({ file: op.file, action: op.action, reason: DESCRIPTION_TOO_LONG_REASON });
+				continue;
+			}
 			if (!op.body || op.body.trim().length === 0) {
 				outcome.skipped.push({ file: op.file, action: op.action, reason: "add requires a body" });
 				continue;
@@ -162,6 +168,10 @@ export function applyMemoryOps(
 			}
 			if (op.old_text !== undefined && !current.includes(op.old_text)) {
 				outcome.skipped.push({ file: op.file, action: op.action, reason: "stale anchor: old_text not in current file" });
+				continue;
+			}
+			if (op.description !== undefined && descriptionTooLong(op.description)) {
+				outcome.skipped.push({ file: op.file, action: op.action, reason: DESCRIPTION_TOO_LONG_REASON });
 				continue;
 			}
 			const merged: MemoryOp = {

@@ -26,6 +26,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { completeSimple } from "@earendil-works/pi-ai/compat";
 import { liftJson } from "../../lib/json-lift.ts";
 import type { MemoryOp } from "./store.ts";
+import { DESCRIPTION_MAX, descriptionTooLong } from "./policy.ts";
 
 export type LlmComplete = typeof completeSimple;
 
@@ -175,6 +176,53 @@ export async function completeMemoryOps(
 	return { ok: true, ops };
 }
 
+
+/**
+ * Descriptions over DESCRIPTION_MAX are rejected by the store; before that
+ * hard gate, one bounded completion rewrites them as noun phrases so a
+ * review's other facts are not lost with the op. Indices (not names) map the
+ * rewrites back, so duplicate names in one batch stay unambiguous.
+ */
+export async function rewriteTooLongDescriptions(
+	model: Model<Api> | undefined,
+	registry: RegistryLike | undefined,
+	ops: MemoryOp[],
+	request: { timeoutMs?: number; signal?: AbortSignal },
+	deps: { complete?: LlmComplete } = {},
+): Promise<{ ops: MemoryOp[]; rewritten: number }> {
+	const bad = ops.map((op, index) => ({ op, index })).filter(({ op }) => op.description !== undefined && descriptionTooLong(op.description));
+	if (bad.length === 0) return { ops, rewritten: 0 };
+	const listing = bad.map(({ op, index }) => `${index}: ${op.description}`).join("\n");
+	const done = await completeText(
+		model,
+		registry,
+		{
+			systemPrompt: "You tighten memory index lines. Rewrite each description below as a noun phrase of at most " + DESCRIPTION_MAX + " characters that keeps the bracketed category prefix (e.g. [insight]) and the topic keywords. Drop explanations and clause chains; never invent facts.",
+			userPrompt: `Descriptions (index: text):\n${listing}\n\nRespond with JSON only: {"rewrites":[{"index":<number>,"description":"<noun phrase>"}]}`,
+			timeoutMs: request.timeoutMs,
+			signal: request.signal,
+		},
+		deps,
+	);
+	if (!done.ok) return { ops, rewritten: 0 };
+	let parsed: { rewrites?: Array<{ index?: unknown; description?: unknown }> };
+	try {
+		parsed = JSON.parse(done.text);
+	} catch {
+		return { ops, rewritten: 0 };
+	}
+	const next = ops.slice();
+	let rewritten = 0;
+	for (const item of Array.isArray(parsed?.rewrites) ? parsed.rewrites : []) {
+		const index = item.index;
+		const description = item.description;
+		if (typeof index !== "number" || !Number.isInteger(index) || index < 0 || index >= ops.length) continue;
+		if (typeof description !== "string" || description.length === 0 || descriptionTooLong(description)) continue;
+		next[index] = { ...next[index], description };
+		rewritten++;
+	}
+	return { ops: next, rewritten };
+}
 
 const VALID_ACTIONS = new Set(["add", "replace", "remove"]);
 const VALID_LAYERS = new Set(["user", "project"]);

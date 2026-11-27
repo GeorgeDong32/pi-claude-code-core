@@ -52,7 +52,7 @@ import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { registerCompactionSubscriber } from "../../lib/compaction-seam.ts";
 
-import { completeMemoryOps, resolveModelRef, type LlmComplete, type OpsCompletion } from "./llm.ts";
+import { completeMemoryOps, resolveModelRef, rewriteTooLongDescriptions, type LlmComplete, type OpsCompletion } from "./llm.ts";
 import { applyMemoryOps, type MemoryOp } from "./store.ts";
 import { scanMemoryDirCached } from "./memdir.ts";
 import { friendlyProjectHint } from "./paths.ts";
@@ -68,6 +68,9 @@ export interface MemorySettings {
 	model?: string;
 	recallModel?: string;
 	recallWaitMs?: number;
+	/** Absolute paths knowledge_search(scope: "roots") may scan besides the
+	 * memory dir (notes vaults). Empty by default: core never assumes a vault. */
+	searchRoots?: string[];
 }
 
 export const DEFAULT_RECALL_WAIT_MS = 5_000;
@@ -76,16 +79,19 @@ export const RECALL_WAIT_MIN_MS = 1_000;
 export const RECALL_WAIT_MAX_MS = 15_000;
 
 export function loadMemorySettings(agentDir: string): MemorySettings {
-	const raw = readJson<{ memory?: { automation?: unknown; model?: unknown; recallModel?: unknown; recallWaitMs?: unknown } }>(
-		join(agentDir, "settings.json"),
-		{},
-	);
+	const raw = readJson<{
+		memory?: { automation?: unknown; model?: unknown; recallModel?: unknown; recallWaitMs?: unknown; searchRoots?: unknown };
+	}>(join(agentDir, "settings.json"), {});
 	const wait = typeof raw.memory?.recallWaitMs === "number" ? raw.memory.recallWaitMs : undefined;
+	const searchRoots = Array.isArray(raw.memory?.searchRoots)
+		? raw.memory.searchRoots.filter((r): r is string => typeof r === "string" && r.startsWith("/"))
+		: [];
 	return {
 		automation: raw.memory?.automation !== false,
 		model: typeof raw.memory?.model === "string" ? raw.memory.model : undefined,
 		recallModel: typeof raw.memory?.recallModel === "string" ? raw.memory.recallModel : undefined,
 		recallWaitMs: wait === undefined ? undefined : Math.min(RECALL_WAIT_MAX_MS, Math.max(RECALL_WAIT_MIN_MS, wait)),
+		...(searchRoots.length > 0 ? { searchRoots } : {}),
 	};
 }
 
@@ -154,14 +160,14 @@ const REVIEW_SYSTEM = `You extract durable memories from coding-agent conversati
 Save only what survives this session and applies to THIS repository: project facts, conventions, corrections, failures and tool quirks (layer "project"). Corrections and failures use type "feedback" and carry a bracketed category prefix in the description, e.g. [correction], [tool-quirk], [insight], [convention], [failure].
 Do not save task progress, transient state, the user's current requirements, unresolved questions or pending confirmations (save only settled decisions and verified facts), anything derivable from the code or git history, or secrets.
 
-Respond with JSON only, no markdown fences: a single object whose operations field is an array. Each operation object carries an action of add, replace or remove; a layer of "project"; for add also name (kebab slug), description (one line), type (feedback, project or reference) and body; for replace also file, body and old_text quoting an exact substring of the CURRENT file shown below; for remove also file. When the conversation contradicts an existing memory, replace it instead of adding a duplicate. If nothing is durable, return an empty operations array.`;
+Respond with JSON only, no markdown fences: a single object whose operations field is an array. Each operation object carries an action of add, replace or remove; a layer of "project"; for add also name (kebab slug), description (a noun phrase of at most 80 characters carrying the topic keywords — not a sentence), type (feedback, project or reference) and body; for replace also file, body and old_text quoting an exact substring of the CURRENT file shown below; for remove also file. When the conversation contradicts an existing memory, replace it instead of adding a duplicate. If nothing is durable, return an empty operations array.`;
 
 const CORRECTION_SYSTEM = `The user just corrected the agent. Decide the durable PROJECT memory to save: a wrong assumption the agent made, a project convention, or an environment/tool fact.
 If an existing memory below is now wrong, replace that file (quote its exact text in old_text); otherwise add. Also include one feedback-type memory capturing the correction itself with a [correction] prefix in its description.
 Respond with JSON only, no markdown fences: a single object whose operations field is an array (same fields as described). If the correction is purely transient (a typo, a one-off task detail, or a request about the current task only), return an empty operations array.`;
 
 const FLUSH_SYSTEM = `The session is being compressed or closed and is about to lose context. Save durable PROJECT facts worth remembering — prioritize corrections and recurring patterns over task-specific detail. Never save task progress, the user's current requirements, unresolved questions or pending confirmations.
-Respond with JSON only, no markdown fences: a single object whose operations field is an array (add, replace or remove; layer "project"; add carries name, description, type, body; replace carries file, body and an exact old_text quote from the current file; remove carries file). If nothing is durable, return an empty operations array.`;
+Respond with JSON only, no markdown fences: a single object whose operations field is an array (add, replace or remove; layer "project"; add carries name, description (noun phrase, at most 80 characters), type, body; replace carries file, body and an exact old_text quote from the current file; remove carries file). If nothing is durable, return an empty operations array.`;
 
 export function projectKeyForDir(projectDir: string): string | undefined {
 	const key = friendlyProjectHint(projectDir);
@@ -180,6 +186,7 @@ export interface AutomationState {
 	corrections: number;
 	flushes: number;
 	opsApplied: number;
+	descRewritten?: number;
 	lastReview?: string;
 	lastCorrection?: string;
 	lastFlush?: string;
@@ -357,7 +364,15 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 			return 0;
 		}
 		if (completion.ops.length === 0) return 0;
-		const outcome = applyMemoryOps(completion.ops as MemoryOp[], { project: dirs(ctx).project });
+		const ops = await rewriteTooLongDescriptions(
+			model,
+			ctx.modelRegistry as never,
+			completion.ops as MemoryOp[],
+			{ timeoutMs, signal: linkedSignal(extraSignal) },
+			{ complete: deps.complete },
+		);
+		state.descRewritten = (state.descRewritten ?? 0) + ops.rewritten;
+		const outcome = applyMemoryOps(ops.ops, { project: dirs(ctx).project });
 		state.opsApplied += outcome.applied;
 		if (outcome.error) state.lastError = `${kind}: ${outcome.error}`;
 		return outcome.applied;

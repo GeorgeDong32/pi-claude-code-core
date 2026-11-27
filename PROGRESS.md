@@ -1,5 +1,18 @@
 # PROGRESS
 
+## 2026-11-27 memory 瘦身批（context diet v3：紧凑索引 + 按需工具 + 写侧规矩 + 探针）
+
+- **来源**：对照 AI_Engineer_CODE_2026 harness 演讲（Petrov「模型本来就知道的 70%」、Schmid「删 90%」、Hallie「重复强调适得其反」、Alvoeiro 缓存稳定性）实测每请求固定负担；spec `~/.factory/specs/2026-11-24-core-context-diet.md`（v1 被 reviewer REJECT——量错了集合，见 `measure-prompt-burden-on-declared-tool-set`；v2/v3 按用户拍板修订）。goal 工具按需化**不在本批**（`syncGoalTools` 本就按状态增删；进一步瘦身作第二批）。
+- **存量先重写**（用户授权，备份 `~/backups/core-project-memory-20261127-194609.tgz`）：84 → 71 条，描述全部 ≤80 字符（中位 64），8 组合并、3 条已修问题删除、2 条重写（headless 规则改默认有头 TUI；vision 条目因 glm-5.4 已声明 image 输入而过时），修 1 处旧断链；AGENTS.md 未动。索引（旧行格式）14.9K → 10.6K 字符。
+- **索引行**（`policy.ts`）：`- slug — description`（slug = 文件名主干；name ≠ 主干时写 `name (file.md)`），超 80 字符标 `⚠`；policy 写明 `<dir>/<slug>.md` / `memory_lookup`，加三行知识地图；写作指引改为「描述 = 名词短语 ≤80 字符、正文 < 10 行不写任务日志」。
+- **写侧规矩**：`store.ts` 在 add 与带新 description 的 replace 上拒收超长项（`DESCRIPTION_TOO_LONG_REASON`）；`llm.ts#rewriteTooLongDescriptions` 在落盘前做一次有界改写（按 index 回填，仍超长/不合法不改）；抽取 prompt 同步；`session_start` 发现存量违规 notify 一次；`/memory` 诊断显示 `descriptions rewritten`。
+- **按需工具**（`lookup.ts`）：`memory_lookup({name})`（name 过 `safeMemoryFileName`，未命中给近似名）与 `knowledge_search({query, scope})`（memory / roots / sessions / all；子串匹配、≤2000 文件、≤20 条、只给命中行不给正文；sessions 转调 `sessionRecall`）；`session_recall` 一并改 `exposure: "deferred"`。设置 `memory.searchRoots`（settings.json 既有 `memory` 键，绝对路径，默认空）。
+- **探针**（`stats-entry.ts`，契约 ME-STAT-01）：`cc-core-memory-stats` display-only entry，每 agent run 一条（indexBytes/indexRows/descTooLong/memoryReads/lookups/searches/recallInjections/descRewritten）。
+- **测试**：新增 `test/lib/memory-context-diet.test.ts`（10）、`test/contracts/memory-stats-entry.test.ts`（1）；P1-3 扩「无 goal 会话各轮声明工具集合不变」断言；既有测试里钉旧行格式的 7 处断言改为新格式（强度不变：`memory.test.ts` ×2、`memory-v2-storage` ×3、`memory-index-bypass` ×2）、`memory-v2-migration` 工具名集合加两个新工具。变异检验：撤 store 上限 → 红；lookup 暴露改 direct → 红；删 stats entry → 红（三处均还原并 cmp 核对）。
+- **门禁**：check exit 0（lint-comments 358 文件）；vitest 93 文件 1279/1279；node:test 各套件 fail 0；contracts 19 文件 111 passed + 4 todo。
+- **文档**：`docs/{en,zh}/memory.md`（表面表、内部地图、不变量）；`test/contracts/README.md` 新行；CHANGELOG Unreleased Added 两条 + Changed 两条。
+- **未做/后续**：goal 工具瘦身（第二批：`/goal` 时一次性激活 + 注入说明、合并为 `goal_update`）；A/B（探针落地一周后扫日志，访问事件 = read + lookup + search，剔除有 recall 注入的会话）；真机 TUI 验收（新行格式、`tool_search` 激活 `memory_lookup`、session_start 的 ⚠ 提示）尚未做。
+
 ## 2026-11-24 harness 演讲对照优化批（P0-1 / P0-2 / P1-3）
 
 - **来源**：对照 AI_Engineer_CODE_2026 六篇 harness 演讲（Schmid / Ronacher / Alvoeiro / Konda / Bhardwaj / Hedin）与 core 现状，用户拍板三项一并做，P1-4（review finding 落盘）暂不做。数据基线来自本机 30 天会话日志扫描（6,200 次 bash：77.8% 含管道、66.6% 带 head/tail；390 段 check 命令 217 段直通管道；obs_recall 71 次 / 33 对象，每对象实际翻页数 == 需要页数，中位 2 最大 4）。

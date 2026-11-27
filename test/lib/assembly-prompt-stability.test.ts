@@ -99,6 +99,13 @@ describe("assembled core: the system prompt does not move within a session", () 
 			expect(first).toContain("<!-- permission-modes:context -->");
 			expect(frozen).not.toContain("<!-- permission-modes:context -->");
 			expect(first.replace(modesBlock, "\n")).toBe(frozen);
+
+			// Tool declarations are request prefix too (context diet v3 §5): with
+			// no goal, the declared set the goal module re-syncs every run must
+			// not move either — a change here is a cache miss on the next run.
+			const declaredSets = host.activeToolsCalls.slice(1).map((names) => [...names].sort().join(","));
+			expect(declaredSets.length).toBeGreaterThan(0);
+			expect(new Set(declaredSets).size, `declared tool set moved:\n${[...new Set(declaredSets)].join("\n---\n")}`).toBe(1);
 			rmSync(sessionDir, { recursive: true, force: true });
 		} finally {
 			vi.useRealTimers();

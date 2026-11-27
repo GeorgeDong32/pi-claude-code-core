@@ -29,7 +29,7 @@ session start / compaction 时重建)、在**任务开头的用户消息**上以
 | `tool_call` | `guardMemoryToolCall`(G1 判定;BH-R2:密钥探测只作用于记忆层路径 —— write 扫 `content`、edit 扫 `edits[].newText`);写入已退役用户目录的任何操作直接拒绝;已读抑制从历史推导(RV-07) |
 | `tool_result` | 陈旧读 staleness 标注 |
 | `agent_settled` | 清除整合 directive-turn 标记(automation 记账重开) |
-| `registerTool` | `session_recall`、`memory_consolidate` |
+| `registerTool` | `session_recall`(deferred)、`memory_lookup`(deferred)、`knowledge_search`(deferred)、`memory_consolidate` |
 | `registerCommand` | `/memory`(含 recall 状态 + 退役层提示)、`/memory-consolidate`(仅手动,项目层)、`/memory-import-claude`、`/memory-import-hermes` |
 
 **不再有 `message_end` / `turn_end` 召回或整合** —— 召回仅 prompt 路径
@@ -88,6 +88,8 @@ prompt 在同一边界预算内触发一次选择器调用。
 | `queue.ts` | 待提取队列(spec 2026-10-07 P0-3 单次 rename 所有权协议):shutdown 把未提取尾窗原子落盘为 `~/.pi/agent/memory-queue/` 下的一条 JSON 记录;下一个同项目 `session_start` 后台 drain。BH-E2:过期判定先于路由 skip;shutdown handler 本体**零 LLM** |
 | `importers.ts` | Claude / Hermes 导入;一切落项目层(user 类型段转为 `reference`);绝不覆写本地编辑 |
 | `store.ts`、`llm.ts`、`paths.ts` | V2 存储(原子写原语顺带失效扫描缓存)、唯一 LLM 通道、路径解析(`memoryWriteRoots` 仅项目目录 —— 已退役用户目录无审批 carve-out)。`MemoryLayer` 留在冻结的 MemoryOp 形状上;user 层 op 以显式理由跳过 |
+| `lookup.ts` | 瘦身的按需半边:`memory_lookup(name)`(单条记忆全文;name 过写入侧同一套文件名白名单)与 `knowledge_search(query, scope)` —— 对记忆目录、`memory.searchRoots` 设置和/或过去会话(经 `session-recall.ts`)做大小写不敏感子串搜索;扫描 ≤2000 文件、返回 ≤20 条、只给命中行不给文件正文 |
+| `stats-entry.ts` | `cc-core-memory-stats`:每个 agent run 一条 display-only entry,带瘦身计数器(索引字节/行数、超长描述数、记忆 read 次数、lookup/search 调用、recall 注入、改写描述数)—— 索引 A/B 的数据源 |
 | `session-recall.ts` | 跨会话回溯(`session_recall` 工具):异步有界扫描 —— ≤200 文件、单文件 ≤1MB 有界部分读、总预算 ≤8MB、透明度尾部行 |
 
 ## 不变量与坑
@@ -102,6 +104,7 @@ prompt 在同一边界预算内触发一次选择器调用。
 - **边界召回**:仅当自最近 compaction 起真实用户消息数少于
   `RECALL_BOUNDARY_TURNS`(2)时选择;message_end/steer 路径永不选择;
   超时 = abort + 丢弃 —— 绝不恢复迟投递。
+- **紧凑索引、按需取详情(context diet v3)**:索引行是 `- slug — description`(slug 即文件名主干,不再重复成链接)。描述是至多 `DESCRIPTION_MAX`(80)字符的名词短语:`store.ts` 在每条写入路径拒收超长项,`llm.ts` 先做一次有界改写让同一批 review 的其他事实不丢,索引给违规项标 `⚠`,`/memory` 报数量。`memory_lookup` 与 `knowledge_search` 是 `exposure: "deferred"` —— `tool_search` 激活前不进工具清单(codemode 随时可调)。`memory.searchRoots`(settings.json,绝对路径,默认 `[]`)是让 `knowledge_search` 扫笔记库的唯一入口;core 永不假设 vault 路径。`cc-core-memory-stats` entry 是探针:按会话对比瘦身前后的 read + lookup + search 次数。
 - **会话稳定注入**:绝不在 memory 写入时重建 policy 块;重建键只有
   session start 与 compaction 计数。
 - **零 LLM 退出(spec 2026-10-03)**:`session_shutdown` 只同步落盘一条队列
