@@ -8,14 +8,14 @@ import { registerCompactionSubscriber } from "../../lib/compaction-seam.ts";
 import { footerStatus, truncateText, displayObjectiveTitle, pauseReasonLabel } from "./goal-core.ts";
 import { renderGoalAuditEvent, renderGoalEvent, type GoalAuditEventDetails } from "./renderers.ts";
 import { registerQuestionnaireTools } from "./goal-questionnaire.ts";
-import { ACTIVE_GOAL_TOOL_NAMES, CREATE_GOAL_TOOL_NAME, PROPOSE_DRAFT_TOOL_NAME, QUESTIONNAIRE_TOOL_NAME, QUESTION_TOOL_NAME, SISYPHUS_STEP_TOOL_NAME, lifecycleToolNamesForGoalStatus, TWEAK_APPLY_TOOL_NAME } from "./goal-tool-names.ts";
+import { CREATE_GOAL_TOOL_NAME, PROPOSE_DRAFT_TOOL_NAME, SISYPHUS_STEP_TOOL_NAME } from "./goal-tool-names.ts";
 import { asRecord, cloneGoal, goalFocusDetails, normalizeGoalRecord, normalizeGoalFocusEntry, nowIso, type AssistantMessageLike, type GoalFocusEntry, type GoalFocusReason, type GoalCreationConfig, type GoalEventDetails, type GoalRecord, type GoalUsage } from "./goal-record.ts";
 import { createGoalAccounting } from "./goal-accounting.ts";
 import { appendGoalEvent, latestAuditorResultForGoal, readGoalLedger } from "./goal-ledger.ts";
 import { buildCompactionSummary } from "./goal-compaction.ts";
 import { archiveGoalFile, mergeGoalPromptFromDisk, readActiveGoalPool, sanitizeGoalPaths, writeActiveGoalFile } from "./storage/goal-files.ts";
 import { openGoalsFromPool, otherOpenGoalCount } from "./goal-pool.ts";
-import { auditorRejectionBlock, continuationPrompt, goalPrompt, staleContinuationPrompt, unfocusedOpenGoalsPrompt, untrustedObjectiveBlock } from "./prompts/goal-prompts.ts";
+import { auditorRejectionBlock, continuationPrompt, goalPrompt, staleContinuationPrompt, unfocusedOpenGoalsPrompt, untrustedObjectiveBlock, pausedGoalPrompt } from "./prompts/goal-prompts.ts";
 import { buildGoalRunningNotification } from "./widgets/goal-notifications.ts";
 import { createGoalUi } from "./ui.ts";
 
@@ -692,9 +692,7 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			} catch {
 			}
 			return {
-				systemPrompt: `${currentSystemPrompt()}\n\n[PI GOAL PAUSED goalId=${current.id}]\n${untrustedObjectiveBlock(current)}${pauseExtras.join("\n")}${auditorExtra}\n\nGoal lifecycle actions (tools.update_goal, tools.pause_goal, tools.abort_goal, tools.apply_goal_tweak, goal_question, goal_questionnaire) are codemode tools: call them from a codemode script, e.g. await tools.pause_goal({ reason, suggestedAction }); a direct call by bare name is not a declared tool.
-
-The goal is paused. Do not autonomously continue substantive work unless the user resumes it with /goal-resume. If the user explicitly asks to finish or abandon the paused goal, or the objective is already satisfied based on available evidence, you may call update_goal(status=complete) or abort_goal without resuming. Do not call pause_goal again.`,
+				systemPrompt: `${currentSystemPrompt()}\n\n${pausedGoalPrompt(current, pauseExtras, auditorExtra)}`,
 			};
 		}
 		const activeGoalNarrowed = lifecycle.focused();

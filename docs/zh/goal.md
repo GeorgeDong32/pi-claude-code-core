@@ -46,7 +46,7 @@
 | `goal-core.ts` | 渲染/状态助手(footer 状态、时长/token 格式化、单行摘要) |
 | `renderers.ts` | 消息渲染器(result / event / audit-event)——自 wiring 拆出(arch review C6),不经工厂即可测 |
 | `goal-record.ts`、`goal-pool.ts`、`goal-ledger.ts` | 状态模型:active/paused 记录、开放目标池、用量台账 |
-| `goal-policy.ts` | 各 goal 状态下允许哪些工具(`ACTIVE_GOAL_TOOL_NAMES`、`POST_STOP_ALLOWED_TOOLS` 等) |
+| `goal-policy.ts` | 生命周期动作的执行层门禁:按 goal 状态校验 complete / pause / abort,`validateNoDraftingPhase`(确认或 tweak 访谈期间拒绝),`validateDraftingInterview`(提问工具只在当前聚焦 goal 的访谈内应答)。可见性不再承担门禁:生命周期工具是 codemode 暴露的。 |
 | `goal-draft.ts`、`goal-questionnaire.ts` | /goals 式意图讨论 → `propose_goal_draft` → Confirm/Continue 对话框 |
 | `goal-auditor.ts` | 独立完成度审计;其批准是 `update_goal(status=complete)` 的门槛。AR1005-AU-02:session 创建一解决即进入覆盖其全部剩余生命周期的 try/finally —— 创建期间取消则不 prompt、恰好 dispose 一次;subscribe/prompt/unsubscribe 失败均仍 dispose;超时/中止后的晚到完成只清理、永不批准。`sessionAdapter` 为内部测试 seam(受控 adapter 对真实 `createAgentSession`)。**BH-E6(spec 2026-11-14-backtest-hardening,已复现)**:prompt await 与 abort signal 竞速——忽略 abort 的流会让 `prompt()` 永不 settle,流程超时返回后 dispose finally 永不执行(session 泄漏);现在 abort 即刻 settle 该 await,session 恰好 dispose 一次(仍是唯一 dispose 点) |
 | `goal-audit-flow.ts` | 完成审计编排(B7 step 2):配置解析、started/rejected/passed 事件三件套、台账写入、有界等待封套。AR1005-AU-01:先建立内部取消结果,再连接外部 signal 并检查其当前状态(预中止调用不触发 auditor,直接返回既有 rejected outcome);timer 与两个 listener 在所有退出路径释放审计事件三相位为 view-only(2026-11-02):每条 `pi-goal-audit-event` 都带 `details.viewOnly`,context handler 将其从模型请求中剔除 —— 审计结论只经 `update_goal` tool result 单通道触达模型 |

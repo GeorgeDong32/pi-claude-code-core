@@ -20,8 +20,8 @@ import { FakeHost } from "../../../test/contracts/fake-host.ts";
 import { writeActiveGoalFile } from "../storage/goal-files.ts";
 import { createGoal } from "../goal-record.ts";
 import { resetCoreBusForTests } from "../../bus.ts";
-import { validateDraftingInterview, validateNoDraftingPhase } from "../goal-policy.ts";
-import { goalPrompt, continuationPrompt, goalTweakDraftingPrompt } from "../prompts/goal-prompts.ts";
+import { buildPausedByAgentGoal, validateDraftingInterview, validateNoDraftingPhase } from "../goal-policy.ts";
+import { goalPrompt, continuationPrompt, goalTweakDraftingPrompt, pausedGoalPrompt } from "../prompts/goal-prompts.ts";
 import { CREATE_GOAL_TOOL_NAME, PROPOSE_DRAFT_TOOL_NAME, QUESTION_TOOL_NAME, SISYPHUS_STEP_TOOL_NAME } from "../goal-tool-names.ts";
 
 const CODEMODE_TOOLS = ["update_goal", "pause_goal", "abort_goal", "apply_goal_tweak", "goal_question", "goal_questionnaire"];
@@ -133,9 +133,10 @@ test("gates: lifecycle verbs are refused during a drafting interview and allowed
 });
 
 test("gates: the question tools answer only inside a goal interview", async () => {
-	assert.equal(validateDraftingInterview({ confirmationIntent: null, tweakDraftingFor: null }, "goal_question").ok, false);
-	assert.equal(validateDraftingInterview({ confirmationIntent: { focus: "goal" }, tweakDraftingFor: null }, "goal_questionnaire").ok, true);
-	assert.equal(validateDraftingInterview({ confirmationIntent: null, tweakDraftingFor: "g1" }, "goal_question").ok, true);
+	assert.equal(validateDraftingInterview({ confirmationIntent: null, tweakDraftingFor: null, focusedId: null }, "goal_question").ok, false);
+	assert.equal(validateDraftingInterview({ confirmationIntent: { focus: "goal" }, tweakDraftingFor: null, focusedId: null }, "goal_questionnaire").ok, true);
+	assert.equal(validateDraftingInterview({ confirmationIntent: null, tweakDraftingFor: "g1", focusedId: "g1" }, "goal_question").ok, true);
+	assert.equal(validateDraftingInterview({ confirmationIntent: null, tweakDraftingFor: "g1", focusedId: "g2" }, "goal_question").ok, false, "a tweak interview for another goal does not carry over");
 
 	const f = setup();
 	const headless = f.host.makeCtx({ cwd: f.cwd, ui: false });
@@ -152,9 +153,23 @@ test("gates: the question tools answer only inside a goal interview", async () =
 	}
 });
 
+test("get_goal: the action hint offers pause only while the goal is active", async () => {
+	const f = setup();
+	try {
+		const base = createGoal({ objective: "=== Goal ===\nObjective: ship the decoder", autoContinue: true, sisyphus: false }, Date.UTC(2026, 10, 27));
+		writeActiveGoalFile({ cwd: f.cwd }, buildPausedByAgentGoal(base, { reason: "waiting on a credential", suggestedAction: "Set TOKEN and /goal-resume", updatedAt: new Date().toISOString() }));
+		await f.host.fire("session_start", { reason: "new" }, f.ctx);
+		const out = (await f.host.tools.get("get_goal")!.execute("g1", {}, undefined, undefined, f.ctx)) as { content: Array<{ text: string }> };
+		assert.match(out.content[0]!.text, /tools\.update_goal/);
+		assert.doesNotMatch(out.content[0]!.text, /pause_goal/, "pause is refused on a paused goal, so the hint must not offer it");
+	} finally {
+		f.cleanup();
+	}
+});
+
 test("prompts: every injected goal text names the codemode call form", () => {
 	const goal = createGoal({ objective: "=== Goal ===\nObjective: ship it", autoContinue: true, sisyphus: false }, Date.UTC(2026, 10, 27)) as never;
-	for (const text of [goalPrompt(goal), continuationPrompt(goal), goalTweakDraftingPrompt(goal as never, "hint")]) {
+	for (const text of [goalPrompt(goal), continuationPrompt(goal), goalTweakDraftingPrompt(goal as never, "hint"), pausedGoalPrompt(goal as never, ["- paused because: x"], "")]) {
 		assert.match(text, /codemode/, text.slice(0, 80));
 		assert.match(text, /tools\.(update_goal|pause_goal|apply_goal_tweak)/);
 		assert.doesNotMatch(text, /(?<![\w.])update_goal\(/, "no bare update_goal( call form");

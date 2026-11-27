@@ -89,8 +89,9 @@ pi.registerTool(defineTool({
 				nudge = "\n\n[NUDGE] You have called get_goal multiple times recently. Prefer concrete work tools (write/read/bash/edit) to advance the goal.";
 			}
 		}
+		const pauseClause = view?.status === "active" ? " if blocked, call tools.pause_goal({reason, suggestedAction}) and stop;" : "";
 		const lifecycleHint = view && (view.status === "active" || view.status === "paused")
-			? "\nGoal actions run from codemode scripts: if evidence proves the objective is satisfied, call tools.update_goal({status: \"complete\", completionSummary}); if blocked, call tools.pause_goal({reason, suggestedAction}) and stop; if the user abandons it or it is obsolete/unsafe, call tools.abort_goal({reason}) and stop. For file or shell work, use the normal work tools directly (write/read/bash/edit); do not call get_goal repeatedly just to look for tools."
+			? `\nGoal actions run from codemode scripts: if evidence proves the objective is satisfied, call tools.update_goal({status: "complete", completionSummary});${pauseClause} if the user abandons it or it is obsolete/unsafe, call tools.abort_goal({reason}) and stop. For file or shell work, use the normal work tools directly (write/read/bash/edit); do not call get_goal repeatedly just to look for tools.`
 			: "";
 		const text = view
 			? `${detailedSummary(view)}${lifecycleHint}${nudge}${otherCount > 0 ? `\nOther open goals: ${otherCount} (human can run /goal-list or /goal-focus)` : ""}`

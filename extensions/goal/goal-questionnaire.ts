@@ -476,7 +476,7 @@ export async function showProposalDialog(
  * used to enforce before they became codemode-exposed). */
 export function registerQuestionnaireTools(
 	pi: ExtensionAPI,
-	phase: () => { confirmationIntent: unknown; tweakDraftingFor: unknown },
+	phase: () => { confirmationIntent: unknown; tweakDraftingFor: unknown; focusedId: string | null },
 ): void {
 	pi.registerTool(defineTool({
 		name: QUESTION_TOOL_NAME,

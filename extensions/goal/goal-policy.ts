@@ -76,10 +76,13 @@ export function validateNoDraftingPhase(
 /** The question tools exist for the drafting interviews only (same boundary
  * they had while visibility gated them). */
 export function validateDraftingInterview(
-	phase: { confirmationIntent: unknown; tweakDraftingFor: unknown },
+	phase: { confirmationIntent: unknown; tweakDraftingFor: unknown; focusedId: string | null },
 	action: string,
 ): PolicyValidation {
-	if (phase.confirmationIntent === null && phase.tweakDraftingFor === null) {
+	// A tweak interview belongs to the goal it was opened for; a /goal-focus
+	// in the middle of it must not carry the question tools over.
+	const inTweakInterview = phase.tweakDraftingFor !== null && phase.tweakDraftingFor === phase.focusedId;
+	if (phase.confirmationIntent === null && !inTweakInterview) {
 		return { ok: false, message: `${action} REJECTED: no goal interview is in progress. Ask in plain chat, or start /goal-tweak to open a drafting interview.` };
 	}
 	return { ok: true };

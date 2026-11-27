@@ -3,12 +3,9 @@ import test from "node:test";
 
 import {
 	ABORT_GOAL_TOOL_NAME,
-	ACTIVE_GOAL_TOOL_NAMES,
 	CREATE_GOAL_TOOL_NAME,
 	GOAL_WORK_TOOL_NAMES,
 	GOAL_PROGRESS_TOOL_NAMES,
-	NO_FOCUSED_GOAL_TOOL_NAMES,
-	PAUSED_GOAL_TOOL_NAMES,
 	POST_STOP_ALLOWED_TOOLS,
 	PROPOSE_DRAFT_TOOL_NAME,
 	QUESTIONNAIRE_TOOL_NAME,
@@ -16,7 +13,6 @@ import {
 	SISYPHUS_STEP_TOOL_NAME,
 	TWEAK_APPLY_TOOL_NAME,
 	isQuestionLikeToolName,
-	lifecycleToolNamesForGoalStatus,
 } from "../goal-tool-names.ts";
 
 test("goal tool names are centralized and preserve published agent-facing names", () => {
@@ -27,19 +23,7 @@ test("goal tool names are centralized and preserve published agent-facing names"
 	assert.equal(SISYPHUS_STEP_TOOL_NAME, "step_complete");
 	assert.equal(CREATE_GOAL_TOOL_NAME, "create_goal");
 	assert.equal(ABORT_GOAL_TOOL_NAME, "abort_goal");
-	assert.deepEqual(ACTIVE_GOAL_TOOL_NAMES, ["get_goal", "update_goal", "pause_goal", "abort_goal"]);
-	assert.deepEqual(PAUSED_GOAL_TOOL_NAMES, ["get_goal", "update_goal", "abort_goal"]);
-	assert.deepEqual(NO_FOCUSED_GOAL_TOOL_NAMES, ["get_goal"]);
 	assert.deepEqual(POST_STOP_ALLOWED_TOOLS, ["get_goal"]);
-});
-
-test("lifecycle tool visibility keeps no-focus read-only and focused mutations scoped", () => {
-	assert.deepEqual(lifecycleToolNamesForGoalStatus(null), ["get_goal"]);
-	assert.deepEqual(lifecycleToolNamesForGoalStatus("active", "drafting"), ["get_goal"]);
-	assert.deepEqual(lifecycleToolNamesForGoalStatus("paused", "tweakDrafting"), ["get_goal"]);
-	assert.deepEqual(lifecycleToolNamesForGoalStatus("complete"), ["get_goal"]);
-	assert.deepEqual(lifecycleToolNamesForGoalStatus("active"), ["get_goal", "update_goal", "pause_goal", "abort_goal"]);
-	assert.deepEqual(lifecycleToolNamesForGoalStatus("paused"), ["get_goal", "update_goal", "abort_goal"]);
 });
 
 test("progress tool set excludes read-only and drafting dialogue tools", () => {

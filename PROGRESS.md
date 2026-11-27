@@ -4,7 +4,7 @@
 
 - **来源**：用户提议「goal 工具只留简短描述、经 codemode 暴露」；spec `~/.factory/specs/2026-11-27-goal-tools-diet.md`（v1 合并方案被 reviewer REJECT：改名要动全部注入文本、收益只在 active 期约 1.5K；v2 改为 codemode 暴露，采纳其 C0 注入文本 / B 阶段门禁搬执行层 / 成本含 promptSnippet 三条）。
 - **改动**：`update_goal` / `pause_goal` / `abort_goal` / `apply_goal_tweak` / `goal_question` / `goal_questionnaire` 改 `exposure: "codemode"`，描述各一行，去掉 promptSnippet / promptGuidelines（名字不变，不改记账与 ledger）；`get_goal` 与 `propose_goal_draft` 保持 direct 并瘦身（删废弃 `draftId`；guidelines 1158 / 424 压到约 290 / 190）；`syncGoalTools` 不再按状态/阶段增删工具，只保证工作工具 + 两个 direct 工具在集合里、hidden 两个不在，每轮幂等重跑（plan 模式退出会恢复快照）；新增 `validateNoDraftingPhase`（起草期拒绝 complete / pause / abort）与 `validateDraftingInterview`（提问工具只在访谈内应答）；`goal-prompts.ts`、paused 块、audit-flow、goal-draft 的注入文本全部改成 codemode 调用形式，auditor 权威与 [Cn] 证据行规则并入 goalPrompt / continuationPrompt。
-- **实测**（FakeHost 全装配，含 promptSnippet）：无 goal 会话 core 声明集 13,398 / 12,364 字符；`propose_goal_draft` 2,137 / 824，`get_goal` 561 / 390；goal 会话工具清单从 +3,966（active）至 +7,918（tweak 起草）变为 +0。
+- **实测**（FakeHost 全装配，同一脚本两侧各量一次，含 promptSnippet）：无 goal 会话 core 声明集 13,997 / 12,364 字符；`propose_goal_draft` 2,232 / 824，`get_goal` 615 / 390；goal 会话工具清单从 +3,966（active）至 +7,918（tweak 起草）变为 +0。
 - **测试**：新增 `extensions/goal/tests/goal-tools-diet.test.ts`（6：暴露与成本上限、全生命周期声明集恒定、两道门禁、注入文本形式；变异检验：去 exposure / 去 update_goal 门禁各红一项）；`goal-turn-lock.test.ts` 的 L6 control 改钉「起草开始后声明集不变」；`goal-draft.test.ts` 删掉随字段一起走的 draftId 用例；契约 `compaction-goal-lifecycle.test.ts` 的首 prompt 长度按 goal 状态重新标定（阈值是请求大小的比例，system prompt 变小后边界移动，非控制器回归），原因写在文件头。
 - **未做/后续**：真机有头 TUI 验收（`/goal` 起草、确认、经 codemode 完成 / 暂停是否首次即走对形式）；pi-claude-code-tui 对 codemode 内嵌 goal 调用的渲染（另仓）。
 
