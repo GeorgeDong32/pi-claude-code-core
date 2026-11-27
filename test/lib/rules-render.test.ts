@@ -1,13 +1,3 @@
-/**
- * P3-RU rules engine tests.
- *
- * §1 表驱动纯函数(renderRules + in-memory RuleFs):五场景 + 红队 #11
- *   补齐(include 深度上限/坏 frontmatter 尾注/确定性)。
- * §2 性质测试:随机文件集 ≤ budget、字节级确定。
- *
- * wiring 行为(steer 首触、mtime stat 计数、session_start 重置、/rules
- * 输出冒烟)全部在 test/lib/rules-wiring.test.ts。
- */
 import { describe, expect, it } from "vitest";
 
 import { renderRules, collectRules, globToRegExp, type RuleDir, type RuleFs } from "../../extensions/rules/render.ts";
@@ -60,7 +50,6 @@ describe("P3-RU-01 scope priority and shadowing", () => {
 		expect(dupe?.name).toBe("from-project");
 		expect(rules.some((r) => r.name === "project-only")).toBe(true);
 
-		// untrusted: project + compat hidden
 		const untrusted = renderRules(baseInput(files, { projectTrusted: false }));
 		expect(untrusted.output).toContain("from-global");
 		expect(untrusted.output).not.toContain("from-project");
@@ -119,8 +108,6 @@ describe("P3-RU-03 @include forms", () => {
 	});
 
 	it("red-team #11: the 6th include level is dropped (depth limit 5)", () => {
-		// chain d1 → d2 → d3 → d4 → d5 → d6: at depth 5 expansion stops, so
-		// d5 keeps its @./d6 token unresolved but d1..d5 bodies all land
 		const files: Record<string, string> = {};
 		for (let i = 1; i <= 6; i++) {
 			files[`/home/rules/d${i}.md`] = `d${i}-body @./d${i + 1}.md`;
@@ -163,15 +150,14 @@ describe("P3-RU-04 budget and inline threshold", () => {
 				{ budgetChars: 20_000 },
 			),
 		);
-		// every rendered body is intact (no mid-content truncation)
 		for (const n of ["alpha", "beta", "gamma"]) {
 			if (result.output.includes(`### ${n}\n`)) {
 				expect(result.output).toContain("zzzzzz");
 			} else {
-				expect(result.output).toContain(n); // degraded to an index row
+				expect(result.output).toContain(n);
 			}
 		}
-		expect(result.output.length).toBeLessThanOrEqual(20_000); // budget is exact, note included
+		expect(result.output.length).toBeLessThanOrEqual(20_000);
 	});
 });
 
@@ -193,7 +179,6 @@ describe("P3-RU-05 total function", () => {
 
 describe("P3-RU-04/05 random property test (review #19)", () => {
 	it("seeded random rule sets: output ≤ budget and byte-deterministic", () => {
-		// deterministic PRNG (mulberry32)
 		let seed = 0x9e3779b9;
 		const rand = () => {
 			seed |= 0;
@@ -217,13 +202,11 @@ describe("P3-RU-04/05 random property test (review #19)", () => {
 			const input = baseInput(files, { budgetChars: budget });
 			const one = renderRules(input);
 			const two = renderRules(input);
-			expect(one.output.length).toBeLessThanOrEqual(budget); // exact budget, note included
-			expect(one.output).toBe(two.output); // byte-deterministic
-			// red line: any inlined body appears whole (no mid-content cut)
+			expect(one.output.length).toBeLessThanOrEqual(budget);
+			expect(one.output).toBe(two.output);
 			for (const [path, content] of Object.entries(files)) {
 				const body = content.split("---\n").pop()!.trim();
 				if (body && one.output.includes(path)) {
-					// indexed form references the path — body must NOT be there half-cut
 					const idx = one.output.indexOf(body.slice(0, 50));
 					if (idx !== -1) expect(one.output.slice(idx, idx + body.length)).toContain(body.slice(-20));
 				}
@@ -275,8 +258,6 @@ describe("adversarial-audit fix: tiny blocks under a small budget", () => {
 	});
 });
 
-// quickwin-2 (arch review 2026-10-03): compiled once per glob — the rules
-// tool_call hot path re-compiled every glob × every path before this cache.
 describe("globToRegExp memo", () => {
 	it("returns the SAME RegExp object per glob (identity, not just equality)", () => {
 		expect(globToRegExp("src/**/*.ts")).toBe(globToRegExp("src/**/*.ts"));

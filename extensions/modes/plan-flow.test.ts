@@ -1,16 +1,3 @@
-/**
- * Characterization tests for the plan flow (SPEC SR W-M, E13b + CORE-17).
- *
- * These tests pin the CURRENT plan-mode behavior — agent_end offer flow,
- * cooldown/suppress window, turn_end [DONE:n] marking, plan-complete,
- * /plan-execute, headless plan_ready, session-restore overlay semantics,
- * the exact `modes` entry key order, and the registration-order snapshot —
- * BEFORE the modes/index.ts split moves this state into plan-session.ts.
- * They must stay green unmodified across the split (pure refactor proof).
- *
- * Fake-pi pattern mirrors index.test.ts (compact copy; this file only needs
- * the plan-flow slice of the surface).
- */
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest"
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -23,8 +10,6 @@ import { setModelsPath } from "./profiles.ts"
 import { setFooterLine } from "../ui/footer-lines.ts"
 import { writePlanFile, getPlanFilePath } from "./plan.ts"
 import { customMsg } from "./test-fixtures.ts"
-
-// ---- compact fake pi (mirrors index.test.ts createFakePi) ----------------
 
 type Handler = (...args: any[]) => unknown
 
@@ -150,7 +135,6 @@ function createFakePi() {
 		registerProvider(..._args: unknown[]) {},
 		unregisterProvider(_name: string) {},
 
-		// Test helpers
 		async simulateSessionStart(
 			cwd: string,
 			ui?: Partial<Parameters<typeof makeCtx>[1]["ui"]>,
@@ -206,8 +190,6 @@ function makeCtx(
 	}
 }
 
-// ---- harness --------------------------------------------------------------
-
 const MODES_ON_SEQUENCE = [
 	"tool_call",
 	"before_agent_start",
@@ -251,7 +233,6 @@ describe("plan flow characterization (SPEC SR W-M)", () => {
 	let projDir: string
 	let configTmp: string
 	let nowMs: number
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	let dateSpy: any
 
 	beforeEach(() => {
@@ -306,14 +287,12 @@ describe("plan flow characterization (SPEC SR W-M)", () => {
 		expect(Array.from(pi.shortcuts.keys())).toEqual(["alt+i", "shift+tab"])
 		expect(pi.flagOrder).toEqual(["model-profile", "permission-mode"])
 		expect(pi.onOrder).toEqual(MODES_ON_SEQUENCE)
-		// getToolCallHandler consumers rely on tool_call being the FIRST pi.on.
 		expect(pi.onOrder[0]).toBe("tool_call")
 	})
 
 	it("modes entry JSON.stringify pins the exact key order", async () => {
 		permissionModesExtension(pi as never)
 		await pi.simulateSessionStart(projDir)
-		// persistState fires on setMode tails and session_compact — force one.
 		for (const h of pi.handlers.get("session_compact") ?? []) await h({}, headlessCtx())
 		const data = await lastModesEntry(pi)
 		expect(Object.keys(data)).toEqual([
@@ -342,7 +321,6 @@ describe("plan flow characterization (SPEC SR W-M)", () => {
 		const smFull = { getEntries: () => [customMsg("modes", full)], getBranch: () => [], getGitBranch: () => "" }
 		await pi.simulateSessionStart(projDir, undefined, undefined, smFull)
 		for (const h of pi.handlers.get("session_compact") ?? []) await h({}, headlessCtx())
-		// overlay applied
 		const afterFull = await lastModesEntry(pi)
 		expect(afterFull).toMatchObject({
 			currentMode: "auto",
@@ -352,7 +330,6 @@ describe("plan flow characterization (SPEC SR W-M)", () => {
 		})
 		expect(afterFull.planTodos).toEqual([{ step: 1, text: "carry this step", completed: false }])
 
-		// a later entry with ONLY currentMode must not reset the plan fields
 		pi.appendEntries.length = 0
 		const smPartial = { getEntries: () => [customMsg("modes", { currentMode: "plan" })], getBranch: () => [], getGitBranch: () => "" }
 		await pi.simulateSessionStart(projDir, undefined, undefined, smPartial)
@@ -397,27 +374,21 @@ describe("plan flow characterization (SPEC SR W-M)", () => {
 
 		await pi.simulateCommand("plan-execute", "", headlessCtx())
 
-		// execution started: modes-execute followUp with the steps
 		const exec = pi.sentMessages.filter((m) => m.message.customType === "modes-execute")
 		expect(exec).toHaveLength(1)
 		expect(exec[0]!.message.content).toContain("1. Implement the parser module")
-		// cleanStepText strips the leading "Add" verb — pin the cleaned form
 		expect(exec[0]!.message.content).toContain("2. Tests for the parser")
 		expect(exec[0]!.opts).toMatchObject({ triggerTurn: true, deliverAs: "followUp" })
-		// raw mode write skipped the capability publish — bus still says plan
 		expect(coreBus().snapshot().modes.mode).toBe("plan")
-		// tool restrictions restored the pre-plan set (plan_ready gone)
 		expect(pi.activeTools).not.toContain("plan_ready")
 		const started = await lastModesEntry(pi)
 		expect(started).toMatchObject({ currentMode: "auto", planPhase: "executing", planExecuting: true })
 
-		// before_agent_start injects the executing block while executing
 		const basHandlers = pi.handlers.get("before_agent_start") ?? []
 		const basResult = await basHandlers[0]!({ systemPrompt: "base" }, headlessCtx())
 		expect(String((basResult as { systemPrompt?: string })?.systemPrompt)).toContain("[Plan/executing]")
 		expect(String((basResult as { systemPrompt?: string })?.systemPrompt)).toContain("Implement the parser module")
 
-		// turn_end marks step 1 done in place and re-publishes the widget
 		pi.widgetCalls.length = 0
 		pi.appendEntries.length = 0
 		await fireTurnEnd(
@@ -430,13 +401,10 @@ describe("plan flow characterization (SPEC SR W-M)", () => {
 		expect((afterDone.planTodos as Array<{ step: number; completed: boolean }>)[1]).toMatchObject({ step: 2, completed: false })
 		expect(pi.widgetCalls.some((w) => w.key === "plan-todos")).toBe(true)
 
-		// /plan-execute again WHILE executing is allowed (planExecuting gate);
-		// it re-extracts from plan.md, so step 1 is un-marked again.
 		pi.sentMessages.length = 0
 		await pi.simulateCommand("plan-execute", "", headlessCtx())
 		expect(pi.sentMessages.filter((m) => m.message.customType === "modes-execute")).toHaveLength(1)
 
-		// mark both steps in one turn; agent_end announces completion and resets
 		await fireTurnEnd(
 			pi,
 			{ role: "assistant", content: [{ type: "text", text: "Everything finished. [DONE:1] [DONE:2]" }] },
@@ -458,19 +426,16 @@ describe("plan flow characterization (SPEC SR W-M)", () => {
 		await switchMode("plan")
 		writePlanFile(projDir, makePlanBody(["implement the parser module", "add tests for the parser"]))
 
-		// 1) execute choice
 		const ctxExecute = uiCtx({ custom: async () => "execute" })
 		await fireAgentEnd(pi, { messages: [] }, ctxExecute)
 		expect(pi.sentMessages.filter((m) => m.message.customType === "modes-execute")).toHaveLength(1)
 		expect((await lastModesEntry(pi))).toMatchObject({ currentMode: "auto", planExecuting: true })
 
-		// reset to plan for the refine path
 		pi = createFakePi()
 		permissionModesExtension(pi as never)
 		await switchMode("plan")
 		writePlanFile(projDir, makePlanBody(["implement the parser module", "add tests for the parser"]))
 
-		// 2) refine choice — editor text becomes a followUp user message
 		let editorTitle = ""
 		const ctxRefine = uiCtx({
 			custom: async () => "refine",
@@ -499,25 +464,19 @@ describe("plan flow characterization (SPEC SR W-M)", () => {
 		await fireAgentEnd(pi, { messages: [] }, ctx)
 		expect(customCalls).toBe(1)
 
-		// content changed but we are inside the 60s window → suppressed
 		nowMs += 30_000
 		writePlanFile(projDir, makePlanBody(["implement the parser module alone", "add tests for the parser"]))
 		await fireAgentEnd(pi, { messages: [] }, ctx)
 		expect(customCalls).toBe(1)
 
-		// past the window with a changed hash → dialog opens again
 		nowMs += 31_000
 		await fireAgentEnd(pi, { messages: [] }, ctx)
 		expect(customCalls).toBe(2)
 	})
 
 	it("agent_end assistant-body sync: empty plan.md gets the assistant Plan: section written and the dialog opens once", async () => {
-		// SR-4b companion pin: this exercises the isAssistantMessage /
-		// assistantMessageText path in plan-session.ts onAgentEnd (the ONLY
-		// sync source is the assistant message body — plan.md is untouched).
 		permissionModesExtension(pi as never)
 		await switchMode("plan")
-		// plan.md is the fresh template after onPlanModeSettled → sync allowed.
 		const assistantBody = makePlanBody(["implement the parser module", "add tests for the parser"])
 		let customCalls = 0
 		const ctx = uiCtx({
@@ -533,22 +492,18 @@ describe("plan flow characterization (SPEC SR W-M)", () => {
 			ctx,
 		)
 
-		// plan.md was written with the assistant's plan section
 		expect(existsSync(getPlanFilePath(projDir))).toBe(true)
 		const planMd = readFileSync(getPlanFilePath(projDir), "utf8")
 		expect(planMd).toContain("Plan:")
 		expect(planMd).toContain("1. implement the parser module")
 		expect(planMd).toContain("2. add tests for the parser")
-		// extracted steps were persisted as planTodos
 		expect(await lastModesEntry(pi)).toMatchObject({
 			currentMode: "plan",
 			planTodos: [
-				// cleanStepText strips only the leading "Add" verb — "Implement" is retained verbatim
 				{ step: 1, text: "Implement the parser module", completed: false },
 				{ step: 2, text: "Tests for the parser", completed: false },
 			],
 		})
-		// exactly one dialog, no execution ("stay" chosen)
 		expect(customCalls).toBe(1)
 		expect(pi.sentMessages.filter((m) => m.message.customType === "modes-execute")).toHaveLength(0)
 	})
@@ -569,10 +524,8 @@ describe("plan flow characterization (SPEC SR W-M)", () => {
 		const text = result.content.find((c) => c.type === "text")!.text
 		expect(text).toContain("headless auto-execute")
 		expect(text).toContain("Implement the parser module only")
-		// no execution was triggered
 		expect(pi.sentMessages.filter((m) => m.message.customType === "modes-execute")).toHaveLength(0)
 		expect(pi.userMessages).toHaveLength(0)
-		// state was persisted (planTodos set) but the mode is untouched
 		expect(await lastModesEntry(pi)).toMatchObject({ currentMode: "plan", planExecuting: false })
 	})
 

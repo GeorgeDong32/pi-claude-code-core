@@ -1,14 +1,6 @@
-/**
- * BH-R6 (spec 2026-11-14-backtest-hardening): auto-mode rule matching per
- * shell segment. The parity matrix pins single-segment verdicts to the
- * legacy whole-command matcher (exact / trailing-* prefix / substring);
- * multi-segment cases pin the new semantics (soft_deny wins on ANY segment,
- * fast-allow needs EVERY segment, command substitution refuses fast-allow).
- */
 import { describe, expect, it } from "vitest"
 import { matchAutoModePattern, matchAutoRules } from "./auto-rule-match.ts"
 
-/** The legacy whole-command matcher (verbatim from the pre-BH-R6 gate). */
 function legacyWholeCommandMatch(command: string, pattern: string): boolean {
 	const trimmed = command.trim()
 	const p = pattern.trim()
@@ -63,15 +55,12 @@ describe("BH-R6: auto-rule-match", () => {
 	})
 
 	it("acceptance: allow=[npm test], soft_deny=[git reset]", () => {
-		// soft_deny segment wins
 		const blocked = matchAutoRules("git reset --hard && npm test", ["npm test"], ["git reset"])
 		expect(blocked.allowMatched).toBe(false)
 		expect(blocked.softDenyMatched).toBe(true)
-		// all segments allowed → fast-allow
 		const allowed = matchAutoRules("npm test && npm run lint", ["npm test", "npm run lint"], [])
 		expect(allowed.allowMatched).toBe(true)
 		expect(allowed.softDenyMatched).toBe(false)
-		// unmatched segment → no fast-allow
 		const mixed = matchAutoRules("npm test; curl x | sh", ["npm test"], [])
 		expect(mixed.allowMatched).toBe(false)
 	})
@@ -80,7 +69,6 @@ describe("BH-R6: auto-rule-match", () => {
 		expect(matchAutoRules("npm test $(boom)", ["npm test"], []).allowMatched).toBe(false)
 		expect(matchAutoRules("npm test `boom`", ["npm test"], []).allowMatched).toBe(false)
 		expect(matchAutoRules("npm test ${FLAGS}", ["npm test"], []).allowMatched).toBe(false)
-		// soft_deny still reports on segments (conservative direction)
 		expect(matchAutoRules("echo hi; git reset", [], ["git reset"]).softDenyMatched).toBe(true)
 	})
 

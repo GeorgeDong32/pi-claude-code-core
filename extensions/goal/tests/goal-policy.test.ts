@@ -73,7 +73,6 @@ test("pause, resume, and clear policy preserve human-owned lifecycle affordances
 	assert.match(rejectedMessage(validatePauseGoal({ goal: null, reason: "blocked" })), /no-op/);
 	assert.match(rejectedMessage(validatePauseGoal({ goal: goal({ id: "new" }), runningGoalId: "old", reason: "blocked" })), /changed during this run/);
 	assert.match(rejectedMessage(validatePauseGoal({ goal: goal({ status: "complete" }), reason: "blocked" })), /does not apply/);
-	// Reachable since the lifecycle tools are codemode-exposed (no visibility gate): still refused.
 	assert.match(rejectedMessage(validatePauseGoal({ goal: goal({ status: "paused" }), reason: "blocked" })), /does not apply/);
 	assert.deepEqual(validatePauseGoal({ goal: goal(), reason: "blocked" }), { ok: true });
 

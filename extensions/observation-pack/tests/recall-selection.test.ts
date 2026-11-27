@@ -1,9 +1,3 @@
-/*
- * P0-2 (2026-11-24): obs_recall selection — `filter` (+`context`) and `tail`
- * over a stored object, the third protocol header line, and the error texts
- * the model sees. Pure primitives first, then the registered tool through the
- * real extension factory. node:test.
- */
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -136,7 +130,6 @@ describe("obs_recall through the extension factory", () => {
 		const tool = captureTool();
 		assert.deepEqual(Object.keys(tool.parameters.properties).sort(), ["context", "filter", "id", "offset", "tail"]);
 		const { id } = await storedObject(LOG);
-		// the factory resolves objects under <sessionDir>/observation-pack/<sessionId>/
 		const root = await mkdtemp(join(tmpdir(), "obs-sel-factory-"));
 		await mkdir(join(root, "observation-pack", "sess-p02", "objects"), { recursive: true });
 		await writeFile(observationPath(join(root, "observation-pack", "sess-p02"), id), `${LOG.join("\n")}\n`, "utf8");
@@ -158,7 +151,6 @@ describe("obs_recall through the extension factory", () => {
 	it("plain offset paging keeps the two-line header and the old details shape (XPKG-04)", async () => {
 		const tool = captureTool();
 		const { id } = await storedObject(LOG);
-		// the factory resolves objects under <sessionDir>/observation-pack/<sessionId>/
 		const root = await mkdtemp(join(tmpdir(), "obs-sel-factory-"));
 		await mkdir(join(root, "observation-pack", "sess-p02", "objects"), { recursive: true });
 		await writeFile(observationPath(join(root, "observation-pack", "sess-p02"), id), `${LOG.join("\n")}\n`, "utf8");
@@ -174,7 +166,6 @@ describe("obs_recall through the extension factory", () => {
 	it("a bad regex and a bad tail come back as text, not as 'unknown observation id'", async () => {
 		const tool = captureTool();
 		const { id } = await storedObject(LOG);
-		// the factory resolves objects under <sessionDir>/observation-pack/<sessionId>/
 		const root = await mkdtemp(join(tmpdir(), "obs-sel-factory-"));
 		await mkdir(join(root, "observation-pack", "sess-p02", "objects"), { recursive: true });
 		await writeFile(observationPath(join(root, "observation-pack", "sess-p02"), id), `${LOG.join("\n")}\n`, "utf8");

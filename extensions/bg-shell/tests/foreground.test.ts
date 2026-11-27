@@ -1,8 +1,3 @@
-// Behaviour tier: a foreground `bash` call over the fake process table and fake
-// time. The call runs Pi's own `bash` over a custom `exec`, so a finished command
-// reads as Pi's does; one still running at 120 s becomes a background task.
-// The commands here are names no shell knows, so a red run never starts
-// anything real.
 import assert from "node:assert/strict";
 import { mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -37,16 +32,13 @@ afterEach(() => {
 });
 after(cleanup);
 
-/** Let the call get as far as launching, and return its fake process. */
 async function launched(index = 0) {
 	await clock.until(() => procs.all.length > index);
 	return procs.all[index];
 }
 
-/** Run pending microtasks after a manual clock tick. */
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 
-/** Wrap the mocked timer globals to track which timer and interval ids are still pending. */
 function trackTimers() {
 	const pending = new Set<unknown>();
 	const originals = {
@@ -166,7 +158,7 @@ describe("a foreground bash call whose end arrives oddly", () => {
 		const proc = await launched();
 		proc.write("main\n");
 		proc.exit(0);
-		proc.write("late\n"); // a background child's last write, after the marker
+		proc.write("late\n");
 		assert.equal(text(await clock.settle(call)), "main\nlate\n");
 	});
 
@@ -176,7 +168,6 @@ describe("a foreground bash call whose end arrives oddly", () => {
 		const proc = await launched();
 		proc.write("main\n");
 		proc.exit(0);
-		// Let one log poll see the marker and arm the grace, then write late.
 		mock.timers.tick(50);
 		await flush();
 		proc.write("late\n");
@@ -195,7 +186,6 @@ describe("a foreground bash call whose end arrives oddly", () => {
 			await flush();
 			proc.write(`chunk${i}\n`);
 		}
-		// Still running 100 ms after the last chunk: each write reset the grace.
 		mock.timers.tick(100);
 		await flush();
 		assert.equal(settled, false, "the call must not finish before the last chunk + 100 ms");
@@ -209,11 +199,9 @@ describe("a foreground bash call whose end arrives oddly", () => {
 		const proc = await launched();
 		proc.write("done\n");
 		proc.exit(0);
-		// The grace is armed by a poll; the call must not have finished yet.
 		mock.timers.tick(50);
 		await flush();
 		assert.equal(settled, false);
-		// 100 ms of idle log later it ends on its own.
 		mock.timers.tick(100);
 		await flush();
 		assert.equal(settled, true);
@@ -311,7 +299,6 @@ describe("a foreground bash call past 120 s", () => {
 		await clock.until(() => s.sent.length > 0);
 		await clock.tick(3);
 		assert.equal(s.sent.length, 1);
-		// The command ran 150 s; the poller notices it on its next 2 s tick.
 		assert.match(
 			s.sent[0].message.content,
 			/^Background task bg-1 finished: exited \(code 3\), ran 2m 32s\.\nCommand: slow-build\nOutput: read it with TaskOutput \(id: bg-1\)\.$/,
@@ -367,9 +354,6 @@ describe("a foreground bash call past 120 s", () => {
 		const s = session();
 		const call = s.toolCall("bash", { command: "slow-build", timeout: 600 });
 		const proc = await launched();
-		// Base behaviour: the call hangs until the 600 s foreground timeout kills it
-		// (settle throws "Command timed out after 600 seconds"). Fixed behaviour: the
-		// call settles at 120 s with the promotion text, deadline = start + timeout.
 		const result = await clock.settle(call, 610_000);
 		assert.match(text(result), /^Command still running after 120 s; moved to the background as task bg-1\./);
 		const task = getRegistry().tasks.get("bg-1");
@@ -434,7 +418,6 @@ describe("a foreground bash call past 120 s", () => {
 			assert.doesNotMatch(text(result), /pi-bash-/);
 			assert.equal(result.details, undefined);
 			assert.deepEqual(readdirSync(tmp), [], "Pi's temp file is deleted");
-			// TaskOutput continues after the last row shown.
 			proc.write("row 5001\n");
 			assert.doesNotMatch(text(await s.toolCall("TaskOutput", { id: "bg-1" })), /row 5000\n/);
 		} finally {
@@ -469,7 +452,7 @@ describe("the active foreground runs", () => {
 		const proc = await launched();
 		proc.write("just done\n");
 		proc.exit(0);
-		[...foregroundRuns()][0].promote(); // before the next log poll sees the marker
+		[...foregroundRuns()][0].promote();
 		assert.equal(text(await clock.settle(call)), "just done\n");
 		assert.equal(text(await s.toolCall("TaskList", {})), "No background tasks.");
 	});

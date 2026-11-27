@@ -1,13 +1,3 @@
-/**
- * V2-A (DESIGN-MEMORY-V2 §4) — side-channel LLM + automation hooks.
- *
- * Covers: strict-JSON ops extraction (fences / trailing object / garbage /
- * empty), prompt guardrail (no parseable example), timeout + abort paths,
- * auth resolution failure, correction regex gate (EN + CJK + negative),
- * correction throttle (1 per 3 turns), review thresholds + warmup +
- * directive-turn exclusion, flush on compact/shutdown, reload skip, and
- * yielded silence. The LLM is always the injected fake — no network.
- */
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -36,7 +26,7 @@ let projectsDirStr: string;
 beforeEach(() => {
 	globalsSnapshot = snapshotCoreGlobals();
 	clearCoreGlobals();
-	(globalThis as Record<string, unknown>).__piCcTui = CCTUI_LIVE; // C2: host-notify leg (after globals reset)
+	(globalThis as Record<string, unknown>).__piCcTui = CCTUI_LIVE;
 	resetCoreBusForTests();
 	prevHome = process.env.HOME;
 	home = mkdtempSync(join(tmpdir(), "memv2a-home-"));
@@ -49,9 +39,6 @@ beforeEach(() => {
 	projectsDirStr = p.projectsDir;
 });
 
-/** Shared dirs lambda for every setupAutomation call site (spec
- * 2026-10-03: the contract now carries projectsDir + agentDir for queue
- * routing and queue writes; the retired user layer is gone). */
 const testDirs = () => ({ project: dir, projectsDir: projectsDirStr, agentDir });
 
 afterEach(() => {
@@ -62,29 +49,22 @@ afterEach(() => {
 	rmSync(project, { recursive: true, force: true });
 });
 
-// ─── llm.ts extraction ───
-
-
-// C2: these assertions observe the host-notify leg of the shared notify
-// entry, which only fires when a cctui replica is live without its own
-// queue consumer (the transitional channel). Plant that state.
 const CCTUI_LIVE = { active: true, notificationsConsumer: false } as const;
 describe("C7 conversationParts backward window", () => {
 	it("returns the LAST n non-empty user/assistant parts — identical to full-walk + slice, empty/non-message skipped", () => {
 		const entries: Array<{ type?: string; message?: unknown }> = [];
 		for (let i = 0; i < 80; i += 1) {
 			if (i % 9 === 0) {
-				entries.push({ type: "compaction", message: { role: "compactionSummary", content: "sum" } }); // never matches
+				entries.push({ type: "compaction", message: { role: "compactionSummary", content: "sum" } });
 				continue;
 			}
 			const role = i % 2 ? "assistant" : "user";
-			const text = i % 7 === 0 ? "" : `m${i}`; // every 7th message has empty text → skipped
+			const text = i % 7 === 0 ? "" : `m${i}`;
 			entries.push({ type: "message", message: { role, content: [{ type: "text", text }] } });
 		}
 		const ctx = { sessionManager: { getBranch: () => entries } } as never;
 		const parts = conversationParts(ctx, 6);
 		expect(parts).toHaveLength(6);
-		// expected = last 6 non-empty message entries, in order
 		const expected = entries
 			.filter((e) => e.type === "message" && ["user", "assistant"].includes((e.message as { role?: string }).role ?? ""))
 			.map((e) => ({ role: (e.message as { role: string }).role, text: (e.message as { content: Array<{ text?: string }> }).content[0]!.text }))
@@ -140,8 +120,6 @@ describe("V2-A parseOperations", () => {
 	});
 });
 
-// ─── llm.ts completion (fake transport) ───
-
 const fakeModel = { provider: "fake", id: "m1", reasoning: false } as never;
 const fakeRegistry = {
 	getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "k", headers: {}, env: {} }),
@@ -171,9 +149,6 @@ describe("V2-A completeMemoryOps", () => {
 			} as never,
 		);
 		expect(r.ok).toBe(false);
-		// CH E7: the INTERNAL timer is distinguishable from an external abort —
-		// it reports `timeout`; an externally supplied signal still reports
-		// `aborted` (pinned in memory-llm-timeout.test.ts).
 		expect(r.reason).toBe("timeout");
 	});
 
@@ -194,8 +169,6 @@ describe("V2-A completeMemoryOps", () => {
 		expect((await completeMemoryOps(fakeModel, noAuth, { systemPrompt: "s", userPrompt: "u" })).reason).toBe("no_auth");
 	});
 });
-
-// ─── automation hooks (wired through setupAutomation with fake LLM) ───
 
 interface Harness {
 	host: FakeHost;
@@ -241,7 +214,7 @@ describe("V2-A correction gate", () => {
 	it("EN strong/weak/negative + CJK patterns behave", () => {
 		expect(isCorrection("don't do that, use pnpm")).toBe(true);
 		expect(isCorrection("That's not what I asked for")).toBe(true);
-		expect(isCorrection("no, use the other file")).toBe(true); // weak + directive
+		expect(isCorrection("no, use the other file")).toBe(true);
 		expect(isCorrection("no worries")).toBe(false);
 		expect(isCorrection("actually looks great")).toBe(false);
 		expect(isCorrection("不对，应该用 pnpm")).toBe(true);
@@ -271,7 +244,7 @@ describe("V2-A correction automation", () => {
 			await h.host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, h.ctx);
 		}
 		await until(() => h.calls.length >= 1);
-		expect(h.calls.length).toBe(1); // second correction is in cooldown
+		expect(h.calls.length).toBe(1);
 	});
 
 	it("yielded (hermes present) ⇒ no side-channel at all", async () => {
@@ -298,16 +271,15 @@ describe("V2-A background review", () => {
 		for (let i = 0; i < 3; i++) await h.host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `t ${i}` }] } }, h.ctx);
 		for (let i = 0; i < 10; i++) await h.host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, h.ctx);
 		await new Promise((r) => setTimeout(r, 50));
-		expect(h.state.reviews).toBe(0); // threshold hit, but the run is still in flight
+		expect(h.state.reviews).toBe(0);
 		expect(h.calls.length).toBe(0);
 		await h.host.fire("agent_end", {}, h.ctx);
-		await until(() => h.state.reviews === 1); // completed run = extraction snapshot
+		await until(() => h.state.reviews === 1);
 	});
 
 	it("tool-call threshold (15) fires before the turn threshold", async () => {
 		const h = harness(OPS_JSON, { sessionEntries: [{ type: "message", message: { role: "user", content: [{ type: "text", text: "conv one" }] } }, { type: "message", message: { role: "assistant", content: [{ type: "text", text: "conv two" }] } }] });
 		for (let i = 0; i < 3; i++) await h.host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `hi ${i}` }] } }, h.ctx);
-		// 3 turns × 5 toolCall blocks = 15
 		for (let i = 0; i < 3; i++) {
 			await h.host.fire("turn_end", { turnIndex: i, message: { role: "assistant", content: [{ type: "text", text: "t" }, ...Array.from({ length: 5 }, () => ({ type: "toolCall", name: "read" }))] }, toolResults: [] }, h.ctx);
 		}
@@ -326,7 +298,6 @@ describe("V2-A background review", () => {
 	});
 
 	it("directive-driven consolidation turns are excluded from accounting", async () => {
-		// simulate an active consolidation directive turn: 20 turns must NOT review
 		const host = new FakeHost();
 		const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0 };
 		const calls: string[] = [];
@@ -357,14 +328,14 @@ describe("V2-A flush", () => {
 		const h = harness(OPS_JSON, { sessionEntries: entries, sessionId: "sess-compact-1" });
 		for (let i = 0; i < 3; i++) await h.host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `z ${i}` }] } }, h.ctx);
 		await h.host.fire("session_before_compact", { reason: "manual", signal: new AbortController().signal }, h.ctx);
-		expect(h.calls.length).toBe(0); // ZERO side-channel LLM on the compact path (C2)
+		expect(h.calls.length).toBe(0);
 		expect(h.state.flushes).toBe(1);
 		expect(h.state.lastFlush).toContain("compact-queued");
 		const files = existsSync(queueDir(agentDir)) ? readdirSync(queueDir(agentDir)).filter((f) => f.endsWith(".json")) : [];
 		expect(files).toHaveLength(1);
 		const rec = JSON.parse(readFileSync(join(queueDir(agentDir), files[0]!), "utf-8")) as QueueRecord;
 		expect(rec.sessionId).toBe("sess-compact-1");
-		expect(rec.parts).toHaveLength(2); // cursor never advanced → whole window
+		expect(rec.parts).toHaveLength(2);
 	});
 
 	it("session_shutdown: reload skips (no record), quit stages the queue with ZERO LLM calls", async () => {
@@ -376,16 +347,16 @@ describe("V2-A flush", () => {
 		const h2 = harness(OPS_JSON, { sessionEntries: entries, sessionId: "sess-quit-1" });
 		for (let i = 0; i < 3; i++) await h2.host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `w ${i}` }] } }, h2.ctx);
 		await h2.host.fire("session_shutdown", { reason: "quit" }, h2.ctx);
-		expect(h2.calls.length).toBe(0); // ZERO side-channel LLM on the exit path
+		expect(h2.calls.length).toBe(0);
 		const files = existsSync(queueDir(agentDir)) ? readdirSync(queueDir(agentDir)).filter((f) => f.endsWith(".json")) : [];
 		expect(files).toHaveLength(1);
 		const rec = JSON.parse(readFileSync(join(queueDir(agentDir), files[0]!), "utf-8")) as QueueRecord;
 		expect(rec.sessionId).toBe("sess-quit-1");
 		expect(rec.projectsDir).toBe(projectsDirStr);
-		expect(rec.parts).toHaveLength(10); // cursor never advanced → whole window
-		expect(rec.parts[9]).toMatchObject({ role: "assistant", text: "m9" }); // suffix semantics
+		expect(rec.parts).toHaveLength(10);
+		expect(rec.parts[9]).toMatchObject({ role: "assistant", text: "m9" });
 		expect(h2.state.lastFlush).toContain("queued");
-		expect(existsSync(join(queueDir(agentDir), files[0]!.replace(/\.json$/, ".tmp")))).toBe(false); // no tmp residue
+		expect(existsSync(join(queueDir(agentDir), files[0]!.replace(/\.json$/, ".tmp")))).toBe(false);
 	});
 
 	it("compact staging is fail-open: nothing to stage / aborted signal never throws", async () => {
@@ -398,8 +369,6 @@ describe("V2-A flush", () => {
 	});
 });
 
-// ── spec 2026-10-03: model chain / queue write / drain / A1 reset ──
-
 describe("spec 2026-10-03 — side-channel model fallback chain", () => {
 	it("model → recallModel → session model; a typo'd ref falls through, not back", () => {
 		const registry = { getAll: () => [{ provider: "p1", id: "fast" }, { provider: "p2", id: "big" }] } as never;
@@ -411,7 +380,6 @@ describe("spec 2026-10-03 — side-channel model fallback chain", () => {
 		expect((typo as { provider: string }).provider).toBe("p1");
 		const fallback = { id: "session" } as never;
 		expect(resolveSideChannelModel({ automation: true }, fallback, undefined)).toBe(fallback);
-		// recall's D3 gate stays untouched: unresolvable recallModel = recall OFF
 		expect(resolveRecallModel("p1/typo", registry as never)).toBeUndefined();
 	});
 });
@@ -430,7 +398,6 @@ describe("spec 2026-10-03 — queue write semantics", () => {
 		const entries = Array.from({ length: 4 }, (_, i) => ({ type: "message", message: { role: i % 2 ? "assistant" : "user", content: [{ type: "text", text: `m${i}` }] } }));
 		const h = harness(OPS_JSON, { sessionEntries: entries });
 		for (let i = 0; i < 3; i++) await h.host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `u ${i}` }] } }, h.ctx);
-		// fire a review so the cursor advances to the full branch length
 		for (let i = 0; i < 10; i++) await h.host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, h.ctx);
 		await h.host.fire("agent_end", {}, h.ctx);
 		await until(() => h.state.reviews === 1);
@@ -447,8 +414,8 @@ describe("spec 2026-10-03 — queue write semantics", () => {
 		expect(files).toHaveLength(1);
 		const rec = JSON.parse(readFileSync(join(queueDir(agentDir), files[0]!), "utf-8")) as QueueRecord;
 		expect(rec.parts).toHaveLength(60);
-		expect(rec.parts[0]).toMatchObject({ text: "m20" }); // first 20 dropped
-		expect(rec.parts[59]).toMatchObject({ text: "m79" }); // newest kept
+		expect(rec.parts[0]).toMatchObject({ text: "m20" });
+		expect(rec.parts[59]).toMatchObject({ text: "m79" });
 	});
 
 	it("same session staged twice → one record (exact sessionId merge)", () => {
@@ -458,13 +425,11 @@ describe("spec 2026-10-03 — queue write semantics", () => {
 		const files = qfiles();
 		expect(files).toHaveLength(1);
 		const rec = JSON.parse(readFileSync(join(queueDir(agentDir), files[0]!), "utf-8")) as QueueRecord;
-		expect(rec.parts).toHaveLength(2); // newest tail survived
+		expect(rec.parts).toHaveLength(2);
 	});
 });
 
 describe("spec 2026-10-03 — queue drain", () => {
-	// P0-3: a record lives as ready (.json), pending or claim — count all
-	// three shapes; only .tmp GC/write leftovers are not records.
 	const qfiles = () => (existsSync(queueDir(agentDir)) ? readdirSync(queueDir(agentDir)).filter((f) => f.endsWith(".json") || f.includes(".pending.") || f.includes(".claim.")) : []);
 	const stage = (over: Partial<QueueRecord> & { sessionId: string }) =>
 		writeQueueRecord(agentDir, { v: 1, projectsDir: projectsDirStr, cwd: project, savedAt: Date.now(), attempts: 0, parts: [{ role: "user", text: "tail content" }], ...over } as QueueRecord);
@@ -476,7 +441,7 @@ describe("spec 2026-10-03 — queue drain", () => {
 		await until(() => qfiles().length === 0);
 		expect(h.calls.length).toBe(1);
 		expect(h.state.opsApplied).toBe(1);
-		expect(existsSync(join(dir, "correction-foo.md"))).toBe(true); // OPS_JSON applied
+		expect(existsSync(join(dir, "correction-foo.md"))).toBe(true);
 		expect(h.state.lastFlush).toContain("flush-queued");
 	});
 	it("drain rewrites an over-long description before applying it (context diet): no silent loss at the store gate", async () => {
@@ -513,7 +478,6 @@ describe("spec 2026-10-03 — queue drain", () => {
 				const f = qfiles();
 				return f.length === 0 || (JSON.parse(readFileSync(join(queueDir(agentDir), f[0]!), "utf-8")) as QueueRecord).attempts === round;
 			});
-			// (a retained record re-appears as ready or pending; both parse)
 			await new Promise((r) => setTimeout(r, 30));
 		}
 		await until(() => qfiles().length === 0);
@@ -558,10 +522,8 @@ describe("spec 2026-10-03 — queue drain", () => {
 		const h2 = mkHarness();
 		h1.drainPending(h1.ctx);
 		h2.drainPending(h2.ctx);
-		await new Promise((r) => setTimeout(r, 60)); // both drains have run their claim pass
-		// exactly one LLM call is in flight
+		await new Promise((r) => setTimeout(r, 60));
 		expect(completions).toBe(1);
-		// the holder's attempt bump is on disk and no second copy exists
 		const claimLike = readdirSync(queueDir(agentDir)).filter((f) => f.endsWith(".json"));
 		const all = readdirSync(queueDir(agentDir));
 		expect(all.filter((f) => f.includes(".claim."))).toHaveLength(1);
@@ -569,7 +531,6 @@ describe("spec 2026-10-03 — queue drain", () => {
 		const claimFile = all.find((f) => f.includes(".claim."))!;
 		const held = JSON.parse(readFileSync(join(queueDir(agentDir), claimFile), "utf-8")) as QueueRecord;
 		expect(held.attempts).toBe(1);
-		// second worker saw claim-failure: no extra files, no pending copies
 		expect(all.filter((f) => f.includes(".pending."))).toHaveLength(0);
 		release({ stopReason: "stop", errorMessage: undefined, content: [{ type: "text", text: OPS_JSON }] });
 		await until(() => readdirSync(queueDir(agentDir)).length === 0);
@@ -586,7 +547,6 @@ describe("spec 2026-10-03 — queue drain", () => {
 		expect(readdirSync(queueDir(agentDir)).filter((f) => f.includes(".claim."))).toHaveLength(0);
 		expect(unhandled).toHaveLength(0);
 		process.removeAllListeners("unhandledRejection");
-		// retryable: a second drain re-claims the pending and bumps to 2
 		h.drainPending(h.ctx);
 		await until(() => {
 			const f = readdirSync(queueDir(agentDir));
@@ -596,8 +556,6 @@ describe("spec 2026-10-03 — queue drain", () => {
 
 	it("Q-T4b (P0-3): apply-fatal (deterministic preflight error) consumes the record with a diagnostic", async () => {
 		stage({ sessionId: "qt4b" });
-		// >200 ops = the store's deterministic preflight rejection (retrying
-		// cannot fix it) → the B2 consume-with-diagnostic path
 		const tooBig = JSON.stringify({
 			operations: Array.from({ length: 201 }, (_, i) => ({ action: "add", layer: "user", name: `f-${i}`, body: "x" })),
 		});
@@ -617,8 +575,6 @@ describe("spec 2026-10-03 — queue drain", () => {
 			}) as never,
 		});
 		h.drainPending(h.ctx);
-		// infra throw during completion → released (attempt counted); the NEXT
-		// drain re-runs the whole record — the §1 disclosed re-apply window
 		await until(() => readdirSync(queueDir(agentDir)).some((f) => f.includes(".pending.")));
 		const second = harness(OPS_JSON);
 		second.drainPending(second.ctx);
@@ -644,15 +600,15 @@ describe("spec 2026-10-03 — A1 per-session reset (in-process session switch)",
 		for (let i = 0; i < 10; i++) await h.host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, h.ctx);
 		await h.host.fire("agent_end", {}, h.ctx);
 		await until(() => h.state.reviews === 1);
-		await h.host.fire("session_shutdown", { reason: "new" }, h.ctx); // kills the controller…
+		await h.host.fire("session_shutdown", { reason: "new" }, h.ctx);
 		const ctx2 = h.host.makeCtx({ cwd: project, ui: true, sessionEntries: [{ type: "message", message: { role: "user", content: [{ type: "text", text: "conv one" }] } }, { type: "message", message: { role: "assistant", content: [{ type: "text", text: "conv two" }] } }], sessionId: "a1" });
 		ctx2.model = fakeModel;
 		ctx2.modelRegistry = fakeRegistry;
-		await h.host.fire("session_start", {}, ctx2); // …reset re-arms it
+		await h.host.fire("session_start", {}, ctx2);
 		for (let i = 0; i < 3; i++) await h.host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `v ${i}` }] } }, ctx2);
 		for (let i = 0; i < 10; i++) await h.host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, ctx2);
 		await h.host.fire("agent_end", {}, ctx2);
-		await until(() => h.state.reviews === 2); // without the reset this times out
+		await until(() => h.state.reviews === 2);
 	});
 });
 
@@ -699,7 +655,6 @@ describe("V2-A settings", () => {
 
 describe("V2-A prompt guardrails", () => {
 	it("automation prompts describe the schema in prose only (no parseable example)", async () => {
-		// indirect: fire a correction and capture the systemPrompt handed to the fake
 		let seenSystem = "";
 		const host = new FakeHost();
 		const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0 };
@@ -722,7 +677,7 @@ describe("V2-A prompt guardrails", () => {
 		await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: "don't do that" }] } }, ctx);
 		await host.fire("turn_end", { turnIndex: 0, message: { role: "assistant" }, toolResults: [] }, ctx);
 		await until(() => seenSystem !== "");
-		expect(seenSystem).not.toMatch(/"operations"\s*:\s*\[/); // no literal example
+		expect(seenSystem).not.toMatch(/"operations"\s*:\s*\[/);
 		expect(seenSystem).toContain("operations");
 	});
 });
@@ -735,8 +690,6 @@ describe("V2-A full wiring smoke (memoryExtension registers the hooks)", () => {
 		ctx.model = fakeModel;
 		ctx.modelRegistry = fakeRegistry;
 		await host.fire("session_start", {}, ctx);
-		// automation uses the REAL complete (no seam here) — assert only that the
-		// hooks are registered and nothing throws on a no-auth fake registry path
 		await expect(
 			host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: "不对" }] } }, ctx),
 		).resolves.toBeUndefined();
@@ -766,16 +719,11 @@ describe("V2 Phase 2 (B3) — settle timing", () => {
 			const m = /reviews (\d+)/.exec((msg!.message as { content?: string }).content ?? "");
 			return Number(m?.[1] ?? -1);
 		};
-		// manual /memory-consolidate sends the directive; its turn is directive-owned
 		await host.commands.get("memory-consolidate")?.("", ctx);
 		expect(host.sentMessages.some((m) => m.message.customType === "pi-memory-consolidate")).toBe(true);
-		// tool returns mid-turn (B3: settles in-flight ONLY, turn stays owned)
 		await host.fire("tool_result", { toolName: "memory_consolidate", content: [], isError: false }, ctx);
-		// 11 turn_ends past the review threshold — still the directive's turn:
-		// the hook early-returns, review never ticks
 		for (let i = 1; i <= 11; i++) await host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, ctx);
 		expect(await reviewsOf()).toBe(0);
-		// turn fully settles → accounting re-opens; 10 fresh turns → one review
 		await host.fire("agent_settled", {}, ctx);
 		for (let i = 12; i <= 21; i++) await host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, ctx);
 		await host.fire("agent_end", {}, ctx);
@@ -808,14 +756,12 @@ describe("V2 Phase 3 (AD5) — extraction cursor + model-wrote mutex", () => {
 		const ctx = host.makeCtx({ cwd: project, ui: true, sessionEntries: entries });
 		ctx.model = fakeModel;
 		ctx.modelRegistry = fakeRegistry;
-		// first review: full window
 		for (let i = 0; i < 3; i++) await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `u${i}` }] } }, ctx);
 		for (let i = 0; i < 10; i++) await host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, ctx);
 		await host.fire("agent_end", {}, ctx);
 		await until(() => state.reviews === 1);
 		expect(prompts.length).toBe(1);
 		expect(prompts[0]).toContain("window-one message 0");
-		// branch grows; second review must see ONLY the new messages
 		entries.push(
 			...Array.from({ length: 6 }, (_, i) => ({
 				type: "message",
@@ -850,15 +796,12 @@ describe("V2 Phase 3 (AD5) — extraction cursor + model-wrote mutex", () => {
 		ctx.model = fakeModel;
 		ctx.modelRegistry = fakeRegistry;
 		for (let i = 0; i < 3; i++) await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `u${i}` }] } }, ctx);
-		// the model writes into the project memory layer → mutex arms
 		await host.fire("tool_call", { toolName: "write", input: { path: join(dir, "self.md"), content: "---\nname: s\ndescription: d\nmetadata:\n  type: project\n---\n\nb" } }, ctx);
 		for (let i = 0; i < 10; i++) await host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, ctx);
 		await host.fire("agent_end", {}, ctx);
 		await until(() => state.reviews === 1);
-		expect(calls.length).toBe(0); // no LLM pass
+		expect(calls.length).toBe(0);
 		expect(state.lastReview).toContain("model wrote memory");
-		// next window without writes resumes LLM reviews (branch grows first,
-		// so the second window is non-empty — run-end extraction skips empty windows)
 		entries.push(
 			{ type: "message", message: { role: "user", content: [{ type: "text", text: "window-two a" }] } },
 			{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "window-two b" }] } },

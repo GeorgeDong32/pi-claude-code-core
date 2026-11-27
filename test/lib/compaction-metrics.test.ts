@@ -1,8 +1,3 @@
-/*
- * SC-MET-01 / INV-7: aggregate only the new display-only measurement rows.
- * Session files may contain private messages and truncated writes; neither
- * their content nor their paths may appear in the aggregate report.
- */
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

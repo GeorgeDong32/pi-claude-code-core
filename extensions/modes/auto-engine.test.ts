@@ -1,10 +1,3 @@
-/**
- * auto-engine.test.ts — E3 (spec 2026-11-15-cleanup-hardening): the
- * classifier-unavailable fail-closed block must carry the plain
- * unavailable message, not the YOLO rejection framing (no
- * "Permission … denied" prefix, no "add a permission rule" hint — that
- * hint makes no sense when the classifier itself is down).
- */
 import { describe, expect, it, vi } from "vitest"
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent"
 

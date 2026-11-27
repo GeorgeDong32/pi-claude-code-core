@@ -1,7 +1,3 @@
-/**
- * Tests for src/config.ts (v0.7): defaults, merge, validation, atomic write,
- * legacy-key migration warnings.
- */
 import { strict as assert } from "node:assert";
 import { afterEach, beforeEach, describe, test } from "node:test";
 import { dirname, join } from "node:path";
@@ -34,7 +30,7 @@ beforeEach(() => {
 
 afterEach(() => {
 	rmSync(sandbox, { recursive: true, force: true });
-	setConfigPath(); // reset to default
+	setConfigPath();
 });
 
 describe("mergeWithDefaults", () => {
@@ -46,7 +42,6 @@ describe("mergeWithDefaults", () => {
 		assert.equal(merged.gate.verdictPolicy, "strict");
 		assert.equal(merged.routing.mode, "adaptive");
 		assert.equal(Object.keys(merged.reviewers).length, 6);
-		// Removed legacy knobs are absent.
 		assert.ok(!("concurrency" in merged));
 		assert.ok(!("inheritance" in merged));
 		assert.ok(!("scorePerIssue" in merged.gate));
@@ -90,7 +85,6 @@ describe("mergeWithDefaults", () => {
 		assert.equal(bug.model, "anthropic/claude-opus-4-6");
 		assert.equal(bug.thinking, "xhigh");
 		assert.equal(bug.enabled, false);
-		// Other reviewers untouched.
 		assert.equal(merged.reviewers["rulesheriff"].model, "inherit");
 	});
 

@@ -1,9 +1,3 @@
-// Behaviour tier: TaskOutput's optional blocking wait (SPEC SR, E4). `block`
-// waits for the task to end (seconds budget, default 30, cap 600); a user
-// message ends the wait early; an aborted call reads nothing and leaves the
-// completion to the poller; a plain read of a finished task claims the
-// completion WITH the status row and gzip now (BG-ENTRY-03) — the red this
-// batch fixes. Fake processes + fake time, like background.test.ts.
 import assert from "node:assert/strict";
 import { after, afterEach, beforeEach, describe, it } from "node:test";
 
@@ -44,17 +38,14 @@ describe("a plain TaskOutput read of a finished task (E4 claim)", () => {
 		const id = await start(s, "echo done");
 		procs.of(id).write("done\n");
 		procs.of(id).exit(0);
-		// The read lands before any poller tick: the marker is in the log, the
-		// registry has not settled. The read itself claims the completion — the
-		// status row included, like every other completion the user sees.
 		const output = text(await s.toolCall("TaskOutput", { id }));
 		assert.match(output, /Task bg-\d+: exited \(code 0\)\.\ndone/);
-		assert.equal(s.sent.length, 0); // no completion message: the read is the report
+		assert.equal(s.sent.length, 0);
 		const entry = statusEntry(s);
 		assert.ok(entry, "expected a cc-core-bg-shell-task status entry");
 		assert.equal((entry.data as { state: string }).state, "exited");
 		assert.equal((entry.data as { exitCode: number }).exitCode, 0);
-		await clock.tick(2); // the poller agrees: nothing left to send
+		await clock.tick(2);
 		assert.equal(s.sent.length, 0);
 		await clock.until(() => gzipped(s, id));
 	});
@@ -68,7 +59,7 @@ describe("a plain TaskOutput read of a finished task (E4 claim)", () => {
 		assert.equal(statusEntry(s), undefined);
 		assert.equal(getRegistry().tasks.get(id)?.notified, false);
 		await clock.tick(1);
-		assert.equal(s.sent.length, 0); // the poller still owes the completion
+		assert.equal(s.sent.length, 0);
 	});
 });
 
@@ -78,11 +69,11 @@ describe("TaskOutput with block: true", () => {
 		const id = await start(s, "echo done");
 		procs.of(id).write("done\n");
 		const call = s.toolCall("TaskOutput", { id, block: true });
-		assert.equal(getRegistry().tasks.get(id)?.waiting, 1); // the call is blocked on the task
+		assert.equal(getRegistry().tasks.get(id)?.waiting, 1);
 		procs.of(id).exit(0);
 		const output = text(await clock.settle(call));
 		assert.match(output, /Task bg-\d+: exited \(code 0\)\.\ndone/);
-		assert.equal(s.sent.length, 0); // the waiter claimed it
+		assert.equal(s.sent.length, 0);
 		const entry = statusEntry(s);
 		assert.ok(entry);
 		await clock.tick(3);
@@ -105,7 +96,7 @@ describe("TaskOutput with block: true", () => {
 		const id = await start(s, "echo done");
 		const call = s.toolCall("TaskOutput", { id, block: true });
 		procs.of(id).exit(0);
-		await clock.tick(1); // the poller sees the exit while the waiter holds the task
+		await clock.tick(1);
 		assert.equal(s.sent.length, 0);
 		const output = text(await clock.settle(call));
 		assert.match(output, /exited \(code 0\)/);
@@ -121,7 +112,6 @@ describe("TaskOutput with block: true", () => {
 		assert.match(output, /partial/);
 		assert.match(output, /\[still running after 2 s\]$/);
 		assert.equal(getRegistry().tasks.get(id)?.notified, false);
-		// The task keeps running; the poller reports it normally when it ends.
 		procs.of(id).exit(0);
 		await clock.until(() => s.sent.length > 0);
 		assert.match(s.sent[0].message.content, /exited \(code 0\)/);
@@ -137,13 +127,13 @@ describe("TaskOutput with block: true", () => {
 
 	it("a deadline kill during the wait is claimed by the waiter, not the poller", async () => {
 		const s = session();
-		const id = await start(s, "sleep 30", { timeout: 2 }); // the task's own deadline
+		const id = await start(s, "sleep 30", { timeout: 2 });
 		procs.of(id).write("dying\n");
-		const call = s.toolCall("TaskOutput", { id, block: true }); // waits up to 30 s
+		const call = s.toolCall("TaskOutput", { id, block: true });
 		const output = text(await clock.settle(call));
 		assert.match(output, /killed \(timed out\)/);
 		assert.match(output, /dying/);
-		assert.equal(s.sent.length, 0); // the kill's completion was claimed, not sent
+		assert.equal(s.sent.length, 0);
 		await clock.tick(3);
 		assert.equal(s.sent.length, 0);
 	});
@@ -162,7 +152,6 @@ describe("TaskOutput with block: true", () => {
 		procs.of(id).exit(0);
 		await clock.until(() => s.sent.length > 0);
 		assert.match(s.sent[0].message.content, /exited \(code 0\)/);
-		// Nothing was consumed by the aborted read: it all comes in one piece now.
 		assert.match(text(await s.toolCall("TaskOutput", { id })), /^Task bg-\d+: exited \(code 0\)\.\nhello$/);
 	});
 
@@ -181,7 +170,7 @@ describe("TaskOutput with block: true", () => {
 		const output = text(await clock.settle(call));
 		assert.match(output, /^Task bg-\d+: running\.\nso far$/);
 		assert.doesNotMatch(output, /still running|aborted/);
-		assert.equal(getRegistry().tasks.get(id)?.notified, false); // still running: the poller owes the completion
+		assert.equal(getRegistry().tasks.get(id)?.notified, false);
 		procs.of(id).exit(0);
 		await clock.until(() => s.sent.length > 0);
 	});
@@ -200,7 +189,7 @@ describe("TaskOutput with block: true", () => {
 		});
 		const output = text(await clock.settle(call));
 		assert.match(output, /exited \(code 0\)/);
-		assert.equal(s.sent.length, 0); // claimed, not sent
+		assert.equal(s.sent.length, 0);
 		assert.ok(statusEntry(s));
 	});
 
@@ -219,13 +208,9 @@ describe("TaskOutput with block: true", () => {
 		const id = await start(s, "echo done");
 		const call = s.toolCall("TaskOutput", { id, block: true });
 		const task = getRegistry().tasks.get(id)!;
-		assert.equal(task.waiting, 1); // the call is blocked on the task
+		assert.equal(task.waiting, 1);
 		procs.of(id).write("done\n");
-		procs.of(id).exit(0); // marker in the log, group gone — the poller has not ticked
-		// The session ends while the wait sleeps: endSession forgets the task (its
-		// state is still `running`), so the waking loop must find the task gone
-		// before it settles anything — a `refresh` here would mark the group empty,
-		// and the next session's end-kill would then skip a reused pid.
+		procs.of(id).exit(0);
 		await s.shutdown("quit");
 		const output = text(await clock.settle(call));
 		assert.match(output, /done/);
@@ -259,8 +244,6 @@ describe("TaskOutput block/timeout validation", () => {
 	const rejectsNonPositive = async (timeout: number) => {
 		const s = session();
 		const id = await start(s, "sleep 30");
-		// settle keeps a red run bounded: today 0/negative return a bogus read and
-		// NaN/Infinity block forever, which settle turns into a clean failure.
 		await assert.rejects(
 			() => clock.settle(s.toolCall("TaskOutput", { id, block: true, timeout })),
 			/^Error: timeout is in seconds \(not ms\); must be a finite number above 0$/,

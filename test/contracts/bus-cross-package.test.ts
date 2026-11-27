@@ -1,23 +1,3 @@
-/**
- * bus-cross-package.test.ts — XPKG contract pins (SPEC 2026-10-07 P1-1 §4.1).
- *
- * XPKG-01: notification tail-queue negotiation — with a consumer-declaring
- *          cctui present, core's notify stops the direct forward and the
- *          fallback only advances its cursor; without presence the fallback
- *          displays each item exactly once.
- * XPKG-02: snapshot.onChange — the v2 data-carried subscription point, one
- *          listener set per bus instance.
- * XPKG-03: snapshot.instance — per-bus random id; reload-style swaps are
- *          detectable by comparison.
- * XPKG-04: obs_recall result protocol — structured `details` is the source;
- *          the two text header lines are a model-facing protocol only.
- * XPKG-05: then_run param shape — plain string AND the { command } object
- *          action-fusion actually registers.
- * XPKG-09-HOST: aboveEditor widget ordering — synthetic faces here; the
- *          real-host faces (both load orders AND timer-driven mid-turn
- *          async registration) are evidenced in the comments below / the
- *          README row (2026-10-08 + 2026-11-15 host batches).
- */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { VERSION } from "@earendil-works/pi-coding-agent";
 import { clearCoreGlobals, snapshotCoreGlobals, restoreCoreGlobals } from "./fake-host.ts";
@@ -64,14 +44,11 @@ describe("XPKG-01 notification tail-queue negotiation (B2)", () => {
 		const g = globalThis as Record<string, unknown>;
 		g.__piCcTui = { active: true, notificationsConsumer: true };
 		const ctx = fakeCtx(direct);
-		// startup FIRST (the real wiring subscribes before business events);
-		// the v1→v2 upgrade publish applies the (still empty) snapshot
 		const adapter = createFallbackAdapter({ hasUI: true, setWorkingMessage: () => {}, notify: (m) => shown.push(m), theme: { fg: (_r, s) => s } });
 		adapter.startup?.();
 		uiNotify(ctx as never, "while consumer live", "info");
-		expect(direct).toHaveLength(0); // consumer declared — no direct leg
-		expect(shown).toHaveLength(0);  // present → cursor advance only
-		// a later handover (cctui off) must not replay the consumed history
+		expect(direct).toHaveLength(0);
+		expect(shown).toHaveLength(0);
 		g.__piCcTui = { active: false, notificationsConsumer: true };
 		uiNotify(ctx as never, "after handover", "info");
 		expect(shown).toEqual(["after handover"]);
@@ -93,21 +70,16 @@ describe("XPKG-02/03 onChange + instance (B3)", () => {
 	it("each instance's onChange notifies only its own listeners; an old instance's listener never sees the new instance's publishes", () => {
 		const old = createCoreBus();
 		const oldHeard: number[] = [];
-		// onChange is a v2+ field (version-gated by design): the consumer
-		// upgrades an untouched bus with one empty publish before subscribing
 		old.publish({});
 		old.snapshot().onChange?.(() => oldHeard.push(1));
 		old.publish({ modes: { mode: "ask", workingStats: null } });
 		expect(oldHeard).toHaveLength(1);
 
-		// reload: a NEW bus takes over globalThis…
 		const fresh = createCoreBus();
 		fresh.publish({ modes: { mode: "plan", workingStats: null } });
 		const g2 = globalThis as unknown as { __piClaudeCodeCore?: CoreSnapshotLike };
 		expect(g2.__piClaudeCodeCore).toBe(fresh.snapshot());
-		// …the old listener is NOT invoked by the new bus's publishes
 		expect(oldHeard).toHaveLength(1);
-		// and instance detects the swap without function-identity tricks
 		expect(g2.__piClaudeCodeCore?.instance).not.toBe(old.snapshot().instance);
 		old.dispose();
 		fresh.dispose();
@@ -130,9 +102,6 @@ type CoreSnapshotLike = { instance?: string };
 
 describe("XPKG-04 obs_recall result protocol (shape pin)", () => {
 	it("the structured details fields are the display-side source (id/offset/bytes/lines/nextOffset/eof; a selection only adds)", async () => {
-		// P0-2: the field set is pinned at RUNTIME by driving the real tool —
-		// plain paging yields the six XPKG-04 fields; filter/tail ADD
-		// filter/tail/matchedLines/totalLines and never drop one of the six.
 		const mod = await import("../../extensions/observation-pack/index.ts");
 		const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
 		const { tmpdir } = await import("node:os");
@@ -173,11 +142,6 @@ describe("XPKG-05 then_run param shape (B4 of P0-1, pinned as contract)", () => 
 });
 
 describe("XPKG-09-HOST aboveEditor widget ordering", () => {
-	// Host sequencing evidence DELIVERED (2026-10-08 follow-up batch, core
-	// e98ce4a + TUI eb3bb11 on real pi 1.0.2, PTY; causal narrative
-	// corrected 2026-10-09 against the host source, TUI LEDGER correction
-	// batch): both load orders, late mounting, live turn updates, and a
-	// post-macrotask session_start handler all verified. Host facts
 	// (pi 1.0.2 bundle, ExtensionRunner.emit + setExtensionWidget): emit
 	// iterates extensions in LOAD order and AWAITS each handler before the
 	// next starts (nothing registers "during" another handler's await);
@@ -189,17 +153,5 @@ describe("XPKG-09-HOST aboveEditor widget ordering", () => {
 	// spinner re-registers via a macrotask callback). A macrotask-crossing
 	// handler only reorders itself against TIMER-deferred registrations
 	// (like that requeue), never against other session_start handlers
-	// (TUI repo docs/evidence/2026-10-08-host run/ht4a, ht4b, ht5m-*,
-	// ht2j-*).
-	//
-	// The previously-uncovered async face is now evidenced too (2026-11-15
-	// SR host batch, real pi 1.5.2 TUI via rex PTY, GLM-5.3-flash): a
-	// probe timer fired MID-AGENT-TURN (between before_agent_start and
-	// turn_end, probe timestamps on file) and registered an aboveEditor
-	// widget — under BOTH load orders (core-before-tui and tui-before-core)
-	// it landed at the map tail, below session_start-registered widgets.
-	// The todo itself stays: the scenario still cannot be automated in
-	// this suite (needs a model-driven live host); evidence at
-	// ~/.cache/pi-core-acceptance/2026-11-15/ (run/h-sc-5b + run/host-todos).
 	it.todo("arbitrary async widget registration OUTSIDE session_start (e.g. a timer firing mid-agent-turn) — evidenced 2026-11-15 (mid-turn timer widget lands at map tail under both load orders); todo retained because the scenario cannot be automated here");
 });

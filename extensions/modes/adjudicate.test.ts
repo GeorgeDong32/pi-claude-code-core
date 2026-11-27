@@ -1,10 +1,3 @@
-/**
- * adjudicate.test.ts — the DECIDE decision table (SPEC 2026-10-07 P2-1 §5).
- * Pure inputs -> expected Decision, no FakeHost, no pi. Behavior parity of
- * the assembled gate (decide + interpret through the real factory) is pinned
- * separately by test/lib/adjudication-parity.test.ts against the golden
- * fixture generated from the pre-refactor baseline.
- */
 import { describe, expect, it } from "vitest";
 import { decide, type AdjudicationFacts } from "./adjudicate.ts";
 
@@ -54,30 +47,25 @@ describe("decide: bypass", () => {
 			.toEqual({ kind: "allow", effects: { trackOutsideWrite: true } });
 	});
 	it("W1: family default-ask auto-approves; explicit ask rule still prompts", () => {
-		// family synthesized ask (first-seen MCP / web-gov domain) — allow
 		expect(decide(facts({
 			mode: "bypass",
 			tool: "mcp__exa__search",
 			verdict: ask,
 			family: { canonicalId: "mcp_exa_search", suggestedRule: "mcp_exa_*", hasExplicitAskRule: false },
 		}))).toEqual({ kind: "allow", effects: {} });
-		// family with a governing explicit ask rule — prompt (CC 1f)
 		expect(decide(facts({
 			mode: "bypass",
 			tool: "mcp__exa__search",
 			verdict: ask,
 			family: { canonicalId: "mcp_exa_search", suggestedRule: "mcp_exa_*", hasExplicitAskRule: true },
 		})).kind).toBe("prompt");
-		// non-family ask verdict — always a real rule, prompts
 		expect(decide(facts({ mode: "bypass", tool: "edit", verdict: ask })).kind).toBe("prompt");
 	});
 	it("W2: bypass edit/write gate uses the CC-parity safety set", () => {
 		expect(decide(facts({ mode: "bypass", tool: "edit", path: "~/.bashrc", pathCcSafety: true })))
 			.toMatchObject({ kind: "prompt", category: "sensitive-path" });
-		// narrow-gate-only sensitivity (pathSensitive) no longer drives 1g
 		expect(decide(facts({ mode: "bypass", tool: "edit", path: "src/a.ts", pathSensitive: true })))
 			.toEqual({ kind: "allow", effects: { trackOutsideWrite: true } });
-		// plain file — allow
 		expect(decide(facts({ mode: "bypass", tool: "write", path: "src/a.ts" })))
 			.toEqual({ kind: "allow", effects: { trackOutsideWrite: true } });
 	});
@@ -171,7 +159,6 @@ describe("decide: embedded commands (ask only)", () => {
 	it("plan mode ignores embedded safety (plan-gate owns it); auto probes arrive via embeddedAuto", () => {
 		expect(decide(facts({ mode: "plan", embeddedCommands: ["npm install"], embeddedUnsafe: [true] })))
 			.toEqual({ kind: "allow", effects: {} });
-		// auto with NO embeddedAuto probes falls to the classifier seam
 		expect(decide(facts({ mode: "auto", tool: "my_custom_tool", embeddedCommands: ["npm install"], embeddedUnsafe: [true] })))
 			.toEqual({ kind: "classify", tier3: { command: undefined, path: undefined } });
 	});
@@ -236,15 +223,12 @@ describe("decide: auto ladder (Step 2)", () => {
 		const reset = { resetAutoDenialState: true };
 		expect(decide(facts({ mode: "auto", tool: "bash", command: "ls", bashTiers: { safe: true, autoApprovable: true } })))
 			.toEqual({ kind: "allow", effects: reset });
-		// pattern matched but compound dangerous -> NOT allowed by 1.5b, falls to tier2/classify
 		expect(decide(facts({ mode: "auto", tool: "bash", command: "npm i && rm -rf /", autoAllowMatched: true, bashTiers: { safe: false, autoApprovable: false } })))
 			.toEqual({ kind: "classify", tier3: { command: "npm i && rm -rf /", path: undefined } });
 		expect(decide(facts({ mode: "auto", tool: "bash", command: "npm run build", autoSoftDenyMatched: true, bashTiers: { safe: false, autoApprovable: true } })))
 			.toEqual({ kind: "prompt", flavor: "permission-options", label: "matched autoMode.soft_deny", category: "auto-deny" });
 		expect(decide(facts({ mode: "auto", tool: "bash", command: "npm run build", bashTiers: { safe: false, autoApprovable: true } })))
 			.toEqual({ kind: "allow", effects: reset });
-		// REVIEW-2026-11-14 Spec axis: both rule flags set (every segment
-		// allow-matches AND one segment soft_deny-matches) — soft_deny wins
 		expect(decide(facts({ mode: "auto", tool: "bash", command: "git add -A && npm publish", autoAllowMatched: true, autoSoftDenyMatched: true, bashTiers: { safe: false, autoApprovable: true } })))
 			.toEqual({ kind: "prompt", flavor: "permission-options", label: "matched autoMode.soft_deny", category: "auto-deny" });
 	});
@@ -255,7 +239,6 @@ describe("decide: auto ladder (Step 2)", () => {
 			.toEqual({ kind: "classify", tier3: { command: undefined, path: "/outside/a.ts" } });
 		expect(decide(facts({ mode: "auto", tool: "my_custom_tool" })))
 			.toEqual({ kind: "classify", tier3: { command: undefined, path: undefined } });
-		// rule verdicts still adjudicate ahead of the ladder
 		expect(decide(facts({ mode: "auto", verdict: deny }))).toMatchObject({ kind: "deny" });
 		expect(decide(facts({ mode: "auto", verdict: allow, tool: "bash" })))
 			.toEqual({ kind: "allow", effects: { resetAutoDenialState: true } });
@@ -264,14 +247,12 @@ describe("decide: auto ladder (Step 2)", () => {
 
 describe("decide: P1-4 protected pi-path write (2026-11-08)", () => {
 	it("step 3.5 prompts in non-bypass modes, after plan hard limits", () => {
-		// ask mode, protected write → prompt (3.5)
 		expect(decide(facts({
 			mode: "ask",
 			tool: "bash",
 			input: { command: "echo x > ~/.pi/agent/permission-modes.json" },
 			bashProtectedWrite: { target: "~/.pi/agent/permission-modes.json", kind: "modes-permissions-file" },
 		}))).toMatchObject({ kind: "prompt", category: "protected-path" });
-		// plan hard block wins over the 3.5 prompt
 		expect(decide(facts({
 			mode: "plan",
 			tool: "bash",
@@ -279,7 +260,6 @@ describe("decide: P1-4 protected pi-path write (2026-11-08)", () => {
 			planHardBlock: { block: true, reason: "plan hard limit" },
 			bashProtectedWrite: { target: "x", kind: "modes-permissions-file" },
 		}))).toEqual({ kind: "deny", reason: "plan hard limit" });
-		// auto mode, protected write → prompt
 		expect(decide(facts({
 			mode: "auto",
 			tool: "bash",
@@ -304,7 +284,6 @@ describe("decide: BH-R3 unrecognized mv/cp flag escalation (ask, never deny)", (
 			.toEqual({ kind: "prompt", flavor: "permission-options", label, category: "sensitive-path" });
 		expect(decide(facts({ mode: "auto", tool: "bash", input: { command: "mv -z a b" }, bashFlagAsk: label })))
 			.toEqual({ kind: "prompt", flavor: "permission-options", label, category: "sensitive-path" });
-		// plan hard block still wins; a protected-path prompt (3.5) beats 3.6
 		expect(decide(facts({
 			mode: "plan",
 			tool: "bash",

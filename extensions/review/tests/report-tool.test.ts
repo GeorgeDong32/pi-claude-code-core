@@ -1,12 +1,3 @@
-/**
- * Tests for src/report-tool.ts — the pi_review_report tool logic.
- *
- * Two real regressions found during local E2E (v0.7):
- *  - the tool relied on process.cwd() to find the run manifest; callers must
- *    be able to pass cwd explicitly.
- *  - gate finalConfidence re-scores were ignored, so a reviewer-reported conf
- *    7 major that the gate verified to 8 was still dropped at threshold 8.
- */
 import { strict as assert } from "node:assert";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -283,10 +274,6 @@ describe("runReportTool", () => {
 	});
 
 	test("unverified blocker/major dispositions are exempt from the threshold floor", () => {
-		// Field regression (2026-08-20/21): the gate could not verify real
-		// majors and its "keep at original confidence" instruction still lost
-		// them to the code-side threshold filter. The exemption floors the
-		// confidence at the threshold and flags the evidence.
 		const { cwd, runId } = setupManifest();
 		const res = runReportTool({
 			runId,
@@ -369,7 +356,6 @@ describe("runReportTool", () => {
 		});
 		assert.equal(res.ok, true);
 		if (!res.ok) return;
-		// No verdict source: the tool reports no-gate instead of fabricating approve.
 		assert.equal(res.verdict, "no-gate");
 	});
 
@@ -399,7 +385,6 @@ describe("runReportTool", () => {
 		});
 		assert.equal(res.ok, true);
 		if (!res.ok) return;
-		// legacy: needs >=3 majors before request_changes; 2 majors -> comment
 		assert.equal(res.verdict, "comment");
 	});
 
@@ -413,9 +398,6 @@ describe("runReportTool", () => {
 		assert.ok((res as { error: string }).error.includes("manifest not found"));
 	});
 });
-// AR1005-JS-06: connection pin — the review consumer accepts its verdict
-// shape through the shared extraction while a genuine trailing comma is
-// repaired; string bodies pass through byte-identical.
 describe("extractVerdictBlock (AR1005-JS-06)", () => {
 	test("string bodies with ,} stay verbatim while a real trailing comma is repaired", () => {
 		const md = 'prose\n```json\n{"verdict":"CHANGES_REQUESTED","reason":"literal ,} sequence",}\n```';

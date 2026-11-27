@@ -1,18 +1,3 @@
-/**
- * Wiring & invariant scans (SPEC SC §5.10 ST-06, INV-2/3, FB-06, APP-04③;
- * task W4).
- *
- * Requirement → test map:
- *   ST-06  → assembly line contains compactionController between memory and
- *            the ccPanels/economy block (source-order scan of index.ts)
- *   INV-2  → no setInterval / recursive setTimeout in extensions/compaction
- *            (the ONE fallback deadline timer is a single non-recursive
- *            setTimeout, whitelisted by pattern)
- *   INV-3  → compaction never calls setThinkingLevel
- *   FB-06  → no "cancel" return anywhere in the compaction module
- *   APP-04③→ no other core module produces compaction/context_edit boundary
- *            drafts (source scan outside extensions/compaction)
- */
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -52,9 +37,6 @@ describe("INV-2 no timers/polling", () => {
 		for (const file of compactionFiles) {
 			const source = readFileSync(file, "utf-8");
 			expect(source, `${file}: setInterval`).not.toContain("setInterval");
-			// The two one-shot fallback deadline timers (wait + regenerate) —
-			// C6 (2026-11-10 review): exactly 2 setTimeout CALLS in index.ts,
-			// zero elsewhere; both are cleared after their race (C1).
 			const timerUses = source.match(/setTimeout\(/g) ?? [];
 			const recursive = /setTimeout\([^)]*\)\s*[;)].*setTimeout/s.test(source);
 			expect(recursive, `${file}: recursive setTimeout`).toBe(false);
@@ -79,7 +61,6 @@ describe("FB-06 no cancel path", () => {
 	it("extensions/compaction contains no cancel return", () => {
 		for (const file of compactionFiles) {
 			const source = readFileSync(file, "utf-8");
-			// Comments may say "never cancels"; the RETURN SHAPE may not exist.
 			expect(/\{\s*cancel|cancel\s*:/.test(source), `${file}: cancel return shape`).toBe(false);
 		}
 	});
@@ -96,9 +77,6 @@ describe("APP-04③ core-wide draft exclusivity", () => {
 			}
 		}
 		for (const [file, source] of scanned) {
-			// A boundary DRAFT would be a returned object with
-			// type:"compaction" or type:"context_edit" — the seam/types
-			// mentions are fine; string literals in handler returns are not.
 			expect(source, `${file}: compaction draft`).not.toMatch(/type:\s*"compaction"/);
 			expect(source, `${file}: context_edit draft`).not.toMatch(/type:\s*"context_edit"/);
 		}

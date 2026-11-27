@@ -1,11 +1,3 @@
-/**
- * test/lib/recall-frequency.test.ts — task-boundary pins (memory-policy
- * spec; the B warmup/cooldown frequency gates were removed with the
- * deferred-delivery era). These exercise the REAL gate: the selector may
- * run only on the first RECALL_BOUNDARY_TURNS real user messages after
- * session start or the most recent compactionSummary, derived from the
- * projection (D9).
- */
 import { describe, expect, it } from "vitest";
 
 import { RECALL_BOUNDARY_TURNS, createRecall, type RecallFile } from "../../extensions/memory/recall.ts";

@@ -1,8 +1,3 @@
-/**
- * json-lift unit tests (arch review C4) — pin the ONE shared extraction:
- * candidate order, string-awareness (the old selector bug), repair, and
- * map-null-keeps-scanning semantics for the four consumers.
- */
 import { describe, expect, it } from "vitest";
 import {
 	_spanScanCountForTests,
@@ -22,10 +17,10 @@ describe("jsonCandidates order", () => {
 	it("balanced spans follow in document order; a duplicate outermost slice dedupes away", () => {
 		const text = 'noise {"outer":{"inner":1}} trailing';
 		const cands = jsonCandidates(text);
-		expect(cands[0]).toBe(text); // whole text (does not parse — fine, order is the pin)
+		expect(cands[0]).toBe(text);
 		expect(cands[1]).toBe('{"outer":{"inner":1}}');
 		expect(cands[2]).toBe('{"inner":1}');
-		expect(cands).toHaveLength(3); // the outermost slice equals span #1 — deduped
+		expect(cands).toHaveLength(3);
 	});
 
 	it("dedupes identical candidates", () => {
@@ -60,8 +55,6 @@ describe("repairJsonCandidate", () => {
 		expect(repairJsonCandidate('{"a":"x, y"}')).toBe('{"a":"x, y"}');
 	});
 
-	// AR1005-JS-01 / JS-T01: the old comma regex did not recognize strings, so a
-	// real trailing comma authorized it to rewrite string bodies too.
 	it("JS-T01: real trailing commas repaired while ,} / ,] inside strings stay verbatim", () => {
 		expect(repairJsonCandidate('{"note":"literal ,} sequence","tags":["a ,] b",],"nums":[1,2,3,]}'))
 			.toBe('{"note":"literal ,} sequence","tags":["a ,] b"],"nums":[1,2,3]}');
@@ -70,8 +63,6 @@ describe("repairJsonCandidate", () => {
 		expect(out).toEqual({ note: "literal ,} sequence", nums: [1, 2, 3] });
 	});
 
-	// AR1005-JS-01 / JS-T02: escape-aware scan — quoted closers, odd/even
-	// backslashes, unicode and nested arrays pass through byte-identical.
 	it("JS-T02: escaped quotes, backslash runs, unicode and nested arrays survive repair unchanged", () => {
 		const input = '{"k":"she said \\"} ,] \\\\ ok 中文 ✅","tail":"after\\\\","nested":[[1,],[2,],]}';
 		expect(repairJsonCandidate(input))
@@ -81,7 +72,6 @@ describe("repairJsonCandidate", () => {
 		expect(out?.nested).toEqual([[1], [2]]);
 	});
 
-	// JS-T03: already-valid text, BOM-only input and repair:false keep baseline semantics.
 	it("JS-T03: valid JSON and BOM handling unchanged; repair:false stays strict", () => {
 		expect(repairJsonCandidate('\uFEFF{"a":1}')).toBe('{"a":1}');
 		expect(repairJsonCandidate('{"a":1}')).toBe('{"a":1}');
@@ -114,7 +104,6 @@ describe("liftJson", () => {
 		expect(liftJson('{"ops":[]}', (v) => (Array.isArray((v as { ops?: unknown }).ops) ? [] : null))).toEqual([]);
 	});
 
-	// JS-T04: canonical order across fences, duplicates and mapper rejection.
 	it("JS-T04: outer candidates rejected by the mapper keep scanning to inner ones, in baseline order", () => {
 		const text = 'head ```json\n{"ops":"outer"}\n``` mid {"ops":[1]} tail';
 		const seen: string[] = [];
@@ -124,12 +113,9 @@ describe("liftJson", () => {
 			return Array.isArray(ops) ? ops : null;
 		});
 		expect(out).toEqual([1]);
-		// raw then repaired variant per candidate; the whole-text candidate does not parse;
-		// the outer span dedupes against the fence candidate (baseline order).
 		expect(seen).toEqual(['{"ops":"outer"}', '{"ops":"outer"}', '{"ops":[1]}']);
 	});
 
-	// JS-T05: mapper edge semantics — empty array wins; null/undefined/throw keep scanning.
 	it("JS-T05: empty-array mapper result is valid; null, undefined and throws keep scanning", () => {
 		expect(liftJson('{"ops":[]}', (v) => (Array.isArray((v as { ops?: unknown }).ops) ? [] : null))).toEqual([]);
 		expect(liftJson('{"a":1}', () => undefined)).toBeNull();
@@ -140,7 +126,6 @@ describe("liftJson", () => {
 		expect(liftJson("total garbage", () => "x")).toBeNull();
 	});
 
-	// JS-T08: inputs that still NEED the span fallback produce baseline-identical results.
 	it("JS-T08: span-fallback fixtures lift the same payloads as the baseline", () => {
 		const fixture = '前置说明 {"selected":["mem-1","mem-2"]} 后置说明';
 		expect(liftJson(fixture, (v) => {
@@ -151,8 +136,6 @@ describe("liftJson", () => {
 		expect(liftJson(malformed, (v) => (v as { keep?: string }).keep ? (v as { keep: string }).keep : null)).toBe("a ,} b");
 	});
 
-	// JS-T07: lazy candidate generation — a stage-1/2 success must never enter
-	// the span scan (operation-count assertion, no machine-specific timing).
 	it("JS-T07: fence or whole-text success never starts span enumeration", () => {
 		_resetSpanScanCountForTests();
 		expect(liftJson('```json\n{"ops":[1]}\n``` trailing prose', (v) => {

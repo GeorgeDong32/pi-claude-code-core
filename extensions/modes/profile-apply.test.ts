@@ -1,8 +1,3 @@
-/**
- * B5-2 (cherry-batch2 spec): the PROFILE effort clamp — the path this batch
- * fixed (it previously wrote unvalidated). Pin: a single-tier model + a
- * profile asking for medium writes the clamped tier + an info notice.
- */
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

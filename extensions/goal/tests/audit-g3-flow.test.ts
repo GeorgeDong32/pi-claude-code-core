@@ -1,14 +1,3 @@
-/**
- * Entropy-control G3 integration tests ([C20]/[C21]) — driving the REAL
- * update_goal path (docs/zh/entropy-control-spec.md).
- *
- * [C20] a completion request whose summary lacks objective [Cn] lines gets
- *       exactly ONE followUp (triggerTurn:false) reminder listing the missing
- *       numbers, and the audit STARTS anyway; full coverage sends no reminder;
- *       objectives without numbered criteria never remind.
- * [C21] the third audit attempt (auditAttempts=2 on disk → 3rd try) surfaces
- *       a one-time UI warning; earlier attempts stay silent.
- */
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,7 +10,6 @@ import goalExtension from "../goal.ts";
 import { createGoal } from "../goal-record.ts";
 import { writeActiveGoalFile } from "../storage/goal-files.ts";
 
-// the shared-notify host leg needs a live non-consuming cctui replica
 const CCTUI_LIVE = { active: true, notificationsConsumer: false } as const;
 
 let prevHome: string | undefined;
@@ -47,7 +35,6 @@ interface AuditorCall {
 	completionSummary?: string;
 }
 
-/** A goal with a custom objective + auditAttempts seed, focused and running. */
 async function setupGoal(opts: { objective: string; auditAttempts?: number; auditor?: (call: AuditorCall) => Promise<{ approved: boolean; disapproved: boolean; output: string; model: string }> }) {
 	const home = mkdtempSync(join(tmpdir(), "g3i-home-"));
 	process.env.HOME = home;
@@ -124,7 +111,7 @@ test("[C21] the third audit attempt surfaces one UI warning; the first does not"
 	} finally {
 		third.cleanup();
 	}
-	resetCoreBusForTests(); // drop the third-attempt bus notice before the control run
+	resetCoreBusForTests();
 	const first = await setupGoal({ objective: OBJECTIVE });
 	try {
 		await first.host.tools.get("update_goal")!.execute("t1", { status: "complete", completionSummary: "[C1] [C2] [C3] done" }, undefined, undefined, first.ctx as never);

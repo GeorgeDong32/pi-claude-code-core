@@ -5,7 +5,6 @@ import { join } from "node:path"
 
 import { loadPermissionModesConfig, setConfigPath } from "./config.ts"
 
-// ---- config (path, mtime) cache (plan2 A1c) ------------------------------
 
 describe("loadPermissionModesConfig (path, mtime) cache", () => {
 	let tmp: string
@@ -26,12 +25,10 @@ describe("loadPermissionModesConfig (path, mtime) cache", () => {
 		utimesSync(file, t1, t1)
 		expect(loadPermissionModesConfig()).toEqual({ classifier: { enabled: false } })
 
-		// content swapped underneath but mtime forced back: cache must hit
 		writeFileSync(file, JSON.stringify({ classifier: { enabled: true } }))
 		utimesSync(file, t1, t1)
 		expect(loadPermissionModesConfig()).toEqual({ classifier: { enabled: false } })
 
-		// mtime moves: fresh read
 		utimesSync(file, t2, t2)
 		expect(loadPermissionModesConfig()).toEqual({ classifier: { enabled: true } })
 	})

@@ -1,15 +1,3 @@
-/*
- * Fallback-leg tests (SPEC SC §5.8 FB-01…08, task W4).
- *
- * Requirement → test map:
- *   FB-01 → "decideFallback matrix" (reason × readiness × custom
- *            instructions × V8a verdict)
- *   FB-04 → "supply shape" (fields complete, origin native-backfill)
- *   FB-06 → "no cancel path" (source scan — wiring test pins the handler)
- *   FB-07 → deadline math is exercised end-to-end by the BLK-3/5 protection
- *            tests; unit level pins hardFitLimitFor per reason
- *   FB-08 → "auditNativeSummary" (⑤–⑦ only; E3 shape invalid)
- */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -29,21 +17,13 @@ const base = {
 };
 
 test("FB-01 matrix: reason × readiness × instructions × fit", () => {
-	// threshold + ready + gates + fit → supply.
 	assert.deepEqual(decideFallback({ ...base, hasReadySnapshot: true, snapshotGatesPassed: true, snapshotHardFitPassed: true }), { action: "supply-snapshot" });
-	// Ready but UNFIT (BLK-3) → skip the snapshot, regenerate.
 	assert.deepEqual(decideFallback({ ...base, hasReadySnapshot: true, snapshotGatesPassed: true, snapshotHardFitPassed: false }), { action: "regenerate" });
-	// Computing → wait (then re-evaluate).
 	assert.deepEqual(decideFallback({ ...base, hasComputingSnapshot: true }), { action: "wait-for-ready" });
-	// Nothing → regenerate.
 	assert.deepEqual(decideFallback({ ...base }), { action: "regenerate" });
-	// manual + instructions → native (D6).
 	assert.deepEqual(decideFallback({ ...base, reason: "manual", hasCustomInstructions: true, hasReadySnapshot: true, snapshotGatesPassed: true, snapshotHardFitPassed: true }), { action: "native" });
-	// manual + clean ready snapshot → supply.
 	assert.deepEqual(decideFallback({ ...base, reason: "manual", hasReadySnapshot: true, snapshotGatesPassed: true, snapshotHardFitPassed: true }), { action: "supply-snapshot" });
-	// manual + nothing → native (no synchronous generation for manual).
 	assert.deepEqual(decideFallback({ ...base, reason: "manual" }), { action: "native" });
-	// overflow behaves like threshold for the decision shape.
 	assert.deepEqual(decideFallback({ ...base, reason: "overflow", hasComputingSnapshot: true }), { action: "wait-for-ready" });
 });
 

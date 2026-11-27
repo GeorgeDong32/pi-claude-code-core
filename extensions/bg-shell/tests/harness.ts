@@ -1,11 +1,7 @@
 // The shared test harness: a temporary state directory, one fake Pi session
 // that records tools, event handlers, sent messages and statuses, and the two
-// tiers' tools. Behaviour tests run the extension over `fakeProcesses()` (a
-// scripted process table behind the process port) and `fakeClock()` (mock
-// timers); the logs stay real files. Contract tests use the real port on real
-// time and never touch the clock. A test file uses one tier: fake time and real
-// processes never meet. SR (2026-11-15): added `fire` so tests can emit events
-// (the `input` handler behind TaskOutput's blocking wait included).
+// tiers' tools. A test file uses one tier: fake time and real processes never
+// meet.
 import { appendFileSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -176,8 +172,6 @@ export function session(options: { id?: string; hasUI?: boolean; branch?: unknow
 		sessionManager: {
 			getSessionId: () => id,
 			getSessionFile: () => join(root, "sessions", `${id}.jsonl`),
-			// CH E6: the session_start id-seeding scan reads the branch; a test
-			// seeds it with pre-recorded entries via `session({ branch: [...] })`.
 			getBranch: () => options.branch ?? [],
 		},
 		get ui() {
@@ -241,7 +235,6 @@ export async function waitFor(done: () => boolean, what: string, ms = 5000): Pro
 	if (!done()) throw new Error(`${what} did not happen within ${ms} ms`);
 }
 
-// --- helpers shared by every test file ---
 
 /** The id in "Started background task <id>." */
 export const taskId = (text: string) => /task (bg-\d+)/.exec(text)?.[1] as string;
@@ -264,7 +257,6 @@ export const logHas = (s: Session, id: string, needle: string) =>
 		`log ${id} holding ${JSON.stringify(needle)}`,
 	);
 
-// --- behaviour tier: fake processes and fake time ---
 
 /** One task the fake process table runs. The test scripts what it does. */
 export type FakeProc = {
@@ -331,7 +323,6 @@ export function fakeProcesses(): FakeProcesses {
 				fake.failNextLaunch = undefined;
 				throw error;
 			}
-			// Exclusive, as the real launch: a log that exists belongs to an earlier run.
 			closeSync(openSync(options.logPath, "wx", 0o600));
 			let leader = true;
 			let child = false;

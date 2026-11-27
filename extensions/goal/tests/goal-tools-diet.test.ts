@@ -1,14 +1,3 @@
-/**
- * Goal tools diet (spec 2026-11-27-goal-tools-diet v2): the six lifecycle
- * tools are codemode-exposed and never declared, so the declared tool list is
- * the same with no goal, during a draft, with an active/paused goal and in a
- * tweak interview. The drafting-phase rules they used to get from visibility
- * are now execute-time gates. Pinned here:
- *   - exposure per tool and the always-on pair's prompt cost caps
- *   - the declared set across a whole goal lifecycle (prefix stability)
- *   - the gates reject in the wrong phase and pass in the right one
- *   - the injected prompts name the codemode call form
- */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -119,7 +108,6 @@ test("gates: lifecycle verbs are refused during a drafting interview and allowed
 	const f = setup();
 	try {
 		await f.host.fire("session_start", { reason: "new" }, f.ctx);
-		// a /goal draft start opens the confirmation interview
 		await command(f, "goal", "fix the bug");
 		const update = f.host.tools.get("update_goal")!;
 		const out = (await update.execute("t1", { status: "complete", completionSummary: "x" }, undefined, undefined, f.ctx)) as { content: Array<{ text: string }> };

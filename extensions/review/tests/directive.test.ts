@@ -1,11 +1,3 @@
-/**
- * Prose / directive-copy tests for src/directive.ts.
- *
- * The JSON-stringified workflowScript body assertions live in
- * tests/workflow-contract.test.ts (which parses the script back and asserts
- * against plain text). This file only asserts the human-facing directive
- * copy that is NOT embedded in the JSON string.
- */
 import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -113,7 +105,6 @@ describe("buildReviewDirective — user-facing copy", () => {
 		assert.ok(d.includes(MANIFEST));
 		assert.ok(d.includes(DIFF));
 		assert.ok(d.includes(WORKSPACE));
-		// No template placeholders survive.
 		assert.doesNotMatch(d, /\$\{TARGET_WORKSPACE\}/);
 		assert.doesNotMatch(d, /\$\{MANIFEST_PATH\}/);
 	});
@@ -135,7 +126,6 @@ describe("buildReviewDirective — user-facing copy", () => {
 	test("hard rules preserve single-wave and no-retry guidance", () => {
 		const d = buildReviewDirective(baseInput());
 		assert.match(d, /Do not retry/);
-		// v0.8.6: the report is echoed verbatim into chat; hand-rewriting stays banned.
 		assert.match(d, /output its markdown verbatim in chat/);
 		assert.match(d, /do not re-write findings yourself/);
 		assert.match(d, new RegExp(leanAgentName("bugbot")));
@@ -159,8 +149,6 @@ describe("lean helpers", () => {
 
 	test("default turnBudget is 26 (raised from 20 — field runs wrapped partial)", () => {
 		assert.equal(LEAN_BUDGETS.turnBudget.maxTurns, 26);
-		// The gate must be able to actually verify high-severity candidates
-		// (user-tuned 2026-08-25: 12 → 16 turns, 10 → 14 soft tools).
 		assert.ok(LEAN_BUDGETS.gateTurnBudget.maxTurns >= 16, "gate turns >= 16");
 		assert.ok(LEAN_BUDGETS.gateToolBudget.soft >= 14, "gate tool budget soft >= 14");
 	});
@@ -175,10 +163,7 @@ describe("lean helpers", () => {
 describe("bundled agent prompts — pi-subagents ≥0.5 acceptance contract", () => {
 	/**
 	 * pi-subagents appends an Acceptance Contract to every child run and
-	 * expects a closing ```acceptance-report fence. Agents whose prompts end
-	 * with only "return JSON and stop" got meta acceptance: rejected on every
-	 * run (observed in the field). Each bundled agent must tell the model to
-	 * comply.
+	 * expects a closing ```acceptance-report fence.
 	 */
 	const agentsDir = join(fileURLToPath(new URL(".", import.meta.url)), "..", "agents");
 	for (const name of [
@@ -207,10 +192,6 @@ describe("bundled agent prompts — pi-subagents ≥0.5 acceptance contract", ()
 	});
 
 	test("v0.8: reviewers use Markdown output; gate/lite end with a fenced JSON block", () => {
-		// User decision (2026-08-27): drop the structured-output tool contract
-		// entirely — reviewers write Markdown reports, and only the gate /
-		// lite-reviewer finish with a fenced ```json block that the report
-		// tool machine-reads.
 		for (const name of [
 			"bugbot",
 			"security-review",
@@ -247,8 +228,6 @@ describe("tui-renderer summary line (v0.8.3 user decision)", () => {
 
 	test("extractHeader reads the report's Verdict line incl. Chinese annotation", async () => {
 		const { summaryLine } = await import("../src/tui-renderer.js");
-		// renderReport emits `**Verdict: APPROVE** (0 blocker · ...)`;
-		// the main agent's Chinese recap may emit `Verdict: APPROVE（通过）`.
 		assert.equal(
 			summaryLine({ verdict: "comment" as never, totals: undefined } as never),
 			"pi-review result: Comment",
@@ -257,7 +236,6 @@ describe("tui-renderer summary line (v0.8.3 user decision)", () => {
 });
 
 describe("tui-renderer flat report card (v0.8.5)", () => {
-	// Pass-through theme: assertions see the plain text, structure only.
 	const passthroughTheme = {
 		fg: (_color: string, text: string) => text,
 		bold: (text: string) => text,
@@ -270,15 +248,12 @@ describe("tui-renderer flat report card (v0.8.5)", () => {
 
 	test("extractHeader parses the canonical report Verdict line", async () => {
 		const { extractHeader } = await import("../src/tui-renderer.js");
-		// renderReport emits `**Verdict: APPROVE** (1 blocker · ...)`.
 		const header = extractHeader("## Review\n**Verdict: APPROVE** (1 blocker · 2 major · 0 minor · 1 nit)\n");
 		assert.equal(header.verdict, "approve");
 		assert.deepEqual(header.totals, { blocker: 1, major: 2, minor: 0, nit: 1 });
-		// Chinese annotation between verdict and counts still parses.
 		const zh = extractHeader("**Verdict: REQUEST_CHANGES（需修改）** (0 blocker · 0 major · 0 minor · 0 nit)");
 		assert.equal(zh.verdict, "request_changes");
 		assert.deepEqual(zh.totals, { blocker: 0, major: 0, minor: 0, nit: 0 });
-		// No Verdict line -> comment fallback.
 		assert.deepEqual(extractHeader("free-form markdown without a verdict"), { verdict: "comment" });
 	});
 
@@ -289,8 +264,6 @@ describe("tui-renderer flat report card (v0.8.5)", () => {
 
 	test("body starts under a `⎿  ` gutter, continuation rows space-aligned", async () => {
 		const rows = await renderCard("**Verdict: APPROVE** (0 blocker · 0 major · 0 minor · 0 nit)\nline one\nline two");
-		// rows[1] is the report's own Verdict line — the full body renders
-		// verbatim (v0.8.3), so the gutter opens with it, not "line one".
 		assert.match(rows[1]!, /^ {2}⎿ {2}\*\*Verdict: APPROVE\*\*/);
 		assert.match(rows[2]!, /^ {5}line one$/);
 		assert.match(rows[3]!, /^ {5}line two$/);
@@ -303,8 +276,6 @@ describe("tui-renderer flat report card (v0.8.5)", () => {
 		for (const row of rows) {
 			assert.ok(visibleWidth(row) <= 80, `row exceeds viewport: ${row}`);
 		}
-		// Body content survives wrapping intact (rows[1] is the Verdict line;
-		// gutter/continuation prefixes stripped from the wrapped long line).
 		const stripped = rows.slice(2).map((r) => r.replace(/^ {2}⎿ {2}/, "").replace(/^ {5}/, "")).join("");
 		assert.equal(stripped, long);
 	});
@@ -324,7 +295,6 @@ describe("tui-renderer flat report card (v0.8.5)", () => {
 	});
 });
 describe("tui-renderer command echo (fused: CC user-bar style)", () => {
-	// Pass-through theme: assertions see the plain text, structure only.
 	const passthroughTheme = {
 		fg: (_color: string, text: string) => text,
 		bold: (text: string) => text,

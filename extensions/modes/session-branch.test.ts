@@ -14,7 +14,7 @@ import {
 	msg,
 } from "./test-fixtures.ts"
 
-// Real SessionEntry shapes from pi 0.80+ typings (plan B1 / C2): messages are
+// Real SessionEntry shapes from pi: messages are
 // wrapped as {type:"message", message:{role:"user"|"assistant"|"toolResult"}}.
 const branch: BranchEntry[] = [
 	msg("user", "list the files"),

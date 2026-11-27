@@ -35,7 +35,6 @@ describe("parseReviewArgs", () => {
 	});
 
 	test("silently drops removed valued flags and their values (graceful degradation)", () => {
-		// Old invocations must not leak flag values into input.
 		const p = parseReviewArgs("--threshold 7 --reviewer bugbot --no-gate focus on bugs");
 		assert.equal(p.input, "focus on bugs");
 		assert.equal(p.lite, false);
@@ -52,8 +51,6 @@ describe("parseReviewArgs", () => {
 	});
 
 	test("legacy valued flag does not swallow a following --flag (R8)", () => {
-		// A legacy valued flag followed by ANOTHER flag must not eat the
-		// flag token as its value: `/review --diff --lite` must set lite.
 		const p = parseReviewArgs("--diff --lite");
 		assert.equal(p.lite, true, "--lite after a legacy valued flag must be honored");
 		assert.equal(p.input, undefined);

@@ -1,6 +1,3 @@
-/**
- * auto-mode risk heuristic tests — carved from utils.test.ts (arch review C3).
- */
 import { describe, expect, it } from "vitest";
 import { checkAutoRisk } from "./auto-risk.ts";
 

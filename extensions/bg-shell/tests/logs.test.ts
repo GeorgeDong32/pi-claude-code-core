@@ -1,8 +1,3 @@
-// Behaviour tier: log housekeeping — gzip after the completion message, reading
-// gzipped logs through `TaskOutput`, and the 7-day cleanup at session start.
-// Fake processes and fake time; the logs are real files whose ages are set with
-// `utimes`. The log-limit kill is a contract test (real `sh`, real time) in
-// contract.test.ts.
 import assert from "node:assert/strict";
 import {
 	chmodSync,
@@ -56,7 +51,6 @@ const gzPath = (s: Session, id: string) => join(s.logDir(), `${id}.log.gz`);
 const plainPath = (s: Session, id: string) => join(s.logDir(), `${id}.log`);
 const out = (s: Session, params: object) => s.toolCall("TaskOutput", params);
 
-/** Set a path's access and modification times to `days` days ago. */
 function aged(path: string, days: number): void {
 	const then = new Date(Date.now() - days * DAY);
 	utimesSync(path, then, then);
@@ -66,7 +60,6 @@ const seq = (from: number, to: number) => Array.from({ length: to - from + 1 }, 
 const lines = (t: string) => t.split("\n").filter((l) => /^\d+$/.test(l));
 const seqLines = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => String(from + i));
 
-/** Run a task to its end: it writes `output`, exits with `code`, and the poller reports it (and gzips the log). */
 async function finished(s: Session, output: string | Buffer, code = 0): Promise<string> {
 	const id = await start(s, "job");
 	procs.of(id).write(output);
@@ -78,9 +71,6 @@ async function finished(s: Session, output: string | Buffer, code = 0): Promise<
 
 describe("id continuity across processes (CH E6)", () => {
 	it("seeds nextId past the ids in the session's status entries, even with pruned logs", async () => {
-		// A resumed session whose earlier run used bg-5 and whose logs were
-		// pruned (or gzipped names unknown): a fresh process must not hand out
-		// bg-1 again, it must continue past the highest recorded id.
 		const s = session({
 			branch: [
 				{
@@ -155,10 +145,8 @@ describe("gzip after the completion message", () => {
 	it("latest and filter work on a gzipped log", async () => {
 		const s = session();
 		const id = await finished(s, seq(1, 30));
-		// A filter over the whole gzipped log keeps only the matching lines.
 		const filtered = text(await out(s, { id, filter: "^2" }));
 		assert.deepEqual(lines(filtered), ["2", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29"]);
-		// The position moved past everything, so `latest` has nothing new.
 		assert.match(text(await out(s, { id, latest: true })), /\(no new output\)/);
 	});
 
@@ -166,7 +154,7 @@ describe("gzip after the completion message", () => {
 		const s = session();
 		const id = await start(s, "job");
 		procs.of(id).write("data\n");
-		procs.of(id).die(); // gone with no marker
+		procs.of(id).die();
 		await clock.until(() => s.sent.length > 0);
 		await clock.until(() => gzipped(s, id));
 		assert.match(s.sent[0].message.content, /finished: exit unknown/);
@@ -224,7 +212,7 @@ describe("cleanup at session start", () => {
 		for (const name of others) assert.equal(existsSync(join(dir, name)), true, name);
 		assert.equal(existsSync(join(dir, "subdir")), true);
 		assert.equal(existsSync(join(dir, "bg-1.log")), false);
-		assert.equal(existsSync(dir), true); // the others keep the directory
+		assert.equal(existsSync(dir), true);
 	});
 
 	it("never follows a symlink out of the directory", async () => {
@@ -234,14 +222,14 @@ describe("cleanup at session start", () => {
 		writeFileSync(join(outside, "bg-1.log"), "precious");
 		const dir = sessionDir("linky");
 		mkdirSync(dir, { recursive: true });
-		symlinkSync(outside, sessionDir("linked-session")); // a symlinked session dir must not be descended into
-		symlinkSync(join(outside, "bg-1.log"), join(dir, "bg-2.log")); // a symlinked log must not be followed
+		symlinkSync(outside, sessionDir("linked-session"));
+		symlinkSync(join(outside, "bg-1.log"), join(dir, "bg-2.log"));
 		writeFileSync(join(dir, "bg-3.log"), "old log\n");
 		aged(join(dir, "bg-3.log"), 8);
 		aged(dir, 8);
 		await s.sessionStart();
 		assert.equal(readFileSync(join(outside, "bg-1.log"), "utf8"), "precious");
-		assert.equal(existsSync(join(dir, "bg-2.log")), true); // the symlink stays
+		assert.equal(existsSync(join(dir, "bg-2.log")), true);
 		assert.equal(existsSync(join(dir, "bg-3.log")), false);
 	});
 
@@ -255,7 +243,7 @@ describe("cleanup at session start", () => {
 		const link = join(dir, "bg-9.log");
 		symlinkSync(join(outside, "precious"), link);
 		const then = new Date(Date.now() - 8 * DAY);
-		lutimesSync(link, then, then); // the link's own mtime, not the target's
+		lutimesSync(link, then, then);
 		aged(dir, 8);
 		await s.sessionStart();
 		assert.equal(existsSync(link), true);
@@ -289,9 +277,9 @@ describe("cleanup at session start", () => {
 		writeFileSync(join(dir, "bg-2.log"), "older\n");
 		for (const name of ["bg-1.log", "bg-2.log"]) aged(join(dir, name), 8);
 		aged(dir, 8);
-		chmodSync(dir, 0o500); // write permission removed: every unlink fails with EACCES
+		chmodSync(dir, 0o500);
 		try {
-			await s.sessionStart(); // one failing unlink must not escape
+			await s.sessionStart();
 			assert.equal(existsSync(join(dir, "bg-1.log")), true);
 			assert.equal(existsSync(join(dir, "bg-2.log")), true);
 		} finally {
@@ -308,7 +296,6 @@ describe("the log limit marker", () => {
 		delete process.env.CC_CORE_BG_LOG_LIMIT_BYTES;
 	});
 
-	/** Start a task that prints well past the lowered limit and wait for its completion. */
 	async function overLimit(s: Session): Promise<string> {
 		const id = await start(s, "runaway");
 		procs.of(id).write("x".repeat(4096));
@@ -323,7 +310,6 @@ describe("the log limit marker", () => {
 		assert.doesNotMatch(s.sent[0].message.content, /__CC_BG_LIMIT__/);
 		const result = text(await out(s, { id }));
 		assert.doesNotMatch(result, /__CC_BG_LIMIT__/);
-		// the raw log really does carry the marker the view cut
 		await clock.until(() => gzipped(s, id));
 		assert.match(gunzipSync(readFileSync(gzPath(s, id))).toString("utf8"), /__CC_BG_LIMIT__:[0-9a-f]{16}\n$/);
 	});
@@ -333,7 +319,7 @@ describe("the log limit marker", () => {
 		const id = await start(s, "runaway");
 		const proc = procs.of(id);
 		proc.write("x".repeat(4096));
-		proc.exit(0); // the exit marker lands before the fast limit check fires
+		proc.exit(0);
 		await clock.until(() => s.sent.length > 0);
 		assert.match(s.sent[0].message.content, /finished: exited \(code 0\)/);
 		assert.doesNotMatch(s.sent[0].message.content, /__CC_BG_LIMIT__|__CC_BG_EXIT__/);
@@ -350,7 +336,7 @@ describe("the log limit marker", () => {
 		const id = await start(s, "runaway");
 		const proc = procs.of(id);
 		proc.write("y".repeat(4096));
-		proc.unkillable = true; // the group survives, so the log is not gzipped and the marker stays put
+		proc.unkillable = true;
 		proc.onSignal = (signal) => {
 			if (signal === "SIGKILL") proc.write("dying\n");
 		};
@@ -365,7 +351,7 @@ describe("the log limit marker", () => {
 		const id = await start(s, "runaway");
 		procs.of(id).write("z".repeat(4096));
 		const plain = plainPath(s, id);
-		chmodSync(plain, 0o000); // stat works, append and read fail with EACCES
+		chmodSync(plain, 0o000);
 		try {
 			await clock.until(() => s.sent.length > 0);
 			assert.equal(s.sent.length, 1);
@@ -382,10 +368,9 @@ describe("the log limit marker", () => {
 		const proc = procs.of(id);
 		const output = "x".repeat(4096);
 		proc.write(output);
-		proc.unkillable = true; // survives SIGKILL, so the limit marker is written and the log stays plain
+		proc.unkillable = true;
 		await clock.until(() => s.sent.length > 0);
 		assert.match(s.sent[0].message.content, /finished: killed \(log limit passed\)/);
-		// The wrapper finally exits on its own, writing its exit marker after the limit marker.
 		proc.exit(3);
 		const task = getRegistry().tasks.get(id)!;
 		assert.equal(existsSync(plainPath(s, id)), true);
@@ -405,9 +390,9 @@ describe("the log limit marker", () => {
 		const id = await start(s, "runaway");
 		const proc = procs.of(id);
 		proc.write("x".repeat(4096));
-		proc.unkillable = true; // SIGKILL does not clear the group, so the kill stays in flight across fast ticks
+		proc.unkillable = true;
 		await clock.until(() => s.sent.length > 0);
-		await clock.tick(2); // let any overlapping kill that a mutant started finish and write
+		await clock.tick(2);
 		assert.equal(proc.signals.filter((signal) => signal === "SIGKILL").length, 1);
 		assert.equal((readFileSync(plainPath(s, id), "utf8").match(/__CC_BG_LIMIT__:[0-9a-f]{16}\n/g) ?? []).length, 1);
 		assert.equal(s.sent.length, 1);
@@ -420,7 +405,7 @@ describe("the log limit marker", () => {
 		proc.write("x".repeat(4096));
 		proc.unkillable = true;
 		await clock.until(() => s.sent.length > 0);
-		await clock.tick(3); // plenty of event-loop turns in which an always-gzip mutant would finish
+		await clock.tick(3);
 		assert.equal(existsSync(plainPath(s, id)), true);
 		assert.equal(existsSync(gzPath(s, id)), false);
 		assert.equal(getRegistry().tasks.get(id)!.logPath, plainPath(s, id));
@@ -437,7 +422,7 @@ describe("the log limit marker", () => {
 		const s = session();
 		const id = await start(s, "runaway");
 		procs.of(id).write("x".repeat(4096));
-		procs.of(id).die(); // gone with no marker before the fast tick
+		procs.of(id).die();
 		await clock.until(() => s.sent.length > 0);
 		assert.equal(getRegistry().tasks.get(id)!.state, "exit-unknown");
 		assert.match(s.sent[0].message.content, /finished: exit unknown/);
@@ -448,7 +433,7 @@ describe("the log limit marker", () => {
 		const id = await start(s, "runaway");
 		procs.of(id).write("x".repeat(4096));
 		await clock.until(() => s.sent.length > 0);
-		await clock.tickMs(300); // past the next 250 ms fast tick, well before the 2 s poller
+		await clock.tickMs(300);
 		assert.equal(getRegistry().limitTimer, undefined);
 	});
 
@@ -471,7 +456,7 @@ describe("gzip timing", () => {
 		procs.of(id).write("done\n");
 		procs.of(id).exit(0);
 		await clock.until(() => s.faults.sendAttempts >= 1);
-		await clock.tick(5); // ample time for a gzip that should not have started
+		await clock.tick(5);
 		assert.equal(existsSync(plainPath(s, id)), true);
 		assert.equal(existsSync(gzPath(s, id)), false);
 		s.faults.failSend = false;
@@ -505,11 +490,11 @@ describe("gzip timing", () => {
 	it("leaves no partial .gz when the gzip write fails, and keeps the plain log", async () => {
 		const s = session();
 		const id = await start(s, "job");
-		mkdirSync(gzPath(s, id), { recursive: true }); // a directory in the .gz's place makes the gzip write fail
+		mkdirSync(gzPath(s, id), { recursive: true });
 		procs.of(id).write("done\n");
 		procs.of(id).exit(0);
 		await clock.until(() => s.sent.length > 0);
-		await clock.until(() => !existsSync(gzPath(s, id)), 3 * POLL_MS); // the async gzip fails
+		await clock.until(() => !existsSync(gzPath(s, id)), 3 * POLL_MS);
 		assert.equal(existsSync(plainPath(s, id)), true);
 		assert.equal(existsSync(gzPath(s, id)), false);
 		assert.equal(getRegistry().tasks.get(id)!.logPath, plainPath(s, id));
@@ -557,7 +542,6 @@ describe("cleanup across processes", () => {
 		aged(join(dir, "owner.pid"), 8);
 		aged(dir, 8);
 		assert.equal(ownerPid(dir), undefined);
-		// The real port throws for a pid above 2^31-1; make that visible here.
 		const port = processPort();
 		setProcessPort({
 			...port,

@@ -30,13 +30,10 @@ describe("dangerous-permissions", () => {
 	})
 
 	it("does not flag specific safe-ish allow patterns", () => {
-		// Narrow script-scoped rules survive; only broad verb/bare forms are stripped.
 		expect(isDangerousBashPermission("Bash", "npm run test *")).toBe(false)
 		expect(isDangerousBashPermission("Bash", "npm install lodash:*")).toBe(false)
 	})
 
-	// Adjudication ② (2026-09-12): package managers with lifecycle-script
-	// execution are dangerous as broad rules — see docs/bash-risk-adjudication-2026-09-12.md.
 	it("flags broad package-manager allow rules as dangerous", () => {
 		expect(isDangerousBashPermission("Bash", "npm:*")).toBe(true)
 		expect(isDangerousBashPermission("Bash", "npm install *")).toBe(true)

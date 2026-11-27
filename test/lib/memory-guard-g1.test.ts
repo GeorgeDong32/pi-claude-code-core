@@ -1,15 +1,3 @@
-/**
- * Entropy-control G1 guard tests (docs/zh/entropy-control-spec.md).
- *
- * Function-level: guardMemoryToolCall covers [C1] frontmatter validation
- * (same-source with the index), [C2] wrong-directory, [C3] the retired
- * USER-layer write ban, [C6] child-session write ban, and the secret probe
- * extended to edit's edits[].
- *
- * Integration-level: the session_start/agent_end [C5] protected-file
- * baseline (direct fs write bypasses the guard → one UI notice) and the
- * [C3] warn-once dedup.
- */
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,8 +6,6 @@ import { FakeHost, clearCoreGlobals, restoreCoreGlobals, snapshotCoreGlobals } f
 import memoryExtension from "../../extensions/memory/index.ts";
 import { guardMemoryToolCall } from "../../extensions/memory/guard.ts";
 import { eligibleMemories } from "../../extensions/memory/memdir.ts";
-// Layer dirs as PLAIN paths (the guard only judges paths; the integration
-// tests below use the real derived locations where it matters).
 const userMemoryDir = (): string => join(home, ".pi", "agent", "memory");
 const projectMemoryDir = (): string => join(project, "projmem", "memory");
 
@@ -86,7 +72,7 @@ describe("[C1] frontmatter validation — same source as the index", () => {
 		const file = join(projectMemoryDir(), "good.md");
 		writeFileSync(file, validMemory("good", "fine"));
 		const v = guardMemoryToolCall("edit", { path: file, edits: [{ oldText: "description: fine", newText: "description:" }] }, env());
-		expect(v.block).toBe(true); // the post-edit content lacks description
+		expect(v.block).toBe(true);
 	});
 
 	it("passes a legal write — and the index agrees (same-source pin)", () => {
@@ -94,7 +80,6 @@ describe("[C1] frontmatter validation — same source as the index", () => {
 		const content = validMemory("ok", "an ok memory");
 		const v = guardMemoryToolCall("write", { path: join(projectMemoryDir(), "ok.md"), content }, env());
 		expect(v.block).toBe(false);
-		// the index-side judgment must agree for exactly this content
 		writeFileSync(join(projectMemoryDir(), "ok.md"), content);
 		const indexed = eligibleMemories(projectMemoryDir()).map((f) => f.title);
 		expect(indexed).toContain("ok");
@@ -182,7 +167,6 @@ describe("[C5]/warn-once integration through the extension hooks", () => {
 		const pm = join(agentDir, "permission-modes.json");
 		writeFileSync(pm, "{}");
 		await host.fire("session_start", {}, ctx);
-		// bypass the guard: direct fs write
 		writeFileSync(pm, JSON.stringify({ permissions: { allow: ["bash"] } }));
 		await host.fire("agent_end", {}, ctx);
 		const hits = host.notifications.filter((n) => n.includes("permission-modes.json"));
@@ -214,8 +198,6 @@ describe("[C5]/warn-once integration through the extension hooks", () => {
 		expect(first.block).toBe(true);
 		expect(second.block).toBe(true);
 		expect(first.reason).toContain("retired");
-		// the old misfiling WARN (userLayerMisfileVerdict) is gone — blocking
-		// is silent now, nothing notifies the UI
 		expect(host.notifications.filter((n) => n.includes("paths:"))).toHaveLength(0);
 	});
 });

@@ -1,11 +1,3 @@
-/**
- * V2-M1 (DESIGN-MEMORY-V2 §1/§2) — storage + write path tests, single layer.
- *
- * The cross-project user layer is retired: the project layer under
- * ~/.pi/agent/projects/<root>/memory is the only store injected, recalled
- * or written. The old user dir survives as a read-only source (pinned
- * injection until migration, snapshots, diagnostics).
- */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, readFileSync, utimesSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -40,7 +32,6 @@ function setup(): FakeHost {
 	return host;
 }
 
-/** RV wiring helper: settings with recallModel + a recording fake selector. */
 function setupWithSelector(keys: string[], log: Array<{ query: string; candidates: string[] }> = []): FakeHost {
 	mkdirSync(join(home, ".pi", "agent"), { recursive: true });
 	writeFileSync(join(home, ".pi", "agent", "settings.json"), JSON.stringify({ memory: { recallModel: "test/selector-1", recallWaitMs: 5000 } }));
@@ -55,7 +46,6 @@ function setupWithSelector(keys: string[], log: Array<{ query: string; candidate
 	return host;
 }
 
-/** A ctx whose modelRegistry resolves the configured recallModel. */
 function recallCtx(host: FakeHost, opts: { cwd: string; projectionMessages?: unknown[] }): Record<string, unknown> {
 	const ctx = host.makeCtx({ cwd: opts.cwd, ui: true, projectionMessages: opts.projectionMessages ?? [] });
 	ctx.modelRegistry = { getAll: () => [{ provider: "test", id: "selector-1" }] };
@@ -70,11 +60,7 @@ function writeMemory(layer: "user" | "project", name: string, title: string, des
 		join(target, name),
 		`---\nname: ${title}\ndescription: ${description}\nmetadata:\n  type: ${type}${pinned ? "\n  pinned: true" : ""}\n---\n\n${body}`,
 	);
-	// C7: direct write bypassed the invalidating primitives — drop the scan
-	// cache so scan→write→scan sequences in one test stay exact.
 	invalidateMemDirCache(target);
-	// the recall echo filter drops files with mtime >= session start; a write
-	// in the same millisecond as session_start would flake — backdate
 	const past = new Date(Date.now() - 60_000);
 	utimesSync(join(target, name), past, past);
 }
@@ -133,7 +119,6 @@ describe("V2-M1 policy injection (single layer)", () => {
 		const handler = host.handlers.get("before_agent_start")![0] as (e: unknown, c: unknown) => Promise<{ systemPrompt?: string }>;
 		const r = (await handler({ systemPrompt: "BASE" }, ctx))!;
 		expect(r.systemPrompt!.split("<memory-policy>").length - 1).toBe(1);
-		// pinned files render as always-active blocks (### title), not index rows
 		const pinnedAt = r.systemPrompt!.indexOf("### prefers-中文");
 		const projAt = r.systemPrompt!.indexOf("build-flow (p1.md) — ");
 		expect(pinnedAt).toBeGreaterThan(-1);
@@ -152,8 +137,6 @@ describe("V2-M1 policy injection (single layer)", () => {
 		const project = Array.from({ length: 200 }, (_, i) => ({ title: `p${i}`, description: "y".repeat(900), file: `p${i}.md` }));
 		const text = buildPolicyInjection(pinned, project, "/t/canonical/memory");
 		const policyBytes = Buffer.byteLength(policyCompact("/t/canonical/memory"), "utf8");
-		// the index sections clamp to the lane; the policy block is the fixed
-		// on-top prefix (same accounting as the old two-layer sections)
 		expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(MEMORY_INDEX_MAX + policyBytes);
 	});
 
@@ -191,7 +174,7 @@ describe("V2-M1 selection pooling (project-only since the user layer retired)", 
 		expect(r.message!.display).toBe(false);
 		expect(r.message!.details.v).toBe(1);
 		expect(r.message!.details.delivery).toBe("immediate");
-		expect(log[0]!.candidates).toEqual(["memory/build.md"]); // project-only pool
+		expect(log[0]!.candidates).toEqual(["memory/build.md"]);
 	});
 });
 
@@ -208,7 +191,6 @@ describe("V2-M1 guard + retired layer", () => {
 		);
 		expect(blocked).toMatchObject({ block: true });
 		expect((blocked as { reason?: string }).reason).toContain("retired");
-		// direct call form as well
 		expect(guardMemoryWrites("write", { path: join(udir, "x.md"), content: "sk-abcdef123456abcdef123456" }, udir).block).toBe(true);
 	});
 });
@@ -223,7 +205,7 @@ describe("V2-M1 regression — single-layer behaviors", () => {
 		const handler = host.handlers.get("before_agent_start")![0] as (e: unknown, c: unknown) => Promise<{ systemPrompt?: string }>;
 		const r = (await handler({ systemPrompt: "BASE" }, ctx))!;
 		expect(r.systemPrompt).not.toContain("Pinned memories");
-		expect(r.systemPrompt).not.toContain("(u1.md)"); // unpinned retired-dir files stay out
+		expect(r.systemPrompt).not.toContain("(u1.md)");
 		expect(r.systemPrompt).toContain("build-flow (p1.md) — ");
 	});
 
@@ -245,7 +227,7 @@ describe("V2 data-safety (Phase 0 D2/D3)", () => {
 		writeMemory("project", "real.md", "real", "real fact");
 		const { entries, skipped } = scanMemoryDir(dir);
 		expect(entries.map((e) => e.file)).toEqual(["real.md"]);
-		expect(skipped).toBe(0); // invisible, not even counted as invalid
+		expect(skipped).toBe(0);
 		reindex(dir);
 		const index = readFileSync(join(dir, "MEMORY.md"), "utf-8");
 		expect(index).not.toContain("zombie");
@@ -277,8 +259,8 @@ describe("V2 Phase 3 (AD1/AD3/AD4) — injection dedupe + policy text", () => {
 		const ctx = recallCtx(host, { cwd: project, projectionMessages: [priorRecall] });
 		await host.fire("session_start", {}, ctx);
 		const r = (await host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "回复语言偏好是什么 language preference" }, ctx)) as { message?: unknown };
-		expect(r?.message).toBeUndefined(); // the only candidate is deduped → nothing eligible
-		expect(log.length).toBe(0); // RV-06: dedup happens BEFORE the selector is paid for
+		expect(r?.message).toBeUndefined();
+		expect(log.length).toBe(0);
 	});
 
 	it("RV-07: a read toolCall in the history excludes the file; without it the file is selectable", async () => {
@@ -294,8 +276,7 @@ describe("V2 Phase 3 (AD1/AD3/AD4) — injection dedupe + policy text", () => {
 		await host.fire("session_start", {}, ctxRead);
 		const r1 = (await host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "回复语言偏好是什么 language preference" }, ctxRead)) as { message?: unknown };
 		expect(r1?.message).toBeUndefined();
-		expect(log.length).toBe(0); // read suppression empties the candidate set → no selector call
-		// history without the read (post-compaction rebuild) → selectable again
+		expect(log.length).toBe(0);
 		const ctxClean = recallCtx(host, { cwd: project, projectionMessages: [] });
 		const r2 = (await host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "回复语言偏好是什么 language preference" }, ctxClean)) as { message?: unknown };
 		expect((r2?.message as { content: Array<{ text: string }> } | undefined)?.content?.[0]?.text).toContain("(memory/lang2.md)");
@@ -308,13 +289,10 @@ describe("V2 Phase 3 (AD1/AD3/AD4) — injection dedupe + policy text", () => {
 		expect(freshnessHeader(now - 47 * 24 * 60 * 60 * 1000, undefined, now)).toContain("47 days ago");
 		const policy = policyCompact("/home/u/.pi/agent/projects/-Users-x-Coding-repo/memory");
 		expect(policy).not.toContain("Update MEMORY.md");
-		expect(policy).toContain("already exist — write files"); // text wraps; assert the first line only
-		// path-mismatch regression pin (2026-10-03): the project line must carry
-		// the REAL interpolated dir, never the literal `<project>/memory/`
+		expect(policy).toContain("already exist — write files");
 		expect(policy).toContain("PROJECT memory at /home/u/.pi/agent/projects/-Users-x-Coding-repo/memory");
 		expect(policy).not.toContain("<project>/memory/");
 		expect(policy).toContain("NOT in a memory/");
-		// retirement pins: the model must not reinvent the cross-project layer
 		expect(policy).toContain("user layer is retired");
 		expect(policy).toContain("Never write");
 	});

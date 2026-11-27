@@ -1,8 +1,3 @@
-/*
- * P0-1 pipefail guard (2026-11-24) — detection on the real command shapes
- * seen in 30 days of session logs, argv shaping per shell, and one real
- * launch proving the marker carries the upstream exit status.
- */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

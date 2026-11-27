@@ -1,6 +1,5 @@
 /*
- * Test-only synthetic-session builders for the compaction suites (INV-7:
- * every fixture here is synthetic — no real session content).
+ * Test-only synthetic-session builders for the compaction suites.
  */
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";

@@ -1,5 +1,3 @@
-// Behaviour tier: `TaskOutput` paging, `latest`, `filter` and the completion
-// tail, over the fake process table: the test writes each task's output and ends it.
 import assert from "node:assert/strict";
 import { after, afterEach, beforeEach, describe, it } from "node:test";
 
@@ -29,9 +27,7 @@ afterEach(() => {
 });
 after(cleanup);
 
-/** The text of `seq from to`. */
 const seq = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => `${from + i}\n`).join("");
-/** Run a task to its end: it writes `output`, exits with `code`, and the poller reports it. */
 async function finished(s: Session, output: string | Buffer, code = 0): Promise<string> {
 	const id = await start(s, "job");
 	procs.of(id).write(output);
@@ -40,7 +36,6 @@ async function finished(s: Session, output: string | Buffer, code = 0): Promise<
 	return id;
 }
 const out = (s: Session, params: object) => s.toolCall("TaskOutput", params);
-/** The output lines of a result: everything above the trailing bracketed notes. */
 const lines = (text: string) => text.split("\n").filter((l) => /^\d+$/.test(l) || /^[a-z]+\d*$/.test(l));
 const seqLines = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => String(from + i));
 
@@ -99,7 +94,7 @@ describe("TaskOutput", () => {
 		const first = text(await out(s, { id }));
 		const second = text(await out(s, { id }));
 		const count = (t: string) => t.split("\n").filter((l) => /^0{90,}\d+$/.test(l)).length;
-		assert.equal(count(first), 506); // a 51200-byte cap holds 506 whole 101-byte lines
+		assert.equal(count(first), 506);
 		assert.match(first, /more remaining/i);
 		assert.equal(count(first) + count(second), 600);
 	});
@@ -151,7 +146,7 @@ describe("TaskOutput", () => {
 		proc.write("tail\n");
 		proc.exit(0);
 		await clock.until(() => s.sent.length > 0);
-		assert.deepEqual(lines(text(await out(s, { id }))), ["tail"]); // nothing skipped, nothing repeated
+		assert.deepEqual(lines(text(await out(s, { id }))), ["tail"]);
 	});
 
 	it("latest: true with nothing unread returns no new output", async () => {
@@ -167,7 +162,7 @@ describe("TaskOutput", () => {
 		const s = session();
 		const id = await start(s, "job");
 		procs.of(id).write(seq(1, 3000));
-		const first = lines(text(await out(s, { id }))); // the oldest page, at most 2000 lines
+		const first = lines(text(await out(s, { id })));
 		assert.equal(first[0], "1");
 		const read = first.length;
 		assert.ok(read < 3000);

@@ -1,9 +1,3 @@
-/**
- * B6 (arch): the fused-call counter — registration-level pin. A real write
- * via the registered fused tool with a then_run command must publish
- * fusedCount on the capability bus; the count comes from the structured
- * details.thenRun field (no protocol-token sniffing). Flat node:test.
- */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtemp, writeFile } from "node:fs/promises";
@@ -14,7 +8,6 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { coreBus, resetCoreBusForTests } from "../../bus.ts";
 import createActionFusion from "../index.ts";
 
-/** Tolerant session stub (then-run.test.ts pattern). */
 function fakeCtx(cwd: string): never {
 	const sessionManager = new Proxy(
 		{ getSessionId: () => "fus-count-session", getSessionDir: () => "", getSessionFile: () => "" },
@@ -58,11 +51,8 @@ test("a fused write with a succeeding then_run publishes fusedCount on the bus",
 		undefined,
 		fakeCtx(dir),
 	);
-	// FUS-04 token still model-facing…
 	assert.ok(result.content.some((b) => b.type === "text" && (b.text ?? "").includes("[then_run:succeeded]")));
-	// …and the structured outcome is on the details
 	assert.equal((result.details as { thenRun?: string } | undefined)?.thenRun, "succeeded");
-	// the counter published through the real bus
 	assert.equal(coreBus()?.snapshot().fusion?.fusedCount, 1);
 	resetCoreBusForTests();
 });

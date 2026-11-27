@@ -1,8 +1,3 @@
-/**
- * Context diet v3 (spec 2026-11-24-core-context-diet): compact index rows,
- * write-side description cap (store gate + one bounded rewrite), the two
- * deferred on-demand tools, and the per-run stats probe.
- */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -64,7 +59,6 @@ describe("index rows: slug — description, no duplicated link, ⚠ on over-long
 		expect(rows).toEqual(["- alpha — [insight] alpha fact", `- beta-long — [failure] ${LONG} ⚠`]);
 		const imported = buildPolicyInjection({ entries: [] }, [{ title: "deploy-flow", description: "d", file: "deploy-flow-646570.md" }], dir);
 		expect(imported).toContain("- deploy-flow (deploy-flow-646570.md) — d");
-		// a hand-edited description with a line break still renders as one row
 		const broken = buildPolicyInjection({ entries: [] }, [{ title: "c", description: "line one\nline two", file: "c.md" }], dir);
 		expect(broken.split("\n").filter((l) => l.startsWith("- "))).toEqual(["- c — line one line two"]);
 		expect(text, "the slug must not be repeated as a markdown link").not.toContain("](");
@@ -236,11 +230,9 @@ describe("module wiring: deferred exposure, counters and the per-run stats entry
 		expect(stats.length).toBe(1);
 		expect(stats[0]?.data).toMatchObject({ memoryReads: 1, lookups: 1, searches: 1, recallInjections: 0, descTooLong: 1, indexRows: 2 });
 		expect((stats[0]?.data as { indexBytes: number }).indexBytes).toBeGreaterThan(0);
-		// per run, not session-cumulative: a quiet second run reports zeros
 		await host.fire("agent_end", { messages: [] }, ctx);
 		const second = host.appendEntries.filter((e) => e.type === "cc-core-memory-stats")[1]?.data;
 		expect(second).toMatchObject({ memoryReads: 0, lookups: 0, searches: 0, recallInjections: 0, descTooLong: 1, indexRows: 2 });
-		// a missing memory dir is a clean miss, not a thrown tool error
 		rmSync(dir, { recursive: true, force: true });
 		const gone = (await lookup.execute("t3", { name: "anything" }, undefined, undefined, ctx)) as { content: Array<{ text: string }>; details: { ok: boolean } };
 		expect(gone.details.ok).toBe(false);

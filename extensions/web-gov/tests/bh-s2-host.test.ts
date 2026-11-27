@@ -1,16 +1,3 @@
-/**
- * BH-S2 (spec 2026-11-14-backtest-hardening) — host extraction must parse
- * URL fields with `new URL()`:
- *
- *   - the old prefix regex stopped at `@`, so `https://github.com@evil.example/`
- *     extracted "github.com" and rode the preapproved list (allow);
- *   - a URL carrying userinfo is NEVER preapproved (ask absent an explicit rule);
- *   - the hostname is lowercased with trailing dots stripped;
- *   - IP literals are hosts: `domain:` rules match them normally, but the
- *     preapproved-domain list never matches an IP;
- *   - an unparsable URL field fails CLOSED (ask), while a free-text `query`
- *     stays unclaimed (a search term is not a fetch target).
- */
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,11 +11,9 @@ import type { PermissionRule } from "../../modes/permissions.ts";
 const rule = (behavior: "allow" | "deny" | "ask", text: string): PermissionRule =>
 	({ behavior, ruleValue: text, source: "global" }) as never;
 
-/** family against the BUILTIN preapproved list (nonexistent home → no override) */
 const family: RuleFamily = createWebRuleFamily("/nonexistent-home");
 after(() => clearRuleFamilies());
 
-/** The family verdict for one url-carrying call (match → resolve). */
 function verdict(url: string, rules: PermissionRule[] = []): "allow" | "deny" | "ask" {
 	const id = family.match("mcp_exa_crawl", { url });
 	assert.notEqual(id, null, `the web family must claim a url-carrying call: ${url}`);
@@ -105,7 +90,6 @@ describe("BH-S2: IP literals are hosts", () => {
 
 describe("BH-S2: fail-closed parsing", () => {
 	it("an unparsable (schemeless) url field asks instead of riding the preapproved list", () => {
-		// base: the regex happily extracted "github.com" → preapproved allow
 		assert.equal(verdict("github.com/docs"), "ask");
 	});
 

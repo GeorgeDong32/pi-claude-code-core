@@ -1,19 +1,3 @@
-/*
- * rex-flow ledger + signal tests (SPEC SC §5.6 LED-05/05b/05c, CUT-04,
- * INV-6; task W7) and long-task signals (W8).
- *
- * Requirement → test map:
- *   LED-05  → "open runs full detail / closed one-line / other-open count"
- *   LED-05b → "three layouts discovered", "cross-project decoy excluded",
- *             "association (a) explicit", "association (b) repo+observed",
- *             "unassociated → sentinel-only", "too-large → reason code"
- *   LED-05c → "run-closed signal fires after the first plain assistant
- *             following a run-done sentinel" (and CUT-04 via selectCut)
- *   LED-06  → association drives narrativeHeader wording (covered in W6;
- *             here: state.associated is the switch)
- *   INV-6   → read-only + 2 MiB cap (too-large fixture) + fail-open
- *   W8      → goal-step / git-commit / verified signal units
- */
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -36,7 +20,6 @@ function settings(over: Partial<CompactionSettings> = {}): CompactionSettings {
 	return { ...DEFAULT_COMPACTION_CORE_SETTINGS, ...over };
 }
 
-/** A region that OBSERVED r2 via a sentinel line. */
 function regionWithSentinel(runId = "r2"): CompressedRegionView {
 	return {
 		entries: [
@@ -49,7 +32,6 @@ function regionWithSentinel(runId = "r2"): CompressedRegionView {
 	void runId;
 }
 
-/** A cwd with a git origin config for association rule (b). */
 function gitCwd(repo: string): string {
 	const dir = mkdtempSync(join(tmpdir(), "sc-git-"));
 	mkdirSync(join(dir, ".git"), { recursive: true });
@@ -65,7 +47,6 @@ test("LED-05b: three board layouts are discovered (dashed / ws-root-named / lega
 	] as const) {
 		const cwd = gitCwd(repo);
 		try {
-			// Observe a run id that actually exists on THAT home's board.
 			const observedRun = home.endsWith("home-a") ? "r2" : home.endsWith("home-b") ? "r9" : "r5";
 			const region = { entries: [userEntry("start"), assistantEntry(`===FLOW-REPORT=== ${observedRun} t1 ready`)] };
 			const result = buildFlowLedger({ cwd, homeDir: home, settings: settings(), region });
@@ -78,8 +59,6 @@ test("LED-05b: three board layouts are discovered (dashed / ws-root-named / lega
 });
 
 test("LED-05b: the cross-project decoy NEVER leaks (other project's only-active board)", () => {
-	// cwd is project A (origin acme/proj-a); the decoy board (other/proj-B,
-	// run r77) sits in the same home. The session observed r2 (project A).
 	const cwd = gitCwd("acme/proj-a");
 	try {
 		const result = buildFlowLedger({ cwd, homeDir: join(FIXTURES, "home-a"), settings: settings(), region: regionWithSentinel() });
@@ -87,13 +66,11 @@ test("LED-05b: the cross-project decoy NEVER leaks (other project's only-active 
 		const all = JSON.stringify(result.state);
 		assert.ok(!all.includes("DECOY"), "the decoy project's content must never appear");
 		assert.ok(!all.includes("r77"));
-		// Project A's own open run r2 IS present with full detail.
 		const r2 = result.state.openRuns.find((run) => run.runId === "r2");
 		assert.ok(r2, "observed run r2 must have a detail row");
 		assert.equal(r2?.tasks.length, 2);
 		assert.equal(r2?.openGates.length, 1);
 		assert.match(r2?.openGates[0]?.question ?? /$/, /row cap/);
-		// r1 (done) is a one-liner with merged counts.
 		assert.ok(result.state.closed.some((item) => item.id === "r1" && /1\/1 merged/.test(item.detail ?? "")));
 	} finally {
 		rmSync(cwd, { recursive: true, force: true });
@@ -105,11 +82,11 @@ test("LED-05b (a): an explicit settings boardPath associates WITHOUT a repo matc
 	try {
 		const result = buildFlowLedger({
 			cwd,
-			homeDir: join(FIXTURES, "home-b"), // enumeration also finds it, but repo differs
+			homeDir: join(FIXTURES, "home-b"),
 			settings: settings({ ledger: { rexFlow: { enabled: true, boardPath: join(FIXTURES, "home-b", ".rex-flow", "projects", "Users-x-proj-b", "board.json") } } }),
 			region: { entries: [userEntry("go"), assistantEntry("===FLOW-REPORT=== r9/t1 doing")] },
 		});
-		assert.equal(result.state.associated, true); // rule (a): the session configured it
+		assert.equal(result.state.associated, true);
 		assert.equal(result.state.openRuns[0]?.runId, "r9");
 	} finally {
 		rmSync(cwd, { recursive: true, force: true });
@@ -137,7 +114,7 @@ test("LED-05b/INV-6: an oversized board is refused with a reason code (2 MiB cap
 			region: regionWithSentinel(),
 		});
 		assert.equal(result.state.associated, false);
-		assert.equal(result.reason, "board-corrupt"); // oversized folds into the corrupt/undreadable bucket
+		assert.equal(result.reason, "board-corrupt");
 	} finally {
 		rmSync(cwd, { recursive: true, force: true });
 	}
@@ -163,7 +140,7 @@ test("LED-05: unobserved open runs on a trusted board collapse to the count line
 		const region = { entries: [userEntry("go"), assistantEntry("===FLOW-REPORT=== r9/t1 doing")] };
 		const result = buildFlowLedger({ cwd, homeDir: join(FIXTURES, "home-b"), settings: settings(), region });
 		assert.equal(result.state.openRuns.length, 1);
-		assert.equal(result.state.otherOpenRuns, 0); // r9 is the only run and it IS observed
+		assert.equal(result.state.otherOpenRuns, 0);
 	} finally {
 		rmSync(cwd, { recursive: true, force: true });
 	}
@@ -185,16 +162,15 @@ test("observeSession picks up --board args and dispatch paths", () => {
 });
 
 test("LED-05c: run-closed fires only after the FIRST plain assistant post run-done", () => {
-	// Realistic shape: the sentinel rides a toolResult (flow-board output).
 	const toolTurn = assistantEntry("query board", { toolCalls: 1 });
 	const sentinelResult = toolResultEntry("===FLOW-REPORT=== r2 run-done all tasks merged");
 	const plain1 = assistantEntry("run r2 wrapped, summarizing results now");
 	const plain2 = assistantEntry("later chat");
 	const entries = [userEntry("go"), toolTurn, sentinelResult, plain1, plain2];
 	const fire = (index: number) => runClosedSignal.weight({ entries, index, idleGapMs: 600_000 });
-	assert.equal(fire(entries.indexOf(plain1)), 1); // first plain assistant after the sentinel
-	assert.equal(fire(entries.indexOf(plain2)), 0); // later plain assistants do NOT re-fire
-	assert.equal(fire(entries.indexOf(toolTurn)), 0); // toolCall turns never fire
+	assert.equal(fire(entries.indexOf(plain1)), 1);
+	assert.equal(fire(entries.indexOf(plain2)), 0);
+	assert.equal(fire(entries.indexOf(toolTurn)), 0);
 });
 
 test("CUT-04: a run-closed boundary inside the window WINS the cut", () => {
@@ -217,8 +193,6 @@ test("CUT-04: a run-closed boundary inside the window WINS the cut", () => {
 	});
 	assert.equal(result.status, "ok");
 	assert.equal(result.cut.boundaryClass, "run-closed");
-	// The cut is the first legal cut after the run-closed boundary (the
-	// wrap-up plain assistant) — the trailing z entry.
 	assert.equal(result.cut.firstKeptEntryId, entries[4].sourceEntry.id);
 });
 

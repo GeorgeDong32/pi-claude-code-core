@@ -1,10 +1,3 @@
-/**
- * [C4] self-modification protection — pure matcher pin
- * (docs/zh/entropy-control-spec.md, Goal 1 [C4]). Covers: each of the five
- * protected boundaries blocks; dir entries catch nested files but not
- * sibling prefixes; the plugin source repo and ordinary project files pass;
- * relative inputs return null (absPath assumption, see protected-paths.ts).
- */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { join } from "node:path";

@@ -1,9 +1,3 @@
-/**
- * cc-panels.test.ts — 2026-10-20 notification CC-ification: the shared CC
- * visual primitives (cc-rows) and every per-customType shaper, pinned against
- * the prototype-page decisions. Pass-through theme keeps assertions on plain
- * text and structure only (same pattern as review's directive tests).
- */
 import { describe, expect, it } from "vitest";
 import {
 	ccBodyBlock,
@@ -34,7 +28,6 @@ const passthroughTheme = {
 	bold: (text: string) => text,
 };
 
-/** Strip SGR sequences + NBSP padding for structural assertions. */
 const strip = (row: string): string => row.replace(/\x1b\[[0-9;]*m/g, "").replace(/\u00A0+$/, "");
 
 describe("cc-rows primitives", () => {
@@ -43,7 +36,6 @@ describe("cc-rows primitives", () => {
 		expect(rows).toHaveLength(1);
 		expect(strip(rows[0]!)).toMatch(/^❯ \/core$/);
 		expect(rows[0]).not.toContain("[pi-core-status]");
-		// NBSP padding fills the row so the background spans the full width
 		expect(rows[0]!.includes("\u00A0")).toBe(true);
 	});
 
@@ -65,7 +57,6 @@ describe("cc-rows primitives", () => {
 		const rows = ccBodyBlock(["line one", "line two", "y".repeat(100)], passthroughTheme, true).render(60);
 		expect(strip(rows[0]!)).toMatch(/^ {2}⎿ {2}line one$/);
 		expect(strip(rows[1]!)).toMatch(/^ {5}line two$/);
-		// the long line wrapped: every row stays within the viewport
 		for (const row of rows) {
 			expect([...strip(row)].length).toBeLessThanOrEqual(60);
 		}
@@ -316,7 +307,6 @@ describe("renderer safety + registration", () => {
 				"plan-complete",
 			].sort(),
 		);
-		// the shaper table and the registration set stay in lockstep
 		expect(Object.keys(CC_PANEL_SHAPERS)).toHaveLength(registered.size);
 	});
 

@@ -1,9 +1,3 @@
-/**
- * Tests for src/target-workspace.ts — PR clone + FETCH_HEAD checkout +
- * expectedHeadSha reconciliation. These branches were previously only
- * exercised through fully-stubbed review-run tests whose mocks returned
- * empty rev-parse output, short-circuiting every verification.
- */
 import { strict as assert } from "node:assert";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -30,24 +24,14 @@ function setup(): string {
 }
 
 interface Script {
-	/** Sequential responses for "gh repo clone". */
 	ghClone?: CmdResult[];
-	/** Sequential responses for "git clone". */
 	gitClone?: CmdResult[];
-	/** Sequential responses for git fetch (pull/... or base). */
 	fetch?: CmdResult[];
-	/** Sequential rev-parse FETCH_HEAD values (consumed in order). */
 	fetchHeads?: string[];
-	/** HEAD sha returned by rev-parse HEAD. */
 	head?: string;
 	checkout?: CmdResult;
 }
 
-/**
- * Scripted workspace cmd runner. Tracks which scratch roots were handed out
- * so tests can verify retry-cleanup behavior. `spawned` records every
- * clone/fetch invocation with its full opts (FX-5 ceiling assertions).
- */
 function scripted(s: Script): { cmd: Cmd; roots: string[]; spawned: Array<{ cmd: string; args: string[]; opts: { cwd: string; timeoutMs?: number; env?: Record<string, string> } }> } {
 	const roots: string[] = [];
 	const spawned: Array<{ cmd: string; args: string[]; opts: { cwd: string; timeoutMs?: number; env?: Record<string, string> } }> = [];
@@ -146,12 +130,8 @@ describe("prepareWorkspace — PR path", () => {
 	});
 
 	test("FETCH_HEAD mismatch + retry fetch itself fails → throws (R2, no silent pass)", async () => {
-		// R2: when the retry fetch FAILS, the old guard silently passed
-		// (retryHead === "" did not throw) and the review proceeded on an
-		// unverified checkout. It must clean the root and throw instead.
 		const cwd = setup();
 		const { cmd, roots } = scripted({
-			// first fetch ok (head AAA mismatches), retry fetch fails
 			fetch: [
 				{ stdout: "", stderr: "", exitCode: 0 },
 				{ stdout: "", stderr: "network down", exitCode: 1 },
@@ -252,7 +232,6 @@ describe("prepareWorkspace — PR command ceilings (FX-5)", () => {
 	test("timed-out PR head fetch aborts through the existing hard-error path", async () => {
 		const cwd = setup();
 		const { cmd } = scripted({
-			// T4/S5: the fake sets the structured timeout field.
 			fetch: [{ stdout: "", stderr: "git fetch timed out after 60000ms", exitCode: 1, timedOut: true }],
 		});
 		setRunCmd(cmd);
@@ -273,8 +252,4 @@ describe("prepareWorkspace — local paths", () => {
 		assert.equal(r.cloned, false);
 	});
 
-	// P3-1 S5: the diff-file target kind is deleted (unreachable since the
-	// --diff flag became a silently-skipped no-op) — the test that pinned it
-	// is removed with it; old manifests remain readable (manifest reader
-	// untouched).
 });

@@ -1,16 +1,4 @@
 /*
- * Smart Compaction summarizer-callface host contracts (SPEC SC §4.1 H2/H14,
- * §4.3 S2/S3, §4.4 BLK-4; contract row SC-HOST-09).
- *
- * Pure-function layer: the PUBLIC compact()/generateSummaryWithUsage()
- * driven through a scripted streamFn — the only per-call observation and
- * injection point (H14). BLK-4's matrix proves the host-side gap the
- * SUM-03/04 gates must close: a split-turn summary whose turn-prefix
- * sub-call returned reasoning-only STILL merges into a whole-looking
- * string. The differential vs the dist-internal prepareCompaction oracle
- * (S2) uses a test-only deep import — production code must never do this.
- *
- * Fixture notes (spike findings, backfilled to spec §4.3):
  * - synthetic usage objects MUST carry a `cost` object — combineUsage in
  *   the split-turn merge dereferences usage.cost.input;
  * - retryAssistantCall retries RESPONSES (stopReason:"error" + retryable
@@ -28,7 +16,6 @@ import { fauxProvider, fauxText, fauxThinking, type AssistantMessage, type Model
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-// S2 oracle — test-only deep import past the package exports map.
 import { prepareCompaction } from "../../node_modules/@earendil-works/pi-coding-agent/dist/core/compaction/compaction.js";
 
 const COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
@@ -49,15 +36,12 @@ function reasoningOnly(thinkingChars: number): AssistantMessage {
 
 interface CapturedCall {
 	promptText: string;
-	/** Text of the first user-role message (the summarization prompt body). */
 	userText: string;
 	options: Record<string, unknown>;
 }
 
-/** streamFn double: classifies each call, returns scripted messages. */
 function scripted(responses: Array<() => AssistantMessage>, captured: CapturedCall[]) {
 	return async (_model: unknown, context: { messages?: Array<{ role: string; content?: Array<{ text?: string }> | string }> }, options: Record<string, unknown>) => {
-		// Content may be a plain string (system) or content blocks (user).
 		const textsByRole = (context.messages ?? []).map((m) => ({
 			role: m.role,
 			text: (typeof m.content === "string" ? [m.content] : (m.content ?? []).map((b) => b.text ?? "")).join(""),
@@ -109,14 +93,12 @@ describe("SC-HOST-09 compact() callface (H14)", () => {
 			scripted([() => assistantOf("## History\n- a"), () => assistantOf("## Prefix\n- b")], captured) as never,
 		)) as CompactionResult;
 		expect(captured.length).toBe(2);
-		// SUM-09 classification anchors: history opens with <conversation>,
+		// history opens with <conversation>,
 		// turn-prefix with "# Conversation" (pi-internal copy — pinned here).
 		expect(captured[0].userText.startsWith("<conversation>\n")).toBe(true);
 		expect(captured[1].userText.startsWith("# Conversation\n")).toBe(true);
 		expect(result.summary).toBe(`## History\n- a${SPLIT_SEPARATOR}## Prefix\n- b`);
-		// Merged usage combines both sub-calls' usage.
 		expect(result.usage?.totalTokens).toBeGreaterThan(0);
-		// The returned CompactionResult carries NO stopReason (H14).
 		expect("stopReason" in (result as object)).toBe(false);
 	});
 
@@ -181,8 +163,6 @@ describe("SC-HOST-09 split-turn partial-empty summaries (H10/H14, BLK-4 baseline
 				() => reasoningOnly(2400),
 			], []) as never,
 		)) as CompactionResult;
-		// The merged result passes a naive whole-summary check (non-trivial
-		// length, headings present) while the turn-prefix section is EMPTY.
 		const looks = wholeLooks(result.summary);
 		expect(looks.chars).toBeGreaterThan(100);
 		expect(looks.headings).toBeGreaterThanOrEqual(1);
@@ -237,7 +217,6 @@ describe("SC-HOST-09 split-turn partial-empty summaries (H10/H14, BLK-4 baseline
 		const prep = { ...base, isSplitTurn: false, turnPrefixMessages: [] } as never;
 		const retryPolicy = { enabled: true, maxRetries: 2, baseDelayMs: 1, maxAgentDelayMs: 100, provider: { maxRetryDelayMs: 60000 } };
 		const result = (await compact(prep, model as never, undefined, undefined, undefined, undefined, "off", retryFn as never, undefined, retryPolicy as never)) as CompactionResult;
-		// The wrapper saw the logical call twice; only the LAST response counts.
 		expect(attempts).toBe(2);
 		expect(result.summary).toContain("recovered");
 	});
@@ -268,19 +247,15 @@ describe("SC-HOST-05 hand-built preparation vs dist oracle (H2, S2 differential)
 			const oracle = prepareCompaction(branch, settings);
 			expect(oracle).toBeDefined();
 
-			// Hand builder on PUBLIC pieces only (what W3's preparation.ts may use).
 			const projection = buildSessionProjection(branch);
 			const projected = projection.entries;
 			const cut = findCutPoint(branch, 1, branch.length, settings.keepRecentTokens);
 			const handFirstKept = projected[cut.firstKeptEntryIndex]?.sourceEntry.id;
 
-			// The differential (S2 通过判据): cut + message slices field-by-field.
 			expect(handFirstKept).toBe(oracle!.firstKeptEntryId);
 			expect(cut.isSplitTurn).toBe(oracle!.isSplitTurn);
-			// Hand-side message slices from the SAME public projection:
 			// non-system messages of projected entries (the internal
-			// getMessagesFromProjectedEntryForCompaction rule), between the
-			// previous-compaction boundary and the cut.
+			// getMessagesFromProjectedEntryForCompaction rule)
 			const prevCompactionIndex = projected.findIndex(
 				(e) => (e.sourceEntry as { type?: string }).type === "compaction" && e.messages.length > 0,
 			);
@@ -298,10 +273,6 @@ describe("SC-HOST-05 hand-built preparation vs dist oracle (H2, S2 differential)
 			} else {
 				expect(oracle!.turnPrefixMessages).toEqual([]);
 			}
-			// previousSummary/fileOps differential needs a prior-compaction
-			// fixture and a fileOps extraction replica — owned by W3's
-			// SUM-01/02 differential tests (this fixture has neither: no
-			// previous compaction, no file tool calls).
 
 			// compact() accepts a fully hand-built preparation (H2: plain data).
 			const { model } = makeModel(false);

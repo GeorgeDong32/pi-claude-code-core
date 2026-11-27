@@ -1,6 +1,3 @@
-/**
- * formatCount tests — carved from utils.test.ts (arch review C3).
- */
 import { describe, expect, it } from "vitest";
 import { formatCount } from "../ui/format.ts";
 

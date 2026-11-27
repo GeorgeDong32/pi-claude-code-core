@@ -1,21 +1,3 @@
-/**
- * Compaction seam tests (SPEC SC §5.9, task W5).
- *
- * Requirement → test map:
- *   SM-01 → "SM-01 seam: …" (sync, self-contained, per-callback isolation,
- *            unregister, entryId dedupe)
- *   SM-02 → "SM-02 mechanics …" (dummy subscribers: committed once / lost
- *            before-only) + the three real-factory blocks below
- *            ({committed, lost, native} × goal/modes/memory)
- *   SM-03 → "SM-03 goal: a mid-run draft commit queues no continuation"
- *   SM-04 → "SM-04 modes …" (after = appendEntry/persistState once) and
- *            "SM-04 memory …" (before = staging, merged per sessionId)
- *   SM-05 → existing suites stay green with UNCHANGED expectations — proven
- *            by `pnpm run test`, not re-asserted here.
- *
- * Real factories run on FakeHost (contract-suite pattern, targets.ts); the
- * seam is reset between cases so registrations never leak across tests.
- */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -48,7 +30,6 @@ function draftInfo(over: Partial<CompactionSeamInfo> = {}): CompactionSeamInfo {
 	return { origin: "boundary-draft", midRun: false, summaryChars: 1234, tokensBefore: 90_000, ...over };
 }
 
-/** Counting spy registered FIRST, so factory subscribers never mask it. */
 function seamSpy(): { before: number; after: number } {
 	const counts = { before: 0, after: 0 };
 	registerCompactionSubscriber({
@@ -112,7 +93,7 @@ describe("SM-01 seam contract (lib-level)", () => {
 		expect(calls).toBe(1);
 		notifyAfter(draftInfo({ entryId: "other" }));
 		expect(calls).toBe(2);
-		notifyAfter(draftInfo()); // defensive branch
+		notifyAfter(draftInfo());
 		expect(calls).toBe(3);
 	});
 });
@@ -120,12 +101,12 @@ describe("SM-01 seam contract (lib-level)", () => {
 describe("SM-02 mechanics (dummy subscribers: committed vs lost)", () => {
 	it("committed: before once then after once; lost: before only, no after", () => {
 		const counts = seamSpy();
-		notifyBefore(draftInfo()); // proposal intent
-		notifyAfter(draftInfo({ entryId: "commit-1" })); // reconciliation hit
+		notifyBefore(draftInfo());
+		notifyAfter(draftInfo({ entryId: "commit-1" }));
 		expect(counts).toEqual({ before: 1, after: 1 });
 
 		const lost = seamSpy();
-		notifyBefore(draftInfo()); // proposal later overridden — no after ever
+		notifyBefore(draftInfo());
 		expect(lost).toEqual({ before: 1, after: 0 });
 	});
 });
@@ -145,7 +126,7 @@ describe("SM-02/03/04 goal (real factory on FakeHost)", () => {
 	async function startedGoalSession() {
 		const g = setupGoal();
 		await g.host.fire("session_start", { reason: "new" }, g.ctx);
-		await sleep(20); // session_start itself queues a continuation (0ms timer) — flush it out of the deltas
+		await sleep(20);
 		return g;
 	}
 
@@ -155,12 +136,12 @@ describe("SM-02/03/04 goal (real factory on FakeHost)", () => {
 	it("native path: session_compact fires once, seam NOT called; continuation queued once", async () => {
 		const spy = seamSpy();
 		const { host, ctx } = await startedGoalSession();
-		const before = goalEventCount(host); // session_start's own continuation already flushed
+		const before = goalEventCount(host);
 		await host.fire("session_before_compact", { reason: "threshold" }, ctx);
 		await host.fire("session_compact", { fromExtension: false }, ctx);
-		await sleep(20); // continuation dispatch is a 0ms timer
+		await sleep(20);
 		expect(spy).toEqual({ before: 0, after: 0 });
-		expect(goalEventCount(host)).toBe(before + 1); // exactly one from the compact hook
+		expect(goalEventCount(host)).toBe(before + 1);
 		expect(readActiveGoalFiles({ cwd: project }).length).toBe(1);
 	});
 
@@ -168,12 +149,12 @@ describe("SM-02/03/04 goal (real factory on FakeHost)", () => {
 		const g = await startedGoalSession();
 		const before = goalEventCount(g.host);
 		const spy = seamSpy();
-		notifyBefore(draftInfo({ midRun: true })); // proposal intent (mid-run)
-		notifyAfter(draftInfo({ entryId: "draft-e1", midRun: false })); // reconciled at run end
+		notifyBefore(draftInfo({ midRun: true }));
+		notifyAfter(draftInfo({ entryId: "draft-e1", midRun: false }));
 		await sleep(20);
 		expect(spy).toEqual({ before: 1, after: 1 });
 		expect(goalEventCount(g.host)).toBe(before + 1);
-		expect(readActiveGoalFiles({ cwd: project }).length).toBe(1); // persist ran
+		expect(readActiveGoalFiles({ cwd: project }).length).toBe(1);
 	});
 
 	it("SM-03: mid-run draft commit queues NO continuation (but persists the goal)", async () => {
@@ -182,8 +163,8 @@ describe("SM-02/03/04 goal (real factory on FakeHost)", () => {
 		notifyBefore(draftInfo({ midRun: true }));
 		notifyAfter(draftInfo({ entryId: "draft-mid", midRun: true }));
 		await sleep(20);
-		expect(g.host.sentMessages.length).toBe(before); // no follow-up queued
-		expect(readActiveGoalFiles({ cwd: project }).length).toBe(1); // persist ran
+		expect(g.host.sentMessages.length).toBe(before);
+		expect(readActiveGoalFiles({ cwd: project }).length).toBe(1);
 	});
 
 	it("draft lost: before fires (staging-side effects idempotent), no after, no continuation", async () => {
@@ -215,7 +196,7 @@ describe("SM-02/04 modes (real factory on FakeHost)", () => {
 		const { host } = setupModes();
 		const spy = seamSpy();
 		notifyAfter(draftInfo({ entryId: "modes-e1" }));
-		notifyAfter(draftInfo({ entryId: "modes-e1" })); // seam dedupe
+		notifyAfter(draftInfo({ entryId: "modes-e1" }));
 		expect(host.appendEntries.filter((e) => e.type === "modes")).toHaveLength(1);
 		expect(spy).toEqual({ before: 0, after: 1 });
 	});
@@ -263,11 +244,11 @@ describe("SM-02/04 memory (real setupAutomation on FakeHost)", () => {
 		const { host, ctx, state, agentDir } = setupMemory(entries, "sess-draft-1");
 		await host.fire("session_start", { reason: "new" }, ctx);
 		for (let i = 0; i < 3; i += 1) await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `w ${i}` }] } }, ctx);
-		notifyBefore(draftInfo({ midRun: true })); // boundary-draft intent
+		notifyBefore(draftInfo({ midRun: true }));
 		expect(state.lastFlush).toContain("boundary-draft");
 		expect(queueFiles(agentDir)).toHaveLength(1);
 		await host.fire("session_before_compact", { reason: "threshold", signal: new AbortController().signal }, ctx);
-		expect(queueFiles(agentDir)).toHaveLength(1); // same sessionId → merged
+		expect(queueFiles(agentDir)).toHaveLength(1);
 	});
 
 	it("memory has no after action: a committed draft notification changes nothing on disk", async () => {

@@ -1,11 +1,3 @@
-/**
- * B5 (arch): the pure projection step, driven directly — no FakeHost, no pi
- * runtime, no bus. These cases were previously reachable only through a
- * ~286-line fake host; they now pin the loop, the send-count recovery
- * heuristic, fail-open, the sentinel streak, the counters, and invariant 9
- * (unaffected messages pass through BY REFERENCE; a replaced message keeps
- * every field except content). node:test, flat (no nested describe).
- */
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -29,7 +21,6 @@ function assistantMessage(): AgentMessage {
 	return { role: "assistant", content: [] } as unknown as AgentMessage;
 }
 
-/** In-memory ports: records everything, fails on demand. */
 function fakePorts(failStoreFor?: (id: string) => boolean): {
 	ports: ProjectionPorts;
 	ledger: Array<Record<string, unknown>>;
@@ -61,7 +52,6 @@ test("first FULL_SENDS requests pass the message through by reference and ledger
 	for (let i = 0; i < FULL_SENDS; i += 1) {
 		const outcome = await projectContext({ messages: [message], root: "/t", state, ports });
 		assert.equal(outcome.messages.length, 1);
-		// invariant 9: identity pass-through while in the full-send window
 		assert.equal(outcome.messages[0], message);
 		assert.equal(outcome.replacedThisRequest, 0);
 		assert.equal(outcome.counters, null);
@@ -81,11 +71,9 @@ test("after FULL_SENDS the content is replaced; every other field survives (inva
 	const outcome = await projectContext({ messages: [message, bystander], root: "/t", state, ports });
 	assert.equal(outcome.replacedThisRequest, 2);
 	assert.equal(ledger.filter((e) => e.event === "placeholder").length, 2);
-	// identity for a NON-candidate message:
 	const plain = assistantMessage();
 	const outcome2 = await projectContext({ messages: [message, plain], root: "/t", state, ports });
 	assert.equal(outcome2.messages[1], plain, "non-candidates pass through by reference");
-	// the replaced message keeps toolCallId/toolName/isError, only content changes
 	const replaced = outcome.messages[0] as ToolResultMessage;
 	assert.notEqual(replaced, message);
 	assert.equal(replaced.toolCallId, message.toolCallId);
@@ -113,7 +101,7 @@ test("counters publish exactly on the first-replacement request, cumulative afte
 
 test("a throwing store fails open for that message only (OBS-08)", async () => {
 	const state = createProjectionState();
-	const { ports, stored } = fakePorts(() => true); // store always throws
+	const { ports, stored } = fakePorts(() => true);
 	const message = bigResult(BIG);
 	const outcome = await projectContext({ messages: [message], root: "/t", state, ports });
 	assert.equal(outcome.messages[0], message, "original bytes survive");
@@ -124,8 +112,6 @@ test("a throwing store fails open for that message only (OBS-08)", async () => {
 });
 
 test("send counts recover from prior assistant messages after a restart", async () => {
-	// fresh state (simulated restart): priorAssistantCounts heuristic must
-	// fast-forward the candidate past FULL_SENDS on its very first request.
 	const state = createProjectionState();
 	const { ports } = fakePorts();
 	const message = bigResult(BIG);
@@ -141,9 +127,6 @@ test("sentinel trips after the streak limit and never repeats", async () => {
 	for (let i = 0; i < FULL_SENDS; i += 1) {
 		await projectContext({ messages: [message], root: "/t", state, ports });
 	}
-	// store succeeds (so eligibility is counted), but the LEDGER throws: the
-	// message keeps its original bytes, nothing packs — the exact CMP-04
-	// "projection looks ineffective" signature.
 	const ledgerBroken: ProjectionPorts = {
 		store: async () => {},
 		appendLedger: async () => {
@@ -158,8 +141,6 @@ test("sentinel trips after the streak limit and never repeats", async () => {
 	assert.equal(warned, 1, "warns exactly once, then stays quiet");
 	assert.equal(state.sentinelWarned, true);
 });
-
-// ── C1 (arch review 2026-10-03): identity memo + stored set ──
 
 test("C1: a repeated message is analyzed and stored exactly once (steady-state requests cost one Map.get)", async () => {
 	const state = createProjectionState();
@@ -234,17 +215,11 @@ test("C1: same toolCallId under different toolNames keeps separate identities", 
 	const state = createProjectionState();
 	const { ports, stored } = fakePorts();
 	const a = bigResult(BIG, "bash");
-	const b = bigResult(BIG, "grep"); // same fixed toolCallId "tc-1", different toolName
+	const b = bigResult(BIG, "grep");
 	await projectContext({ messages: [a, b], root: "/t", state, ports });
 	assert.equal(state.identity.size, 2, "the memo key includes toolName — no collision");
 	assert.equal(stored.length, 2);
 });
-
-// ── AR1005-OB (spec 2026-10-05 §10): the stable placeholder memo. The
-// head/tail complete-line construction (a full-text scan) ran on EVERY
-// hot request; it now runs once per identity and the memo is reused
-// verbatim. Counts via state.placeholderConstructions — an honest state
-// observable, no monkeypatching, no production export config. ──
 
 async function runRequests(n: number, messages: AgentMessage[], state = createProjectionState(), ports = fakePorts().ports) {
 	const out = [];
@@ -254,9 +229,9 @@ async function runRequests(n: number, messages: AgentMessage[], state = createPr
 
 test("OB-T01: the cached placeholder is byte-identical across requests and fresh states (CRLF, no trailing newline, unicode, long single line)", async () => {
 	const variants = [
-		"line1\r\nline2\r\n" + "y".repeat(THRESHOLD_BYTES), // CRLF + no trailing newline
-		"中文内容\n" + "§".repeat(THRESHOLD_BYTES) + "\n✅", // unicode
-		"z".repeat(THRESHOLD_BYTES * 2), // long single line
+		"line1\r\nline2\r\n" + "y".repeat(THRESHOLD_BYTES),
+		"中文内容\n" + "§".repeat(THRESHOLD_BYTES) + "\n✅",
+		"z".repeat(THRESHOLD_BYTES * 2),
 	];
 	for (const text of variants) {
 		const messages = [bigResult(text)];
@@ -266,7 +241,6 @@ test("OB-T01: the cached placeholder is byte-identical across requests and fresh
 		const placeholders = results.slice(FULL_SENDS).map((r) => (r.messages[0] as ToolResultMessage).content[0] && (r.messages[0] as ToolResultMessage).content[0]!.type === "text" ? ((r.messages[0] as ToolResultMessage).content[0] as { text: string }).text : "");
 		assert.ok(placeholders.every((p) => p.length > 0));
 		assert.ok(new Set(placeholders).size === 1, "placeholder identical across hot requests");
-		// a FRESH state regenerates the byte-identical placeholder
 		const stateB = createProjectionState();
 		const portsB = fakePorts();
 		await runRequests(FULL_SENDS + 1, messages, stateB, portsB.ports);
@@ -291,12 +265,12 @@ test("OB-T02: zero constructions during full-send; ONE at the first replacement;
 
 test("OB-T03: isolation — same call id under different tools, multiple roots, fresh state", async () => {
 	const a = bigResult(BIG, "bash");
-	const b: ToolResultMessage = { ...bigResult(BIG, "read"), toolCallId: "tc-1" }; // SAME call id, different tool
+	const b: ToolResultMessage = { ...bigResult(BIG, "read"), toolCallId: "tc-1" };
 	const state = createProjectionState();
 	const ports = fakePorts();
 	for (let i = 0; i < FULL_SENDS + 2; i++) {
 		await projectContext({ messages: [a, b], root: "/w", state, ports: ports.ports });
-		await projectContext({ messages: [a, b], root: "/other", state, ports: ports.ports }); // different root
+		await projectContext({ messages: [a, b], root: "/other", state, ports: ports.ports });
 	}
 	assert.equal(state.placeholderConstructions, 4, "one per (root, tool, callId) identity");
 });
@@ -346,14 +320,9 @@ test("OB-T07: ledger event order and sentinel/first-savings semantics (BH-E3b: o
 	assert.ok(state.savedTokens > 0);
 });
 
-// OBS-09-SITES: per-site display-only savings — one entry per observation
-// FIRST replaced by this request (previousSends === FULL_SENDS), matching the
-// single-shot semantics upstream SoL-Pi flashes in showSolPiSavings.
 test("OBS-09-SITES: one sites entry per first-replacement observation, avoidedTokens = that observation's removedTokens", async () => {
 	const state = createProjectionState();
 	const { ports, ledger } = fakePorts();
-	// Two candidates with distinct identities (different tools, different
-	// text sizes, different call ids) crossing FULL_SENDS in the SAME request.
 	const a = bigResult("a".repeat(THRESHOLD_BYTES + 100), "bash", "tc-multi-a");
 	const b = bigResult("b".repeat(THRESHOLD_BYTES + 4000), "grep", "tc-multi-b");
 	const messages = [a, b];
@@ -365,9 +334,6 @@ test("OBS-09-SITES: one sites entry per first-replacement observation, avoidedTo
 	assert.ok(first.counters, "first-replacement request publishes counters");
 	assert.ok(first.counters.sites.length === 2, "one sites entry per first-replaced observation");
 	const byTool = new Map(first.counters.sites.map((site) => [site.tool, site]));
-	// Shape: exactly tool/id/avoidedTokens/toolCallId per entry — the call
-	// id is the display-side row correlation key (the projection rewrites
-	// only the provider request, so content shape cannot locate the row).
 	for (const site of first.counters.sites) {
 		assert.deepEqual(Object.keys(site).sort(), ["avoidedTokens", "id", "tool", "toolCallId"]);
 		assert.ok(site.id.startsWith("obs_"));
@@ -376,8 +342,6 @@ test("OBS-09-SITES: one sites entry per first-replacement observation, avoidedTo
 	assert.equal(byTool.get("bash")!.toolCallId, "tc-multi-a");
 	assert.equal(byTool.get("grep")!.toolCallId, "tc-multi-b");
 	assert.equal(new Set(first.counters.sites.map((site) => site.toolCallId)).size, 2);
-	// avoidedTokens per site = that observation's removedTokens, not a sum:
-	// cross-check against the placeholder ledger rows written this request.
 	const placeholderRows = ledger.filter(
 		(entry) => entry.event === "placeholder" && typeof entry.sendNumber === "number" && entry.sendNumber === FULL_SENDS + 1,
 	);
@@ -391,12 +355,9 @@ test("OBS-09-SITES: one sites entry per first-replacement observation, avoidedTo
 	const distinct = new Set(first.counters.sites.map((site) => site.avoidedTokens));
 	assert.equal(distinct.size, 2, "per-observation values, not one shared number");
 	assert.equal(first.counters.placeholders, 2);
-	// Cumulative total still the sum of removedTokens.
 	assert.equal(first.counters.tokensAvoided, first.counters.sites.reduce((sum, site) => sum + site.avoidedTokens, 0));
 });
 
-// Acceptance (b): after the first-replacement request counters stay null —
-// no sites payload is produced on later requests (publish trigger unchanged).
 test("OBS-09-SITES: later requests keep counters null — no sites payload", async () => {
 	const state = createProjectionState();
 	const { ports } = fakePorts();
@@ -415,9 +376,6 @@ test("OBS-09-SITES: later requests keep counters null — no sites payload", asy
 	}
 });
 
-// BH-E3a: obs_recall results ARE recall excerpts (bounded at 16 KiB — above
-// THRESHOLD_BYTES) — packing them again nests a pack inside a pack (Air
-// backtest: 53 nested objects). They must be exempt from projection entirely.
 test("BH-E3a: obs_recall results are exempt from projection — never analyzed, stored, ledgered, or packed", async () => {
 	const state = createProjectionState();
 	const { ports, ledger, stored } = fakePorts();
@@ -445,9 +403,6 @@ test("BH-E3a: obs_recall results are exempt from projection — never analyzed, 
 	assert.equal(state.identity.size, 1, "the recall result is not even memoized as a candidate");
 });
 
-// BH-E3b: per-request placeholder rows grew session ledgers to 43 MB / 194K
-// rows (Air backtest). The row must be written once per object id per process;
-// the line format itself is unchanged.
 test("BH-E3b: the placeholder ledger row is written once per object id per process, not per request", async () => {
 	const state = createProjectionState();
 	const { ports, ledger } = fakePorts();
@@ -461,22 +416,15 @@ test("BH-E3b: the placeholder ledger row is written once per object id per proce
 	assert.equal(placeholderRows.length, 1, "BH-E3b: exactly one audit row for the first replacement");
 	assert.equal(placeholderRows[0].sendNumber, FULL_SENDS + 1, "the row still records the first-replacement send number");
 	assert.ok(String(placeholderRows[0].id).startsWith("obs_"));
-	// Deduping is LEDGER-only: the projection keeps replacing every request and
-	// send counts keep advancing.
 	assert.equal(state.sentCounts.get(`/t\0${placeholderRows[0].id}`), FULL_SENDS + 3);
 	assert.equal(lastReplaced, 1);
 });
 
-// BH-E3c (projection level): the candidate check ran OUTSIDE the per-message
-// try — a malformed message killed the whole request instead of failing open.
 test("BH-E3c: a message that throws in the candidate check fails open for itself; other messages still project", async () => {
 	const state = createProjectionState();
 	const { ports } = fakePorts();
-	// No content array: isPureTextResult throws reading .content.length.
 	const malformed = { role: "toolResult", toolCallId: "tc-bad", toolName: "bash", isError: false } as unknown as ToolResultMessage;
 	const good = bigResult(BIG, "bash", "tc-good");
-	// The healthy result must march through its full-send window DESPITE the
-	// malformed neighbour failing open on every request, then be replaced.
 	let outcome: Awaited<ReturnType<typeof projectContext>> | undefined;
 	for (let i = 0; i < FULL_SENDS + 1; i += 1) {
 		outcome = await projectContext({ messages: [malformed, good], root: "/t", state, ports });

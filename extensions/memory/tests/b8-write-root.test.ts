@@ -1,14 +1,3 @@
-/**
- * B8 (cherry-batch2 spec): isMemoryWritePath realpath tightening + the
- * guard-layer lexical conservatism pin. The carve-out is an ALLOWANCE —
- * an alias symlink pointing outside a write root must NOT ride it; a
- * real inside write (and a not-yet-existing new file under a real root)
- * must keep the carve-out (no regression to approval prompts).
- *
- * The retired user dir is no longer a write root (single-layer memory):
- * the project layer is the only root the carve-out can apply to, so it is
- * the sample root throughout.
- */
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,8 +9,6 @@ import { isMemoryWritePath, memoryWriteRoots } from "../paths.ts";
 const dir = mkdtempSync(join(tmpdir(), "b8-"));
 after(() => rmSync(dir, { recursive: true, force: true }));
 
-/** The project write root for a fake cwd/home pair (cwd is not a git repo,
- *  so gitCanonicalRoot falls back to the cwd itself). */
 function projectRoot(home: string, cwd: string): string {
 	return join(home, ".pi", "agent", "projects", cwd.replace(/[/\\]/g, "-"), "memory");
 }
@@ -35,7 +22,6 @@ describe("B8 isMemoryWritePath realpath tightening", () => {
 		mkdirSync(outside, { recursive: true });
 		const alias = join(root, "escape.md");
 		symlinkSync(join(outside, "target.md"), alias);
-		// lexical match says inside; realpath says outside → carve-out denied
 		assert.equal(isMemoryWritePath(alias, join(dir, "project"), home), false);
 	});
 
@@ -74,7 +60,7 @@ describe("B8 isMemoryWritePath realpath tightening", () => {
 		const root = projectRoot(home, join(dir, "project4"));
 		mkdirSync(root, { recursive: true });
 		const ghost = join(root, "ghost");
-		symlinkSync(join(dir, "nowhere"), ghost); // dangling alias
+		symlinkSync(join(dir, "nowhere"), ghost);
 		assert.equal(isMemoryWritePath(ghost, join(dir, "project4"), home), false);
 	});
 

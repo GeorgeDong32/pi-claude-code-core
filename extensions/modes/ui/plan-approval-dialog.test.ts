@@ -48,7 +48,6 @@ describe("plan-approval-dialog layout helpers", () => {
   it("computePlanViewportLines leaves room for sticky footer chrome", () => {
     const viewport = computePlanViewportLines(40);
     expect(viewport).toBeGreaterThanOrEqual(MIN_PLAN_VIEWPORT_LINES);
-    // header base + scroll status + footer (no summary/trunc)
     const chrome = HEADER_BASE_LINES + 1 + FOOTER_CHROME_LINES;
     expect(viewport).toBe(computeMaxRenderLines(40) - chrome);
   });
@@ -93,7 +92,6 @@ describe("plan-approval-dialog component", () => {
     expect(lines.length).toBe(maxLines);
     expect(maxLines).toBeGreaterThan(termRows * 0.8);
 
-    // Sticky footer: last lines are border / footer / options — not blank padding
     expect(lines[lines.length - 1]?.includes("─")).toBe(true);
     expect(lines.some((line) => line.includes("Stay in plan mode"))).toBe(true);
     expect(lines.some((line) => line.includes("Execute the plan"))).toBe(true);
@@ -172,14 +170,14 @@ describe("plan-approval-dialog component", () => {
     expect(initial.some((line) => line.includes("plan 1-"))).toBe(true);
 
     for (let i = 0; i < 50; i++) {
-      component.handleInput?.("\x1b[6~"); // PageDown
+      component.handleInput?.("\x1b[6~");
     }
     const afterScroll = component.render(80);
     expect(afterScroll.length).toBeLessThanOrEqual(computeMaxRenderLines(24));
     expect(afterScroll.join("\n")).not.toContain("plan 1-");
 
     for (let i = 0; i < 50; i++) {
-      component.handleInput?.("\x1b[5~"); // PageUp
+      component.handleInput?.("\x1b[5~");
     }
     const backToTop = component.render(80);
     expect(backToTop.some((line) => line.includes("plan 1-"))).toBe(true);
@@ -197,12 +195,12 @@ describe("plan-approval-dialog component", () => {
     });
 
     for (let i = 0; i < 10; i++) {
-      component.handleInput?.("\x1b[6~"); // PageDown to scroll plan
+      component.handleInput?.("\x1b[6~");
     }
     const scrolled = component.render(80).join("\n");
     expect(scrolled).not.toContain("plan 1-");
 
-    component.handleInput?.("\x1b[B"); // down arrow -> select next option
+    component.handleInput?.("\x1b[B");
     const afterArrow = component.render(80).join("\n");
     expect(afterArrow).toContain("→ Refine the plan");
     expect(afterArrow).not.toContain("plan 1-");

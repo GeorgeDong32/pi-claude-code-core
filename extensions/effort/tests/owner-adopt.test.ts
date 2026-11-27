@@ -1,10 +1,6 @@
 /*
- * SPEC EFF-04: external thinking-change adoption through the
- * thinking_level_select listener guard (lastApplied semantics).
  * The fake pi reproduces the REAL pi ordering: setThinkingLevel updates its
- * state FIRST, then emits the event (agent-session.js 0.87/0.99) — a fake
- * that emits before updating hides the exact no-slot false-skip this suite
- * pins (spec review finding).
+ * state FIRST, then emits the event.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -38,7 +34,6 @@ function makeFakePi(initial: ThinkingLevel = "medium"): FakePi {
 	return pi;
 }
 
-/** Mirror of the extension listener (extensions/effort/index.ts). */
 function attachAdopter(pi: FakePi, owner: EffortOwner, publish: (source: string) => void): void {
 	pi.on("thinking_level_select", (event) => {
 		if (event.level === owner.lastApplied()) return;
@@ -55,7 +50,6 @@ test("EFF-04① no-slot state: external change adopts as session-level explicit 
 	attachAdopter(pi, owner, (source) => sources.push(source));
 	assert.equal(owner.lastApplied(), null);
 
-	// External writer (pi's thinking.cycle) — state updates, event fires.
 	pi.setThinkingLevel("high");
 
 	assert.equal(owner.effective(), "high");
@@ -71,12 +65,11 @@ test("EFF-04② owner's own apply is skipped (echo guard via lastApplied)", () =
 		adoptions += 1;
 	});
 
-	// Owner write → apply → setThinkingLevel → event(level==lastApplied) → skip.
 	owner.setExplicit("low", "command");
 	assert.equal(pi.thinkingLevel, "low");
 	assert.equal(owner.lastApplied(), "low");
 	assert.equal(adoptions, 0);
-	assert.equal(owner.currentSource(), "session"); // stays the command write
+	assert.equal(owner.currentSource(), "session");
 });
 
 test("EFF-04③ env pin refuses the external change", () => {
@@ -86,10 +79,10 @@ test("EFF-04③ env pin refuses the external change", () => {
 	const sources: string[] = [];
 	attachAdopter(pi, owner, (source) => sources.push(source));
 
-	pi.setThinkingLevel("high"); // event fires; owner refuses
+	pi.setThinkingLevel("high");
 
-	assert.equal(owner.effective(), "low"); // env pin wins
-	assert.deepEqual(sources, []); // pinned-by-env: no bus publish
+	assert.equal(owner.effective(), "low");
+	assert.deepEqual(sources, []);
 });
 
 test("EFF-04④ reset falls back to profile and the echo is swallowed", () => {
@@ -97,11 +90,11 @@ test("EFF-04④ reset falls back to profile and the echo is swallowed", () => {
 	const owner = newEffortOwner(pi as never);
 	attachAdopter(pi, owner, () => {});
 
-	owner.setFromProfile("high", "main"); // profile slot; apply writes high
-	owner.setExplicit("low", "command"); // user override; apply writes low
+	owner.setFromProfile("high", "main");
+	owner.setExplicit("low", "command");
 	assert.equal(pi.thinkingLevel, "low");
 
-	owner.resetExplicit(); // apply writes profile's high → echo skipped
+	owner.resetExplicit();
 	assert.equal(pi.thinkingLevel, "high");
 	assert.equal(owner.currentSource(), "profile");
 	assert.equal(owner.effective(), "high");

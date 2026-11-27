@@ -1,14 +1,3 @@
-/**
- * R12 (D-CH-3) — PR dry-run rendering (`/review --no-spawn <PR url>`).
- *
- * A PR dry run must be METADATA-ONLY: `gh pr view` + `gh pr diff` run, but
- * no `git clone` / `git fetch` / checkout ever happens (prepareWorkspace is
- * skipped). The rendered summary must say so: "workspace: not cloned
- * (dry run)", with rules + history marked "not computed (dry run)".
- *
- * Red evidence on base (2026-11-15): the spy caught `git clone`/`git fetch`
- * during the dry run — prepareWorkspace ran unconditionally.
- */
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -47,7 +36,6 @@ afterEach(() => {
 	restoreCoreGlobals(globalsSnapshot);
 });
 
-/** gh-only fake: answers pr view/diff, THROWS on any git clone/fetch. */
 const ghOnlyDryRun: RunCmd = async (cmd, args) => {
 	if (cmd === "gh" && args[0] === "pr" && args[1] === "view") {
 		return {

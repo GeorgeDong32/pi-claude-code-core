@@ -1,5 +1,3 @@
-// Behaviour tier: the poller and the registry's fault handling, id and log
-// rules, over the fake process table and fake time.
 import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -33,7 +31,6 @@ afterEach(() => {
 });
 after(cleanup);
 
-/** Make the log unreadable for the duration of `body`. */
 async function unreadable(logPath: string, body: () => Promise<void>): Promise<void> {
 	chmodSync(logPath, 0o000);
 	try {
@@ -51,14 +48,14 @@ describe("a resumed session", () => {
 		procs.of(oldId).exit(0);
 		await clock.until(() => first.sent.length > 0);
 		await clock.until(() => gzipped(first, oldId));
-		resetRegistry(); // a new Pi process: ids restart at bg-1, the log directory stays
+		resetRegistry();
 		const second = session({ id: first.id });
 		const id = await start(second, "echo new-run");
 		assert.notEqual(id, oldId);
 		procs.of(id).write("new-run\n");
 		assert.match(gunzipSync(readFileSync(join(second.logDir(), `${oldId}.log.gz`))).toString("utf8"), /old-run/);
 		await clock.tick(3);
-		assert.equal(second.sent.length, 0); // the old run's marker did not end it
+		assert.equal(second.sent.length, 0);
 		procs.of(id).exit(0);
 		await clock.until(() => second.sent.length > 0);
 		const result = text(await second.toolCall("TaskOutput", { id }));
@@ -106,7 +103,7 @@ describe("the poller survives faults", () => {
 		const id = await start(s, "echo done");
 		procs.of(id).exit(0);
 		await clock.until(() => s.faults.sendAttempts >= 1);
-		const reloaded = session({ id: s.id }); // attach(): a fresh pi, the old poller replaced
+		const reloaded = session({ id: s.id });
 		await clock.tick(4);
 		assert.equal(s.sent.length, 0);
 		assert.equal(reloaded.sent.length, 1);
@@ -180,7 +177,6 @@ describe("the poller survives faults", () => {
 		const id = await start(s, "long", { timeout: 3 });
 		const proc = procs.of(id);
 		proc.write("real output\n");
-		// The command finishes and writes its marker while the kill's grace period is running.
 		proc.onSignal = (signal) => {
 			if (signal === "SIGTERM") proc.exit(0);
 		};

@@ -1,7 +1,3 @@
-/**
- * P0-LB-03 / P0-LB-04 — lib/overlay.ts unit tests.
- * Degradation matrix + component behavior via a fake ExtensionCommandContext.
- */
 import { describe, expect, it } from "vitest";
 import { showOverlay } from "../../lib/overlay.ts";
 import type { Component } from "@earendil-works/pi-tui";
@@ -53,7 +49,6 @@ function makeCtx(opts: FakeCtxOptions = {}): { ctx: any; record: CtxRecord } {
 	return { ctx, record };
 }
 
-/** Drive a factory-produced component through scripted input keys. */
 async function runComponent(
 	factory: ComponentFactory,
 	keys: string[],
@@ -136,7 +131,6 @@ describe("P0-LB-03 list component behavior", () => {
 		const { ctx: ctx3 } = makeCtx({
 			customImpl: (factory) => runComponent(factory, [UP, UP, UP, ENTER]),
 		});
-		// Cursor clamps at the top instead of wrapping.
 		await expect(showOverlay(ctx3, { title: "Pick", items: ITEMS, selected: "medium" })).resolves.toBe(
 			"low",
 		);
@@ -157,7 +151,6 @@ describe("P0-LB-03 list component behavior", () => {
 				expect(joined).toContain("low");
 				expect(joined).toContain("tiny");
 				expect(joined).toContain("Enter to confirm");
-				// Second render at same width is cached (identical array).
 				expect(comp.render(60)).toBe(lines);
 				return Promise.resolve(null);
 			},

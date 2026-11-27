@@ -1,7 +1,3 @@
-/*
- * SC-MET-01 / INV-7: measurement-only writes, no policy effects, and honest
- * runtime aggregates (proposals/manual/overflow never inflate early success).
- */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { metricFromEntry, recordCompactionMetric, summarizeCompactionMetrics, COMPACTION_METRICS_ENTRY_TYPE, type CompactionMetric } from "../metrics.ts";

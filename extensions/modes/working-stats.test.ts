@@ -1,13 +1,3 @@
-/**
- * AR1005-ST working-stats module behavior (spec 2026-10-05 §9):
- *  - ST-T05: hosts without (or with throwing) getLeafId take the uncached
- *    path and still get correct totals; read failures are never cached as
- *    successful snapshots (later events retry).
- *  - ST-T03: parity with a REAL SessionManager vs brute-force four-channel
- *    sums, and a key-hit second read on the real manager.
- * The wiring-level operation counts (ST-T01/T02/T07 through the real modes
- * hooks) live in index.test.ts next to the FakePi harness.
- */
 import { describe, expect, it } from "vitest"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -33,7 +23,7 @@ describe("AR1005-ST module behavior", () => {
 		const a = cache.snapshot(host)
 		const b = cache.snapshot(host)
 		expect(a.stats).toEqual({ input: 3, output: 4, cacheRead: 0, cacheWrite: 0, cost: 0 })
-		expect(b.stats).toEqual(a.stats) // correct, just uncached (old-host fallback)
+		expect(b.stats).toEqual(a.stats)
 	})
 
 	it("ST-T05: a throwing getLeafId is uncacheable — never treated as a legal empty leaf", () => {
@@ -64,9 +54,9 @@ describe("AR1005-ST module behavior", () => {
 				},
 			},
 		}
-		expect(cache.snapshot(host).stats.input).toBe(0) // falls back to last totals
+		expect(cache.snapshot(host).stats.input).toBe(0)
 		fail = false
-		expect(cache.snapshot(host).stats.input).toBe(9) // retried and recovered
+		expect(cache.snapshot(host).stats.input).toBe(9)
 	})
 
 	it("ST-T02 (module): the legal empty branch (leaf null) is cacheable and distinct from uncacheable", () => {
@@ -80,7 +70,7 @@ describe("AR1005-ST module behavior", () => {
 		const a = cache.snapshot(host)
 		const b = cache.snapshot(host)
 		expect(a.stats).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 })
-		expect(b.stats).toEqual(a.stats) // null-leaf snapshot is reusable (identity is not the contract; zero host reads is)
+		expect(b.stats).toEqual(a.stats)
 	})
 })
 
@@ -146,19 +136,15 @@ describe("AR1005-ST capability-consistency regression (adversarial R1)", () => {
 				return { tokens: 5, contextWindow: 100, percent: 5 }
 			},
 		}
-		// turn_start-style forced read WITH the capability
 		const forced = cache.snapshot(host, { force: true })
 		expect(forced.usage?.percent).toBe(5)
-		// message_update-style key hit must still carry the usage
 		const hit = cache.snapshot(host)
 		expect(hit.usage?.percent).toBe(5)
 		expect(hit).toBe(forced)
-		// and a capability-less forced snapshot never poisons freshness for
-		// capability-bearing later reads
 		const bareForced = cache.snapshot({ sessionManager: host.sessionManager }, { force: true })
 		expect(bareForced.usage).toBeUndefined()
 		const recovered = cache.snapshot(host)
 		expect(recovered.usage?.percent).toBe(5)
-		expect(usageCalls).toBe(2) // forced + recovered; the capability-less read makes NO host call
+		expect(usageCalls).toBe(2)
 	})
 })

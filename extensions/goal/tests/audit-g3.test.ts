@@ -1,13 +1,3 @@
-/**
- * Entropy-control G3 tests ([C18]/[C19]/[C20]/[C21]) — docs/zh/entropy-control-spec.md.
- *
- * [C18] parseBlockers: conformant / explicit-empty / missing (legacy)
- * [C19] auditorRejectionBlock: list preferred, whole items, budget truncation
- *       notes the remainder, missing block falls back to the 300-char prefix
- * [C20]/[C21] live in audit-g3-flow.test.ts as REAL integration tests
- * (driving update_goal); the earlier predicate/source-regex pins here were
- * redundant and removed on audit review.
- */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parseBlockers } from "../goal-auditor.ts";

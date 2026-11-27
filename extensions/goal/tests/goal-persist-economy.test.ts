@@ -1,21 +1,3 @@
-/**
- * BH-E1 (spec 2026-11-14-backtest-hardening §4 W-B): goal-state write
- * amplification. Usage-bearing events used to append a FULL pi-goal-state
- * snapshot + rewrite .pi/goals/<id>.md + rescan the disk pool on EVERY event
- * (backtest: 98.8% of persisted entries differed only in usage/updatedAt; the
- * worst session file was 40% goal-state entries).
- *
- * New model: usage/updatedAt-only changes update IN-MEMORY state only; usage
- * reaches disk at exactly three points — each agent_end (only when usage
- * changed since the last persist), session_shutdown, and any real state
- * transition (transitions write immediately, carrying the latest usage).
- * Budget/usage reads keep using the in-memory value. The persisted entry
- * FORMAT is untouched (P0-CT-08 frozen).
- *
- * Harness: the shared FakeHost — on-disk goal fixture + event fire, counting
- * pi-goal-state entries (the amplification unit), same shape as
- * goal-cost-accounting.test.ts.
- */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -68,14 +50,12 @@ test("BH-E1: N usage events in one run produce at most ONE usage-related state e
 		await f.host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "work on the goal" }, f.ctx);
 		const before = f.stateEntries().length;
 
-		// 10 usage-bearing events inside ONE run
 		for (let i = 1; i <= 10; i++) {
 			await f.host.fire("turn_end", turnEndWithUsage(1000), f.ctx);
 		}
 		const midRunEntries = f.stateEntries().length - before;
 		assert.equal(midRunEntries, 0, "usage events must not append pi-goal-state entries");
 
-		// the single run-boundary flush
 		await f.host.fire("agent_end", { messages: [] }, f.ctx);
 		const total = f.stateEntries().length - before;
 		assert.ok(total <= 1, `one run appends at most 1 usage-related entry (got ${total})`);
@@ -91,8 +71,6 @@ test("BH-E1: a real state transition persists immediately, carrying the latest u
 		await f.host.fire("session_start", { reason: "new" }, f.ctx);
 		await f.host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "work" }, f.ctx);
 		await f.host.fire("turn_end", turnEndWithUsage(2500), f.ctx);
-		// no agent_end yet — usage is memory-only; the transition must still
-		// land it on disk right away (transition writes carry latest usage)
 		await f.host.commands.get("goal-pause")!("", f.ctx as never);
 		const paused = f.diskGoal();
 		assert.equal(paused?.status, "paused");
@@ -114,7 +92,6 @@ test("BH-E1: session_shutdown flushes memory usage; a restart restores it (≤ o
 		await f.host.fire("session_shutdown", {}, f.ctx);
 		assert.equal(f.diskGoal()?.usage.tokensUsed, 4321, "shutdown persists the run usage");
 
-		// restart: a fresh factory adopts the persisted record
 		const host2 = new FakeHost();
 		goalExtension(host2.asPi());
 		const ctx2 = host2.makeCtx({ cwd: f.cwd, ui: false, sessionEntries: [] });
@@ -140,10 +117,6 @@ test("BH-E1: an agent_end without usage change appends nothing (idle run)", asyn
 });
 
 test("BH-E1: 50-turn synthetic run — entry counts before/after", async () => {
-	// The spec asks for a synthetic 50-turn scenario in the report. On the
-	// BASELINE each turn_end appended one full pi-goal-state entry (50 entries
-	// + md rewrite + pool rescan per event); with BH-E1 the same run appends
-	// exactly 1 (the agent_end flush).
 	const f = setup();
 	try {
 		await f.host.fire("session_start", { reason: "new" }, f.ctx);

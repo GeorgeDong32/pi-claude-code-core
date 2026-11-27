@@ -1,8 +1,5 @@
 /**
- * V2-M (DESIGN-MEMORY-V2 §7) — full hermes migration + /memory diagnostics.
- *
- * Fixture shapes mirror the REAL hermes on-disk format (verified
- * 2026-09-24): standalone `§` separator lines, trailing
+ * Fixture shapes mirror the REAL hermes on-disk format: standalone `§` separator lines, trailing
  * `<!-- created=…, project64=BASE64 -->` metadata, category-prefixed
  * failure entries, and the projects-memory/<name>/ per-project stores.
  */
@@ -38,7 +35,6 @@ function setup(): FakeHost {
 	return host;
 }
 
-/** Write a hermes-shaped global store + optional per-project stores. */
 function hermesFixture(opts: { user?: string; memory?: string; failures?: string; projects?: Record<string, string> }): void {
 	const h = join(agentDir, "pi-hermes-memory");
 	mkdirSync(h, { recursive: true });
@@ -86,7 +82,7 @@ describe("V2-M section parsing", () => {
 		expect(s.project64).toBe("Q2hlcnJ5UFI");
 		expect(decodeProject64(s.project64!)).toBe("CherryPR");
 		expect(s.body).toContain("Some fact");
-		expect(s.body).not.toContain("project64"); // comment lifted out of the body
+		expect(s.body).not.toContain("project64");
 	});
 
 	it("projectMatchesCurrent matches the sanitized-dir endsWith rule", () => {
@@ -108,22 +104,19 @@ describe("V2-M full migration routing", () => {
 				`CherryPR-specific review workflow details. <!-- created=2026-08-12, project64=Q2hlcnJ5UFI -->`,
 			].join("\n"),
 		});
-		// RV-15: a foreign-project tag routes to THAT project's layer when it
-		// exists under <agentDir>/projects/*-<name>/memory — never the user layer
 		const cherryLayer = join(agentDir, "projects", "-Users-gd32-Coding-CherryPR", "memory");
 		mkdirSync(cherryLayer, { recursive: true });
 		const r = importHermesFull({ agentDir, projectMemoryDir: dir, userMemoryDir: udir });
 		expect(r.copied).toBe(5);
-		expect(r.routed.user).toBe(0); // the retired layer never receives anything
-		expect(r.routed.project).toBe(5); // everything: 2 USER + untagged global + current tag + CherryPR tag
-		expect(existsSync(join(udir, "MEMORY.md"))).toBe(false); // retired dir untouched
+		expect(r.routed.user).toBe(0);
+		expect(r.routed.project).toBe(5);
+		expect(existsSync(join(udir, "MEMORY.md"))).toBe(false);
 		const projIndex = readFileSync(join(dir, "MEMORY.md"), "utf-8");
-		expect(projIndex).toContain("George"); // USER.md facts land as reference memories
+		expect(projIndex).toContain("George");
 		expect(projIndex).toContain("bun and vitest");
-		expect(projIndex).not.toContain("CherryPR-specific"); // foreign tags go to their own layer
+		expect(projIndex).not.toContain("CherryPR-specific");
 		const cherryIndex = readFileSync(join(cherryLayer, "MEMORY.md"), "utf-8");
 		expect(cherryIndex).toContain("CherryPR-specific");
-		// no matching project dir → skipped + noted (re-runnable, idempotent)
 		const bare = importHermesFull({
 			agentDir: agentDir + "-bare",
 			projectMemoryDir: dir + "-bare",
@@ -141,7 +134,6 @@ describe("V2-M full migration routing", () => {
 		const projIndex = readFileSync(join(dir, "MEMORY.md"), "utf-8");
 		expect(projIndex).toContain("[tool-quirk]");
 		expect(projIndex).toContain("[failure]");
-		// one file carries feedback type
 		const files = readdirSync(dir).filter((f) => f.startsWith("hermes-"));
 		expect(files.some((f) => readFileSync(join(dir, f), "utf-8").includes("type: feedback"))).toBe(true);
 	});
@@ -157,7 +149,6 @@ describe("V2-M full migration routing", () => {
 	});
 
 	it("matching projects-memory store migrates into the project layer; others are listed, not migrated", () => {
-		// current project key = basename of the tmp project dir
 		const key = project.split("/").pop()!;
 		hermesFixture({
 			projects: {
@@ -226,9 +217,7 @@ describe("V2-M commands + diagnostics", () => {
 		expect(content).toContain("automation: on");
 		expect(content).toContain("consolidation: manual-only");
 		expect(content).toContain("run /memory-import-hermes");
-		// steady-state surface: exactly these commands
 		expect([...host.commands.keys()].sort()).toEqual(["memory", "memory-consolidate", "memory-import-claude", "memory-import-hermes"]);
-		// tools: session_recall + memory_consolidate + the two deferred on-demand tools
 		expect([...host.tools.keys()].sort()).toEqual(["knowledge_search", "memory_consolidate", "memory_lookup", "session_recall"]);
 	});
 });
@@ -253,7 +242,6 @@ describe("V2-M data-safety (Phase 0 D1/D4)", () => {
 		hermesFixture({
 			failures: `[tool-quirk] grep 在 Zed 里会挂，回退到 bash grep。 <!-- created=2026-08-03, project64=${Buffer.from("CherryPR").toString("base64")} -->`,
 		});
-		// RV-15: the foreign project tag lands in THAT project's layer
 		const cherryLayer = join(agentDir, "projects", "-Users-gd32-Coding-CherryPR", "memory");
 		mkdirSync(cherryLayer, { recursive: true });
 		const r = importHermesFull({ agentDir, projectMemoryDir: dir, userMemoryDir: udir });
@@ -272,7 +260,6 @@ describe("V2 Phase 2 (B6) — torn-source detection", () => {
 		const file = join(store, "s.md");
 		writeFileSync(file, "§ fact one\nbody");
 		expect(readSourceStable(file).torn).toBe(false);
-		// injectable read that mutates the file mid-read → mtime moves
 		const torn = readSourceStable(file, (p) => {
 			const raw = readFileSync(p, "utf-8");
 			writeFileSync(p, raw + "\n§ fact two\nmore");

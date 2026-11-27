@@ -1,16 +1,3 @@
-/**
- * BH-R2 (spec 2026-11-14-backtest-hardening) — the secret probe is a
- * MEMORY-layer guard, not a global one:
- *
- *   - it runs ONLY when the target path is inside one of the memory layers
- *     (the 1618f89 G1 rewrite had dropped that limit — 12 false blocks in
- *     backtests, and models bypassed the block via bash);
- *   - an edit scans ONLY the incoming `edits[].newText` — a memory file
- *     whose EXISTING content contains secret-looking text must not block
- *     a clean edit (the whole-file `resultingContent` scan is C1/C3's
- *     business, not the probe's);
- *   - a write scans its content.
- */
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -38,9 +25,7 @@ const env = (over: Partial<MemoryGuardEnv> = {}): MemoryGuardEnv => ({
 
 const SECRET = "api_key = sk-abcdef123456abcdef123456";
 
-/** A valid, indexable memory document whose body carries the secret. */
 const memoryWithSecret = `---\nname: leak\ndescription: d\nmetadata:\n  type: project\n---\n\nnote line\n${SECRET}\n`;
-/** Same shape, clean body. */
 const memoryClean = `---\nname: clean\ndescription: d\nmetadata:\n  type: project\n---\n\nnote line\n`;
 
 describe("BH-R2: the secret probe only guards memory-layer targets", () => {

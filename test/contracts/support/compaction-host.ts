@@ -1,28 +1,13 @@
 /*
- * Host-faithful compaction test scaffold (SPEC SC §4.1 H16, task W0).
+ * Host-faithful compaction test scaffold.
  *
- * Recipe (verified against pi 1.5.0, 2026-11-09 smoke):
- *   fauxProvider() (pi-ai root export)
- *   + ModelRuntime.create({authPath, modelsPath: null, refreshOnCreate: false})
- *   + runtime.registerNativeProvider(faux.provider)
- *   + createAgentSession({cwd, agentDir, model: faux.getModel(), modelRuntime,
- *       settingsManager, sessionManager: SessionManager.inMemory(), resourceLoader: <stub>})
- *   + session.bindExtensions({})
- * The extension under test (a test-local probe factory — never extensions/
- * production code) is loaded via the TEST-ONLY deep imports
- * createExtensionRuntime/loadExtensionFromFactory (precedent:
- * extensions/effort/tests/integration.test.ts). compat.registerFauxProvider
+ * compat.registerFauxProvider
  * does NOT work here (ModelRuntime reports "no API implementation").
  *
- * Design decisions:
  * - session.prompt() does NOT throw on provider errors (stopReason:"error"
  *   only) — tests must assert stopReason / faux.state.callCount instead.
  * - faux responses may be factories, which is how tests capture the context
- *   of each provider request (S1②⑦, BLK-1 call counting).
- * - The probe records every extension-visible event in arrival order; the
- *   reconcile trigger set (APP-08) is derived from that log.
- * - Every session gets isolated tmp agentDir/cwd; cleanup removes the tree.
- * All fixtures are synthetic (INV-7): no real session content in repo.
+ *   of each provider request.
  */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -46,8 +31,8 @@ import {
 	type LoadExtensionsResult,
 	type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
-// Test-only deep imports (loader is not part of the package exports map;
-// relative-path resolution bypasses it — the same exception S2's oracle uses).
+// The loader is not part of the package exports map; a relative-path import
+// bypasses it.
 import {
 	createExtensionRuntime,
 	loadExtensionFromFactory,
@@ -204,24 +189,17 @@ export async function createCompactionHost(options: HostOptions = {}): Promise<C
 	const settingsManager = SettingsManager.create(cwd, agentDir);
 	if (options.settingsOverrides) {
 		settingsManager.applyOverrides(options.settingsOverrides as never);
-		// SC W4: the controller creates its OWN SettingsManager (H8), which
-		// reads DISK — persist the compaction overrides into the agentDir's
-		// global settings file so controller-visible thresholds match the
-		// host's (applyOverrides stays for the session's own manager).
 		if (options.settingsOverrides.compaction) {
 			const globalPath = join(agentDir, "settings.json");
 			let globalSettings: Record<string, unknown> = {};
 			try {
 				globalSettings = JSON.parse(readFileSync(globalPath, "utf-8")) as Record<string, unknown>;
 			} catch {
-				/* fresh temp dir */
 			}
 			writeFileSync(globalPath, JSON.stringify({ ...globalSettings, compaction: options.settingsOverrides.compaction }), "utf8");
 		}
 	}
-	// SC W4: disk-backed session dir under the temp agentDir so the controller
-	// can derive <agentDir> from getSessionDir() AND the jsonl serialization
-	// path is exercised for real (inMemory returned "" for getSessionDir).
+	// SessionManager.inMemory() returns "" for getSessionDir().
 	const sessionManager = SessionManager.continueRecent(cwd, join(agentDir, "sessions"));
 
 	const events: RecordedEvent[] = [];
@@ -250,9 +228,7 @@ export async function createCompactionHost(options: HostOptions = {}): Promise<C
 			}) as never);
 		}
 		// turn_end draft handler (ours) is registered FIRST, so later core
-		// modules and extra handlers can override/append — matching the SC
-		// controller's position requirement (ST-06: registered after goal/
-		// modes/memory; anything after it can still replace entries, H5).
+		// modules and extra handlers can override/append.
 		if (probeConfig.turnEndDraft) {
 			const draft = probeConfig.turnEndDraft;
 			pi.on("turn_end" as never, ((event: Record<string, any>, ctx: any) => {
@@ -290,9 +266,6 @@ export async function createCompactionHost(options: HostOptions = {}): Promise<C
 		}
 	};
 
-	// D8.2 (2026-11-10 review D): save the prior env value BEFORE overriding —
-	// cleanup restores it exactly (undefined → delete, never clobber a caller's
-	// value), and a mid-init throw below restores it too (see try/catch).
 	let envOverridden = false;
 	let priorCompactionEnv: string | undefined;
 	const restoreCompactionEnv = (): void => {
@@ -302,8 +275,6 @@ export async function createCompactionHost(options: HostOptions = {}): Promise<C
 		envOverridden = false;
 	};
 	if (options.controllerSettings) {
-		// SC W4: the controller resolves its settings file from the agent dir
-		// (derived from the session dir above) — write them BEFORE loading.
 		writeFileSync(join(agentDir, "core-compaction.json"), JSON.stringify(options.controllerSettings), "utf8");
 		if (options.envMode !== null) {
 			priorCompactionEnv = process.env.PI_CORE_COMPACTION;
@@ -312,14 +283,9 @@ export async function createCompactionHost(options: HostOptions = {}): Promise<C
 		}
 	}
 
-	// Everything below runs with the env override in place — a throw must
-	// still restore it and drop the temp tree (D8.2).
 	try {
 		const eventBus = createEventBus();
 		const extensionRuntime = createExtensionRuntime();
-		// SC W4: controller factory (non-literal on purpose so the contracts tsc
-		// pass cannot resolve it ahead of the module's existence — flip history
-		// preserved; now that extensions/compaction/index.ts exists it resolves).
 		let controllerFactory: ExtensionFactory | undefined;
 		if (options.controllerSettings) {
 			const specifier = "./../../../extensions/compaction/index.ts";
@@ -371,7 +337,6 @@ export async function createCompactionHost(options: HostOptions = {}): Promise<C
 			},
 		};
 	} catch (error) {
-		// D8.2: never leak the env override or the temp tree on init failure.
 		restoreCompactionEnv();
 		rmSync(tempRoot, { recursive: true, force: true });
 		throw error;

@@ -1,6 +1,3 @@
-/**
- * path-safety tests — carved from utils.test.ts (arch review C3).
- */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, symlinkSync, existsSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -116,7 +113,6 @@ describe("findProjectRoot", () => {
 		mkdirSync(join(tmpDir, "packages"));
 		mkdirSync(join(tmpDir, "packages", "app"));
 		writeFileSync(join(tmpDir, "packages", "app", "package.json"), "{}");
-		// walking up from packages/app should stop at packages/app (innermost)
 		expect(findProjectRoot(join(tmpDir, "packages", "app"))).toBe(
 			join(tmpDir, "packages", "app"),
 		);
@@ -133,8 +129,6 @@ describe("isInsideProject", () => {
 	})
 
 	it("returns true for path outside cwd but inside project root (relaxation case)", () => {
-		// cwd is /home/user/project/src, project root is /home/user/project
-		// writing to ../README.md = /home/user/project/README.md → inside project
 		expect(isInsideProject("../README.md", cwd, projectRoot)).toBe(true)
 	})
 
@@ -175,7 +169,7 @@ describe("getProjectId", () => {
 	it("falls back to cwd hash when no marker exists", () => {
 		const id = getProjectId(tmpDir);
 		expect(id).toMatch(/^[a-f0-9]{8}$/);
-		expect(id).toBe(getProjectId(tmpDir)); // deterministic
+		expect(id).toBe(getProjectId(tmpDir));
 	});
 
 	it("falls back when .pi/ exists but no permission-modes-*.md", () => {
@@ -186,8 +180,6 @@ describe("getProjectId", () => {
 	})
 
 	it("switches from hash fallback to marker id when the marker appears mid-session", () => {
-		// Positive-only caching (plan A2): a marker created after the first
-		// hash-fallback call must win on the next call.
 		const before = getProjectId(tmpDir);
 		expect(before).toMatch(/^[a-f0-9]{8}$/);
 		mkdirSync(join(tmpDir, ".pi"), { recursive: true });

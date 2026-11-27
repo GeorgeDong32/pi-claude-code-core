@@ -1,7 +1,3 @@
-// Behaviour tier: what happens to tasks when the session ends, reloads or
-// meets a hard stop, over the fake process table and fake time. The Pi-gone
-// watch is a separate detached watcher process outside the task's group (see
-// `launch.ts` `WATCH` and spec Q34); it is exercised by the contract tests.
 import assert from "node:assert/strict";
 import { after, afterEach, beforeEach, describe, it } from "node:test";
 
@@ -56,7 +52,7 @@ describe("/reload", () => {
 	it("runs one poller after two registrations: an interval checks each task once", async () => {
 		const first = session();
 		await start(first, "one");
-		session({ id: first.id }); // the reload's registration
+		session({ id: first.id });
 		const port = processPort();
 		const probe = port.pidAlive;
 		let probes = 0;
@@ -80,7 +76,7 @@ describe("/reload", () => {
 			["slow-build"],
 		);
 		// A reload loads a fresh copy of the module (`moduleCache: false`): it sees the same runs.
-		const reloaded = "../foreground.ts?reloaded"; // a fresh module instance, as /reload loads
+		const reloaded = "../foreground.ts?reloaded";
 		const copy = (await import(reloaded)) as typeof import("../foreground.ts");
 		assert.notEqual(copy.foregroundRuns, foregroundRuns);
 		assert.deepEqual(
@@ -99,7 +95,7 @@ for (const reason of ["quit", "new", "resume", "fork"] as const) {
 			const s = session();
 			const a = await start(s, "one");
 			const b = await start(s, "two");
-			const groups = [procs.of(a), procs.of(b)]; // the tasks are forgotten at shutdown
+			const groups = [procs.of(a), procs.of(b)];
 			await clock.settle(s.shutdown(reason));
 			for (const group of groups) {
 				assert.equal(group.signals[0], "SIGTERM");
@@ -112,7 +108,7 @@ for (const reason of ["quit", "new", "resume", "fork"] as const) {
 			const leaves = await start(s, "server &");
 			const clean = await start(s, "true");
 			procs.of(leaves).exit(0, { child: true });
-			await clock.until(() => s.sent.length === 1); // staggered: two exits in one tick are batched into one message
+			await clock.until(() => s.sent.length === 1);
 			procs.of(clean).exit(0);
 			await clock.until(() => s.sent.length === 2);
 			const [left, empty] = [procs.of(leaves), procs.of(clean)];
@@ -157,9 +153,9 @@ for (const reason of ["quit", "new", "resume", "fork"] as const) {
 		it("sets notified on every task so an in-flight kill cannot leak its message into the next session", async () => {
 			const s = session();
 			await start(s, "long");
-			s.dialogs.keys = [["x"]]; // the session's end empties the list, so it does not come back
-			const killing = s.command("tasks"); // a /tasks kill with notify: true, left in flight
-			await clock.advance(100); // into the SIGTERM grace period
+			s.dialogs.keys = [["x"]];
+			const killing = s.command("tasks");
+			await clock.advance(100);
 			const fresh = session({ id: s.id });
 			await clock.settle(s.shutdown(reason));
 			await clock.settle(killing);
@@ -173,8 +169,8 @@ for (const reason of ["quit", "new", "resume", "fork"] as const) {
 			const id = await start(s, "true");
 			const proc = procs.of(id);
 			proc.exit(0);
-			await clock.until(() => s.sent.length > 0); // the poller settles it and records the empty group
-			proc.spawnChild(); // the pid now leads an unrelated, live group
+			await clock.until(() => s.sent.length > 0);
+			proc.spawnChild();
 			await clock.settle(s.shutdown(reason));
 			assert.deepEqual(proc.signals, []);
 		});
@@ -219,8 +215,8 @@ describe("a task whose command has exited", () => {
 		const id = await start(s, "true");
 		const proc = procs.of(id);
 		proc.exit(0);
-		await clock.until(() => s.sent.length > 0); // the poller settles it and records the empty group
-		proc.spawnChild(); // a recycled pid now leads an unrelated, live group
+		await clock.until(() => s.sent.length > 0);
+		proc.spawnChild();
 		const result = await clock.settle(s.toolCall("TaskStop", { id }));
 		assert.equal(text(result), `Task ${id} has already finished: exited (code 0).`);
 		assert.deepEqual(proc.signals, []);
@@ -259,7 +255,6 @@ describe("a task whose command has exited", () => {
 		s.dialogs.keys = [["x"], [keys.escape]];
 		await clock.settle(s.command("tasks"));
 		assert.equal(procs.of(id).signals[0], "SIGTERM");
-		// C2 follow-up: the kill outcome notice rides the shared bus tail queue.
 		assert.match(
 			(coreBus().snapshot().notifications ?? []).map((n) => n.msg).join("\n"),
 			/stopped the processes it left running/,

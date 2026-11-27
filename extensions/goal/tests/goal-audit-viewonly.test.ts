@@ -1,12 +1,3 @@
-/**
- * Goal audit view-only contract (2026-11-02) — the GOAL_AUDIT_ENTRY trio
- * (started / passed / approved) is display-only: every emission carries
- * details.viewOnly=true and the goal context handler drops those messages
- * from model requests, so the audit conclusion reaches the model exactly
- * once (through the update_goal tool result). Prevents the auditor report
- * being injected twice and baiting the model into answering it again.
- * Legacy entries without the flag stay visible (backward compatible).
- */
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -75,7 +66,6 @@ test("audit emissions carry details.viewOnly; agent_settled flush too; context d
 			assert.equal(m.details?.viewOnly, true, `phase ${m.details?.phase} is view-only`);
 		}
 
-		// the held approved marker flushes after the finishing turn settles
 		await f.host.fire("agent_settled", {}, f.ctx);
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		const approved = f.host.sentMessages
@@ -84,8 +74,6 @@ test("audit emissions carry details.viewOnly; agent_settled flush too; context d
 		assert.ok(approved, "approved marker flushed after agent_settled");
 		assert.equal(approved.details?.viewOnly, true, "approved marker is view-only");
 
-		// context handler: view-only audit events are dropped from model
-		// requests; legacy entries (no flag) and other messages stay.
 		const messages = [
 			{ role: "user", content: "hi", timestamp: 1 },
 			{ role: "custom", customType: "pi-goal-audit-event", content: "Auditor: starting", display: true, details: { phase: "started", goalId: "g1", viewOnly: true }, timestamp: 2 },

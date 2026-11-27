@@ -23,8 +23,6 @@ import {
 } from "../effort.ts";
 
 // 0.85 upstream added the "max" ThinkingLevel alias; USER_LEVELS intentionally
-// stays the five user-facing levels (parseEffortCommand handles min/max as
-// aliases before this list is consulted).
 type _UncoveredLevels = Exclude<ThinkingLevel, (typeof USER_LEVELS)[number] | "max">;
 const _driftCheck: [_UncoveredLevels] extends [never] ? true : never = true;
 void _driftCheck;
@@ -32,14 +30,11 @@ void _driftCheck;
 const standardReasoningModel = { id: "minimax/minimax-m2.7", reasoning: true } as const;
 const xhighReasoningModel = { id: "gpt-5.4", reasoning: true, thinkingLevelMap: { xhigh: "xhigh" } } as const;
 const opusXhighReasoningModel = { id: "claude-opus-4.6", reasoning: true, thinkingLevelMap: { xhigh: "xhigh" } } as const;
-// Sparse reasoning map: low tiers mapped to null → only high + xhigh are usable.
 const sparseReasoningModel = {
   id: "gemini-sparse",
   reasoning: true,
   thinkingLevelMap: { minimal: null, low: null, medium: null, high: "high", xhigh: "max" },
 } as const;
-
-// ─── parseEffortCommand / parseFastCommand ──────────────────────────
 
 test("parseEffortCommand handles explicit levels", () => {
   assert.deepEqual(parseEffortCommand("high"), { kind: "set-session", level: "high" });
@@ -86,8 +81,6 @@ test("parseFastCommand toggles with no args and handles explicit overrides", () 
   assert.throws(() => parseFastCommand("status"), /Unknown fast mode/);
 });
 
-// ─── resolveMinLevel / resolveMaxLevel ───────────────────────────────
-
 test("resolveMinLevel returns minimal for reasoning models", () => {
   assert.equal(resolveMinLevel(standardReasoningModel), "minimal");
   assert.equal(resolveMinLevel(xhighReasoningModel), "minimal");
@@ -112,15 +105,11 @@ test("resolveMaxLevel returns undefined for non-reasoning models", () => {
   assert.equal(resolveMaxLevel(null), undefined);
 });
 
-// ─── Sparse reasoning map (low tiers mapped to null) ────────────────
-
 test("sparse reasoning map: available levels drop null-mapped tiers", () => {
   assert.deepEqual(getAvailableThinkingLevels(sparseReasoningModel), ["off", "high", "xhigh"]);
 });
 
 test("sparse reasoning map: resolveMinLevel returns lowest available level", () => {
-  // "minimal" is mapped to null and therefore unavailable; min must fall
-  // back to the lowest usable tier instead of returning "minimal".
   assert.equal(resolveMinLevel(sparseReasoningModel), "high");
 });
 
@@ -144,8 +133,6 @@ test("resolveEffortLevel resolves semantic aliases per model", () => {
   assert.equal(resolveEffortLevel("min", { id: "plain-model", reasoning: false }), undefined);
 });
 
-// ─── xhigh capability (via public functions) ─────────────────────────
-
 test("xhigh capability: gpt-5.4 includes xhigh in available levels", () => {
   assert.deepEqual(getAvailableThinkingLevels(xhighReasoningModel), [
     "off", "minimal", "low", "medium", "high", "xhigh",
@@ -163,8 +150,6 @@ test("xhigh capability: minimax does not include xhigh in available levels", () 
     "off", "minimal", "low", "medium", "high",
   ]);
 });
-
-// ─── getAvailableThinkingLevels / getUserFacingLevels ────────────────
 
 test("getAvailableThinkingLevels includes off for all reasoning models", () => {
   assert.deepEqual(getAvailableThinkingLevels({ id: "plain-model", reasoning: false }), ["off"]);
@@ -186,13 +171,11 @@ test("getUserFacingLevels excludes off", () => {
   ]);
 });
 
-// ─── cycleLevel ──────────────────────────────────────────────────────
-
 test("cycleLevel advances through user-facing levels", () => {
   const model = xhighReasoningModel;
   assert.equal(cycleLevel("minimal", model), "low");
   assert.equal(cycleLevel("medium", model), "high");
-  assert.equal(cycleLevel("xhigh", model), "minimal"); // wraps
+  assert.equal(cycleLevel("xhigh", model), "minimal");
 });
 
 test("cycleLevel returns first level for unknown current", () => {
@@ -204,8 +187,6 @@ test("cycleLevel returns first level for unknown current", () => {
 test("cycleLevel returns undefined for non-reasoning models", () => {
   assert.equal(cycleLevel("high", { id: "plain-model", reasoning: false }), undefined);
 });
-
-// ─── Settings persistence ────────────────────────────────────────────
 
 test("writeFastMode preserves unrelated settings and writes pi-effort namespace", () => {
   const dir = mkdtempSync(join(tmpdir(), "pi-effort-"));
@@ -233,8 +214,6 @@ test("getFastMode returns false when unset or corrupt", () => {
   assert.equal(getFastMode(settingsPath), false);
 });
 
-// ─── USAGE ───────────────────────────────────────────────────────────
-
 test("USAGE exposes only effort and fast primitives", () => {
   assert.match(USAGE, /min/);
   assert.match(USAGE, /max/);
@@ -242,8 +221,6 @@ test("USAGE exposes only effort and fast primitives", () => {
   assert.doesNotMatch(USAGE, /default|options|show|fast/);
   assert.equal(FAST_USAGE, "Usage: /fast [on|off]");
 });
-
-// ─── Completion filtering (via getUserFacingLevels) ──────────────────
 
 test("completion filter: non-reasoning model — no thinking levels", () => {
   const model = { id: "some-gpt-3.5", reasoning: false };
@@ -265,12 +242,6 @@ test("completion filter: xhigh-capable model — includes xhigh", () => {
 });
 
 
-// ─── C5 (arch review): shared cycle-shortcut decision ────────────────
-// The zero-explicit-write guard: on a single-level model the decision is
-// "noop" — the handler notifies and never calls owner.setExplicit (the old
-// modes probe loop pinned a clamped value into the explicit slot and
-// suppressed profile effort for the whole session).
-
 const singleLevelModel = {
   id: "single-tier",
   reasoning: true,
@@ -278,11 +249,7 @@ const singleLevelModel = {
 } as const;
 
 test("decideCycleShortcut: single-level model — ctrl+shift+e is a NOOP (zero explicit write); alt+t still reaches off", () => {
-  // ctrl+shift+e (includeOff=false): the ONLY user-facing level is "high" and
-  // we're on it → noop, never setExplicit (the old probe-loop bug).
   assert.deepEqual(decideCycleShortcut("high", singleLevelModel, { includeOff: false }), { kind: "noop", current: "high" });
-  // alt+t (includeOff=true): off ↔ high are BOTH real levels on this model —
-  // cycling to them is a legitimate write, not a clamp.
   assert.deepEqual(decideCycleShortcut("high", singleLevelModel, { includeOff: true }), { kind: "write", next: "off" });
   assert.deepEqual(decideCycleShortcut("off", singleLevelModel, { includeOff: true }), { kind: "write", next: "high" });
 });

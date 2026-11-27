@@ -1,4 +1,3 @@
-/** DC2: effort presentation wrapper — the fakeable ctx.ui seam for effort. */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createEffortUi, type EffortCtxLike } from "../ui/index.ts";
@@ -65,14 +64,11 @@ test("notify keeps the direct write off without a cctui (queue is the path)", ()
 	const { ctx, calls } = fakeCtx();
 	ui.notify(ctx, "Effort changed: low -> high", "info");
 	ui.notify(ctx, "pinned", "warning");
-	// DC5b: the fallback adapter (or a cctui consumer) owns the display —
-	// the wrapper itself must not write ctx.ui.notify here. Display
-	// negotiation is pinned by notify-display.test.ts.
 	assert.deepEqual(calls.notify, []);
 });
 
 test("pickEffort without a TUI falls back to select", async () => {
-	const { ctx } = fakeCtx(); // hasUI=false → no overlayCtx
+	const { ctx } = fakeCtx();
 	const result = await ui.pickEffort(ctx, ["low", "medium", "high"], "high");
 	assert.deepEqual(result, { action: "select", level: "low" });
 });

@@ -1,19 +1,3 @@
-/**
- * BH-E2 (spec 2026-11-14-backtest-hardening) — expiry (attempt cap + age)
- * must be checked BEFORE the projectsDir routing skip in validateClaimed.
- *
- * On base the routing skip ran first, so cross-project queue records were
- * skipped-and-released at every startup: never counted, never expired
- * (backtest: 6 files, oldest 37 days, attempts=0), re-released as NEW
- * pending files each session. Expired records must now take the SAME
- * settle-with-diagnostic disposal path as expired same-project records.
- *
- * Age comes from the record's own `savedAt`, never the file mtime — the
- * release rename (claim → pending) must not reset a record's age, so an
- * expired record that has been released is still disposed on the next
- * drain. Claim semantics (P0-3) and the queue naming (contract P0-CT-09)
- * are untouched.
- */
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -121,8 +105,6 @@ describe("BH-E2: expiry precedes the projectsDir routing skip", () => {
 
 	it("an expired record that was RELEASED (fresh mtime) still expires — age is the record's savedAt, not the file mtime", async () => {
 		stage("xp-renamed", { projectsDir: "/somewhere/else", savedAt: Date.now() - 8 * DAY });
-		// simulate what base did at every startup: claim + release renames
-		// the file (fresh mtime) without ever expiring it
 		const ready = recordFiles().find((f) => f.endsWith(".json"))!;
 		const claim = claimRecord(agentDir, { file: ready });
 		assert.notEqual(claim, null);

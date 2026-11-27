@@ -1,7 +1,3 @@
-/**
- * B5 (cherry-batch2 spec) clampToSupported unit pins — the one clamping
- * semantic shared by the command/flag/profile paths.
- */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
@@ -29,7 +25,6 @@ describe("clampToSupported (B5-1)", () => {
 	});
 
 	it("equidistant clamps to the LOWER side (conservative direction)", () => {
-		// medium(3) with low(2) and high(4) available: dist 1 both → low
 		const m = mapModel({ minimal: null, low: "low", medium: null, high: "high", xhigh: null, max: null });
 		assert.deepEqual(clampToSupported("medium", m), { level: "low", clamped: true });
 	});

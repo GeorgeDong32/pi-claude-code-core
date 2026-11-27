@@ -9,14 +9,6 @@ import {
 	writeJsonAtomic,
 } from "../../lib/settings";
 
-// C1 (arch review 2026-10-18): the mtime-keyed cached read primitive.
-// Contract pinned here:
-//   1. same-mtime re-reads share one object (no second readFileSync)
-//   2. an mtime change is a miss
-//   3. writeJsonAtomic drops the entry (same-millisecond rewrites)
-//   4. a missing file returns the fallback and drops any stale entry
-//   5. throwing onInvalid guards re-report on every call (never cached)
-//   6. plain readJson stays uncached
 
 let dir: string;
 let path: string;
@@ -48,7 +40,6 @@ describe("readJsonCached", () => {
 		writeFileSync(path, JSON.stringify({ a: 99 }));
 		utimesSync(path, st.atime, st.mtime);
 		expect(readJsonCached<{ a: number }>(path, { a: 0 })).toBe(first);
-		// and once the mtime moves, the new content shows up
 		const later = new Date(st.mtimeMs + 2000);
 		utimesSync(path, later, later);
 		expect(readJsonCached<{ a: number }>(path, { a: 0 }).a).toBe(99);
@@ -64,7 +55,7 @@ describe("readJsonCached", () => {
 	it("writeJsonAtomic invalidates even within the same mtime millisecond", () => {
 		writeJsonAtomic(path, { a: 1 });
 		const before = readJsonCached<{ a: number }>(path, { a: 0 });
-		writeJsonAtomic(path, { a: 2 }); // same ms is the norm on fast disks
+		writeJsonAtomic(path, { a: 2 });
 		const after = readJsonCached<{ a: number }>(path, { a: 0 });
 		expect(after).not.toBe(before);
 		expect(after.a).toBe(2);
@@ -90,6 +81,6 @@ describe("readJsonCached", () => {
 		writeJsonAtomic(path, { a: 1 });
 		const a = readJson<{ a: number }>(path, { a: 0 });
 		const b = readJson<{ a: number }>(path, { a: 0 });
-		expect(b).not.toBe(a); // fresh object every time, as before
+		expect(b).not.toBe(a);
 	});
 });

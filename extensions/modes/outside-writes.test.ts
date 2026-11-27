@@ -1,6 +1,3 @@
-/**
- * outside-writes snapshot engine tests — carved from utils.test.ts (arch review C3).
- */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -65,7 +62,6 @@ describe("trackOutsideWrite + listTrackedOutsideWrites", () => {
 	});
 
 	it("caps at MAX_TRACKED_WRITES (100) and LRU-evicts oldest", () => {
-		// Insert 101 snapshots with increasing timestamps
 		for (let i = 0; i < 101; i++) {
 			trackOutsideWrite(cwd, {
 				timestamp: new Date(2026, 0, 1, 0, 0, i).toISOString(),
@@ -76,9 +72,7 @@ describe("trackOutsideWrite + listTrackedOutsideWrites", () => {
 		}
 		const list = listTrackedOutsideWrites(cwd);
 		expect(list).toHaveLength(100);
-		// Oldest (i=0) should be evicted
 		expect(list[0].originalPath).toBe("/p/1");
-		// Newest (i=100) should remain
 		expect(list[99].originalPath).toBe("/p/100");
 	});
 });
@@ -123,7 +117,6 @@ describe("restoreOutsideWrite + popTrackedOutsideWrite", () => {
 	});
 
 	it("returns noop when file already restored", () => {
-		// backupContent is "original" but file was never written by the write
 		writeFileSync(outsideFile, "original");
 		const snap: OutsideWriteSnapshot = {
 			timestamp: "2026-06-29T12:00:00.000Z",
@@ -132,7 +125,6 @@ describe("restoreOutsideWrite + popTrackedOutsideWrite", () => {
 			backupContent: "original",
 		};
 		const result = restoreOutsideWrite(snap);
-		// Content matches, so no change needed
 		expect(result.action).toBe("noop");
 		expect(readFileSync(outsideFile, "utf-8")).toBe("original");
 	});
@@ -140,7 +132,7 @@ describe("restoreOutsideWrite + popTrackedOutsideWrite", () => {
 	it("deletes file on noop when backupContent is null and file missing", () => {
 		const snap: OutsideWriteSnapshot = {
 			timestamp: "2026-06-29T12:00:00.000Z",
-			originalPath: outsideFile, // doesn't exist
+			originalPath: outsideFile,
 			toolName: "write",
 			backupContent: null,
 		};
@@ -171,24 +163,3 @@ describe("restoreOutsideWrite + popTrackedOutsideWrite", () => {
 		expect(() => popTrackedOutsideWrite(tmpDir, snap)).not.toThrow();
 	});
 });
-
-// ---- filterSkillsFromPrompt --------------------------------------------
-
-// ---- filterSkillsFromPrompt --------------------------------------------
-//
-// IMPORTANT: The skill block format used here MUST match what pi's
-// `formatSkillsForPrompt()` emits (see `node_modules/@earendil-works/
-// pi-coding-agent/dist/core/skills.js`). The actual emitted XML is:
-//
-//   <available_skills>
-//     <skill>
-//       <name>SKILL_NAME</name>
-//       <description>...</description>
-//       <location>...absolute path to SKILL.md...</location>
-//     </skill>
-//     ...
-//   </available_skills>
-//
-// NOT the Agent Skills spec `<skill name="...">` attribute format. The
-// v1.1.4 implementation used the wrong format — all 21 skills leaked
-// through regardless of the `model-profiles.json` allowlist (v1.1.5 fix).

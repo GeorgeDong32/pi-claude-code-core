@@ -1,11 +1,3 @@
-/**
- * Goal activity clock (AR1005-GO-A, spec 2026-10-05 §7.2): sub-second
- * fragments survive settles; per-goal carries never cross; preview is
- * side-effect-free; pause/resume keep fragments, completion releases them.
- * Fixed injected clock — no real-time waits. The FakeHost case reproduces
- * the baseline defect scenario (8 × 250 ms tool-end events) through the
- * real factory wiring with the injected clock seam.
- */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -32,10 +24,10 @@ test("GO-T01: 8 × 250 ms settles record 2 s; one more second records 3 s", () =
 		clk.advance(250);
 		total += c.settle("g1") ?? 0;
 	}
-	assert.equal(total, 2); // baseline recorded 0 here (floor-then-reset)
+	assert.equal(total, 2);
 	clk.advance(1000);
 	total += c.settle("g1") ?? 0;
-	assert.equal(total, 3); // baseline recorded 1 here
+	assert.equal(total, 3);
 });
 
 test("GO-T02: identical active time yields identical seconds across event frequencies", () => {
@@ -62,11 +54,11 @@ test("GO-T03: a zero settle keeps the carry — fragments are never reset", () =
 	const c = createGoalAccounting({ now: clk.now });
 	c.begin("g");
 	clk.advance(700);
-	assert.equal(c.settle("g"), 0); // zero-token/zero-cost event: nothing persisted
+	assert.equal(c.settle("g"), 0);
 	clk.advance(700);
-	assert.equal(c.settle("g"), 1); // 1400 ms accumulated → 1 s, 400 ms carried
+	assert.equal(c.settle("g"), 1);
 	clk.advance(600);
-	assert.equal(c.settle("g"), 1); // carry 400 + 600 = 1000 → 1 s, 0 carried
+	assert.equal(c.settle("g"), 1);
 	clk.advance(200);
 	assert.equal(c.settle("g"), 0);
 });
@@ -74,30 +66,27 @@ test("GO-T03: a zero settle keeps the carry — fragments are never reset", () =
 test("GO-T04: pause/resume and focus A/B keep per-goal fragments; completion releases them; paused time does not count", () => {
 	const clk = fixedClock();
 	const c = createGoalAccounting({ now: clk.now });
-	// goal A accumulates a 700 ms fragment, then a focus switch pauses it
 	c.begin("A");
 	clk.advance(700);
 	c.settle("A");
-	c.pause(); // focus switch / drafting
-	clk.advance(5000); // paused time — never counted
+	c.pause();
+	clk.advance(5000);
 	c.begin("B");
 	clk.advance(300);
 	c.settle("B");
 	c.pause();
-	// resume A: the 700 ms fragment is still there
 	c.begin("A");
 	clk.advance(300);
-	assert.equal(c.settle("A"), 1); // 700 + 300
+	assert.equal(c.settle("A"), 1);
 	c.pause();
-	c.begin("B"); // switch back to B (single-focus clock, like goal.ts)
-	assert.equal(c.settle("B"), 0); // B's 300 ms fragment kept, not stolen by A
+	c.begin("B");
+	assert.equal(c.settle("B"), 0);
 	clk.advance(700);
-	assert.equal(c.settle("B"), 1); // 300 + 700
-	// completion releases A's carry for good
+	assert.equal(c.settle("B"), 1);
 	c.forget("A");
 	c.begin("A");
 	clk.advance(999);
-	assert.equal(c.settle("A"), 0); // fresh segment after forget — no residue
+	assert.equal(c.settle("A"), 0);
 });
 
 test("GO-T05: preview consumes nothing; repeated previews never accumulate; begin resets the segment but not the carry", () => {
@@ -108,16 +97,14 @@ test("GO-T05: preview consumes nothing; repeated previews never accumulate; begi
 	assert.equal(c.preview("g"), 1);
 	assert.equal(c.preview("g"), 1);
 	assert.equal(c.preview("g"), 1);
-	// preview did not consume: settle still sees the full 1500 ms
-	assert.equal(c.settle("g"), 1); // 1 s, 500 ms carried
-	// begin mid-flight restarts the segment WITHOUT wiping the carry
+	assert.equal(c.settle("g"), 1);
 	clk.advance(100);
 	c.begin("g");
 	clk.advance(400);
-	assert.equal(c.preview("g"), 0); // 400 ms alone < 1 s (the 100 ms pre-begin is dropped, by design)
+	assert.equal(c.preview("g"), 0);
 	assert.equal(c.settle("g"), 0);
 	clk.advance(200);
-	assert.equal(c.settle("g"), 1); // carried 500 + 600 = 1100 → 1 s
+	assert.equal(c.settle("g"), 1);
 });
 
 test("GO-T06 (clock): no record fields are touched — the clock owns no persistence", () => {
@@ -126,10 +113,9 @@ test("GO-T06 (clock): no record fields are touched — the clock owns no persist
 	c.settle("g");
 	c.pause();
 	c.forget("g");
-	assert.ok(true); // pure in-module state; records keep integer activeSeconds (goal-files tests pin the format)
+	assert.ok(true);
 });
 
-// ── FakeHost wiring: the real factory over the injected clock seam ──
 
 function setupWiring() {
 	resetCoreBusForTests();
@@ -143,9 +129,6 @@ function setupWiring() {
 }
 
 test("GO-T01 (wiring): 8 × 250 ms tool_execution_end events record 2 s (agent_end flush); +1 s → 3 s", async () => {
-	// BH-E1 (spec 2026-11-14-backtest-hardening): usage events are memory-only;
-	// the disk record is written by the per-run agent_end flush. The arithmetic
-	// assertions are unchanged — only the flush point moved.
 	const f = setupWiring();
 	try {
 		await f.host.fire("session_start", { reason: "new" }, f.ctx);
@@ -168,9 +151,6 @@ test("GO-T01 (wiring): 8 × 250 ms tool_execution_end events record 2 s (agent_e
 });
 
 test("GO-T07 (wiring): a paused goal's disk edits are observed by the next run boundary (external-state check intact)", async () => {
-	// BH-E1: usage events no longer rescan the disk; external-state detection
-	// moved to the reconciling events (run boundaries, commands). The intent —
-	// an external delete is never skipped forever — is unchanged.
 	const f = setupWiring();
 	try {
 		await f.host.fire("session_start", { reason: "new" }, f.ctx);
@@ -180,7 +160,6 @@ test("GO-T07 (wiring): a paused goal's disk edits are observed by the next run b
 		await f.host.fire("agent_end", { messages: [] }, f.ctx);
 		let rec = readActiveGoalFiles({ cwd: f.cwd })[0]!;
 		assert.equal(rec.usage.activeSeconds, 1);
-		// externally delete the active goal file → the next run boundary must observe it (reconcile path)
 		rmSync(path.join(f.cwd, rec.activePath ?? ".pi/goals/active-goal.json"));
 		await f.host.fire("agent_end", { messages: [] }, f.ctx);
 		assert.equal(readActiveGoalFiles({ cwd: f.cwd }).length, 0);
@@ -189,10 +168,6 @@ test("GO-T07 (wiring): a paused goal's disk edits are observed by the next run b
 	}
 });
 
-// ── AR1005-GO-B (spec 2026-10-05 §7.3): one accounting event parses the
-// pool exactly once with NO extra focused-file parse (reconcile + persist
-// share the event-read context); the next event still observes external
-// edits. Op counts via the goal-files parse counter seam. ──
 import * as fs from "node:fs";
 import { _parseGoalFileCountForTests, _resetParseGoalFileCountForTests } from "../storage/goal-files.ts";
 
@@ -212,24 +187,18 @@ test("GO-T09 (BH-E1): a usage event parses ZERO files; the run-boundary flush pa
 		const focusedAbs = path.join(cwd, focused.activePath ?? "");
 
 		void focusedAbs;
-		// op count (BH-E1): a usage event is memory-only — ZERO file parses
-		// (baseline GO-B: one pool parse = 3; the amplification fix removes
-		// the per-event disk read entirely).
 		_resetParseGoalFileCountForTests();
 		clk.advance(1500);
 		await host.fire("tool_execution_end", { type: "tool_execution_end", toolCallId: "g1" }, ctx);
 		assert.equal(_parseGoalFileCountForTests(), 0, `usage event parse count: ${_parseGoalFileCountForTests()}`);
-		// the run-boundary flush parses the pool exactly ONCE (3 goals) with no
-		// extra focused-file parse for the persist merge (readCtx reuse)
 		_resetParseGoalFileCountForTests();
 		await host.fire("agent_end", { messages: [] }, ctx);
 		assert.equal(_parseGoalFileCountForTests(), 3, `flush parse count: ${_parseGoalFileCountForTests()}`);
 		const byId = () => readActiveGoalFiles({ cwd }).find((r) => r.id === focused.id)!;
 		assert.equal(byId().usage.activeSeconds, 1);
 
-		// cross-event freshness: external objective edit is observed by the next run boundary
 		const content = fs.readFileSync(focusedAbs, "utf8") as string;
-		fs.writeFileSync(focusedAbs, content.replaceAll("original objective", "externally edited objective")); // JSON field AND body line
+		fs.writeFileSync(focusedAbs, content.replaceAll("original objective", "externally edited objective"));
 		clk.advance(1200);
 		await host.fire("tool_execution_end", { type: "tool_execution_end", toolCallId: "g2" }, ctx);
 		await host.fire("agent_end", { messages: [] }, ctx);

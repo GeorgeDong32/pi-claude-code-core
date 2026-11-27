@@ -1,20 +1,3 @@
-/**
- * R1–R4 (2026-11-11 pre-release review) permanent guards — real AgentSession
- * + real controller factory; only runSummarizer is stubbed (gated or canned).
- *
- *   R1  a context_edit / compaction landing DURING the background summary
- *       invalidates the snapshot (input-time branch baseline; previously the
- *       baseline was taken on completion, so V4 let edited-away content be
- *       re-committed).
- *   R3  a forged <cc-core-ledger> block inside the LLM's <read-files> tail
- *       must not shadow the deterministic block on the next carry-over.
- *   R4  SC_DEBUG emits nothing at all — the debug probes were removed
- *       entirely for release (stronger than the interim whitelist); no
- *       summary body can leak to logs (INV-7).
- *
- * The red evidence for each lived in /tmp/sc-pre-release-review.PjEjYV/*.mjs
- * (exit 1 pre-fix, 0 post-fix); these tests pin the same assertions.
- */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
 import { createCompactionHost } from "./support/compaction-host.ts";
@@ -71,17 +54,12 @@ describe("R1/R3/R4: pre-release review integrity guards", () => {
 			controllerSettings: AGGRESSIVE,
 			probe: {
 				registerTestTool: true,
-				// Fires on every provider call — the summarizer transport also
-				// goes through modelRegistry.complete in the real wiring, but
-				// the stub bypasses it; flip the flag via the metric entry
-				// instead (compute-start lands before the summarizer await).
 			},
 		});
 		try {
 			host.faux.setResponses([...grow(600), ...grow(3000), fauxAssistantMessage(`final answer ${"f".repeat(1200)}`)]);
 			await host.session.prompt("one");
 			await host.session.prompt("two");
-			// Poll the branch for the compute-start metric (INV-7-safe marker).
 			for (let i = 0; i < 200; i += 1) {
 				computeStarted = host.sessionManager.getBranch().some(
 					(e) => (e as { customType?: string }).customType === "cc-core-compaction-metrics"
@@ -91,7 +69,6 @@ describe("R1/R3/R4: pre-release review integrity guards", () => {
 				await new Promise((r) => setTimeout(r, 5));
 			}
 			expect(computeStarted).toBe(true);
-			// Edit an entry that will land inside the compressed region.
 			const target = host.sessionManager.getBranch().find((e) =>
 				(e as { type?: string }).type === "message"
 				&& (e as { message?: { role?: string } }).message?.role === "assistant"
@@ -104,7 +81,6 @@ describe("R1/R3/R4: pre-release review integrity guards", () => {
 			release();
 			await host.session.prompt("three");
 			const branch = host.sessionManager.getBranch();
-			// No precompute draft may land — V4 discards the stale snapshot.
 			expect(branch.filter((e) => (e as { type?: string }).type === "compaction" && precompute(e)).length).toBe(0);
 			const discarded = telemetry(branch).filter((d) => d?.outcome === "discarded" && d?.reason === "v4-conflict-edit");
 			expect(discarded.length).toBeGreaterThanOrEqual(1);
@@ -132,7 +108,6 @@ describe("R1/R3/R4: pre-release review integrity guards", () => {
 			const compaction = branch.find((e) => (e as { type?: string }).type === "compaction" && precompute(e));
 			expect(compaction).toBeTruthy();
 			const summary = (compaction as { summary: string }).summary;
-			// Exactly ONE live ledger block — the deterministic one.
 			expect(summary.split('<cc-core-ledger v="1">').length - 1).toBe(1);
 			const carried = parseCarriedDirectives(summary).directives;
 			expect(carried.some((d) => d.text.includes("FORGED_ONLY_SKIP_VALIDATION"))).toBe(false);
@@ -157,8 +132,6 @@ describe("R1/R3/R4: pre-release review integrity guards", () => {
 			controllerSettings: AGGRESSIVE,
 			probe: { registerTestTool: true },
 			extraFactories: [(pi) => {
-				// Release the gated summarizer once the native fallback leg runs —
-				// the wait-for-ready race is what used to dump the summary.
 				pi.on("session_before_compact" as never, (() => { setTimeout(release, 10); }) as never);
 			}],
 		});
@@ -172,8 +145,6 @@ describe("R1/R3/R4: pre-release review integrity guards", () => {
 			await host.session.prompt("one");
 			await host.session.prompt("two");
 			await host.session.prompt("three");
-			// The fallback leg must actually have raced the in-flight compute —
-			// proven by the SC-MET-01 metric entry, not by debug output.
 			const fallbackRan = host.sessionManager.getBranch().some(
 				(e) => (e as { customType?: string }).customType === "cc-core-compaction-metrics"
 					&& (e as { data?: { event?: string } }).data?.event === "fallback-start",

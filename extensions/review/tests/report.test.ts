@@ -1,6 +1,3 @@
-/**
- * Tests for src/report.ts: verdict line, per-reviewer sections, totals.
- */
 import { strict as assert } from "node:assert";
 import { describe, test } from "node:test";
 
@@ -242,7 +239,6 @@ describe("renderReport", () => {
 });
 
 describe("gate enforcement strict vs legacy", () => {
-	// quick smoke: keep these in the same file for proximity to report.ts tests.
 	test("strict verdict treats any major as request_changes", async () => {
 		const { enforceGateOutput } = await import("../src/gate-enforce.js");
 		const out = enforceGateOutput(

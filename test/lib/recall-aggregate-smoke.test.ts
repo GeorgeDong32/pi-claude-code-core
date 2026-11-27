@@ -1,13 +1,3 @@
-/**
- * test/lib/recall-aggregate-smoke.test.ts — B observability pin (spec
- * docs/en/recall-frequency-tuning.md §5 row 8): the aggregate script keeps
- * parsing sessions whose deliveries became SPARSER under the warmup +
- * cooldown gates, with the output shape unchanged.
- *
- * The gates themselves never touch details v1 (frozen, P0-CT-08): what
- * lands on disk is simply fewer pi-memory-recall blocks with larger turn
- * gaps — this smoke pins that the script reads that shape fine.
- */
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -17,7 +7,6 @@ import { describe, expect, it } from "vitest";
 
 const script = fileURLToPath(new URL("../../scripts/recall-aggregate.mjs", import.meta.url));
 
-/** A synthetic session jsonl: N user turns with a recall block every k turns. */
 function synthSession(userTurns: number, blockEvery: number): string {
 	const lines: string[] = [];
 	for (let i = 0; i < userTurns; i++) {
@@ -46,17 +35,15 @@ describe("recall-aggregate smoke over sparse deliveries (B spec §5 row 8)", () 
 		try {
 			const sessionDir = join(dir, "2026-10-20T00-00-00-000Z_smoke");
 			mkdirSync(sessionDir, { recursive: true });
-			writeFileSync(join(sessionDir, "session.jsonl"), synthSession(30, 5)); // sparse: block every 5 turns
+			writeFileSync(join(sessionDir, "session.jsonl"), synthSession(30, 5));
 			const result = spawnSync("node", [script, dir], { encoding: "utf8" });
 			expect(result.status).toBe(0);
 			const out = result.stdout;
-			// unchanged shape: the sections the corpus tooling relies on
 			expect(out).toContain("sessions scanned: 1 jsonl file(s)");
 			expect(out).toContain("delivery: immediate");
 			expect(out).toContain("selector elapsedMs:");
 			expect(out).toContain("landing position");
 			expect(out).toContain("waitMs recommendation");
-			// the sparse blocks are counted, not dropped
 			expect(out).toMatch(/immediate \d+ \/ deferred \d+/);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
@@ -68,7 +55,7 @@ describe("recall-aggregate smoke over sparse deliveries (B spec §5 row 8)", () 
 		try {
 			const sessionDir = join(dir, "2026-10-19T00-00-00-000Z_dense");
 			mkdirSync(sessionDir, { recursive: true });
-			writeFileSync(join(sessionDir, "session.jsonl"), synthSession(8, 1)); // dense: block every turn
+			writeFileSync(join(sessionDir, "session.jsonl"), synthSession(8, 1));
 			const result = spawnSync("node", [script, dir], { encoding: "utf8" });
 			expect(result.status).toBe(0);
 			expect(result.stdout).toContain("sessions scanned: 1 jsonl file(s)");

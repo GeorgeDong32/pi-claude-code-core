@@ -1,9 +1,3 @@
-// Contract tier: the real process port with real, short `sh` commands on real
-// time. No mock timers. It covers what only a real process shows: quoting,
-// Pi's shell and environment, the exit marker and its nonce, the group kill and
-// the errno mapping, and spawn failures. The poller's 2 s tick is not waited on:
-// these tests read state through `TaskOutput` and `TaskStop`, which look at the
-// log and the process themselves.
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -32,17 +26,14 @@ import {
 	waitFor,
 } from "./harness.ts";
 
-// A short grace period, so a task that ignores SIGTERM takes well under a second to kill.
 process.env.CC_CORE_BG_GRACE_MS = "300";
 
 afterEach(resetRegistry);
 after(cleanup);
 
 const out = async (s: Session, id: string) => text(await s.toolCall("TaskOutput", { id }));
-/** Wait until the task's exit marker is in the log. */
 const ended = (s: Session, id: string) =>
 	waitFor(() => /__CC_BG_EXIT__:[0-9a-f]{16}:\d+\n$/.test(logText(s, id)), `${id}'s marker`);
-/** Run a command to its end and return what `TaskOutput` reports. */
 async function run(s: Session, command: string): Promise<string> {
 	const id = await start(s, command);
 	await ended(s, id);
@@ -55,7 +46,6 @@ const fileHas = async (path: string) => {
 	return readFileSync(path, "utf8").trim();
 };
 const alive = (pid: number) => realPort.pidAlive(pid);
-/** Pids whose command line matches `pgrep -f <pattern>`; [] when none. */
 const pids = (pattern: string): number[] => {
 	try {
 		return execFileSync("pgrep", ["-f", pattern], { encoding: "utf8" }).trim().split("\n").filter(Boolean).map(Number);
@@ -145,7 +135,6 @@ describe("bash without background", () => {
 });
 
 describe("a foreground command", () => {
-	/** A command that records its pid in `pidFile`, then blocks until `gate` exists. */
 	const blocked = (pidFile: string, gate: string, after = "echo finished") =>
 		`echo $$ > ${pidFile}; echo started; while [ ! -f ${gate} ]; do sleep 0.02; done; ${after}`;
 	const pidOf = async (pidFile: string) => Number(await fileHas(pidFile));
@@ -153,7 +142,6 @@ describe("a foreground command", () => {
 	it("past the threshold becomes a task: the same process runs on, detached from the turn, and is reported once", {
 		timeout: 15000,
 	}, async (t) => {
-		// A short threshold for this test only: any other foreground call here must finish, not be promoted.
 		process.env.CC_CORE_BG_PROMOTE_MS = "300";
 		t.after(() => delete process.env.CC_CORE_BG_PROMOTE_MS);
 		const s = session();
@@ -164,9 +152,8 @@ describe("a foreground command", () => {
 		assert.match(text(result), /Output so far:\nstarted\n$/);
 		const pid = await pidOf(pidFile);
 		const task = getRegistry().tasks.get("bg-1")!;
-		// The task is the wrapper the call launched, and the running command is its child: nothing restarted.
 		assert.equal(execFileSync("ps", ["-o", "ppid=", "-p", String(pid)], { encoding: "utf8" }).trim(), String(task.pid));
-		turn.abort(); // the turn ends: the task must not
+		turn.abort();
 		await realSleep(100);
 		assert.equal(alive(pid), true);
 		assert.equal(alive(task.pid), true);
@@ -247,7 +234,7 @@ describe("the exit marker", () => {
 	it("finds the marker when a backgrounded grandchild writes after it", async () => {
 		const s = session();
 		const id = await start(s, "(sleep 0.3; echo late) & echo main");
-		await logHas(s, id, "late\n"); // the marker is now in the middle of the file
+		await logHas(s, id, "late\n");
 		const result = await out(s, id);
 		assert.match(result, /^Task bg-1: exited \(code 0\)\.\nmain\nlate$/);
 		assert.doesNotMatch(result, /__CC_BG_EXIT__/);
@@ -263,7 +250,7 @@ describe("the exit marker", () => {
 		await logHas(s, id, "=0\n");
 		const running = await out(s, id);
 		assert.match(running, /^Task bg-1: running\./);
-		assert.match(running, /__CC_BG_EXIT__=0/); // the task's own lines stay output
+		assert.match(running, /__CC_BG_EXIT__=0/);
 		writeFileSync(gate, "");
 		await ended(s, id);
 		assert.match(await out(s, id), /^Task bg-1: exited \(code 5\)\./);
@@ -418,7 +405,6 @@ describe("the log limit", () => {
 });
 
 describe("session lifetime", () => {
-	/** A stand-in for Pi: a process the test can kill; resolves once it is really gone. */
 	function standIn() {
 		const child = spawn("sleep", ["60"], { stdio: "ignore" });
 		const gone = new Promise<void>((resolve) => child.once("exit", () => resolve()));
@@ -439,7 +425,7 @@ describe("session lifetime", () => {
 		});
 		try {
 			const child = Number(await fileHas(childFile));
-			assert.ok(alive(pid) && alive(child)); // the watch does not fire while Pi lives
+			assert.ok(alive(pid) && alive(child));
 			pi.kill();
 			await pi.gone;
 			await waitFor(() => !alive(child) && !realPort.groupAlive(pid), "the group's end after Pi's");
@@ -451,8 +437,6 @@ describe("session lifetime", () => {
 	});
 
 	it("a task whose Pi is still alive keeps running past one watch period", async () => {
-		// The one fixed wait in the suite: it proves the watch does not fire while Pi
-		// lives (a watch that killed every group after 1 s would leave this task dead).
 		const pi = standIn();
 		const childFile = scratch("alive-child");
 		const logPath = scratch("alive.log");
@@ -475,8 +459,6 @@ describe("session lifetime", () => {
 	});
 
 	it("a child a command left behind still dies when Pi is gone, and the log ends with the GONE marker", async () => {
-		// The watcher is its own process outside the task's group, so it survives the
-		// wrapper and kills a leftover `server &` after Pi's death (spec Q34).
 		const pi = standIn();
 		const childFile = scratch("left-child");
 		const logPath = scratch("left.log");
@@ -493,7 +475,6 @@ describe("session lifetime", () => {
 			assert.match(readFileSync(logPath, "utf8"), new RegExp(`__CC_BG_EXIT__:${nonce}:0\\n$`));
 			pi.kill();
 			await pi.gone;
-			// The ~1 s watch period bounds this: a 4 s watch would leave the child alive past this wait.
 			await waitFor(() => !alive(child) && !realPort.groupAlive(pid), "the child's end after Pi's", 3000);
 			assert.match(readFileSync(logPath, "utf8"), new RegExp(`\\n__CC_BG_GONE__:${nonce}\\n$`));
 		} finally {
@@ -518,14 +499,13 @@ describe("session lifetime", () => {
 
 	it("the watcher exits once its group has emptied", async () => {
 		const logPath = scratch("w.log");
-		// `sleep` keeps the group alive, so the watcher stays observable until the group is killed.
 		const pid = await realPort.launch({ command: "sleep 69", cwd: root, logPath, nonce: "watchexit" });
 		const pattern = `cc-bg-watch ${process.pid} ${pid} `;
 		try {
 			await waitFor(() => pids(pattern).length > 0, "the task's watcher", 3000);
 			const wpid = pids(pattern)[0];
 			assert.notEqual(wpid, undefined, "the watcher must be found while its group is alive");
-			realPort.signalGroup(pid, "SIGKILL"); // empty the group; the watcher must leave on its own
+			realPort.signalGroup(pid, "SIGKILL");
 			await waitFor(() => !alive(wpid), "the watcher's end", 3000);
 		} finally {
 			realPort.signalGroup(pid, "SIGKILL");

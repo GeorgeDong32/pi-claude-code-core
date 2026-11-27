@@ -1,9 +1,3 @@
-/**
- * modes/loop-guard.test.ts — D1/D1b unit pins (spec
- * docs/en/tool-call-loop-guard.md §6, cases 1-10). The FakePi integration
- * cases (11: stopReason=length interop, 12: blocked-first follower) live
- * in index.test.ts.
- */
 import { describe, expect, it } from "vitest";
 
 import {
@@ -116,15 +110,12 @@ describe("D1b parent-level circuit breaker", () => {
 
 	it("P2-2: a parent over its key budget passes NEW keys unrecorded; the stuck few keys still trip", () => {
 		const breaker = createParentLoopBreaker(3, 256, 4);
-		// fill the parent's key budget with distinct keys
 		for (let i = 0; i < 4; i++) breaker.check("p", parentLoopKey("bash", { command: `k${i}` }));
-		// a brand-new key passes and is NOT recorded (no growth)
 		expect(breaker.check("p", parentLoopKey("bash", { command: "fresh" }))).toBeUndefined();
-		// the existing loop key still counts to the cap
 		const loopKey = parentLoopKey("bash", { command: "k0" });
-		expect(breaker.check("p", loopKey)).toBeUndefined(); // 2nd
-		expect(breaker.check("p", loopKey)).toBeUndefined(); // 3rd
-		expect(breaker.check("p", loopKey)).toMatch(/codemode script/); // 4th ≥ maxIdentical
+		expect(breaker.check("p", loopKey)).toBeUndefined();
+		expect(breaker.check("p", loopKey)).toBeUndefined();
+		expect(breaker.check("p", loopKey)).toMatch(/codemode script/);
 	});
 
 	it("P3-5: parents FIFO-evict at maxParents — the oldest parent's counters reset silently", () => {
@@ -132,8 +123,8 @@ describe("D1b parent-level circuit breaker", () => {
 		const key = parentLoopKey("bash", { command: "x" });
 		breaker.check("p1", key);
 		breaker.check("p2", key);
-		breaker.check("p3", key); // evicts p1
-		expect(breaker.check("p1", key)).toBeUndefined(); // p1 re-admitted fresh
+		breaker.check("p3", key);
+		expect(breaker.check("p1", key)).toBeUndefined();
 	});
 
 	it("10b: duplicateKey stability across shapes", () => {

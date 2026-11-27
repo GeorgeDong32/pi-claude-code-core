@@ -1,8 +1,3 @@
-/*
- * Stall watchdog: no output growth for 45 s and a prompt-looking last line →
- * one nudge per task on its own channel (never `notified`), sent alone even
- * when completions are batched, dropped if the task ended before the flush.
- */
 import assert from "node:assert/strict";
 import { after, afterEach, beforeEach, describe, it } from "node:test";
 
@@ -32,7 +27,6 @@ afterEach(() => {
 });
 after(cleanup);
 
-/** A poll tick is 2 s; the first tick records the output size, so 45 s of stillness lands inside 24 ticks. */
 const STALL_TICKS = 24;
 
 describe("stall watchdog", () => {
@@ -70,12 +64,12 @@ describe("stall watchdog", () => {
 		const s = session();
 		const id = await start(s, "sh setup");
 		procs.of(id).write("Continue?\n");
-		await clock.tick(20); // 40 s: 38 s after the first tick recorded the size
+		await clock.tick(20);
 		assert.equal(s.sent.length, 0);
-		procs.of(id).write("Continue?\n"); // growth at 40 s; the tail reads the same, only the clock restarts
-		await clock.tick(4); // 48 s: 46 s after the first record, 6 s after the growth → silent
+		procs.of(id).write("Continue?\n");
+		await clock.tick(4);
 		assert.equal(s.sent.length, 0, "the stall clock restarted at the growth");
-		await clock.tick(STALL_TICKS); // 45 s+ after the growth, no further output → reported
+		await clock.tick(STALL_TICKS);
 		assert.equal(s.sent.length, 1);
 		assert.match(s.sent[0]!.message.content, /Continue\?/);
 	});
@@ -123,9 +117,9 @@ describe("stall watchdog", () => {
 		await s.fire("agent_start", {});
 		const id = await start(s, "sh setup");
 		procs.of(id).write("Continue?\n");
-		await clock.tick(STALL_TICKS); // nudge held
+		await clock.tick(STALL_TICKS);
 		procs.of(id).exit(0);
-		await clock.until(() => s.entries.length === 1); // completion held too (row first)
+		await clock.until(() => s.entries.length === 1);
 		await s.fire("agent_settled", {});
 		assert.equal(s.sent.length, 1);
 		assert.match(s.sent[0]!.message.content, /^Background task bg-1 finished: exited \(code 0\)/);
@@ -137,9 +131,9 @@ describe("stall watchdog", () => {
 		const stuck = await start(s, "sh setup");
 		const quick = await start(s, "echo done");
 		procs.of(stuck).write("Continue?\n");
-		await clock.tick(STALL_TICKS); // nudge held
+		await clock.tick(STALL_TICKS);
 		procs.of(quick).exit(0);
-		await clock.until(() => s.entries.length === 1); // completion held (row first)
+		await clock.until(() => s.entries.length === 1);
 		await s.fire("agent_settled", {});
 		assert.equal(s.sent.length, 2);
 		assert.match(s.sent[0]!.message.content, /^Background task bg-1 appears to be waiting for interactive input/);

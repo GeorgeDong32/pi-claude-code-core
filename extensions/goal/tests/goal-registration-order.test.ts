@@ -1,14 +1,4 @@
 /**
- * SPEC SR (2026-11-15) W-G: registration-order pin for the goal extension.
- *
- * E13a splits goal.ts into six files. This suite pins the observable
- * registration surface BEFORE the split so the pure refactor can be verified
- * to change nothing:
- *   - the two message renderers, in order;
- *   - all registerCommand names, in registration order;
- *   - the eight goal tools, in registration order (after questionnaire tools);
- *   - all fifteen pi.on event handlers, in registration order;
- *   - the factory-time setActiveTools call (syncGoalTools at factory tail).
  * Ordering is the contract: pi renders/commands/tools dispatch by registration
  * order for override resolution, and the compaction wiring relies on the
  * handler sequence around session_before_compact/session_compact.
@@ -67,7 +57,6 @@ const PI_EVENTS = [
 	"session_shutdown",
 ];
 
-/** Factory-time tool-set sync (the factory-tail `syncGoalTools()` call): no goal focused, normal phase. */
 const FACTORY_ACTIVE_TOOLS = ["read", "edit", "write", "bash", "grep", "find", "get_goal", "propose_goal_draft"];
 
 interface Recording {
@@ -76,7 +65,6 @@ interface Recording {
 	commands: string[];
 }
 
-/** Wraps the FakeHost's pi object with registration recorders. */
 function record(): { host: FakeHost; pi: Record<string, unknown>; rec: Recording } {
 	const host = new FakeHost();
 	const base = host.asPi() as Record<string, unknown>;
@@ -141,11 +129,8 @@ test("E13a pin: all fifteen pi.on handlers register in original order", () => {
 test("E13a pin: full registration sequence — renderers, commands, questionnaire+goal tools, setActiveTools last", () => {
 	const { rec, pi } = record();
 	goalExtension(pi as never);
-	// renderers first
 	assert.deepEqual(rec.log.slice(0, 2), RENDERERS.map((name) => `renderer:${name}`));
-	// then the fifteen commands, contiguous and in order
 	assert.deepEqual(rec.log.slice(2, 2 + COMMANDS.length), COMMANDS.map((name) => `command:${name}`));
-	// everything between commands and the final setActiveTools is tool registration
 	const tail = rec.log.slice(2 + COMMANDS.length);
 	assert.equal(tail[tail.length - 1], "setActiveTools", "factory-time syncGoalTools must be the last registration action");
 	const toolTail = tail.slice(0, -1);
@@ -155,7 +140,6 @@ test("E13a pin: full registration sequence — renderers, commands, questionnair
 test("E13a pin: factory-time setActiveTools call content is unchanged", () => {
 	const { host, pi, rec } = record();
 	goalExtension(pi as never);
-	// No events fired — the ONLY setActiveTools call is the factory-time one.
 	assert.equal(host.activeToolsCalls.length, 1);
 	assert.deepEqual(host.activeToolsCalls[0], FACTORY_ACTIVE_TOOLS);
 });

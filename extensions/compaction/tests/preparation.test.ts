@@ -1,17 +1,3 @@
-/*
- * Preparation tests (SPEC SC §5.5 SUM-01/SUM-02, task W3).
- *
- * Requirement → test map:
- *   SUM-01 → differential vs the dist-internal prepareCompaction oracle
- *            (test-only deep import): cut/slices/previousSummary equal; the
- *            context_edit fixture proves edited-away content never re-enters
- *            the summary input (H15)
- *   SUM-02 → fileOps differential: assistant toolCalls + toolResult
- *            nestedCalls + previous PI-generated compaction's lists seed
- *            the sets identically to the oracle
- * Fixtures are synthetic (INV-7). Usage objects always carry `cost`
- * (W0 fixture fact #2: combineUsage dereferences usage.cost.input).
- */
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,7 +5,6 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { buildSessionProjection, findTurnStartIndex, SessionManager } from "@earendil-works/pi-coding-agent";
-// Test-only oracle deep import (S2 precedent) — production never does this.
 import { prepareCompaction } from "../../../node_modules/@earendil-works/pi-coding-agent/dist/core/compaction/compaction.js";
 
 import { buildPreparation, computeFileLists } from "../preparation.ts";
@@ -52,9 +37,6 @@ function toolResultMsg(nested: Array<{ name: string; path: string }> = []) {
 	} as never;
 }
 
-/** Derive OUR CutSelection from the oracle's own cut (same cut → the slice
- * differential then compares message assembly only). The oracle's
- * turnStartIndex is branch-relative — map both positions by entry id. */
 function cutFromOracle(
 	oracle: NonNullable<ReturnType<typeof prepareCompaction>>,
 	projection: ReturnType<typeof buildSessionProjection>,
@@ -121,7 +103,6 @@ test("SUM-01/SUM-02 differential: prior pi compaction seeds previousSummary + fi
 	const dir = mkdtempSync(join(tmpdir(), "sc-prep2-"));
 	try {
 		const sm = SessionManager.inMemory(dir);
-		// History that the PRIOR compaction will summarize.
 		sm.appendMessage(userMsg("old turn one with plenty of text ".repeat(20)) as never);
 		sm.appendMessage(assistantMsg("old reply", [{ name: "read", path: "/a/read-only.ts" }, { name: "write", path: "/a/written.ts" }]) as never);
 		sm.appendMessage(toolResultMsg([{ name: "edit", path: "/a/edited.ts" }]) as never);
@@ -134,7 +115,6 @@ test("SUM-01/SUM-02 differential: prior pi compaction seeds previousSummary + fi
 			{ readFiles: ["/a/prev-read.ts"], modifiedFiles: ["/a/prev-mod.ts"] },
 			false,
 		);
-		// Post-compaction conversation that WE will summarize now.
 		sm.appendMessage(userMsg("new turn one ".repeat(30)) as never);
 		sm.appendMessage(assistantMsg("new reply one ".repeat(50), [{ name: "read", path: "/a/read-only.ts" }, { name: "edit", path: "/a/new-edit.ts" }]) as never);
 		sm.appendMessage(toolResultMsg() as never);
@@ -155,8 +135,6 @@ test("SUM-01/SUM-02 differential: prior pi compaction seeds previousSummary + fi
 		assert.ok(mine);
 		assert.equal(mine.previousSummary, oracle.previousSummary);
 		assert.deepEqual(mine.messagesToSummarize, oracle.messagesToSummarize);
-		// SUM-02: sets seeded from prev pi compaction + live tool calls;
-		// computeFileLists must equal the oracle's extraction end-to-end.
 		assert.deepEqual(computeFileLists(mine.fileOps), {
 			readFiles: [...(oracle.fileOps as { read: Set<string> }).read].filter(
 				(f) => !new Set([...(oracle.fileOps as { written: Set<string> }).written, ...(oracle.fileOps as { edited: Set<string> }).edited]).has(f),
@@ -218,8 +196,6 @@ test("SUM-01: nothing to summarize → undefined (mirrors prepareCompaction)", (
 		const branch = sm.getBranch();
 		const oracle = prepareCompaction(branch, settings);
 		const projection = buildSessionProjection(branch);
-		// Cut at index 0 → everything summarized; cut at the last message with
-		// keep 0 → the same. Use a cut that leaves nothing to summarize.
 		const last = projection.entries.length - 1;
 		const mine = buildPreparation({
 			projection,

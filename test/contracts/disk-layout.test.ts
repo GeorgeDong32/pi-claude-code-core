@@ -1,11 +1,3 @@
-/**
- * P0-CT §4.5 — frozen disk-layout contracts (P0-CT-09).
- *
- * Each module's on-disk locations are pinned so the core merge can never
- * silently move them (existing user data + session replay compatibility).
- * Default-path constants are asserted via a query-suffixed dynamic import
- * (fresh module instance, immune to the test-time path redirects).
- */
 import { describe, expect, it } from "vitest";
 import { existsSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -27,7 +19,6 @@ describe("P0-CT §4.5 frozen disk layout", () => {
 		const root = mkdtempSync(join(tmpdir(), "ct-pm-"));
 		writeProjectPermissionsFile(root, { allow: [] } as never, false);
 		writeProjectPermissionsFile(root, { allow: [] } as never, true);
-		// project id is derived from cwd by pm; assert the shape of the layout.
 		const projectsDir = join(root, ".pi", "projects");
 		const ids = readdirSync(projectsDir);
 		expect(ids.length).toBe(1);
@@ -43,18 +34,11 @@ describe("P0-CT §4.5 frozen disk layout", () => {
 	});
 
 	it("P0-CT-09 (pm): global config + model-profiles defaults point at ~/.pi/agent/", () => {
-		// config.ts keeps its default in a module-level initializer with no
-		// restore-capable setter, so pin the source line (any path change
-		// rewrites it). profiles.ts snapshots its load-time default into the
-		// modelsPath export, which is immune to the test-time redirect.
 		const configSrc = readFileSync(
 			new URL("../../extensions/modes/config.ts", import.meta.url),
 			"utf-8",
 		);
 					// C2 review R1 P1-1: the frozen root stays homedir()-based on purpose —
-			// the host getAgentDir() honors PI_CODING_AGENT_DIR and would silently
-			// relocate existing users' permissions (invariant 7). config.ts now
-			// resolves this lazily (??=) with the setConfigPath test seam.
 			expect(configSrc).toContain('join(homedir(), ".pi", "agent", "permission-modes.json")');
 		expect(modelsPath).toBe(join(homedir(), ".pi", "agent", "model-profiles.json"));
 	});
@@ -67,7 +51,6 @@ describe("P0-CT §4.5 frozen disk layout", () => {
 	});
 
 	it("P0-CT-09 (memory): pending-extraction queue lives under <agentDir>/memory-queue with atomic v1 records (spec 2026-10-03 + P0-3 claim suffixes)", async () => {
-		// default anchor: the frozen global location under ~/.pi/agent
 		expect(queueDir(join(homedir(), ".pi", "agent"))).toBe(join(homedir(), ".pi", "agent", "memory-queue"));
 		const agentDir = mkdtempSync(join(tmpdir(), "ct-mq-"));
 		const rec: QueueRecord = {
@@ -82,17 +65,13 @@ describe("P0-CT §4.5 frozen disk layout", () => {
 		writeQueueRecord(agentDir, rec);
 		const files = readdirSync(queueDir(agentDir));
 		expect(files).toHaveLength(1);
-		expect(files[0]).toMatch(/^s1234567-\d+\.json$/); // 8-char session prefix + epoch
-		expect(files.some((f) => f.endsWith(".tmp"))).toBe(false); // atomic write, no residue
+		expect(files[0]).toMatch(/^s1234567-\d+\.json$/);
+		expect(files.some((f) => f.endsWith(".tmp"))).toBe(false);
 		const staged = loadQueue(agentDir);
 		expect(staged).toHaveLength(1);
 		expect(staged[0]!.record!.sessionId).toBe("s1234567890abcdef");
-		// same-session merge: staging again replaces, never duplicates
 		writeQueueRecord(agentDir, { ...rec, savedAt: Date.now() + 1 });
 		expect(readdirSync(queueDir(agentDir))).toHaveLength(1);
-		// P0-3 claim/pending suffixes (registered shapes): a claim and a
-		// release produce the documented non-.json names, never a second
-		// queue record path for the same original
 		const { claimRecord, releaseClaim } = await import("../../extensions/memory/queue.js");
 		const claim = claimRecord(agentDir, { file: readdirSync(queueDir(agentDir))[0]! });
 		expect(claim).not.toBeNull();
@@ -117,11 +96,8 @@ describe("P0-CT §4.5 frozen disk layout", () => {
 
 	it("P0-CT-09 (review): config default path and run dirs are unchanged", async () => {
 		const reviewConfig = await import("../../extensions/review/src/config.js");
-		reviewConfig.setConfigPath(undefined); // restore the default
+		reviewConfig.setConfigPath(undefined);
 		expect(reviewConfig.configPath()).toBe(join(homedir(), ".pi", "agent", "pi-review.json"));
-		// run dir convention lives inside prepareRun; the frozen shape is
-		// <cwd>/.pi/pi-review/runs/<runId>. No exported constructor exists, so
-		// pin the source path segment (any layout change rewrites this line).
 		const reviewRunSrc = readFileSync(
 			new URL("../../extensions/review/src/review-run.ts", import.meta.url),
 			"utf-8",

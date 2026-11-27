@@ -1,9 +1,3 @@
-/**
- * P3-ME memory module tests (spec §2.3 matrix) — tmp HOME + tmp project.
- *
- * HOME is redirected per test so the module resolves
- * ~/.pi/agent/projects/<sanitized>/memory into the sandbox.
- */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -35,8 +29,6 @@ let project: string;
 let prevHome: string | undefined;
 
 function memoryDir(): string {
-	// handlers anchor on ctx.cwd (= project tmp dir); tests use the same
-	// resolution so the two can never drift
 	return resolveMemoryPaths(project, home).memoryDir;
 }
 
@@ -54,8 +46,6 @@ function writeMemory(name: string, title: string, description: string, type = "p
 		`---\nname: ${title}\ndescription: ${description}\nmetadata:\n  type: ${type}\n---\n\n${body}`,
 	);
 	invalidateMemDirCache(dir);
-	// backdate: a write in the same millisecond as session_start would flake
-	// against the recall echo filter (mtime >= sessionStart → excluded)
 	const past = new Date(Date.now() - 60_000);
 	utimesSync(join(dir, name), past, past);
 }
@@ -63,7 +53,7 @@ function writeMemory(name: string, title: string, description: string, type = "p
 beforeEach(() => {
 	globalsSnapshot = snapshotCoreGlobals();
 	clearCoreGlobals();
-	(globalThis as Record<string, unknown>).__piCcTui = CCTUI_LIVE; // C2: host-notify leg (after globals reset)
+	(globalThis as Record<string, unknown>).__piCcTui = CCTUI_LIVE;
 	resetCoreBusForTests();
 	prevHome = process.env.HOME;
 	home = mkdtempSync(join(tmpdir(), "mem-home-"));
@@ -80,9 +70,6 @@ afterEach(() => {
 });
 
 
-// C2: these assertions observe the host-notify leg of the shared notify
-// entry, which only fires when a cctui replica is live without its own
-// queue consumer (the transitional channel). Plant that state.
 const CCTUI_LIVE = { active: true, notificationsConsumer: false } as const;
 describe("P3-ME-02 index reconciler", () => {
 	it("3 valid + 1 invalid → index has exactly the 3 rows; scan reports skipped:1", () => {
@@ -90,7 +77,7 @@ describe("P3-ME-02 index reconciler", () => {
 		writeMemory("b.md", "beta", "second");
 		writeMemory("c.md", "gamma", "third");
 		mkdirSync(memoryDir(), { recursive: true });
-		writeFileSync(join(memoryDir(), "broken.md"), "---\nname: x\n"); // invalid
+		writeFileSync(join(memoryDir(), "broken.md"), "---\nname: x\n");
 
 		const { entries, skipped } = scanMemoryDir(memoryDir());
 		expect(entries.length).toBe(3);
@@ -121,7 +108,6 @@ describe("P3-ME-02 index reconciler", () => {
 
 describe("/memory panel recall accuracy (2026-10-03 fix)", () => {
 	it("reports recall ON from the panel itself — no prior agent turn required (was mislabeled 'unresolvable')", async () => {
-		// settings with a resolvable recallModel under the fake home
 		const agentDir = join(home, ".pi", "agent");
 		mkdirSync(agentDir, { recursive: true });
 		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ memory: { recallModel: "test/model-1" } }));
@@ -132,7 +118,6 @@ describe("/memory panel recall accuracy (2026-10-03 fix)", () => {
 		ctx.modelRegistry = { getAll: () => [{ provider: "test", id: "model-1" }] } as never;
 		await host.fire("session_start", {}, ctx);
 
-		// NO before_agent_start fired — the panel must re-attempt resolution itself
 		await host.commands.get("memory")?.("", ctx);
 		const listed = host.sentMessages.find((m) => m.message.customType === "pi-memory-status");
 		const panel = (listed!.message as { content?: string }).content ?? "";
@@ -171,11 +156,8 @@ describe("P3-ME-03 policy injection", () => {
 		expect(results.length).toBe(1);
 		const prompt = results[0].systemPrompt ?? "";
 		expect(prompt.startsWith("BASE")).toBe(true);
-		// exactly one memory-policy block, plus the index
 		expect(prompt.split("<memory-policy>").length - 1).toBe(1);
 		expect(prompt).toContain("alpha (a.md) — first");
-		// path-mismatch fix (2026-10-03): the injected policy names the REAL
-		// project-layer directory, never the literal `<project>/memory/`
 		expect(prompt).toMatch(/PROJECT memory at \/\S*\/memory/);
 		expect(prompt).not.toContain("<project>/memory/");
 	});
@@ -183,7 +165,6 @@ describe("P3-ME-03 policy injection", () => {
 
 describe("P3-ME-06 yield gate", () => {
 	it("static probe yields when hermes is in the npm dir; tools/commands still run", async () => {
-		// hermes in the agent npm dir (static scan path)
 		const npmDir = join(home, ".pi", "agent", "npm", "node_modules");
 		mkdirSync(npmDir, { recursive: true });
 		writeFileSync(join(npmDir, "hermes-memory"), "package stub");
@@ -193,18 +174,15 @@ describe("P3-ME-06 yield gate", () => {
 		const ctx = host.makeCtx({ cwd: project, ui: true });
 		await host.fire("session_start", {}, ctx);
 
-		// before_agent_start must NOT inject policy (handler returns undefined)
 		const r = (await (host.handlers.get("before_agent_start")![0] as (e: unknown, c: unknown) => Promise<{ systemPrompt?: string } | undefined>)({
 			systemPrompt: "BASE",
 		}, ctx));
 		expect(r).toBeUndefined();
 
-		// /memory command still works and reports yielded
 		await host.commands.get("memory")?.("", ctx);
 		const listed = host.sentMessages.find((m) => m.message.customType === "pi-memory-status");
 		expect((listed!.message as { content?: string }).content).toContain("yielded to hermes: true");
 
-		// session_recall tool still registered and callable
 		const tool = host.tools.get("session_recall");
 		expect(tool).toBeDefined();
 	});
@@ -214,9 +192,7 @@ describe("P3-ME-06 yield gate", () => {
 		const ctx = host.makeCtx({ cwd: project, ui: true });
 		await host.fire("session_start", {}, ctx);
 		const handler = host.handlers.get("before_agent_start")![0] as (e: unknown, c: unknown) => Promise<{ systemPrompt?: string } | undefined>;
-		// first call carries a foreign <memory-policy marker → yield
 		await handler({ systemPrompt: "BASE <memory-policy>hermes</memory-policy>" }, ctx);
-		// subsequent call injects nothing
 		const r = await handler({ systemPrompt: "BASE" }, ctx);
 		expect(r?.systemPrompt ?? "BASE").toBe("BASE");
 	});
@@ -236,7 +212,6 @@ describe("P3-ME-05 secret guard", () => {
 		const clean = { toolName: "write", input: { path: join(memoryDir(), "new.md"), content: "---\nname: new\ndescription: d\nmetadata:\n  type: project\n---\n\nok" } };
 		expect(await host.fire("tool_call", clean, ctx)).toBeUndefined();
 
-		// raw bypass (no interceptor): reconciler still converges the index
 		writeFileSync(join(memoryDir(), "raw.md"), "---\nname: raw\ndescription: bypassed\nmetadata:\n  type: project\n---\n\nraw");
 		await host.fire("session_start", {}, ctx);
 		const index = readFileSync(join(memoryDir(), "MEMORY.md"), "utf-8");
@@ -249,7 +224,6 @@ describe("P3-ME-05 secret guard", () => {
 describe("P3-ME-07 session_recall", () => {
 	function writeSession(name: string, lines: unknown[]): void {
 		// C8/R2-P1: the sessions dir uses pi's WRAPPING-dash naming — compute
-		// it via the authority instead of hand-building the old bare form.
 		const dir = sessionsDirFor(project, home);
 		mkdirSync(dir, { recursive: true });
 		writeFileSync(
@@ -284,7 +258,7 @@ describe("P3-ME-07 session_recall", () => {
 	});
 
 	it("C8/R2-P1: sessionsDirFor uses pi's wrapping-dash naming (the tool was dead on real machines)", () => {
-		expect(sessionsDirFor("/Users/x/Coding/proj", "/h")).toBe("/h/.pi/agent/sessions/--Users-x-Coding-proj-"); // wrapper + leading slash = "--", trailing wrapper = "-"
+		expect(sessionsDirFor("/Users/x/Coding/proj", "/h")).toBe("/h/.pi/agent/sessions/--Users-x-Coding-proj-");
 	});
 
 	it("C8: readLinesBounded yields prefix lines, marks truncation, drops the partial tail", async () => {
@@ -296,7 +270,6 @@ describe("P3-ME-07 session_recall", () => {
 		const twoLine = '{"a":1}\n{"a":2}\n';
 		writeFileSync(exact, twoLine);
 		const big = join(dir, "big.jsonl");
-		// ~30KB of lines then more content past the 1KB cap
 		const filler = `{"pad":"${"x".repeat(60)}"}`;
 		writeFileSync(big, Array.from({ length: 40 }, () => filler).join("\n") + "\n");
 
@@ -317,7 +290,7 @@ describe("P3-ME-07 session_recall", () => {
 			const n = await exactReader.next();
 			if (n.done) { exactMeta = n.value; break; }
 		}
-		expect(exactMeta.truncated).toBe(false); // cap-exact file = EOF, not truncation
+		expect(exactMeta.truncated).toBe(false);
 
 		const capped = readLinesBounded(big, 1000);
 		const cappedLines: string[] = [];
@@ -330,7 +303,7 @@ describe("P3-ME-07 session_recall", () => {
 		expect(cappedMeta.truncated).toBe(true);
 		expect(cappedMeta.bytes).toBeLessThanOrEqual(1000);
 		expect(cappedLines.length).toBeGreaterThan(0);
-		expect(cappedLines.length).toBeLessThan(40); // prefix only
+		expect(cappedLines.length).toBeLessThan(40);
 	});
 
 	it("C8: caps surface via transparency — size truncation and budget exhaustion (injected reader)", async () => {
@@ -344,8 +317,6 @@ describe("P3-ME-07 session_recall", () => {
 		const hit = entry("needle found here");
 		const miss = entry("nothing relevant");
 
-		// size-truncated newest file still delivers its hits (bounded partial read);
-		// the older file has no hit — the reader is basename-keyed
 		const byBasename = (map: Record<string, { lines: string[]; bytes: number; truncated: boolean }>) =>
 			async function* (path: string): AsyncGenerator<{ line: string; number: number }, { bytes: number; truncated: boolean }> {
 				const spec = map[path.split("/").pop()!];
@@ -371,7 +342,6 @@ describe("P3-ME-07 session_recall", () => {
 		expect(recallTransparencyLine(r1)).toContain("budget=ok");
 		expect(recallTransparencyLine(r1)).not.toContain("narrow the query");
 
-		// budget exhausted: every file consumes the full budget → second file not scanned
 		const r2 = await sessionRecall({
 			query: "needle",
 			cwd: project,
@@ -383,7 +353,6 @@ describe("P3-ME-07 session_recall", () => {
 		expect(recallTransparencyLine(r2)).toContain("budget=exhausted");
 		expect(recallTransparencyLine(r2)).toContain("narrow the query");
 
-		// file-count cap: MAX_FILES files, no budget hit, no limit hit
 		const many = Array.from({ length: MAX_FILES_PER_QUERY + 5 }, (_, i) => `f${i}.jsonl`);
 		const r3 = await sessionRecall({
 			query: "needle",
@@ -398,7 +367,7 @@ describe("P3-ME-07 session_recall", () => {
 	it("C8/code-R1: hitting the limit CLOSES the reader generator (no abandoned fd)", async () => {
 		let finallyRuns = 0;
 		const hitLine = JSON.stringify({ type: "message", message: { role: "user", content: "needle found here" } });
-		const lines = [hitLine, hitLine, hitLine]; // more hits than the limit
+		const lines = [hitLine, hitLine, hitLine];
 		const reader = async function* (): AsyncGenerator<{ line: string; number: number }, { bytes: number; truncated: boolean }> {
 			try {
 				for (const [i, l] of lines.entries()) yield { line: l, number: i + 1 };
@@ -415,7 +384,7 @@ describe("P3-ME-07 session_recall", () => {
 			deps: { listSessionFiles: async () => ["only.jsonl"], readLinesBounded: reader as never },
 		});
 		expect(r.hits).toHaveLength(1);
-		expect(finallyRuns).toBe(1); // the limit-break resumed + closed the generator
+		expect(finallyRuns).toBe(1);
 	});
 });
 
@@ -427,7 +396,6 @@ describe("P3-ME-09 chmod-verified writability", () => {
 		wf(join(dir, "a.md"), "---\nname: alpha\ndescription: d\nmetadata:\n  type: project\n---\n\nbody");
 		const host = setup();
 		const ctx = host.makeCtx({ cwd: project, ui: true });
-		// make the dir read-only BEFORE the first session_start probe
 		chmodSync(dir, 0o555);
 		try {
 			await host.fire("session_start", {}, ctx);
@@ -435,7 +403,6 @@ describe("P3-ME-09 chmod-verified writability", () => {
 				{ systemPrompt: "BASE" },
 				ctx,
 			))!;
-			// policy-only: no index rows (they derive from the unwritable dir)
 			expect(r.systemPrompt).toContain("<memory-policy>");
 			expect(r.systemPrompt).not.toContain("(a.md)");
 			expect(host.notifications.some((n) => n.includes("policy-only"))).toBe(true);
@@ -468,7 +435,6 @@ describe("P3-ME-08 importers", () => {
 	it("claude import creates a missing target project dir (live ENOENT regression)", () => {
 		const source = mkdtempSync(join(tmpdir(), "cc-mem-nodir-"));
 		writeFileSync(join(source, "fresh.md"), "---\nname: fresh\ndescription: x\n---\n\nbody");
-		// Target layer dir does NOT exist — a CC project never opened in pi.
 		const dir = join(tmpdir(), "pi-proj-mem-", `t${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
 		const report = importFromClaude(source, dir);
 		expect(report.copied).toBe(1);
@@ -503,9 +469,6 @@ describe("P3-ME-09 resilience", () => {
 		const host = setup();
 		const ctx = host.makeCtx({ cwd: project, ui: true });
 		await host.fire("session_start", {}, ctx);
-		// historyFor throws → caught inside; a selector factory that THROWS at
-		// construction would be caught by recallBlockFor's caller try/catch.
-		// Simulate the hostile shape: projection that explodes on access.
 		const hostile = host.makeCtx({ cwd: project, ui: true }) as Record<string, unknown>;
 		hostile.sessionManager = {
 			get buildSessionProjection() {
@@ -531,10 +494,8 @@ describe("review-2026-09-22-II fixes", () => {
 		writeFileSync(join(dirB, "b.md"), "---\nname: beta\ndescription: b\nmetadata:\n  type: project\n---\n\nbeta body");
 		const first = reindex(dirA);
 		expect(first.entries.map((e) => e.title)).toEqual(["alpha"]);
-		// same-process second dir must NOT receive A's cached entries
 		const second = reindex(dirB);
 		expect(second.entries.map((e) => e.title)).toEqual(["beta"]);
-		// deleting a file (no mtime bump anywhere) must drop the dead row
 		rmSync(join(dirA, "a.md"));
 		const third = reindex(dirA);
 		expect(third.entries.map((e) => e.title)).toEqual([]);
@@ -557,7 +518,6 @@ describe("review-2026-09-22-II fixes", () => {
 
 	it("C8: readLines never splits a multibyte char at the chunk boundary", () => {
 		const file = join(home, "big-boundary.jsonl");
-		// fill so the 256KiB boundary falls INSIDE the 测 character (3 bytes)
 		const prefix = "x".repeat(READ_CHUNK - 2);
 		const line = `{"text":"${prefix}测 tail"}`;
 		writeFileSync(file, line + "\n");
@@ -572,10 +532,9 @@ describe("review-2026-09-22-II fixes", () => {
 		mkdirSync(source, { recursive: true });
 		writeFileSync(join(source, "note.md"), "---\nname: note\ndescription: d\n---\n\noriginal");
 		const dir = memoryDir();
-		mkdirSync(dir, { recursive: true }); // importers assume the target dir exists
+		mkdirSync(dir, { recursive: true });
 		const first = importFromClaude(source, dir);
 		expect(first.copied).toBe(1);
-		// local edit after import
 		writeFileSync(join(dir, "note.md"), "---\nname: note\ndescription: d\n---\n\nlocally edited");
 		const second = importFromClaude(source, dir);
 		expect(second.copied).toBe(0);
@@ -589,7 +548,6 @@ describe("review-2026-09-22-II fixes", () => {
 		await host.fire("session_start", {}, ctx);
 		const busSnap = () => (globalThis as Record<string, unknown>).__piClaudeCodeCore as { memory?: { yielded: boolean; dir?: string } };
 		expect(busSnap().memory?.yielded).toBe(false);
-		// dynamic probe: a hermes <memory-policy marker in the system prompt flips the gate
 		const beforeAgent = host.handlers.get("before_agent_start")?.[0] as (e: unknown, c: unknown) => Promise<unknown>;
 		await beforeAgent({ systemPrompt: "<memory-policy>\nhermes is here\n</memory-policy>" }, ctx);
 		expect(busSnap().memory?.yielded).toBe(true);
@@ -600,8 +558,6 @@ describe("review-2026-09-22-II fixes", () => {
 describe("adversarial-audit fixes (2026-09-22)", () => {
 	it("C8b: 4-byte emoji at the chunk boundary decodes intact", () => {
 		const file = join(home, "emoji-boundary.jsonl");
-		// fill so the 256KiB boundary falls exactly at the START of a
-		// 4-byte emoji sequence (F0 9F 98 80) — the audit case that broke
 		const prefix = "x".repeat(READ_CHUNK - 4);
 		const line = `{"text":"${prefix}😀 tail"}`;
 		writeFileSync(file, line + "\n");
@@ -617,13 +573,8 @@ describe("adversarial-audit fixes (2026-09-22)", () => {
 		const dir = memoryDir();
 		mkdirSync(dir, { recursive: true });
 		expect(importFromHermes(store, dir).copied).toBe(1);
-		// corrupt the local copy's frontmatter (invisible to scanMemoryDir)
 		writeFileSync(join(dir, "hermes-deploy-flow.md"), "not valid frontmatter at all");
 		const second = importFromHermes(store, dir);
-		// D1 (2026-09-26): "exists with different content" now means "a
-		// distinct fact shares the slug" — the corrupted local file is still
-		// never clobbered, but the source fact imports under a fingerprint
-		// suffix instead of being silently dropped
 		expect(second.copied).toBe(1);
 		expect(readFileSync(join(dir, "hermes-deploy-flow.md"), "utf-8")).toBe("not valid frontmatter at all");
 		expect(existsSync(join(dir, "hermes-deploy-flow-646570.md"))).toBe(true);
@@ -631,10 +582,6 @@ describe("adversarial-audit fixes (2026-09-22)", () => {
 
 });
 
-
-/* ── RV wiring (spec 2026-10-02-memory-recall-v2 §8 cases 16–20, revised by
- * the memory-policy spec: task-boundary recall, prompt-path only, steer
- * path removed, discard-on-timeout) ── */
 
 import type { Selector, SelectorOutcome } from "../../extensions/memory/selector.ts";
 
@@ -702,15 +649,14 @@ describe("RV wiring (spec 2026-10-02-memory-recall-v2)", () => {
 		const ctx = recallCtx(host);
 		await host.fire("session_start", {}, ctx);
 		// pi 1.2.0 fires before_agent_start for custom-message runs too
-		// (messageType "custom", no prompt) — e.g. goal continuation directives.
 		const r = (await host.fire(
 			"before_agent_start",
 			{ type: "before_agent_start", messageType: "custom", systemPrompt: "BASE", message: { role: "user", content: [{ type: "text", text: "<pi_goal_continuation goal_id=\"g1\" kind=\"continue\">" }], customType: "pi-goal-continuation" } },
 			ctx,
 		)) as { message?: unknown; systemPrompt?: string };
-		expect(r?.systemPrompt).toContain("<memory-policy"); // policy/index still injected
-		expect(r?.message).toBeUndefined(); // no recall block on a run without a user prompt
-		expect(log).toHaveLength(0); // and no selector cost either
+		expect(r?.systemPrompt).toContain("<memory-policy");
+		expect(r?.message).toBeUndefined();
+		expect(log).toHaveLength(0);
 	});
 
 	it("pi 1.2.0 union: a mid-run user steer NEVER selects (the steer path was removed with the deferred era)", async () => {
@@ -719,14 +665,11 @@ describe("RV wiring (spec 2026-10-02-memory-recall-v2)", () => {
 		const host = setupWithSelector(["memory/a.md"], log);
 		const ctx = recallCtx(host);
 		await host.fire("session_start", {}, ctx);
-		// custom run starts (goal continuation) — no selection
 		await host.fire(
 			"before_agent_start",
 			{ type: "before_agent_start", messageType: "custom", systemPrompt: "BASE", message: { role: "user", content: [{ type: "text", text: "<pi_goal_continuation goal_id=\"g1\" kind=\"continue\">" }], customType: "pi-goal-continuation" } },
 			ctx,
 		);
-		// real user steer mid-run → task-boundary recall only fires on the
-		// prompt path; a mid-run steer is NOT a task boundary
 		await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: "mid-run steer about repo convention" }] } }, ctx);
 		await new Promise((r) => setTimeout(r, 10));
 		expect(log).toHaveLength(0);
@@ -750,16 +693,12 @@ describe("RV wiring (spec 2026-10-02-memory-recall-v2)", () => {
 		const ctx = recallCtx(host);
 		await host.fire("session_start", {}, ctx);
 		await host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "the repo convention prompt" }, ctx);
-		expect(log).toHaveLength(1); // selected once at before_agent_start
-		// the persisted user message's own message_end: NO second selection
+		expect(log).toHaveLength(1);
 		await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: "the repo convention prompt" }] } }, ctx);
 		expect(log).toHaveLength(1);
-		// custom + toolResult messages never trigger
 		await host.fire("message_end", { message: { role: "user", customType: "pi-memory-recall", content: [{ type: "text", text: "whatever" }] } }, ctx);
 		await host.fire("message_end", { message: { role: "toolResult", toolName: "bash", isError: false, content: [] } }, ctx);
 		expect(log).toHaveLength(1);
-		// a fresh run selects again (abort cleared run-scoped dedup; the fake
-		// projection is empty, so the boundary is still open)
 		await host.fire("agent_end", {}, ctx);
 		await host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "second run prompt about convention" }, ctx);
 		expect(log).toHaveLength(2);
@@ -769,11 +708,9 @@ describe("RV wiring (spec 2026-10-02-memory-recall-v2)", () => {
 		writeMemory("a.md", "convention", "repo convention");
 		const log: Array<{ query: string; count: number }> = [];
 		const host = setupWithSelector(["memory/a.md"], log);
-		expect(host.handlers.has("context")).toBe(false); // RV: the projection hook is gone
+		expect(host.handlers.has("context")).toBe(false);
 		const ctx = recallCtx(host);
 		await host.fire("session_start", {}, ctx);
-		// dynamic yield: the incoming system prompt already carries another
-		// memory policy → the module defers entirely (no message, no selector)
 		const r = await host.fire("before_agent_start", { messageType: "user", systemPrompt: `BASE\n\n<memory-policy>\nforeign policy\n</memory-policy>`, prompt: "repo convention question here" }, ctx);
 		expect((r as { message?: unknown })?.message).toBeUndefined();
 		expect(log).toHaveLength(0);
@@ -781,9 +718,6 @@ describe("RV wiring (spec 2026-10-02-memory-recall-v2)", () => {
 	});
 });
 
-// ── AR1005-RC-04 wiring (spec 2026-10-05 §4.4): teardown/rebuild/close
-// invalidates old requests on both the prompt and steer paths. Confirmed
-// RED at baseline via stash (old wiring had no dispose anywhere). ──
 describe("AR1005-RC wiring lifecycle", () => {
 	interface Gate {
 		complete: (outcome: import("../../extensions/memory/selector.ts").SelectorOutcome) => void;
@@ -808,27 +742,21 @@ describe("AR1005-RC wiring lifecycle", () => {
 		const host = gatedHost(gates);
 		const ctx = recallCtx(host);
 		await host.fire("session_start", {}, ctx);
-		// prompt-path request #1 parks on the OLD machine (test/selector-1);
-		// the wait times out later, but the gate is captured here
 		const p1 = host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "convention question on old model" }, ctx);
 		await new Promise((r) => setTimeout(r, 5));
 		expect(gates).toHaveLength(1);
-		// settings change the model → session_start reloads settings and defensively disposes
 		writeSettings2("test/selector-2");
 		const ctx2 = recallCtx(host);
 		(ctx2 as { modelRegistry?: unknown }).modelRegistry = { getAll: () => [{ provider: "test", id: "selector-2" }] };
 		await host.fire("session_start", {}, ctx2);
-		// the OLD parked request completes (adapter ignored nothing — just late)
 		gates[0]!.complete({ kind: "selected", keys: ["memory/a.md"], elapsedMs: 1 });
 		await new Promise((r) => setTimeout(r, 5));
-		// prompt path on the NEW machine creates a new gated request
 		const p = host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "convention question after model switch" }, ctx2);
 		await new Promise((r) => setTimeout(r, 5));
 		expect(gates).toHaveLength(2);
 		gates[1]!.complete({ kind: "selected", keys: ["memory/a.md"], elapsedMs: 1 });
 		const r = (await p) as { message?: { customType?: string; details?: { model?: string } } };
 		void p1;
-		// exactly ONE recall block — the new machine's immediate block; the old request delivered nothing
 		expect(host.sentMessages.filter((m) => m.message.customType === "pi-memory-recall")).toHaveLength(0);
 		expect(r?.message?.customType).toBe("pi-memory-recall");
 		expect(r?.message?.details?.model).toBe("test/selector-2");
@@ -843,7 +771,6 @@ describe("AR1005-RC wiring lifecycle", () => {
 		const p1 = host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "prompt parks before recall off" }, ctx);
 		await new Promise((r) => setTimeout(r, 5));
 		expect(gates).toHaveLength(1);
-		// settings drop memory entirely → session_start reload + defensive dispose
 		mkdirSync(join(home, ".pi", "agent"), { recursive: true });
 		writeFileSync(join(home, ".pi", "agent", "settings.json"), JSON.stringify({ memory: {} }));
 		await host.fire("session_start", {}, ctx);
@@ -851,7 +778,7 @@ describe("AR1005-RC wiring lifecycle", () => {
 		await new Promise((r) => setTimeout(r, 5));
 		expect(host.sentMessages.filter((m) => m.message.customType === "pi-memory-recall")).toHaveLength(0);
 		const r1 = (await p1) as { message?: unknown };
-		expect(r1?.message).toBeUndefined(); // the disposed machine's request resolved null
+		expect(r1?.message).toBeUndefined();
 	});
 
 	it("RC-T09c: session_shutdown disposes — late completion delivers nothing and reads no history", async () => {
@@ -863,13 +790,13 @@ describe("AR1005-RC wiring lifecycle", () => {
 		await host.fire("session_start", {}, ctx);
 		void host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "prompt parks before shutdown" }, ctx);
 		await new Promise((r) => setTimeout(r, 5));
-		historyReads++; // entry-time read (approximation — the machine read history at entry)
+		historyReads++;
 		expect(gates).toHaveLength(1);
 		await host.fire("session_shutdown", { reason: "replaced" }, ctx);
 		gates[0]!.complete({ kind: "selected", keys: ["memory/a.md"], elapsedMs: 1 });
 		await new Promise((r) => setTimeout(r, 5));
 		expect(host.sentMessages.filter((m) => m.message.customType === "pi-memory-recall")).toHaveLength(0);
-		expect(historyReads).toBe(1); // no second history pass for the late completion
+		expect(historyReads).toBe(1);
 	});
 });
 
@@ -882,12 +809,10 @@ describe("injection stability + boundary wiring", () => {
 		const fire = () =>
 			host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "some prompt long enough" }, ctx) as Promise<{ systemPrompt?: string }>;
 		const first = (await fire()).systemPrompt;
-		// a memory file lands mid-session (automation write path)
 		writeMemory("b.md", "beta", "second");
 		const second = (await fire()).systemPrompt;
-		expect(second).toBe(first); // unchanged — no cache churn, no index row yet
+		expect(second).toBe(first);
 		expect(second).not.toContain("beta");
-		// a compaction in the projection → rebuilt, new row appears
 		(ctx as { sessionManager: { buildSessionProjection: () => { messages: unknown[] } } }).sessionManager.buildSessionProjection = () => ({
 			messages: [{ role: "compactionSummary", content: "s" }],
 		});
@@ -901,16 +826,12 @@ describe("injection stability + boundary wiring", () => {
 		const host = setupWithSelector(["memory/fresh.md"], log);
 		const ctx = recallCtx(host);
 		await host.fire("session_start", {}, ctx);
-		// the file lands AFTER session_start — restamp it to NOW so its mtime
-		// is deterministically inside the session (writeMemory backdates)
 		writeMemory("fresh.md", "fresh", "written this session");
 		utimesSync(join(memoryDir(), "fresh.md"), new Date(), new Date());
 		invalidateMemDirCache(memoryDir());
 		const r = (await host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "recall the fresh convention" }, ctx)) as { message?: unknown };
-		expect(r?.message).toBeUndefined(); // zero candidates → no selection
+		expect(r?.message).toBeUndefined();
 		expect(log).toHaveLength(0);
-		// backdate the file → it predates the session → eligible again
-		// (the scan cache snapshots mtimeMs — drop it or the backdate is invisible)
 		utimesSync(join(memoryDir(), "fresh.md"), new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
 		invalidateMemDirCache(memoryDir());
 		await host.fire("before_agent_start", { messageType: "user", systemPrompt: "BASE", prompt: "recall the backdated convention" }, ctx);
@@ -919,14 +840,12 @@ describe("injection stability + boundary wiring", () => {
 	});
 });
 
-/** writeSettings variant for a different model id (RC-T09a). */
 function writeSettings2(recallModel: string): void {
 	writeFileSync(join(home, ".pi", "agent", "settings.json"), JSON.stringify({ memory: { recallModel, recallWaitMs: 5000 } }));
 }
 
 describe("consolidation manual-only wiring", () => {
 	function overBudgetStore(): void {
-		// an index that exceeds the 25K budget → needsConsolidation fires
 		const dir = memoryDir();
 		mkdirSync(dir, { recursive: true });
 		writeFileSync(
@@ -956,7 +875,6 @@ describe("consolidation manual-only wiring", () => {
 		expect(sent).toHaveLength(1);
 		expect((sent[0]!.message as { content?: string }).content).toContain("PROJECT memory store");
 		expect((sent[0]!.opts as { triggerTurn?: boolean }).triggerTurn).toBe(true);
-		// the /memory panel reflects the manual-only state
 		await host.commands.get("memory")?.("", ctx);
 		const listed = host.sentMessages.find((m) => m.message.customType === "pi-memory-status");
 		expect((listed!.message as { content?: string }).content).toContain("manual-only");

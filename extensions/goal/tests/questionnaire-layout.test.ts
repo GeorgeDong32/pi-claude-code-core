@@ -1,9 +1,3 @@
-// Spec: 2026-10-01 goal-dialog-scroll (GDS-01 table tests + component
-// red/green tests for GDS-02..05). Pure layout math is pinned by tables;
-// the component tests pin (a) byte-identity of short-content rendering
-// except the intended selected-row highlight, (b) overflow slicing with a
-// pinned header/footer, (c) key routing for ctrl+u/ctrl+d and PageUp/
-// PageDown, (d) the ≤7-row footer option window.
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -51,7 +45,7 @@ test("clampScrollOffset pins the offset to the last full viewport", () => {
 		[-3, 40, 10, 0],
 		[35, 40, 10, 30],
 		[3, 5, 10, 0],
-		[7, 5, 0, 5], // 0 viewport: body is empty regardless; offset floors at max(0, total - viewport)
+		[7, 5, 0, 5],
 	];
 	for (const [offset, total, viewport, expected] of cases) {
 		assert.equal(clampScrollOffset(offset, total, viewport), expected, `offset ${offset} total ${total} viewport ${viewport}`);
@@ -140,8 +134,6 @@ test("planDialogLayout passes short bodies through and slices overflowing ones",
 	assert.deepEqual(tiny.visibleBody, []);
 });
 
-// ---- component tests (GDS-02..05) -----------------------------------------
-
 interface TestComponent {
 	render(width: number): string[];
 	handleInput(data: string): void;
@@ -149,9 +141,6 @@ interface TestComponent {
 
 const SEP = "─".repeat(60);
 
-// add()-routed lines are padded to the full width by truncateToWidth(pad=true)
-// — the legacy behavior the byte-identity criterion pins. All test strings
-// below are single-width BMP so .length == visible width.
 const pad = (s: string) => s.padEnd(60);
 
 async function mountQuestionnaire(
@@ -165,7 +154,6 @@ async function mountQuestionnaire(
 ): Promise<TestComponent> {
 	let comp: TestComponent | undefined;
 	// fakeTui: pi-tui TUI instance shape the component reads (terminal.rows
-	// for GDS-05) + the requestRender Editor needs.
 	const fakeTui = { terminal: { rows: terminalRows }, requestRender: () => {} };
 	const identityTheme = {
 		fg: (_key: string, s: string) => s,
@@ -203,11 +191,6 @@ test("short dialog renders byte-identical except the selected-row highlight (gol
 		" L1",
 		" L2",
 		"",
-		// intended visual delta (GDS-04): selected row = bg(selectedBg,
-		// fg(text, " ❯ N. label ")) — with the identity theme stub only the
-		// ❯ marker shows; every other line matches the legacy layout byte
-		// for byte (add()-routed lines included, which truncateToWidth pads
-		// to the full width).
 		pad(" ❯ 1. Confirm — create this goal now  ★"),
 		pad("  2. Continue chatting — keep refining"),
 		"",
@@ -265,9 +248,8 @@ test("long context scrolls while header, indicator and pinned footer stay put", 
 		options: ["Confirm — create this goal now", "Continue chatting — keep refining"],
 		recommended: 0,
 		allowCustom: false,
-	}], 20); // available = min(20-6, 20) = 14
+	}], 20);
 	let lines = comp.render(60);
-	// header 2 (sep + question) + indicator 1 + body 5 + footer 6 = 14
 	assert.equal(lines.length, 14, "rendered height never exceeds the available height");
 	assert.equal(lines[0], SEP);
 	assert.equal(lines[1], " Confirm Goal Draft");
@@ -280,29 +262,24 @@ test("long context scrolls while header, indicator and pinned footer stay put", 
 	assert.equal(lines[12], pad(" ↑↓ navigate • Enter select • Esc cancel"));
 	assert.equal(lines[13], SEP);
 
-	// ctrl+d (0x04): half page = ⌊5/2⌋ = 2
 	comp.handleInput("\x04");
 	lines = comp.render(60);
 	assert.equal(lines[2], "(lines 3–7 of 40 · ctrl+u/ctrl+d to scroll)");
 	assert.deepEqual(lines.slice(3, 8), [" Line 3", " Line 4", " Line 5", " Line 6", " Line 7"]);
 
-	// PageDown (\x1b[6~): full page = 5
 	comp.handleInput("\x1b[6~");
 	lines = comp.render(60);
 	assert.equal(lines[2], "(lines 8–12 of 40 · ctrl+u/ctrl+d to scroll)");
 	assert.deepEqual(lines.slice(3, 8), [" Line 8", " Line 9", " Line 10", " Line 11", " Line 12"]);
 
-	// ctrl+u (0x15): half page back up
 	comp.handleInput("\x15");
 	lines = comp.render(60);
 	assert.equal(lines[2], "(lines 6–10 of 40 · ctrl+u/ctrl+d to scroll)");
 
-	// PageUp (\x1b[5~) beyond the top clamps to offset 0
 	comp.handleInput("\x1b[5~");
 	lines = comp.render(60);
 	assert.equal(lines[2], "(lines 1–5 of 40 · ctrl+u/ctrl+d to scroll)");
 
-	// repeated PageDown clamps at the last full page; options stay pinned
 	for (let i = 0; i < 20; i++) comp.handleInput("\x1b[6~");
 	lines = comp.render(60);
 	assert.equal(lines[2], "(lines 36–40 of 40 · ctrl+u/ctrl+d to scroll)");
@@ -322,16 +299,13 @@ test("scrolling does not change existing ↑↓/Enter/Esc semantics", async () =
 		recommended: 0,
 		allowCustom: false,
 	}], 20);
-	// ↑ (0x1b[A) moves the selection, not the scroll offset.
 	comp.handleInput("\x1b[A");
 	let lines = comp.render(60);
 	assert.equal(lines[2], "(lines 1–5 of 40 · ctrl+u/ctrl+d to scroll)", "offset untouched");
 	assert.ok(lines[10].includes("2. Continue chatting — keep refining"), "selection unchanged at the top");
-	// ↓ (0x1b[B) moves the selection marker within the pinned footer.
 	comp.handleInput("\x1b[B");
 	lines = comp.render(60);
 	assert.ok(lines[10].includes("❯ 2. Continue chatting — keep refining"), "selection moved to option 2");
-	// Esc still cancels the dialog (submit(true) → done).
 	let finished: unknown = "unset";
 	const ctx = {
 		hasUI: true,
@@ -379,7 +353,6 @@ test("option lists longer than seven rows get a footer window with (+N more)", a
 	assert.ok(!optionLines.some((l) => l.includes("Option 8")), "tail options hidden");
 	const hint = lines.find((l) => l.includes("↑↓ navigate"));
 	assert.ok(hint?.includes("(+3 more)"), `hint reports hidden options: ${hint}`);
-	// ↓×9 moves the selection to the last option; the window follows.
 	for (let i = 0; i < 9; i++) comp.handleInput("\x1b[B");
 	lines = comp.render(60);
 	const moved = lines.filter((l) => /Option \d+/.test(l));
@@ -396,7 +369,7 @@ test("inputMode keeps the editor pinned while the context scrolls", async () => 
 		context,
 		options: [],
 		allowCustom: true,
-	}], 30); // available = 24
+	}], 30);
 	const lines = comp.render(60);
 	assert.equal(lines.length, 24, "inputMode also respects the height budget");
 	assert.equal(lines[0], SEP);

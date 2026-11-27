@@ -1,15 +1,3 @@
-/*
- * Apply-path tests (SPEC SC §5.7 APP-01/02/06/07/08, task W3).
- *
- * Requirement → test map:
- *   APP-02 → "V1…V10" — one discard per gate (+V8a/V8b independently) and
- *             one all-pass propose; V10 asserts HOLD (snapshot survives)
- *   APP-01 → "draft shape + append-only merge"
- *   APP-06 → precheck totality (malformed inputs never throw)
- *   APP-07/08 → "reconcile matrix" — nonce hit (real entryId + V4' audit),
- *             miss → overridden, session_tree → branch-changed, scanMax
- *             window misses, post-commit conflict-edit counting
- */
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
@@ -75,7 +63,6 @@ test("APP-02 V4: a post-snapshot context_edit targeting the compressed region di
 		{ ...entry("edit-1", "context_edit"), targetId: "e1", replacement: null },
 	] as never;
 	assert.deepEqual(runPrechecks(passingInput({ branchEntries: branch })), { action: "discard", reason: "v4-conflict-edit" });
-	// An edit aimed at the KEPT tail does not poison the snapshot.
 	const tailEdit = [
 		entry("e0"), entry("e1"), entry("e2"), entry("e3"), entry("e4"),
 		{ ...entry("edit-2", "context_edit"), targetId: "e4", replacement: null },
@@ -120,7 +107,6 @@ test("APP-02 V10: same-boundary conflicts HOLD — snapshot survives for the nex
 	assert.deepEqual(runPrechecks(passingInput({ sameBoundaryEntries: withCompaction })), { action: "hold" });
 	const withEdit = [{ type: "context_edit", targetId: "e1", replacement: null }];
 	assert.deepEqual(runPrechecks(passingInput({ sameBoundaryEntries: withEdit })), { action: "hold" });
-	// Harmless same-boundary entries do not block.
 	assert.deepEqual(
 		runPrechecks(passingInput({ sameBoundaryEntries: [{ type: "context_edit", targetId: "e4", replacement: null }] })),
 		{ action: "propose" },
@@ -128,7 +114,6 @@ test("APP-02 V10: same-boundary conflicts HOLD — snapshot survives for the nex
 });
 
 test("APP-06: malformed precheck inputs never throw (total function)", () => {
-	// Missing ids, wrong shapes — the gates degrade to a discard, never throw.
 	const weird = runPrechecks(
 		passingInput({
 			branchEntries: [{ type: "message" }] as never,
@@ -155,7 +140,6 @@ test("APP-01: draft shape (nonce, ccCore origin, file lists) and append-only mer
 	assert.equal(draft.details.ccCore.origin, "precompute");
 	assert.equal(draft.details.ccCore.proposalId, "nonce-1");
 	assert.deepEqual(draft.details.readFiles, ["/a.ts"]);
-	// Append-only (H5(a)): the draft lands AFTER earlier handlers' entries.
 	const merged = mergeDraftEntries([{ type: "context_edit", targetId: "e9" }], draft);
 	assert.deepEqual(merged.entries, [{ type: "context_edit", targetId: "e9" }, draft]);
 });
@@ -183,7 +167,7 @@ test("APP-08/V4': post-commit context_edits targeting the compressed region are 
 		{ ...entry("c-1", "compaction"), summary: "s", firstKeptEntryId: "e3", details: { ccCore: { v: 1, proposalId } } },
 		{ ...entry("edit-1", "context_edit"), targetId: "e1", replacement: null },
 		{ ...entry("edit-2", "context_edit"), targetId: "e2", replacement: null },
-		{ ...entry("edit-3", "context_edit"), targetId: "e4", replacement: null }, // tail — not a conflict
+		{ ...entry("edit-3", "context_edit"), targetId: "e4", replacement: null },
 	);
 	const result = reconcile(branch as never, proposalId, 50, false, COMPRESSED);
 	assert.equal(result.status, "committed");
@@ -193,7 +177,7 @@ test("APP-08/V4': post-commit context_edits targeting the compressed region are 
 test("APP-08: nonce miss → lost(overridden); session_tree since proposal → lost(branch-changed)", () => {
 	const branch = branchWith(
 		entry("e0"), entry("e1"), entry("e2"), entry("e3"), entry("e4"),
-		{ ...entry("c-1", "compaction"), summary: "someone else's", firstKeptEntryId: "e3" }, // no ccCore
+		{ ...entry("c-1", "compaction"), summary: "someone else's", firstKeptEntryId: "e3" },
 	);
 	const overridden = reconcile(branch as never, "nonce-x", 50, false, COMPRESSED);
 	assert.deepEqual(overridden, { status: "lost", lostReason: "overridden" });
@@ -212,7 +196,6 @@ test("APP-08: the nonce beyond scanMax is not found (windowed scan)", () => {
 	);
 	const result = reconcile(branch as never, proposalId, 10, false, COMPRESSED);
 	assert.equal(result.status, "lost");
-	// A generous window finds it.
 	const found = reconcile(branch as never, proposalId, 70, false, COMPRESSED);
 	assert.equal(found.status, "committed");
 });

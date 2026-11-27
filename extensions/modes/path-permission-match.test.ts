@@ -21,12 +21,6 @@ describe("path-permission-match", () => {
 	})
 })
 
-// BH-S1 (spec 2026-11-14-backtest-hardening): single `*` is a within-segment
-// glob ([^/]*), `**` keeps cross-segment semantics; every other regex
-// metacharacter stays escaped. deny / ask / allow share this matcher
-// (permissions.ts ruleMatchesToolCall → pathToolMatchesRuleContent), so the
-// matcher-level cases below cover all three kinds' mechanics; the
-// evaluateToolPermission block pins the kind wiring itself.
 describe("BH-S1: single-star glob semantics", () => {
 	const cwd = "/home/user/project"
 
@@ -39,24 +33,19 @@ describe("BH-S1: single-star glob semantics", () => {
 		expect(evaluateToolPermission("read", { path: "./.env.local" }, cwd, rules)).toMatchObject({ behavior: "deny" })
 		expect(evaluateToolPermission("read", { path: "./secrets.key" }, cwd, rules)).toMatchObject({ behavior: "ask" })
 		expect(evaluateToolPermission("read", { path: "./logs/build.txt" }, cwd, rules)).toMatchObject({ behavior: "allow" })
-		// cross-directory targets stay OUT of a single-* rule
 		expect(evaluateToolPermission("read", { path: "./a/.env.local" }, cwd, rules)).toMatchObject({ behavior: "passthrough" })
 	})
 
 	it("single * matches within one segment, not across directories", () => {
 		expect(pathMatchesRulePattern("./.env.local", "./.env.*", cwd)).toBe(true)
 		expect(pathMatchesRulePattern("./a/.env.local", "./.env.*", cwd)).toBe(false)
-		// globstar keeps cross-segment semantics
 		expect(pathMatchesRulePattern("./a/.env.local", "./**/.env.*", cwd)).toBe(true)
-		// home-dir form
 		expect(pathMatchesRulePattern("~/.ssh/id_rsa", "~/.ssh/*", cwd)).toBe(true)
 		expect(pathMatchesRulePattern("~/.ssh/sub/id_rsa", "~/.ssh/*", cwd)).toBe(false)
 	})
 
 	it("other regex metacharacters in literals stay escaped", () => {
-		// `.` in the pattern must not become a wildcard
 		expect(pathMatchesRulePattern("./envXlocal", "./.env.*", cwd)).toBe(false)
-		// parens/brackets/plus in literal rule paths match literally
 		expect(pathMatchesRulePattern("./a(1).txt", "./a(1).txt", cwd)).toBe(true)
 		expect(pathMatchesRulePattern("./a1.txt", "./a(1).txt", cwd)).toBe(false)
 		expect(pathMatchesRulePattern("./x+[1].md", "./x+[1].md", cwd)).toBe(true)

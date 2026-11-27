@@ -1,5 +1,3 @@
-// Behaviour tier: starting a background task and the completion message, the
-// log's place and mode, the footer and the tool's schema.
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -52,16 +50,10 @@ describe("bash with background: true", () => {
 		const id = await start(s, "echo done");
 		procs.of(id).write("done\n");
 		procs.of(id).exit(0);
-		// The agent reads before the poller settles: the marker is already in
-		// the log, so the read itself is terminal and must claim the
-		// notification — otherwise the completion queues behind the very turn
-		// that did the reading and arrives as a redundant follow-up.
 		const output = text(await s.toolCall("TaskOutput", { id }));
 		assert.match(output, /exited \(code 0\)\./);
-		await clock.tick(3); // the poller settles but must not send
+		await clock.tick(3);
 		assert.equal(s.sent.length, 0);
-		// The task itself is still settled (visible to TaskList), only the
-		// message is gone.
 		assert.match(text(await s.toolCall("TaskList", {})), /exited \(code 0\)/);
 	});
 
@@ -83,7 +75,7 @@ describe("bash with background: true", () => {
 		procs.of(id).write("one\ntwo\n");
 		procs.of(id).exit(0);
 		await clock.until(() => s.sent.length > 0);
-		await clock.tick(3); // more ticks must not resend
+		await clock.tick(3);
 		assert.equal(s.sent.length, 1);
 		const { message, options } = s.sent[0];
 		assert.deepEqual(options, { deliverAs: "followUp", triggerTurn: true });
@@ -99,7 +91,7 @@ describe("bash with background: true", () => {
 		const multi = await start(s, "echo a\necho b");
 		const long = await start(s, `echo ${"x".repeat(300)}`);
 		procs.of(multi).exit(0);
-		await clock.until(() => s.sent.length === 1); // staggered: two exits in one tick are batched into one message
+		await clock.until(() => s.sent.length === 1);
 		procs.of(long).exit(0);
 		await clock.until(() => s.sent.length > 1);
 		const contents = s.sent.map((m) => m.message.content);
@@ -119,7 +111,6 @@ describe("bash with background: true", () => {
 		const quiet = await start(s, "exit 1");
 		procs.of(quiet).exit(1);
 		await clock.until(() => s.sent.length > 1);
-		// No-output case: same pointer shape (the agent discovers emptiness on read).
 		assert.match(s.sent[1].message.content, /Output: read it with TaskOutput \(id: [^)]+\)\.$/);
 	});
 
@@ -172,9 +163,9 @@ describe("bash with background: true", () => {
 describe("refresh-timer self-termination (C8)", () => {
 	it("a timer whose view stopped rendering goes stale after 3 ticks", () => {
 		const now = 10_000;
-		assert.equal(timerIsStale(now, now), false); // fresh
-		assert.equal(timerIsStale(now - 2_999, now), false); // 2 ticks quiet
-		assert.equal(timerIsStale(now - 3_001, now), true); // past 3 ticks
+		assert.equal(timerIsStale(now, now), false);
+		assert.equal(timerIsStale(now - 2_999, now), false);
+		assert.equal(timerIsStale(now - 3_001, now), true);
 	});
 });
 
