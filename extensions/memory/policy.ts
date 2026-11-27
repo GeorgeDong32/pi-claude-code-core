@@ -27,14 +27,14 @@ You have persistent PROJECT memory at ${projectMemoryDir} — facts about this
 repository: paths, workflows, conventions, lessons that only apply here.
 Scan the index below before relying on an assumption; when a listed memory
 is relevant, read its file first: <this dir>/<slug>.md, or call
-memory_lookup(name). Write project memories HERE, exactly at this path —
-NOT in a memory/ directory inside the repository (that location is never
-read).
+tools.memory_lookup({ name }) from a codemode script. Write project
+memories HERE, exactly at this path — NOT in a memory/ directory inside the
+repository (that location is never read).
 
-Where to look for what: this repository's facts → the index below /
-memory_lookup; earlier sessions of this project →
-knowledge_search(scope: "sessions"); other knowledge roots your settings
-list (notes vaults) → knowledge_search(scope: "roots").
+Where to look for what (both from codemode): this repository's facts → the
+index below / tools.memory_lookup; earlier sessions of this project →
+tools.knowledge_search({ query, scope: "sessions" }); other knowledge roots
+your settings list (notes vaults) → scope "roots".
 
 Writing memories: create plain markdown files with a frontmatter block:
 

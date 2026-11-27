@@ -523,7 +523,7 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 	pi.registerTool(defineTool({
 		name: "session_recall",
 		label: "Session Recall",
-		exposure: "deferred",
+		exposure: "codemode",
 		description:
 			"Search past pi sessions for this project (read-only). AND-matched query over user/assistant text. Returns matching excerpts with file/line pointers.",
 		parameters: Type.Object({

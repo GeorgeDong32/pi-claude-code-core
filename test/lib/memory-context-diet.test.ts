@@ -70,12 +70,12 @@ describe("index rows: slug — description, no duplicated link, ⚠ on over-long
 		expect(text, "the slug must not be repeated as a markdown link").not.toContain("](");
 	});
 
-	it("the policy names the file path convention, both on-demand tools and the three knowledge sources", () => {
+	it("the policy names the file path convention, both on-demand tools (codemode call form) and the three knowledge sources", () => {
 		const text = buildPolicyInjection({ entries: [] }, [], dir);
 		expect(text).toContain("<this dir>/<slug>.md");
-		expect(text).toContain("memory_lookup(name)");
-		expect(text).toContain('knowledge_search(scope: "sessions")');
-		expect(text).toContain('knowledge_search(scope: "roots")');
+		expect(text).toContain("tools.memory_lookup({ name })");
+		expect(text).toContain('tools.knowledge_search({ query, scope: "sessions" })');
+		expect(text).toContain('scope "roots"');
 		expect(text).toContain(`at most ${DESCRIPTION_MAX} characters`);
 		expect(text).toContain("⚠");
 	});
@@ -215,12 +215,12 @@ describe("on-demand tools: lookup and search", () => {
 });
 
 describe("module wiring: deferred exposure, counters and the per-run stats entry", () => {
-	it("memory_lookup / knowledge_search / session_recall are deferred (not declared until tool_search activates them) and callable", async () => {
+	it("memory_lookup / knowledge_search / session_recall are codemode-exposed (listed by codemode, never declared) and callable", async () => {
 		put(dir, "fact.md", "fact", "a fact");
 		put(dir, "old-long.md", "old-long", LONG);
 		const host = setup();
 		for (const name of ["memory_lookup", "knowledge_search", "session_recall"]) {
-			expect((host.tools.get(name) as { exposure?: string } | undefined)?.exposure, name).toBe("deferred");
+			expect((host.tools.get(name) as { exposure?: string } | undefined)?.exposure, name).toBe("codemode");
 		}
 		const ctx = host.makeCtx({ cwd: project, sessionId: "s1", ui: true });
 		await host.fire("session_start", {}, ctx);

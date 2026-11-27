@@ -8,8 +8,10 @@
  *                                       over the memory dir, the configured
  *                                       searchRoots and/or past sessions
  *
- * Both are registered with exposure "deferred": nothing in the tool list
- * until tool_search finds them (codemode can call them directly).
+ * Both are registered with exposure "codemode": nothing in the tool list,
+ * but codemode lists them (searchTools) and scripts call them directly.
+ * "deferred" was the first choice and failed real-TUI acceptance: pi
+ * registers its tool_search inactive, so a deferred tool is listed nowhere.
  *
  * Safety: a lookup name must pass the same file-name whitelist as writes
  * (no traversal); root search is substring-only (no regex, no ReDoS), reads
@@ -208,7 +210,7 @@ export function lookupTool(dir: (ctx: ExtensionContext) => string, onCall: () =>
 		name: "memory_lookup",
 		label: "Memory Lookup",
 		description: "Return the full text of one project memory by its slug (the index lists slug — description).",
-		exposure: "deferred",
+		exposure: "codemode",
 		parameters: Type.Object({
 			name: Type.String({ description: "Memory slug, e.g. bg-shell-module-facts" }),
 		}),
@@ -233,7 +235,7 @@ export function searchTool(deps: (ctx: ExtensionContext) => KnowledgeSearchDeps,
 		name: "knowledge_search",
 		label: "Knowledge Search",
 		description: 'Case-insensitive substring search for a topic: scope "memory" (project memories), "roots" (configured notes roots), "sessions" (past sessions of this project) or "all". Returns paths/pointers, not file bodies.',
-		exposure: "deferred",
+		exposure: "codemode",
 		parameters: Type.Object({
 			query: Type.String({ description: "Substring to look for" }),
 			scope: Type.Optional(Type.Union([Type.Literal("memory"), Type.Literal("roots"), Type.Literal("sessions"), Type.Literal("all")], { description: "Default: all" })),

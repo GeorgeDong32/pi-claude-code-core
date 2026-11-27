@@ -33,7 +33,7 @@ importers land everything in the project layer.
 | `tool_call` | `guardMemoryToolCall` (G1 verdicts; BH-R2: the secret probe is memory-layer-scoped and scans only the incoming text — write's `content`, edit's `edits[].newText`); any write into the retired user dir is blocked outright; read suppression is history-derived (RV-07) |
 | `tool_result` | Stale-read staleness note |
 | `agent_settled` | Consolidation directive-turn flag cleared (automation accounting reopens) |
-| `registerTool` | `session_recall` (deferred), `memory_lookup` (deferred), `knowledge_search` (deferred), `memory_consolidate` |
+| `registerTool` | `session_recall` (codemode), `memory_lookup` (codemode), `knowledge_search` (codemode), `memory_consolidate` |
 | `registerCommand` | `/memory` (incl. recall status + retired-layer notice), `/memory-consolidate` (manual-only, project layer), `/memory-import-claude`, `/memory-import-hermes` |
 
 **No `message_end` / `turn_end` recall or consolidation** — recall is
@@ -128,8 +128,11 @@ selector call within the same boundary budget.
   bounded rewrite first so a batch's other facts survive. Imported and
   hand-written files bypass both gates: the index marks them `⚠`, `/memory`
   reports the count and session_start lists them once. `memory_lookup` and
-  `knowledge_search` carry `exposure: "deferred"` — nothing in the tool list
-  until `tool_search` activates them (codemode can call them regardless).
+  `knowledge_search` and `session_recall` carry `exposure: "codemode"` —
+  nothing in the tool list; codemode lists them (`searchTools`) and scripts
+  call them by name. (`"deferred"` was tried first and failed real-TUI
+  acceptance: pi registers its `tool_search` inactive unless `defaultTools`
+  names it, and deferred tools are listed nowhere else.)
   `memory.searchRoots` (settings.json, absolute dirs, default `[]`) is the
   only way to point `knowledge_search` at a notes vault; core never assumes a
   vault path. The `cc-core-memory-stats` entry is the probe: compare
