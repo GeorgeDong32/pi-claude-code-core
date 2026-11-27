@@ -1,14 +1,3 @@
-/**
- * Shared permission-rule text helpers (Standards #4 of REVIEW-2026-09-22:
- * the ruleValue→text extraction had four copies and the trailing-wildcard
- * match two — one deep point instead).
- *
- * Callers: modes/rule-families, mcp-gov/family, mcp-gov/index, web-gov.
- *
- * Self-contained on purpose: lib must not depend back on extensions/ (the
- * value shape mirrors modes' PermissionRuleValue structurally).
- */
-
 interface RuleLike {
 	ruleValue: unknown;
 }

@@ -1,11 +1,3 @@
-/**
- * rules/scan.ts — pure file parsing for the rules engine (P3-RU-02/03/05).
- *
- * No I/O here: callers hand in file contents, the functions return parsed
- * structures or `null` for "invalid, skip silently". Everything is
- * deterministic so renderRules stays byte-stable for identical input.
- */
-
 export interface RuleFrontmatter {
 	name?: string;
 	description?: string;

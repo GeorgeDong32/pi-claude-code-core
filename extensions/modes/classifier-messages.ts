@@ -1,7 +1,3 @@
-/**
- * Auto-mode classifier denial / unavailable messages (CC messages.ts subset).
- */
-
 export const DENIAL_WORKAROUND_GUIDANCE =
 	`IMPORTANT: You *may* attempt to accomplish this action using other tools that might naturally be used to accomplish this goal, ` +
 	`e.g. using head instead of cat. But you *should not* attempt to work around this denial in malicious ways, ` +

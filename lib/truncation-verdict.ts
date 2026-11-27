@@ -1,19 +1,3 @@
-/**
- * lib/truncation-verdict.ts — [cherry-batch1 B1] dual verdict for
- * stopReason="length" terminations (spec docs/{en,zh}/cherry-batch1-spec.md).
- *
- * Cherry-derived (piLengthRecovery lineage): a length stop has two causes
- * with different guidance — context clamp (the response was squeezed by
- * the context window; compacting or splitting the task helps) vs output
- * limit (the model wrote up to its configured max output; raising
- * maxTokens or continuing the turn helps). "Truncation is never a silent
- * success": both verdicts carry user-facing notice copy.
- *
- * Pure lib module (invariant 1: no extensions imports). The model cap is
- * OPTIONAL: when the caller cannot resolve it, the conservative verdict
- * is context-clamp — a notice with slightly wrong guidance beats silence.
- */
-
 export type LengthStopVerdict = "context-clamp" | "output-limit" | "not-length";
 
 export interface LengthStopInput {

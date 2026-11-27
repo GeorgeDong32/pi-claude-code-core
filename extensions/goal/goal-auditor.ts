@@ -13,28 +13,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { GoalRecord } from "./goal-record.ts";
 
-/*
- * goal-auditor.ts — the independent completion auditor session (fork of
- * capyup/pi-goal, see FORK.md). AR1005-AU-02 (2026-10-05): the moment
- * session creation resolves, the session enters a try/finally covering
- * its ENTIRE remaining lifecycle — cancel-during-creation skips the prompt
- * and disposes exactly once; subscribe/prompt/unsubscribe failures all
- * still dispose (each cleanup step guarded so one throwing cannot skip
- * the other); a creation rejection never touches a nonexistent disposer.
- * `sessionAdapter` is the internal test seam (controlled adapter vs the
- * real createAgentSession — one host boundary, not a mock-everything
- * layer). A late completion after the flow's timeout/abort can only clean
- * up: it returns an aborted error outcome, never an approval.
- *
- * BH-E6 (spec 2026-11-14-backtest-hardening, reproduced 2026-11-14): the
- * prompt await is raced against the abort signal — pi only CONTRACTS that
- * prompt() settles after abort(); a stream ignoring the signal used to hang
- * the await past the flow's timeout return and skip the dispose finally
- * (session leak). On abort the await settles, the finally disposes exactly
- * once (still the only disposal site), and the raced-off prompt loser is
- * detached from unhandled-rejection reporting.
- */
-
 export interface AuditorSession {
 	subscribe(listener: (event: unknown) => void): () => void;
 	prompt(prompt: string): Promise<unknown>;
@@ -126,7 +104,6 @@ export function saveGoalAuditorFileConfig(cwd: string, config: GoalAuditorConfig
 	if (clean.provider) persisted.provider = clean.provider;
 	if (clean.model) persisted.model = clean.model;
 	if (clean.thinkingLevel) persisted.thinking_level = clean.thinkingLevel;
-	// shared settings-JSON primitive (P2-GO-03a): tmp+rename atomic write
 	writeJsonAtomic(goalAuditorConfigPath(cwd), persisted);
 	return clean;
 }
@@ -285,22 +262,9 @@ export async function runGoalCompletionAuditor(args: {
 				}
 			});
 			if (args.signal?.aborted) return { approved: false, disapproved: true, output: "", model: modelLabel(model), thinkingLevel, error: "Auditor aborted." };
-			// Bounded-abort wiring (spec 2026-10-04-goal-audit-hang-fix §3.3):
-			// pi's PromptOptions has no signal, so translate tool-abort/timeout
-			// into AgentSession.abort(). Verified against the pi 1.0.1 implementation:
-			// after abort(), prompt() settles (resolves) via the run-loop's
-			// _agentRunAbortRequested checks, so this await always returns.
-			//
-			// BH-E6 (spec 2026-11-14-backtest-hardening, reproduced): that
-			// settling is only a CONTRACT — a stream that ignores the abort
-			// signal hangs prompt() forever (abort() itself awaits
-			// waitForIdle, so it hangs too), the finally below never runs, and
-			// the session leaks for the rest of the process. Race the prompt
-			// against the abort signal: on abort the await settles
-			// immediately, the existing AU-02 finally unsubscribes and
-			// disposes EXACTLY ONCE (this stays the only disposal site), and
-			// the raced-off prompt loser is detached so it can never surface
-			// as an unhandled rejection.
+			// pi's PromptOptions has no signal and prompt() settling after abort() is
+			// only a contract — a stream that ignores abort hangs prompt() forever
+			// (abort() itself awaits waitForIdle), so the await is raced against the signal.
 			let resolveOnAbort: (() => void) | null = null;
 			const abortSettled = new Promise<void>((resolve) => {
 				resolveOnAbort = resolve;
@@ -321,12 +285,10 @@ export async function runGoalCompletionAuditor(args: {
 			try {
 				unsubscribe?.();
 			} catch {
-				/* unsubscribe failure must not skip dispose */
 			}
 			try {
 				session.dispose();
 			} catch {
-				/* an already-disposed/throwing disposer must not mask the result */
 			}
 		}
 		const output = outputParts.join("\n\n").trim();

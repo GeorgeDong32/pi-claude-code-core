@@ -1,33 +1,3 @@
-/**
- * extensions/ui/cc-rows.ts — the CC visual-language primitives shared by
- * core's message renderers (2026-10-20 notification CC-ification, user
- * decision captured on the prototype page):
- *
- *   command bar   dim `❯` + white command text on the CC user-bar gray
- *   summary row   accent `⏺` + bold toolTitle summary
- *   body block    dim `⎿` gutter (5 visible cells), continuation rows
- *                 space-aligned, body painted toolOutput
- *
- * Single source for the whole family — the same shapes review's
- * tui-renderer.ts (v0.8.5 flat card + command echo) established; new
- * renderers must not re-roll their own copy. Only standard pi theme tokens
- * are consulted (accent/toolTitle/dim/toolOutput/success) with ONE
- * deliberate exception: the command-bar background is the CC user-bar
- * constant rgb(55,55,55), because CC themes deliberately blank
- * `userMessageBg` (CC-TUI owns user-message painting there) — a themed
- * lookup would render a transparent bar (review's commandEchoRow made the
- * same call).
- *
- * Every component is a plain pi-tui Component ({ invalidate, render });
- * render(width) NEVER throws — on internal failure it falls back to the
- * raw unstyled body lines (AGENTS trap 1 discipline: render callbacks run
- * in stacks pi cannot catch).
- *
- * Long bodies do not invent their own fold state: the host's global
- * expansion toggle (ctrl+o) drives `expanded`; collapsed renders the first
- * CLIP_LINES rows plus a dim hint (keyText is unreachable here — the
- * literal "ctrl+o" matches pi's default and CC-TUI's fallback wording).
- */
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 export interface CcRowTheme {
@@ -35,6 +5,9 @@ export interface CcRowTheme {
 	bold(text: string): string;
 }
 
+// CC themes deliberately blank `userMessageBg` (CC-TUI owns user-message
+// painting there) — a themed lookup would render a transparent bar, so the
+// command bar uses CC's user-bar constant rgb(55,55,55).
 const BAR_BG = "\x1b[48;2;55;55;55m";
 const BAR_BG_OFF = "\x1b[49m";
 const BAR_FG = "\x1b[38;2;255;255;255m";
@@ -52,7 +25,8 @@ export interface RowsComponent {
 	render(width: number): string[];
 }
 
-/** Plain-text fallback rows for a failed styled render (never throws). */
+/** Render callbacks run in stacks pi cannot catch — a render must never
+ * throw; these are the raw unstyled body lines. */
 function rawFallback(body: readonly BodyLine[]): string[] {
 	return body.map((l) => (typeof l === "string" ? l : l.strong + l.rest));
 }
@@ -101,6 +75,8 @@ function paintFragment(fragment: string, strongLeft: number, theme: CcRowTheme):
 }
 
 export function ccBodyBlock(body: readonly BodyLine[], theme: CcRowTheme, expanded: boolean): RowsComponent {
+	// `expanded` mirrors the host's global expansion toggle (ctrl+o) — no
+	// per-component fold state; the hint literal matches pi's default wording.
 	return {
 		invalidate() {},
 		render(width: number): string[] {
@@ -145,8 +121,6 @@ export function ccPanel(parts: CcPanelParts, theme: CcRowTheme, expanded: boolea
 				if (parts.body && parts.body.length > 0) rows.push(...ccBodyBlock(parts.body, theme, expanded).render(width));
 				return rows;
 			} catch {
-				// Styled assembly failed — emit the raw text rather than throwing
-				// from a render callback (AGENTS trap 1; pi cannot catch us here).
 				return rawFallback(parts.body ?? []);
 			}
 		},

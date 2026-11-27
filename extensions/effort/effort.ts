@@ -5,14 +5,6 @@ import { readJson, readJsonCached, writeJsonAtomic } from "../../lib/settings.js
 export const ALL_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export const ALL_LEVELS_WITHOUT_XHIGH = ["off", "minimal", "low", "medium", "high"] as const;
 
-/**
- * B5 (cherry-batch2): clamp a requested level to the model's nearest
- * SUPPORTED tier. Equidistant → the lower side (lower tiers spend fewer
- * tokens and fail smaller — the conservative direction). "off" is always
- * legal. An unresolvable model returns undefined — the CALLER keeps the
- * status-quo reject (today /effort with a null model refuses; clamp-style
- * must not widen that).
- */
 export function clampToSupported(
   level: EffortLevel,
   model: EffortModel | null | undefined,
@@ -193,11 +185,6 @@ export function cycleLevelWithOff(current: string, model: EffortModel | null | u
 	return withOff[(idx + 1) % withOff.length]!;
 }
 
-/** C5 (arch review): the shared shortcut decision — pure, so the
- * zero-explicit-write guard is testable without a runtime. "noop" = the
- * model supports no other level: the handler notifies and MUST NOT call
- * owner.setExplicit (the old probe loop pinned a clamped value into the
- * explicit slot and suppressed profile effort for the whole session). */
 export type CycleDecision =
 	| { kind: "write"; next: EffortLevel }
 	| { kind: "noop"; current: string }

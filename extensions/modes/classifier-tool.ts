@@ -1,7 +1,3 @@
-/**
- * CC classify_result tool schema for auto-mode classifier (tool stage).
- */
-
 import { Type } from "typebox";
 import { type Tool } from "@earendil-works/pi-ai"
 

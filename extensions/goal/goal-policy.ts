@@ -56,10 +56,6 @@ export function validateGoalAbort(args: {
 	return { ok: true };
 }
 
-/** Goal actions are codemode-exposed and never declared, so visibility no
- * longer keeps them out of a drafting interview; this gate does. Completing,
- * pausing or aborting in the middle of a confirmation or /goal-tweak interview
- * would leave the interview and the goal record inconsistent. */
 export function validateNoDraftingPhase(
 	phase: { confirmationIntent: unknown; tweakDraftingFor: unknown },
 	action: string,
@@ -73,14 +69,10 @@ export function validateNoDraftingPhase(
 	return { ok: true };
 }
 
-/** The question tools exist for the drafting interviews only (same boundary
- * they had while visibility gated them). */
 export function validateDraftingInterview(
 	phase: { confirmationIntent: unknown; tweakDraftingFor: unknown; focusedId: string | null },
 	action: string,
 ): PolicyValidation {
-	// A tweak interview belongs to the goal it was opened for; a /goal-focus
-	// in the middle of it must not carry the question tools over.
 	const inTweakInterview = phase.tweakDraftingFor !== null && phase.tweakDraftingFor === phase.focusedId;
 	if (phase.confirmationIntent === null && !inTweakInterview) {
 		return { ok: false, message: `${action} REJECTED: no goal interview is in progress. Ask in plain chat, or start /goal-tweak to open a drafting interview.` };

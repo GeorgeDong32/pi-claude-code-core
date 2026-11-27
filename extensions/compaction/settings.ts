@@ -1,18 +1,3 @@
-/*
- * Smart Compaction — settings schema, defaults and reader (SPEC SC §5.10
- * ST-02/ST-03 env part, task W1).
- *
- * File: ~/.pi/agent/core-compaction.json via lib/settings.ts readJson
- * (missing/malformed → defaults, never throws; writes are atomic — the
- * /smart-compact mode writer lands with W4). Per-field normalization follows
- * lib/core-economy.ts: unknown or mistyped fields fall back silently; the
- * ratio GROUP is validated together (POL-02): one bad ratio reverts the whole
- * group with a single warn, never a partial mix.
- *
- * PI_CORE_COMPACTION=off|shadow|on (SC-ENV-01) overrides the file's mode;
- * any other value is ignored with one warn.
- */
-
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -241,10 +226,6 @@ export function getCompactionSettingsPath(): string {
 	return (settingsPath ??= join(homedir(), ".pi", "agent", "core-compaction.json"));
 }
 
-/**
- * Read + normalize. Never throws (AGENTS invariant 10); `warned` carries the
- * POL-02 group revert (and malformed-file) reasons for the caller to surface.
- */
 export function loadCompactionSettings(env: Record<string, string | undefined> = process.env): {
 	settings: CompactionSettings;
 	warned: string[];

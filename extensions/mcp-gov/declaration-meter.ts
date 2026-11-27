@@ -1,31 +1,3 @@
-/**
- * mcp-gov/declaration-meter.ts — [cherry-batch3 B4-F1] measures the tool
- * declaration volume of every provider request (spec
- * docs/zh/cherry-batch3-b4-spec.md; data basis docs/{en,zh}/b4-declaration-recon.md:
- * one direct MCP server costs ≈1.3K tokens per request).
- *
- * Dialect-tolerant extraction (review R1 P2-1): flat `tools` /
- * Bedrock `toolConfig.tools`; names via `name ?? function?.name`; Google's
- * nested `tools:[{functionDeclarations:[…]}]` is expanded; unextractable
- * shapes fall into the "other" bucket; no tools at all → silently skipped
- * (fail-open — the meter must never affect the request; it only READS the
- * payload).
- *
- * Three buckets (R1 P2-2 — ExtensionAPI has no runtime tool enumeration):
- * mcp__<server>__* → that server, parsed from the PAYLOAD-side as-sanitized
- * name (pi's createMcpToolName already sanitizes before declaring — so no
- * id-side re-sanitization is needed here; GATE-side "is this MCP-shaped"
- * classification remains lib/mcp-shape's authority, invariant 4 — this meter
- * only BUCKETES names for display and never gates); a static list of core's
- * own registered tool names (imported from the registering modules where a
- * shared constant exists) → "core"; everything else → "other(builtin+ext)".
- *
- * Pure in-memory: latest snapshot + maxBytes. No disk writes, no timers,
- * never on the bus — the /core panel pulls it synchronously. A request
- * carrying NO tools (or an unrecognizable dialect) keeps the previous
- * snapshot — deliberate: the meter shows the last MEANINGFUL measurement.
- */
-
 import {
 	ABORT_GOAL_TOOL_NAME,
 	CREATE_GOAL_TOOL_NAME,
@@ -48,6 +20,7 @@ interface MeterState {
 	last: DeclarationSnapshot | null;
 }
 
+// pi's ExtensionAPI has no runtime tool enumeration — core's own tool names are this static list.
 const CORE_TOOL_NAMES = new Set<string>([
 	"TaskOutput",
 	"TaskList",
@@ -78,6 +51,8 @@ export function createDeclarationMeter(): {
 } {
 	const state: MeterState = { last: null };
 	return {
+		// pi's createMcpToolName already sanitizes names before declaring, so the
+		// payload-side `mcp__<server>__<tool>` parsing needs no re-sanitization.
 		observe(payload: unknown): void {
 			try {
 				const tools = extractTools(payload);
@@ -106,7 +81,6 @@ export function createDeclarationMeter(): {
 				const maxBytes = Math.max(total, state.last?.maxBytes ?? 0);
 				state.last = { totalBytes: total, maxBytes, perClass, perServer, toolCount: count };
 			} catch {
-				/* fail-open: metering must never break a request */
 			}
 		},
 		last(): DeclarationSnapshot | null {

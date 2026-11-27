@@ -1,12 +1,5 @@
-/**
- * Typed adapter over ctx.sessionManager — the single place that knows pi's
- * real SessionEntry shape. Messages arrive wrapped as
- * {type:"message", message: AgentMessage} with roles user/assistant/toolResult
- * (never "tool"). A private shape guess elsewhere previously left the
- * injection probe dead at runtime (plan B1); every session read goes through
- * this port so the shape has one owner and one test surface.
- */
-
+// pi session entries wrap messages as {type:"message", message: AgentMessage};
+// roles are user/assistant/toolResult — never "tool".
 export interface BranchAgentMessage {
 	role: "user" | "assistant" | "toolResult"
 	content?: unknown
@@ -65,9 +58,6 @@ export function readBranchEntries(sessionManager: unknown): BranchEntry[] {
 	}
 }
 
-/** Strict variant for cache owners (AR1005-ST): null = the read failed or
- *  the host has no getBranch — a failure must NEVER be cached as a
- *  successful empty snapshot. A legal empty branch returns []. */
 export function readBranchEntriesStrict(sessionManager: unknown): BranchEntry[] | null {
 	try {
 		const raw = (sessionManager as SessionManagerLike | undefined)?.getBranch?.()

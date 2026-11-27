@@ -1,25 +1,3 @@
-/**
- * modes/profile-apply.ts — the stateful model-profile controller (arch
- * review C5 Move B, carved from index.ts 2026-10-03). profiles.ts owns the
- * pure layer (types / load / resolve); THIS module owns the state: the
- * active profile name, the in-memory config, lazy first activation,
- * reload re-stamping, the --model-profile flag pre-activation, and the
- * /model-profile + alt+i surfaces. The wiring (index.ts) injects
- * getMode / notify / onStateChanged / sendList and keeps only call sites.
- *
- * Fidelity points carried over verbatim (do not "fix" while moving):
- *   1. lazy first activation lives in applyForMode (NOT init) — a profile
- *      activates on the FIRST mode switch, not on session start;
- *   2. after reload, `active` is re-stamped IN MEMORY only — the on-disk
- *      file is never modified by a mode switch;
- *   3. entry restore overrides the --model-profile flag (the wiring calls
- *      restoreFromEntry AFTER initSession);
- *   4. a profile that maps a model but expresses NO effort leaves the
- *      thinking level completely alone (PLAN §3.3, P1-EF-06 d).
- *
- * Effort side effects go through lib/effort-owner.ts (invariant 2) — the
- * same single call site as before the move.
- */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { getSharedEffortOwner, type OwnerEffortLevel } from "../../lib/effort-owner.ts";
@@ -57,8 +35,6 @@ export interface ProfileWiring {
 export interface ProfileController {
 	readonly active: string | undefined;
 	readonly config: ModelProfilesConfig;
-	/** mode-switch application: lazy activation + reload re-stamp + model
-	 * + optional effort. Never throws; failures notify and keep the model. */
 	applyForMode(mode: PermissionMode, ctx: ExtensionContext): Promise<void>;
 	setActive(name: string, ctx: ExtensionContext): Promise<void>;
 	cycle(ctx: ExtensionContext): Promise<void>;

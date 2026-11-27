@@ -1,28 +1,3 @@
-/**
- * modes/cc-import.ts — Claude Code approved-list importer (SPEC P2,
- * 2026-11-02). Reads Claude Code's three settings layers plus the legacy
- * ~/.claude.json allowedTools history and maps CC permission rules onto
- * core permission rules through the existing permissions-loader write
- * path (addPermissionRule — atomic + idempotent).
- *
- * Sources and scope mapping (CC → core):
- *   ~/.claude/settings.json            permissions.{allow,deny,ask} → global
- *   <cwd>/.claude/settings.json        permissions.{allow,deny,ask} → project
- *   <cwd>/.claude/settings.local.json  permissions.{allow,deny,ask} → local
- *   ~/.claude.json projects.<cwd>.allowedTools (legacy array)      → project
- *
- * Rule mapping (core already stores CC "Tool(content)" syntax for the
- * built-in tools — PI_TO_CC_TOOL — so most rules pass through verbatim):
- *   Bash/Read/Edit/Write/Grep/Glob(...) → verbatim (same wire format)
- *   WebFetch(domain:host)               → webfetch(domain:host) (family is lowercase)
- *   mcp__server__tool / mcp__server__*  → mcp_server_tool / mcp_server_*
- *   bare tool names (WebSearch, Task…)  → verbatim tool-level rule
- *   anything the shared parser rejects → skipped with a reason
- *
- * Pure planning (planCcImport) is separated from execution (executeCcImport)
- * so /permissions import-cc --dry-run can show the full report without
- * touching disk.
- */
 import { existsSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import * as path from "node:path"
@@ -213,7 +188,6 @@ export interface CcImportResult {
 	perDestination: Record<string, number>
 }
 
-/** Execute a plan through addPermissionRule (atomic + idempotent writes). */
 export function executeCcImport(plan: CcImportPlan, opts: { cwd: string; home?: string }): CcImportResult {
 	const home = opts.home ?? homedir()
 	const result: CcImportResult = { imported: 0, skippedExisting: 0, failed: 0, perDestination: {} }

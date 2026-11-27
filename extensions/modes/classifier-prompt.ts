@@ -1,8 +1,3 @@
-/**
- * CC-style auto-mode classifier system prompt assembly.
- * Prompt text from Claude Code yolo-classifier-prompts (external build).
- */
-
 import { readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"

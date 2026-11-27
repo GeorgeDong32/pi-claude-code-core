@@ -1,16 +1,3 @@
-/**
- * Permission-modes extension config (`~/.pi/agent/permission-modes.json`).
- * Pure fs helpers — no pi dependency.
- *
- * BH-R7 (2026-11-14): hand-edited config must never crash the extension —
- * `sanitizePermissionModesConfig` normalizes every rule list (string-only
- * filters for autoMode.allow/soft_deny/environment and
- * permissions.allow/deny/ask; non-array entries dropped with a one-shot
- * warning) and deletes non-object `autoMode`/`permissions` blocks. The
- * sanitizer caches by object identity (WeakMap) so repeated reads of the
- * same parsed config are free.
- */
-
 import { readJsonCached } from "../../lib/settings.ts"
 import { homedir } from "node:os"
 import { join } from "node:path"

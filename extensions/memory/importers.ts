@@ -37,7 +37,7 @@ export function importFromClaude(projectMemoryDir: string, targetDir: string): I
 			report.skipped++;
 			continue;
 		}
-		writeDocument(targetDir, file, { kind: "raw", text: content }); // W1: atomic + cache-invalidated
+		writeDocument(targetDir, file, { kind: "raw", text: content });
 		report.copied++;
 	}
 	reindex(targetDir);
@@ -181,8 +181,6 @@ export function projectMatchesCurrent(hermesName: string, memoryDir: string): bo
 export function importHermesFull(args: {
 	agentDir: string;
 	projectMemoryDir: string;
-	/** retired layer — kept in the signature for report compat; nothing is
-	 *  written here anymore, everything lands in the project layer */
 	userMemoryDir?: string;
 }): HermesMigrationReport {
 	const report: HermesMigrationReport = { copied: 0, skipped: 0, notes: [], routed: { user: 0, project: 0 }, otherProjects: [] };
@@ -227,8 +225,6 @@ export function importHermesFull(args: {
 					report.notes.push(`[${name}] section skipped — no project layer under ~/.pi/agent/projects matches (open that project once, then re-run; idempotent)`);
 				}
 			} else {
-				// user-layer sections land in the project store: the user layer
-				// is retired, and imported data must stay visible
 				count(importSection(section, args.projectMemoryDir, type === "user" ? "reference" : type, categoryPrefix, seen));
 			}
 		} else {

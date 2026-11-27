@@ -1,10 +1,3 @@
-/**
- * EffortOwner red-green suite (P1-EF-05/06) + source-scan (P1-EF-07).
- *
- * The a)–f) cases map 1:1 to the spec's behavior table. A fake pi records
- * setThinkingLevel calls; "model default" is simulated by the fake starting
- * at some level the owner never wrote.
- */
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -59,7 +52,6 @@ describe("P1-EF-06 ownership chain behavior", () => {
 		expect(pi.calls).toEqual(["high"]);
 
 		owner.setFromProfile("low", "profile-a");
-		// ② manual beats ③ profile: nothing written, still high.
 		expect(pi.calls).toEqual(["high"]);
 		expect(owner.effective()).toBe("high");
 		expect(owner.currentSource()).toBe("session");
@@ -69,9 +61,8 @@ describe("P1-EF-06 ownership chain behavior", () => {
 		const pi = fakePi("medium");
 		const owner = newEffortOwner(pi as never);
 		owner.setExplicit("high", "command");
-		owner.setFromProfile("low", "profile-a"); // held off by ②
+		owner.setFromProfile("low", "profile-a");
 		owner.resetExplicit();
-		// ③ now effective → pushed down.
 		expect(pi.calls).toEqual(["high", "low"]);
 		expect(owner.effective()).toBe("low");
 		expect(owner.currentSource()).toBe("profile");
@@ -90,15 +81,12 @@ describe("P1-EF-06 ownership chain behavior", () => {
 		expect(owner.effective()).toBe("low");
 		expect(owner.currentSource()).toBe("env");
 
-		// Same-value explicit request is still the pinned value — refused too.
 		expect(owner.setExplicit("low", "command")).toBe("pinned-by-env");
 
-		// Profile writes are stored but env wins.
 		owner.setFromProfile("high", "p");
 		expect(pi.calls).toEqual(["low"]);
 		expect(owner.currentSource()).toBe("env");
 
-		// Unknown env tokens are ignored (no pin, no write).
 		const pi2 = fakePi("medium");
 		const owner2 = newEffortOwner(pi2 as never);
 		owner2.setFromEnv("banana");
@@ -109,14 +97,9 @@ describe("P1-EF-06 ownership chain behavior", () => {
 	it("d) profile without :effort never touches thinking level", () => {
 		const pi = fakePi("medium");
 		const owner = newEffortOwner(pi as never);
-		// modes' guard skips setFromProfile entirely when the profile has no
-		// `:effort` — the owner-side contract being that a profile switch
-		// WITHOUT a profile write leaves the level and its source untouched.
 		expect(pi.calls).toEqual([]);
 		expect(owner.effective()).toBe("medium");
 		expect(owner.currentSource()).toBe("model-default");
-		// contrast: WITH a profile write the level moves — this is the switch
-		// the guard suppresses when the profile lacks `:effort`
 		owner.setFromProfile("low", "with-effort");
 		expect(pi.calls).toEqual(["low"]);
 	});
@@ -124,7 +107,7 @@ describe("P1-EF-06 ownership chain behavior", () => {
 	it("e) fresh session with no ②/③ leaves the model default untouched", () => {
 		const pi = fakePi("xhigh");
 		const owner = newEffortOwner(pi as never);
-		owner.setFromEnv(""); // empty env = unset
+		owner.setFromEnv("");
 		expect(pi.calls).toEqual([]);
 		expect(owner.effective()).toBe("xhigh");
 		expect(owner.currentSource()).toBe("model-default");
@@ -148,10 +131,8 @@ describe("P1-EF-06 ownership chain behavior", () => {
 		const seen: OwnerEffortLevel[] = [];
 		owner.changed((v) => seen.push(v));
 		owner.setExplicit("high", "command");
-		owner.setFromProfile("low", "p"); // stored under ③, effective stays ② high
-		owner.resetExplicit(); // drops to profile low
-		// Fires on every state mutation (refresh is idempotent): the profile
-		// write re-fires "high", the reset then lands on "low".
+		owner.setFromProfile("low", "p");
+		owner.resetExplicit();
 		expect(seen).toEqual(["high", "high", "low"]);
 	});
 
@@ -168,7 +149,7 @@ describe("P1-EF-06 ownership chain behavior", () => {
 	it("effective value already applied is not re-written (idempotent apply)", () => {
 		const pi = fakePi("medium");
 		const owner = newEffortOwner(pi as never);
-		owner.setFromProfile("medium", "p"); // equals current → no write
+		owner.setFromProfile("medium", "p");
 		expect(pi.calls).toEqual([]);
 	});
 });
@@ -182,7 +163,6 @@ describe("P1-EF-07 single-writer source scan", () => {
 			for (const file of files) {
 				if (!file.endsWith(".ts") || file.endsWith(".test.ts")) continue;
 				const src = readFileSync(join(extensionsDir, moduleDir, file), "utf-8");
-				// Strip line comments so design notes can mention the API name.
 				const stripped = src
 					.split("\n")
 					.map((line) => line.replace(/\/\/.*$/, ""))

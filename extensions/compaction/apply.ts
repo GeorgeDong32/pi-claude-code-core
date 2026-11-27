@@ -1,19 +1,8 @@
 /*
- * Smart Compaction — apply path (SPEC SC §5.7 APP-01…08, task W3).
- *
- * Pure decision core for the synchronous proposal path:
- *
- *   runPrechecks  V1–V10 (first failure wins; V10 = HOLD, not discard: the
- *                 snapshot stays ready for the next boundary)
- *   buildDraft    APP-01 entry shape with the reconciliation nonce
- *   reconcile     APP-08 — scan the branch for OUR nonce on a compaction
- *                 entry (INV-13: "returned a draft" ≠ "compaction
- *                 happened"; entry_appended is invisible to extensions, H3)
- *   auditConflictEdits  V4' — post-commit context_edit targeting the
- *                 compressed region; counted, never blocked (H15)
- *
- * All functions are synchronous and total: a proposal-path bug must return
- * "don't propose" (INV-1), never throw into pi.
+ * The reconcile nonce scan exists because a returned draft does not mean
+ * compaction happened — pi's entry_appended is invisible to extensions, so
+ * finding OUR nonce on a compaction entry in the branch is the only
+ * confirmation.
  */
 
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";

@@ -1,28 +1,3 @@
-/**
- * memory/consolidate.ts — memory_consolidate tool + the manual consolidation
- * directive (V2-C, DESIGN-MEMORY-V2 §5; the automatic turn_end trigger was
- * removed — consolidation is manual-only, see DEVIATIONS).
- *
- * Form (user-approved): a consolidation is a DIRECTIVE injected via
- * sendMessage({triggerTurn: true, deliverAs: "followUp"}); the in-session
- * model reads the listed files and calls the memory_consolidate tool ONCE
- * with a full batch. Tool call + result render through pi's native
- * ●/⎿ pipeline — no custom status UI.
- *
- * S2 (OPT-3): consolidation is a POLICY on the shared write engine —
- * validation rules (filename predicate, frontmatter, secret scan, size
- * cap) and the atomic write primitive all come from store.ts; what stays
- * here is the must-shrink invariant, the mkdir lock, and the directive.
- *
- * Batch-member exclusivity (2026-10-18): writes and deletes may not name
- * the same file, and write keys must be unique. Both shapes previously
- * skewed the bytesAfter accounting (content counted for a file that never
- * lands, or counted twice for one landing) and could produce a false
- * "does not shrink" rejection; they are now explicit validation failures.
- * Guard messages carry the name-format and layer hints that field usage
- * showed models need (a 6-rejected-attempt consolidation run tripped on
- * exactly these two unstated contracts).
- */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -185,7 +160,6 @@ export function runConsolidation(
 		return fail(`delete(s) without provenance: ${orphaned.join(", ")} — name them in the absorbing write's merged_from, or give each a per-file reason`);
 	}
 
-	// must-shrink invariant: post state strictly smaller in bytes or files
 	const beforeFiles = before.files;
 	const fileNamesAfter = new Set<string>(
 		[...listMemoryFiles(dir), ...writes.map((w) => w.file)].filter((f) => !deleteSet.has(f)),
@@ -238,10 +212,7 @@ export function needsConsolidation(stats: LayerStats, indexCap: number): string 
 }
 
 export interface ConsolidationHooks {
-	/** called when a directive run is queued (marks the turn so memory
-	 *  automation does not extract from the consolidation run itself) */
 	onDirectiveSent?: (reason: string) => void;
-	/** called after a consolidation batch was applied */
 	onApplied?: () => void;
 }
 

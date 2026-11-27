@@ -1,8 +1,3 @@
-/**
- * plan-gate.test.ts — T12 (SPEC 2026-10-07 P0-1 §5): the pure plan hard-limit
- * function. One case per hard-limit class + the plan-legal allowlist returns
- * undefined. No mode parameter: planHardBlock is only called under plan mode.
- */
 import { describe, expect, it } from "vitest";
 import { planHardBlock, type PlanGateFacts } from "./plan-gate.ts";
 

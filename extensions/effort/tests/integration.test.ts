@@ -12,9 +12,7 @@ import {
   type LoadExtensionsResult,
   type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
-// 0.85.x no longer re-exports AuthStorage / loader helpers from the package
-// root — import them from their dist modules (import-path migration only;
-// assertions below are unchanged from pi-effort 0.1.2).
+// pi 0.85.x no longer re-exports AuthStorage / loader helpers from the package root — import them from their dist modules.
 import { AuthStorage } from "../../../node_modules/@earendil-works/pi-coding-agent/dist/core/auth-storage.js";
 import {
   createExtensionRuntime,
@@ -73,7 +71,6 @@ function createResourceLoader(extensionsResult: LoadExtensionsResult): ResourceL
     getAgentsFiles: () => ({ agentsFiles: [] }),
     getSystemPrompt: () => undefined,
     getAppendSystemPrompt: () => [],
-    // 0.85.x ResourceLoader additions (setup-shape adaptation)
     getSystemPromptSource: () => undefined,
     getAppendSystemPromptSources: () => [],
     extendResources: () => {},
@@ -126,15 +123,12 @@ async function createTestSession(
   }
 
   const authStorage = AuthStorage.create(join(config.agentDir, "auth.json"));
-  // 0.85.x AuthStorage replaced set(provider, cred) with modify(provider, fn) —
-  // setup-call adaptation only (pi-effort 0.1.2 wrote the same credential).
+  // 0.85.x AuthStorage replaced set(provider, cred) with modify(provider, fn).
   await authStorage.modify("openrouter", async () => ({ type: "api_key", key: "test" }));
   const sessionManager = SessionManager.inMemory();
 
   // 0.85.x createAgentSession dropped the authStorage/modelRegistry options in
-  // favor of a default modelRuntime that reads agentDir/auth.json + models.json
-  // (the credential above is written to that same path). The explicit
-  // ModelRegistry.create(...) call from pi-effort 0.1.2 no longer exists.
+  // favor of a default modelRuntime that reads agentDir/auth.json + models.json.
   const { session } = await createAgentSession({
     cwd: config.cwd,
     agentDir: config.agentDir,
@@ -157,7 +151,6 @@ function cleanupSession(previousAgentDir: string | undefined) {
   }
 }
 
-// ─── Basic command tests ────────────────────────────────────────────
 
 test("runtime command changes session thinking level", async () => {
   const { session, previousAgentDir } = await createTestSession(reasoningModel, "medium", "medium");
@@ -229,9 +222,6 @@ test("runtime /fast matches provider-prefixed GPT-5 ids on Responses APIs", asyn
     const handlers = extension.handlers.get("before_provider_request");
     assert.ok(handlers?.[0]);
 
-    // Substring match: "CherryCodex/gpt-5.5" previously failed the gpt-5
-    // PREFIX check and fast mode silently never applied. Also covers the
-    // gpt-6 family (codex/gpt-6-luna on the air machine).
     const ctx = { model: { id: "CherryCodex/gpt-5.5", api: "openai-responses" } };
     const payload = { model: "CherryCodex/gpt-5.5", input: [] };
     const result = await handlers[0]({ type: "before_provider_request", payload }, ctx);
@@ -274,10 +264,6 @@ test("runtime /fast never injects outside OpenAI Responses dialects", async () =
     const handlers = extension.handlers.get("before_provider_request");
     assert.ok(handlers?.[0]);
 
-    // 2026-10-13 regression shape: every GPT-5.x model behind the CPA proxy
-    // is anthropic-messages on the wire; service_tier rode the anthropic
-    // body and was silently dropped by the translating proxy — the request
-    // was never fast.
     const ctx = { model: { id: "gpt-5.6-luna", api: "anthropic-messages" } };
     const payload = { model: "gpt-5.6-luna", messages: [], max_tokens: 16 };
     const result = await handlers[0]({ type: "before_provider_request", payload }, ctx);
@@ -296,8 +282,6 @@ test("runtime /fast skips injection when the model is unknown", async () => {
     const handlers = extension.handlers.get("before_provider_request");
     assert.ok(handlers?.[0]);
 
-    // Fail-safe: no model on the context (side-channel/unknown dialect) —
-    // never inject a field we cannot place on the wire.
     const payload = { model: "gpt-5.5", input: [] };
     const result = await handlers[0]({ type: "before_provider_request", payload }, {});
 
@@ -317,14 +301,12 @@ test("new sessions inherit defaultThinkingLevel from Pi settings", async () => {
   }
 });
 
-// ─── xhigh pre-validation tests ─────────────────────────────────────
 
 test("runtime CLAMPS xhigh to high on non-xhigh-capable model (B5 clamp-style)", async () => {
   const { session, previousAgentDir } = await createTestSession(reasoningModel, "medium", "medium");
 
   try {
     await session.prompt("/effort xhigh");
-    // B5: the nearest supported tier is written (was: reject, level unchanged)
     assert.equal(session.thinkingLevel, "high" as ThinkingLevel);
   } finally {
     cleanupSession(previousAgentDir);
@@ -342,7 +324,6 @@ test("runtime accepts xhigh on xhigh-capable model", async () => {
   }
 });
 
-// ─── min/max semantic alias tests ───────────────────────────────────
 
 test("runtime /effort max resolves to high on non-xhigh model", async () => {
   const { session, previousAgentDir } = await createTestSession(reasoningModel, "medium", "medium");
@@ -377,7 +358,6 @@ test("runtime /effort min resolves to minimal on reasoning model", async () => {
   }
 });
 
-// ─── Extension lifecycle surface tests ──────────────────────────────
 
 test("runtime --effort flag resolves aliases on session start", async () => {
   const { session, previousAgentDir } = await createTestSession(xhighModel, "medium", "medium", { effort: "max" });
@@ -433,17 +413,12 @@ test("argument completions expose only effort levels and fast on/off", async () 
   }
 });
 
-// ─── /effort bare command opens the picker ─────────────────────────
 
-/** Build a minimal ExtensionCommandContext sufficient for the picker branch. */
 function buildPickerCtx(opts: {
   model: Model<any>;
   thinkingLevel: PiThinkingLevel;
   hasUI: boolean;
-  // Receives the factory the extension passes to ctx.ui.custom. Tests drive
-  // the returned component's keyboard state to simulate user input.
   onPicker?: (factory: (tui: any, theme: any, kb: any, done: (result: unknown) => void) => unknown) => void;
-  // Receives the prompt passed to ctx.ui.select, used in the non-TUI fallback.
   onSelect?: (title: string, options: string[]) => Promise<string | undefined>;
 }) {
   const notifications: Array<{ message: string; type?: string }> = [];
@@ -458,7 +433,6 @@ function buildPickerCtx(opts: {
       },
       custom: async (factory: any, _options?: unknown) => {
         if (opts.onPicker) opts.onPicker(factory);
-        // Simulate the component resolving immediately via cancel.
         return { action: "cancel" };
       },
       notify: (message: string, type?: string) => {
@@ -486,13 +460,11 @@ test("bare /effort in TUI mode invokes ctx.ui.custom and applies the chosen leve
       thinkingLevel: "medium",
       hasUI: true,
       onPicker: (factory) => {
-        // Drive the component: grab the done callback, then immediately confirm "high".
         let done: ((r: any) => void) | undefined;
         const component = factory(undefined, undefined, undefined, (r: any) => {
           done?.(r);
         });
         pickerLevels = (component as any).levels;
-        // Simulate user pressing Right twice then Enter (low → medium → high).
         const handle = (component as any).handleInput;
         handle.call(component, "\x1b[C"); // right
         handle.call(component, "\x1b[C"); // right
@@ -501,16 +473,14 @@ test("bare /effort in TUI mode invokes ctx.ui.custom and applies the chosen leve
       },
     });
 
-    // Override the picker resolution to return the simulated confirm.
     const originalCustom = ctx.ui.custom;
     ctx.ui.custom = async (factory: any, options?: any) => {
-      ctx.ui.custom = originalCustom; // restore after first call
+      ctx.ui.custom = originalCustom;
       let capturedDone: ((r: any) => void) | undefined;
       const component: any = factory(undefined, undefined, undefined, (r: any) => {
         capturedDone?.(r);
       });
       pickerLevels = component.levels;
-      // Simulate user pressing Right twice (low → medium → high) then Enter.
       component.handleInput("\x1b[C");
       component.handleInput("\x1b[C");
       component.handleInput("\r");
@@ -519,12 +489,7 @@ test("bare /effort in TUI mode invokes ctx.ui.custom and applies the chosen leve
 
     await command.handler("", ctx);
 
-    // Picker was opened with the model's user-facing levels minus "minimal".
     assert.deepEqual(pickerLevels, ["low", "medium", "high", "xhigh"]);
-    // After confirm, applySessionLevel runs pi.setThinkingLevel → session state updated.
-    // The session was created with thinkingLevel "medium"; after /effort bare → "high".
-    // (We don't have direct access to the session here, but the notify call confirms
-    // applySessionLevel ran.)
     const last = (ctx as any)._lastNotify as string | undefined;
     void last;
   } finally {
@@ -581,12 +546,8 @@ test("bare /effort cancel does not change thinking level", async () => {
       hasUI: true,
     });
     ctx.ui.notify = (message: string, type?: string) => notifications.push({ message, type });
-    // ctx.ui.custom resolves with cancel without invoking factory meaningfully.
     ctx.ui.custom = async () => ({ action: "cancel" });
 
-    // DC5b single display: the message lands on the real bus queue (the
-    // fallback adapter owns the screen in a full assembly); the wrapper
-    // itself must not direct-write ctx.ui.notify here.
     const { coreBus } = await import("../../bus.ts");
     const before = (coreBus().snapshot().notifications ?? []).length;
     await command.handler("", ctx);
@@ -620,7 +581,6 @@ test("bare /effort on a non-reasoning model notifies and returns", async () => {
       return { action: "cancel" };
     };
 
-    // DC5b single display: the error rides the bus queue, not a direct write.
     const { coreBus } = await import("../../bus.ts");
     const before = (coreBus().snapshot().notifications ?? []).length;
     await command.handler("", ctx);
@@ -655,11 +615,8 @@ test("C5 (arch review): alt+t registered here; single-level model handler never 
 
     const before = session.thinkingLevel;
     const { ctx } = buildPickerCtx({ model: singleLevelModel, thinkingLevel: "high", hasUI: true });
-    // ctrl+shift+e on the ONLY user-facing level: noop decision — notify,
-    // zero explicit writes, thinking level unchanged.
     await shortcuts.get("ctrl+shift+e")!.handler(ctx);
     assert.equal(session.thinkingLevel, before, "noop path leaves the thinking level untouched");
-    // alt+t from "high": write(off) — a REAL level on this model.
     await shortcuts.get("alt+t")!.handler(ctx);
     assert.ok(true, "both shortcut handlers ran without throwing");
   } finally {

@@ -1,20 +1,3 @@
-/**
- * mcp-gov/family.ts — the MCP rule family (P4-MC-01/02).
- *
- * canonicalize three call shapes to one id: `mcp__exa__search` (native
- * prefix), `exa_search` (direct naming), proxy `mcp` tool with
- * `input.tool` → `mcp_exa_search`. Non-MCP names return null — the family
- * never claims beyond its boundary.
- *
- * canonicalizeMcpTool stays the single authority (invariant 4); its pure
- * shape core lives in lib/mcp-shape.ts and is shared verbatim with the
- * modes plan gate (arch batch B1) so the two consumers cannot drift.
- *
- * resolve order: deny > ask > allow (the pm engine's order, applied to
- * rule strings over the canonical id with `mcp_<server>_*` prefixes
- * matching first, then the bare `mcp_*`).
- */
-
 import { canonicalizeMcpShape } from "../../lib/mcp-shape.js";
 import { ruleMatchesId, ruleValueText } from "../../lib/rule-text.js";
 import type { PermissionRule } from "../modes/permissions.ts";

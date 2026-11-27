@@ -1,34 +1,3 @@
-/**
- * modes/loop-guard.ts — [D1/D1b] provider-output loop defenses at the
- * tool_call gate (spec docs/{en,zh}/tool-call-loop-guard.md, reviewed
- * 2026-10-20 R1).
- *
- * D1 — message-level duplicate suppression: pi finalizes the whole
- * assistant message (message_end carries every toolCall part + id) before
- * dispatching toolCalls one by one through the gate, so same-batch
- * identity is exactly knowable. The index keeps the FIRST call of each
- * byte-identical group (parts order) and marks followers; the gate
- * blocks followers with a self-healing reason. Fail-open by construction:
- * an id missing from the index passes (older hosts, nested executeTool
- * calls — those carry parentToolCallId and never appear in message
- * parts, so the D1b breaker owns them instead).
- *
- * D1b — parent-level circuit breaker: codemode nested calls DO pass the
- * gate individually; a stuck script re-issuing byte-identical calls
- * trips the per-parent counter at maxIdentical. Bounded memory: parents
- * FIFO-evict at maxParents; a parent stops admitting new keys at
- * maxKeysPerParent (a stuck loop reuses few keys — detection intact).
- *
- * This is a DEFENSE, not a permission: the gate step runs before the
- * adjudicator. EXCEPTED in bypass mode since 2026-11-02 (P1-B, BREAKING):
- * the adapter skips the D1b check entirely when the current mode is
- * bypass — Claude Code's bypass has no loop defense, and its scripts
- * legitimately repeat identical calls (polling, retries). D1 (same-batch
- * byte-identical followers) still runs in every mode. Cross-turn
- * repetition stays legal by design (polling, retries) — only same-batch
- * duplicates and same-parent loops (non-bypass) block.
- */
-
 export function duplicateKey(toolName: string, input: unknown): string {
 	const sorted = canonicalize(input);
 	return `${toolName}\u0000${JSON.stringify(sorted)}`;
@@ -57,6 +26,10 @@ interface ToolCallPartLike {
 	arguments?: unknown;
 }
 
+// pi finalizes the whole assistant message (message_end carries every
+// toolCall part + id) before dispatching toolCalls one by one through the
+// gate; nested executeTool calls carry parentToolCallId and never appear
+// in message parts.
 export function indexBatchDupes(message: { role?: string; content?: unknown }): BatchDupIndex | null {
 	if (message.role !== "assistant") return null;
 	const content = message.content;
@@ -87,11 +60,6 @@ export function batchDupReason(firstIdHint: string): string {
 	);
 }
 
-/**
- * D1 gate check: returns the block reason when toolCallId is a duplicate
- * follower of the indexed batch, else undefined (pass — including the
- * fail-open miss, which covers nested parentToolCallId calls).
- */
 export function checkBatchDup(index: BatchDupIndex | undefined, toolCallId: string): string | undefined {
 	const entry = index?.byId.get(toolCallId);
 	if (!entry || !entry.isDupFollow) return undefined;

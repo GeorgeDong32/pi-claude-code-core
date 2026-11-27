@@ -1,34 +1,4 @@
-/*
- * ObservationPack core module (SPEC OBS-01..10).
- *
- * Keeps large tool results reachable without replaying them: a pure-text
- * tool result larger than THRESHOLD_BYTES is sent in full for its first
- * FULL_SENDS provider requests, then the projection replaces it with a short
- * stable placeholder; the original bytes live in a per-session store and the
- * agent pages them back with `obs_recall`.
- *
- * The mechanism never edits history: it rewrites only the projection layer
- * (`pi.on("context")`), so the transcript, the TUI rendering, native
- * compaction and session resume are all unaffected.
- *
- * Ported from NVlabs/SoL-Pi (MIT) with three core-side changes (PORT §7.5):
- * storage root derived via sessionManager public API; the SoL-Pi TUI banner
- * replaced by a capability-bus patch; a request-level sentinel that warns
- * when the projection stops taking effect (CMP-04).
- *
- * BH-E3 (2026-11-14, spec 2026-11-14-backtest-hardening): obs_recall results
- * are exempt from projection entirely (packing a recall excerpt would nest
- * packs); the placeholder ledger row is written once per object id per
- * process (per-request rows ballooned Air session ledgers to 43 MB); and the
- * whole `context` handler body is fail-open — any throw returns the
- * unmodified context (invariant 8).
- *
- * P0-2: besides byte paging, `obs_recall` selects — `filter`
- * (regex over the whole object, `context` lines around each match) or `tail`
- * (last N lines) — and the placeholder names the on-disk path. In 30 days of
- * session logs every recall paged the object start to end (median 2, max 4
- * round trips) because the model had no way to ask for the failing lines.
- */
+// Ported from NVlabs/SoL-Pi (MIT).
 import { join } from "node:path";
 import { VERSION } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "@earendil-works/pi-coding-agent";

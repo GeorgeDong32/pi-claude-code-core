@@ -1,15 +1,3 @@
-/**
- * Thin wrapper that adapts `runReportTool` to `pi.registerTool`. The tool
- * loads the manifest, validates the workflow return value's reviewer/gate
- * structuredOutput, runs the deterministic verdict + report builder, and
- * persists a session entry.
- *
- * v0.8.6 (user decision): the tool no longer pushes the report into chat as
- * a rendered card. The result text carries the FULL markdown plus an
- * instruction to output it verbatim as the main agent's final chat message —
- * the report lives in the conversation as plain assistant text, not inside a
- * tool-result card.
- */
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 

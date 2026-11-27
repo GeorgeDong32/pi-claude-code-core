@@ -15,9 +15,7 @@ export function matchAutoModePattern(command: string, pattern: string): boolean 
 const NESTED_SHELL_PATTERNS: RegExp[] = [/`/, /\$\(/, /\$\{/, /<\(/, />\(/]
 
 export interface AutoRuleMatch {
-	/** Tier-1.5b gate: every segment matched an allow rule (and no hazards). */
 	allowMatched: boolean
-	/** Tier-1.5 gate: any segment matched a soft_deny rule (soft_deny wins). */
 	softDenyMatched: boolean
 }
 
@@ -35,8 +33,6 @@ export function matchAutoRules(
 	}
 	const softDenyMatched =
 		!!softDeny?.length && segments.some((seg) => softDeny.some((p) => matchAutoModePattern(seg, p)))
-	// command substitution makes per-segment matching unreliable — never
-	// fast-allow through the rule tier (falls through to the later tiers)
 	const allowMatched =
 		!!allow?.length &&
 		!NESTED_SHELL_PATTERNS.some((p) => p.test(command)) &&

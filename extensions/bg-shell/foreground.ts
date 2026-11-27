@@ -70,7 +70,6 @@ function operations(ctx: ExtensionContext, run: Run) {
 			const port = processPort();
 			const reservation = reserve(ctx.sessionManager.getSessionId());
 			const { logPath, nonce } = reservation;
-			// Pi's environment as the delegate resolved it, PI_* variables included.
 			const sessionEnv: Record<string, string> = {};
 			for (const key of SESSION_ENV_KEYS) if (env?.[key] !== undefined) sessionEnv[key] = env[key];
 			const shell = env === undefined ? undefined : { ...resolveShell(), env };
@@ -278,12 +277,10 @@ export async function runForeground(
 		result = await delegate.execute(toolCallId, piParams, signal, onUpdate, ctx);
 	} catch (error) {
 		// Pi's bash throws its output with the status (aborted, timed out, no exit code).
-		// CH E2: no "never appeared" note here — models that pass placeholder
 		if (error instanceof Error) error.message = sanitize(error.message);
 		throw error;
 	}
-	// Pi's bash hands the agent the output as the command wrote it; strip it as Pi does
-	// for the user's `!` commands. Its own temp file and the task's log stay raw.
+	// Pi's bash hands the agent the output as the command wrote it — sanitize what reaches the model; its own temp file and the task's log stay raw.
 	result = {
 		...result,
 		content: result.content.map((part) => (part.type === "text" ? { ...part, text: sanitize(part.text) } : part)),

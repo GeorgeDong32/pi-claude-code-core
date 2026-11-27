@@ -1,9 +1,3 @@
-/**
- * goal-ledger live-read tests (cherry-batch1 B2-9): the ledger read path
- * rides lib/live-jsonl.ts — torn tails from a concurrent appender are
- * dropped (fail-open), bad lines are counted, and LiveReadError maps to
- * an empty result + cache drop (the ledger never throws on read).
- */
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,7 +10,6 @@ import { GOAL_LEDGER_FILE, GoalLedgerContext, goalLedgerPath, readGoalLedger } f
 const dir = mkdtempSync(join(tmpdir(), "ledger-live-"));
 after(() => rmSync(dir, { recursive: true, force: true }));
 
-/** Each case gets its own cwd so the derived ledger path is isolated. */
 function ctxFor(name: string): GoalLedgerContext {
 	const cwd = join(dir, name);
 	mkdirSync(join(cwd, ".pi", "goals"), { recursive: true });
@@ -38,7 +31,6 @@ describe("goal-ledger live JSONL read (cherry-batch1 B2-9)", () => {
 		const ctx = ctxFor("case-b");
 		writeFileSync(goalLedgerPath(ctx), ev("g1") + '{"type":"goal_created","at":"2026');
 		const r = readGoalLedger(ctx);
-		// the half-written second line is a torn tail: dropped, first event kept
 		assert.equal(r.events.length, 1);
 	});
 
@@ -60,7 +52,6 @@ describe("goal-ledger live JSONL read (cherry-batch1 B2-9)", () => {
 		const ctx = ctxFor("case-e");
 		const target = goalLedgerPath(ctx);
 		writeFileSync(target, ev("g1"));
-		// replace the real ledger with a symlink pointing elsewhere
 		rmSync(target);
 		symlinkSync(join(dir, "elsewhere.jsonl"), target);
 		const r = readGoalLedger(ctx);

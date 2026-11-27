@@ -1,24 +1,3 @@
-/*
- * Smart Compaction — pressure policy (SPEC SC §5.3, task W1).
- *
- * Pure functions only (POL-03): no timers, no I/O, no pi context objects —
- * every input is injected data, every output is a decision the caller applies.
- * The state machine (§5.2) is a total function over (state, event) so tests
- * can enumerate every edge, including cooldowns, single-flight and the
- * "no re-propose while proposed" invariant (INV-5).
- * Boundary observation owns the clock; an apply-time proposal does not tick
- * it again. Replay may still use one combined boundary evaluation.
- *
- * Key host facts baked in:
- *   - H7: getContextUsage().tokens is null after a compaction until the next
- *     assistant response — null pressure never starts compute/propose
- *     (POL-04); existing boundary-clock semantics are preserved.
- *   - H8: T_n must come from the EFFECTIVE compaction settings (modelOverrides
- *     resolved by the caller via SettingsManager); POL-01 refuses to guess.
- *   - H12: outcome==="completed" is NOT sufficient safety; POL-07 checks the
- *     raw stopReason and the session's pending-native-recovery flag.
- */
-
 import { estimateTokens } from "@earendil-works/pi-coding-agent";
 import type {
 	AgentMessage,
@@ -32,10 +11,7 @@ import type {
 } from "./types.ts";
 
 
-/**
- * T_n = contextWindow − effectiveReserveTokens (H8). Any missing input or a
- * non-positive result → null: the controller stays idle and never throws.
- */
+// T_n must come from the EFFECTIVE compaction settings (modelOverrides resolved by the caller via pi's SettingsManager).
 export function effectiveThreshold(
 	contextWindow: number | null | undefined,
 	reserveTokens: number | null | undefined,
@@ -46,6 +22,7 @@ export function effectiveThreshold(
 	return tn > 0 ? tn : null;
 }
 
+// pi host: getContextUsage().tokens is null after a compaction until the next assistant response — null pressure must never start compute or propose.
 export function pressure(tokens: number | null, tn: number | null): number | null {
 	if (tokens === null || tn === null || tn <= 0) return null;
 	return tokens / tn;
@@ -57,11 +34,6 @@ export interface ModeResolution {
 	reason?: string;
 }
 
-/**
- * Version gate (POL-08) wins outright; native `compaction.enabled=false`
- * forces shadow (POL-06 — the controller must not auto-compact, but keeps
- * observing); a configured "off" is always respected.
- */
 export function resolveMode(
 	configured: ControllerMode,
 	nativeCompactionEnabled: boolean,
@@ -82,12 +54,7 @@ export function applyPointSafe(input: ApplyPointSafety): boolean {
 	return true;
 }
 
-/**
- * A1 (2026-11-10 review P0, rework R1): stopReason of the last assistant
- * message on the SESSION BRANCH (backward scan). The authority for POL-07 —
- * `event.entries` is the host's draft-accumulator (runner.js emitBoundary),
- * never session messages, so it must not be read for stopReasons.
- */
+// pi host: `event.entries` is the host's draft-accumulator (runner.js emitBoundary), never session messages — stopReason must be scanned from session entries.
 export function lastAssistantStopReason(entries: ReadonlyArray<unknown>): string | undefined {
 	for (let i = entries.length - 1; i >= 0; i--) {
 		const entry = entries[i] as { type?: string; message?: { role?: string; stopReason?: unknown } } | undefined;
@@ -247,11 +214,6 @@ function propose(state: ControllerState, event: Extract<PolicyEvent, { type: "pr
 	return { state: { ...state, phase: "proposed", proposalId }, action: { type: "propose", proposalId } };
 }
 
-/**
- * Total transition function (§5.2). Every edge is a table row in the tests;
- * unknown combinations fall through to "none" rather than throwing (INV-1's
- * pure-function form: a policy bug must never break a turn).
- */
 export function evaluate(
 	state: ControllerState,
 	event: PolicyEvent,

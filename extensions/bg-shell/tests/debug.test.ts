@@ -1,7 +1,3 @@
-// Behaviour tier: the opt-in debug log (`CC_CORE_BG_DEBUG=1`): what it records,
-// that nothing is written without the variable, a swallowed error being logged,
-// the rotation at session start, and the 7-day cleanup leaving it alone.
-// Fake processes and fake time; the files are real.
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -162,7 +158,7 @@ describe("with CC_CORE_BG_DEBUG=1", () => {
 
 	it("never throws when the log cannot be written", async () => {
 		debugOn();
-		mkdirSync(logFile, { recursive: true }); // a directory where the file should be
+		mkdirSync(logFile, { recursive: true });
 		const s = session();
 		await start(s, "job");
 		assert.equal(statSync(logFile).isDirectory(), true);

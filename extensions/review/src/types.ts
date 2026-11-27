@@ -1,14 +1,3 @@
-/**
- * Shared type definitions for pi-review (v0.7+).
- *
- * The active path is the foreground workflowScript:
- *   /review → plugin prep (diff + target workspace + manifest)
- *          → main agent runs one subagent({ workflowScript })
- *          → pi_review_report tool renders the deterministic report
- *
- * No legacy spawn-pipeline types remain.
- */
-
 export type Verdict = "approve" | "request_changes" | "comment";
 
 export type IssueSeverity = "blocker" | "major" | "minor" | "nit";

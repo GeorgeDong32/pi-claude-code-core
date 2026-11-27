@@ -1,12 +1,5 @@
-/**
- * lib/tool-render.ts — shared presentation helpers for core tool renderers
- * (spec 2026-10-02-core-tool-renderers TR).
- *
- * Structural ThemeLike only: lib/ must not import extension or pi types
- * (invariant 1); renderers receive the live `theme` from pi's factory args
- * (TR-FACT F2/F4 — never capture ctx.ui.theme, it goes stale across session
- * switches).
- */
+// Renderers receive the live `theme` from pi's factory args — never capture
+// ctx.ui.theme: it goes stale across session switches.
 
 export interface ThemeLike {
 	fg(role: string, text: string): string;

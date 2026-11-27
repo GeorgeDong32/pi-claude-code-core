@@ -1,9 +1,4 @@
-/*
- * ObservationPack - pure storage/excerpt primitives.
- * Ported from NVlabs/SoL-Pi (MIT) @ src/sol-pi/extensions/observation-pack/observation.ts,
- * SPEC OBS-02: sha256 content addressing, O_NOFOLLOW open flags, complete-line
- * head/tail excerpts are upstream behaviour kept byte-for-byte.
- */
+// Ported from NVlabs/SoL-Pi (MIT) @ src/sol-pi/extensions/observation-pack/observation.ts.
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { type FileHandle, lstat, mkdir, open } from "node:fs/promises";
@@ -203,13 +198,7 @@ function trimUtf8End(buffer: Buffer, limit: number): number {
 	return end;
 }
 
-/**
- * Selection ceiling (P0-2): `filter`/`tail` read the whole
- * object to select lines; above this the model pages by `offset` instead.
- * Largest object seen in 30 days of session logs: 51 KiB.
- */
 export const SELECTION_MAX_BYTES = 8 * 1024 * 1024;
-/** Lines before/after each `filter` match (failures sit a few lines past the match). */
 export const RECALL_DEFAULT_CONTEXT = 2;
 
 export interface RecallSelection {
@@ -220,16 +209,13 @@ export interface RecallSelection {
 }
 
 export interface SelectedRecall extends RecallChunk {
-	/** third header line for the model, e.g. `[selection: filter="FAIL" context=2 matched=12 of 1870 lines]` */
 	readonly selection: string;
 	readonly matchedLines?: number;
 	readonly totalLines?: number;
 }
 
-/** A bad request (regex, tail, offset, size) — reported to the model as text. */
 export class RecallSelectionError extends Error {}
 
-/** Same paging rules as readRecallChunk, over an in-memory selection. */
 function pageText(text: string, offset: number, limits: { readonly maxBytes: number; readonly maxLines: number }): RecallChunk {
 	const buffer = Buffer.from(text, "utf8");
 	if (offset > buffer.length) throw new RecallSelectionError(`Offset ${offset} exceeds selection size ${buffer.length}`);
@@ -249,12 +235,6 @@ function pageText(text: string, offset: number, limits: { readonly maxBytes: num
 	return { text: chunk.toString("utf8"), bytes: chunk.length, lines: countBufferLines(chunk), nextOffset, eof: nextOffset >= buffer.length };
 }
 
-/**
- * `filter` (regex over whole-object lines, `context` lines around each match)
- * or `tail` (last N lines), then paged by `offset`. Selected lines carry their
- * 1-based number: `N: ` for a match, `N  ` for context, so the model can cite
- * and narrow. A failed regex or a non-positive tail is a RecallSelectionError.
- */
 export async function readRecallSelected(
 	path: string,
 	selection: RecallSelection,

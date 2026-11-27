@@ -34,7 +34,6 @@ export function buildTelemetryEntry(data: CompactionTelemetryData): { type: stri
 
 export interface SessionRuntimeDeps {
 	settings: CompactionSettings;
-	/** Fail-open telemetry writer (index.ts wraps appendEntry). */
 	emitTelemetry: (data: CompactionTelemetryData) => void;
 	notifyBefore: (info: CompactionSeamInfo) => void;
 	notifyAfter: (info: CompactionSeamInfo) => void;
@@ -212,7 +211,6 @@ export class SessionRuntime {
 		this.emit({ outcome: "infeasible", reason: neededTn !== undefined ? `pol-09:needTn=${Math.round(neededTn)}` : "pol-09", origin: "precompute", validated: false });
 	}
 
-	/** B5 (2026-11-10 review): APP-06 — an apply-path handler error writes telemetry, never throws. */
 	onApplyError(): void {
 		this.emit({ outcome: "discarded", reason: "apply-error", origin: "precompute", validated: true });
 	}
@@ -240,7 +238,6 @@ export class SessionRuntime {
 		try {
 			this.deps.emitTelemetry({ v: 1, ...data });
 		} catch {
-			// Telemetry is fail-open (INV-1): never break a boundary for it.
 		}
 	}
 }

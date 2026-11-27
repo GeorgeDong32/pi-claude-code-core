@@ -13,15 +13,8 @@ import type { SelectionCandidate, Selector, SelectorOutcome } from "./selector.t
 
 export const RECALL_CUSTOM_TYPE = "pi-memory-recall";
 
-/**
- * Task-boundary recall (replacing the B-batch warmup/cooldown frequency
- * gates, user decision in the memory-policy spec): the selector may run only
- * on the first RECALL_BOUNDARY_TURNS real user messages after session start
- * or the most recent compactionSummary. The count derives from the projection
- * (D9); the CURRENT message is not yet in it — pi appends user messages to
- * the session only after before_agent_start — so `userTurns` counts the real
- * user messages BEFORE this one, and the check is `userTurns < RECALL_BOUNDARY_TURNS`.
- */
+// pi appends user messages to the session only after before_agent_start,
+// so userTurns counts the real user messages BEFORE the current one.
 export const RECALL_BOUNDARY_TURNS = 2;
 
 export const RECALL_DETAILS_FIELDS = ["v", "delivery", "model", "files", "bytes", "elapsedMs"] as const;
@@ -47,7 +40,6 @@ export interface RecallStats {
 	selections: number;
 	empties: number;
 	failures: number;
-	/** selections discarded because recallWaitMs elapsed before the selector answered */
 	late: number;
 	lastReason: string | null;
 	deliveries: number;
@@ -117,9 +109,7 @@ interface DerivedHistory {
 	read: Set<string>;
 	bytesUsed: number;
 	recentTools: string[];
-	/** real user messages since the last compactionSummary, BEFORE the current one */
 	userTurns: number;
-	/** most recent real user message (≤1000 chars) — selector query context for short follow-ups */
 	lastUserText: string | null;
 }
 
@@ -156,7 +146,6 @@ export function deriveHistory(messages: readonly unknown[], cwd: string): Derive
 		if (m.role === "user" && !m.customType) {
 			toolsClosed = true;
 			userTurns++;
-			// backward scan — the first hit is the most recent message before the current one
 			if (lastUserText === null) lastUserText = messageText(m).slice(0, 1000) || null;
 			continue;
 		}
@@ -360,10 +349,6 @@ export function createRecall(deps: {
 
 				if (bounded === "cancelled") return null;
 				if (bounded === "timeout" && timedOut) {
-					// Task-boundary recall: on timeout the selection is aborted and
-					// DISCARDED — nothing may inject into the run after the prompt
-					// path has given up (the deferred-delivery chain was removed;
-					// a late completion finds no observer and its outcome is dropped).
 					req.controller.abort();
 					if (req.timer !== null) clearTimeout(req.timer);
 					if (current === req) current = null;

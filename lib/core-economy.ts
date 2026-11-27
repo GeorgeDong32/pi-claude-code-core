@@ -1,15 +1,3 @@
-/*
- * Shared feature switches for the economy modules (SPEC DEC-02 / ASM-03).
- * File: ~/.pi/agent/core-economy.json — { version: 1, actionFusion: bool,
- * observationPack: bool }; both default to true when absent. A malformed file
- * degrades to defaults with one warning instead of blocking the load
- * (deliberately unlike upstream SoL-Pi's fail-fast).
- *
- * B2: reading goes through lib/settings.ts readJson (invariant 10 — one
- * JSON reader). Semantics preserved: missing stays silent; malformed /
- * empty / non-object warn once and degrade; per-field boolean normalization
- * stays here (the reader is generic, the schema is ours).
- */
 import { homedir } from "node:os";
 import { join } from "node:path";
 

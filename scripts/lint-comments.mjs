@@ -1,7 +1,4 @@
 #!/usr/bin/env node
-// Comment-hygiene lint (no-comments policy): bans suppressions, section
-// banners, date-stamped archaeology, sermon markers and commented-out code
-// in comments. Zero dependencies; runs as part of `pnpm run check`.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
@@ -9,12 +6,6 @@ const ROOT = join(import.meta.dirname, "..");
 const SCANDIRS = ["extensions", "lib", "types", "scripts"];
 const SKIP_PATH = [/\.test\.ts$/, /\/tests?\//, /\/test\//, /\/node_modules\//, /\/archive\//];
 
-// Entries: { file, includes } — a comment containing `includes` (substring,
-// whitespace-normalized) in that file is exempt. Every entry must stay
-// justified: REVIEW-kept external claims and salvaged invariant docs only.
-// Entries: { file, includes } — a comment containing `includes` (substring,
-// whitespace-normalized) in that file is exempt. Every entry is a date stamp
-// inside a salvaged invariant doc or a REVIEW-kept external claim.
 const ALLOW = [
 { file: "extensions/action-fusion/then-run.ts", includes: "2026-11-14" },
 	{ file: "extensions/bg-shell/index.ts", includes: "2026-11-14" },
@@ -86,7 +77,6 @@ const RULES = [
 	{ name: "commented-out-code", re: /^\s*(const |let |var |return |import |export |function |class |await |console\.)/ },
 ];
 
-// Naive lexer: yields comment lines, skipping string/template literals.
 function* commentLines(src) {
 	let i = 0;
 	let line = 1;

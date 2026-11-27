@@ -1,42 +1,3 @@
-/**
- * modes/working-stats.ts — the streaming working-stats cache (AR1005-ST,
- * spec 2026-10-05 §9). ONE owner of the stats snapshot, the host-read
- * invalidation and the context-usage snapshot; the incremental
- * accumulateBranchStats sum and its prefix check are untouched.
- *
- * Cheap-key discipline (ST-02): a snapshot is cacheable only when the host
- * provides a reliable cheap identity —
- *   • the sessionManager INSTANCE (a WeakMap id; hosts may create a new ctx
- *     object per event, so ctx identity is meaningless),
- *   • the available sessionId,
- *   • the current leafId from the shape authority (session-branch.ts) —
- *     including the LEGAL empty-branch null (rendered as ""); a missing or
- *     throwing getter means "uncacheable", never "empty leaf".
- * A missing/failed cheap key falls back to the uncached read path (old
- * hosts keep working; the peer floor is not raised). Read failures are
- * never cached as successful empty snapshots — the next event retries.
- *
- * Invalidation model (spec table):
- *   reset()         session_start / session_tree / session_shutdown — drop
- *                  the accumulator and the cache; the next read re-bases.
- *   invalidate()    session_compact — drop the cached snapshot (the branch
- *                  rewrite re-bases the accumulator via its tail check).
- *   markDirty()     message_end — fired BEFORE the host appends the entry;
- *                  the cached snapshot must not be mistaken for the new
- *                  branch state (belt-and-suspenders with the leafId key,
- *                  which also moves on append).
- *   onModelChange() model_select / observable model or contextWindow
- *                  change — the usage snapshot is stale.
- *   snapshot(host, { force, forceUsage }) — the ONE read point. Key hit +
- *                  not dirty → ZERO getBranch/getContextUsage calls (the
- *                  message_update hot path). force → re-read the branch
- *                  (turn_start/turn_end committed-final); forceUsage →
- *                  re-read context usage only (before_provider_request —
- *                  no unconditional branch re-sum).
- *
- * Streaming fragments never enter the branch totals (they are not entries
- * — unchanged accumulate semantics).
- */
 import { accumulateBranchStats, emptyBranchStatsState, type BranchStats, type BranchStatsState } from "./branch-stats.ts";
 import { readBranchEntriesStrict, readLeafId, readSessionId } from "./session-branch.ts";
 
@@ -73,6 +34,8 @@ export function createWorkingStats(): WorkingStatsCache {
 	let cachedEntry: WorkingStatsEntry | undefined;
 	let usageFresh = false;
 
+	// Hosts may create a new ctx object per event, so ctx identity is
+	// meaningless — key on the sessionManager instance (a WeakMap id).
 	function cheapKeyOf(sessionManager: unknown): string | undefined {
 		if (!sessionManager || typeof sessionManager !== "object") return undefined;
 		try {
@@ -89,13 +52,6 @@ export function createWorkingStats(): WorkingStatsCache {
 		}
 	}
 
-	/** Read context usage. A returning-undefined or throwing read stays
-	 *  unfresh — the next event retries (a failure is never cached as a
-	 *  successful empty snapshot). An ABSENT capability also leaves freshness
-	 *  unset: a capability-less read must never mark usage fresh, or a later
-	 *  capability-bearing key hit would wrongly reuse a missing value
-	 *  (adversarial R1 — the ctx% line would vanish mid-stream). The absent
-	 *  case costs one typeof check, no host read. */
 	function readUsage(host: WorkingStatsHost): ContextUsageLike | undefined {
 		if (typeof host.getContextUsage !== "function") {
 			usageFresh = false;

@@ -1,12 +1,3 @@
-/*
- * Ledger verification + file-activity scans (SPEC SC §5.6 LED-04, task W6).
- *
- * Session-scanning providers (deterministic, synchronous, no process
- * spawns): the last TEST command and its outcome, the last `git commit`
- * subject/hash, and the file-activity lists — all from the compressed
- * region's model-visible messages (context edits applied).
- */
-
 import type { CompressedRegionView, FileActivity, VerificationData } from "./types.ts";
 
 const DEFAULT_TEST_COMMAND = /\b(pnpm run test|npm (run )?test|vitest|node --test|pytest|go test|cargo test|bun (run )?test)\b/;

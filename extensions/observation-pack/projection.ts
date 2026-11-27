@@ -1,36 +1,3 @@
-/**
- * Pure context-projection step (arch B5, SPEC OBS-01..10 + CMP-04).
- *
- * Everything the mechanism does per provider request, expressed as a pure
- * function over injected ports: the candidate loop, the send-count recovery
- * heuristic, the FULL_SENDS/placeholder decision, the sentinel streak, and
- * the OBS-09 counters (cumulative) plus their OBS-09-SITES per-site payload:
- * display-only data for the first-replacement requests — it rides the
- * capability bus and never enters the projected messages (invariant 9).
- * Each site entry carries the source message's toolCallId: the projection
- * only rewrites the provider request, so toolCallId is the ONLY key that
- * correlates a site with the tool row the user sees. No pi runtime, no bus, no console — the adapter in
- * index.ts owns those side effects (CON-03/04 keep pinning the wiring
- * end-to-end; node:test drives this step directly).
- *
- * BH-E3 (2026-11-14, spec 2026-11-14-backtest-hardening): obs_recall results
- * are exempt from projection entirely (they are themselves bounded recall
- * excerpts — packing them again nests packs inside packs); the placeholder
- * ledger row is written once per object id per process (per-request rows
- * ballooned session ledgers to 43 MB); and the candidate check sits inside
- * the per-message fail-open try, so even a malformed message fails open.
- *
- * Port discipline (three side-effect channels, nothing else):
- *   - store(observation)       → observation storage (ensureStored in prod)
- *   - appendLedger(entry)      → the append-only audit trail
- *   - and the OUTCOME carries everything the adapter must emit:
- *     failOpenReasons (console.error), sentinelWarning (console.warn),
- *     counters (coreBus publish).
- *
- * invariant 9 (never edits history): the projection only ever REPLACES the
- * `content` array of an eligible tool-result message (spread-copied); every
- * other message passes through BY REFERENCE — pinned by identity tests.
- */
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 
 import {
@@ -52,27 +19,9 @@ export interface ProjectionPorts {
 
 export interface ProjectionState {
 	readonly sentCounts: Map<string, number>;
-	/** C1 (arch review 2026-10-03): candidate identity memo, key
-	 * `${root}\0${toolName}\0${toolCallId}` (toolCallId alone is NOT unique —
-	 * different tools can share call ids across messages). value = the
-	 * memoized Observation, or null = already judged ineligible
-	 * (<THRESHOLD_BYTES / reducer receipt) — never re-analyzed. Premise:
-	 * a tool result is immutable once in the transcript (append-only
-	 * history; invariant 9 only ever rewrites the projection copy), so the
-	 * per-request join/byteLength/2×sha256/countLines work is pure waste
-	 * after the first request. Retention cost (code review R1 P3-2): each
-	 * entry holds the Observation INCLUDING its full text — roughly 2x the
-	 * bytes those large results already occupy in the session, held for the
-	 * session's lifetime and NOT reclaimed at compaction (proportional to
-	 * eligible-result volume; accepted). */
+	/** toolCallId alone is NOT unique — different tools can share call ids
+	 * across messages (pi transcript data); the key adds root + toolName. */
 	readonly identity: Map<string, Observation | null>;
-	/** C1: observation ids already stored through ports.store. Skips the
-	 * EEXIST full-read + re-hash verification on every later request.
-	 * Disclosure: after the first successful store, an object file corrupted
-	 * externally mid-session no longer surfaces via that verification —
-	 * accepted (content-addressed, write-once objects). A FAILED store is
-	 * not memoized here, so the per-message fail-open retry semantics
-	 * (OBS-08) are unchanged. */
 	readonly stored: Set<string>;
 	readonly placeholder: Map<string, { text: string; tokens: number }>;
 	placeholderConstructions: number;
@@ -101,7 +50,6 @@ export function createProjectionState(): ProjectionState {
 export interface ProjectionOutcome {
 	readonly messages: readonly AgentMessage[];
 	readonly replacedThisRequest: number;
-	/** OBS-08 fail-open reasons, one per failed message — the adapter logs them. */
 	readonly failOpenReasons: readonly string[];
 	readonly sentinelWarning: string | null;
 	readonly counters: {

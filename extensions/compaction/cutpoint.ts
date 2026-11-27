@@ -1,25 +1,3 @@
-/*
- * Smart Compaction — cut-point selection (SPEC SC §5.4, task W1).
- *
- * Capacity-first, then semantics:
- *   1. tailMax = q·T − S − G comes from POL-09 (jointFeasibility); the
- *      candidate window is [keep, min(keep + slack, tailMax)]. tailMax < keep
- *      ⇒ infeasible — NEVER widen the window for a nicer semantic score
- *      (CUT-08).
- *   2. Legal cut points mirror the host's own rules (isCutPointMessage):
- *      first conversational role ∉ {toolResult}; never the latest compaction
- *      entry itself; everything before it is already outside the projection.
- *   3. Among window candidates: score = class weight − λ·|tail − nativeTail|/
- *      slack; highest wins, ties break toward the native tail, then toward
- *      the older index. Deterministic on identical input (CUT-03).
- *   4. No candidate in the window ⇒ the native cut (findCutPoint) with class
- *      "native-equivalent" (CUT-02). The tail never drops below keep and is
- *      never smaller than what native would keep.
- *
- * Token accounting uses the CURRENT projection messages (context edits
- * applied, H15) — the same messages the next request would actually carry.
- */
-
 import {
 	estimateTokens,
 	findCutPoint,
@@ -82,10 +60,6 @@ function classOfSignal(name: string): BoundaryClass {
 	}
 }
 
-/**
- * Select the cut. Pure and deterministic; 10k entries must stay ≤ 1s
- * (CUT-06: single reverse pass + linear candidate scan).
- */
 export function selectCut(entries: ProjectedEntry[], params: CutpointParams): CutpointResult {
 	const n = entries.length;
 	if (n === 0) return { status: "infeasible", reason: "empty projection" };
@@ -123,7 +97,6 @@ export function selectCut(entries: ProjectedEntry[], params: CutpointParams): Cu
 		if (
 			best === undefined ||
 			score > best.score ||
-			// Deterministic tie-breaks: closer to native tail, then older index.
 			(score === best.score && (distance < best.distance || (distance === best.distance && i < best.index)))
 		) {
 			best = { index: i, score, tail, distance, className: classOfSignal(fired.name) };

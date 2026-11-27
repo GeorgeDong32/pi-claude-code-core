@@ -1,25 +1,8 @@
 /**
- * memory/llm.ts — the side-channel completion lane (V2-A §4; model-ref
- * resolution + the queue-drain lane added by spec 2026-10-03-memory-exit-flush).
- *
- * ONE independent completeSimple() call per automation tick (review /
- * correction / flush / queue drain): invisible to the conversation, never
- * triggers an agent turn, never blocks a hook (callers fire-and-forget or
- * bound the wait). No subprocess fallback — a failed call is skipped silently
- * and the next hook retries (deliberate downgrade vs hermes, documented in
- * the V2 report). The shutdown path itself stages a queue record and runs
- * ZERO LLM here (queue.ts); this lane drains it at the next session_start.
- *
- * CH E7 (2026-11-15): the lane's own timeout timer and an external abort are
- * distinguishable — the timer reports `timeout`, an externally supplied
- * signal still reports `aborted`. Consumers surface the reason verbatim
- * (recall stats.lastReason → /memory diagnostics; automation lastError) and
- * none of them branch on the value.
- *
- * Response contract: strict JSON in the TEXT channel —
- *   an object whose "operations" field is an array of memory ops.
- * The prompts describe the schema in prose only (no parseable example — a
- * restated schema must never parse into live operations, hermes #235).
+ * Response contract: strict JSON in the TEXT channel — an object whose
+ * "operations" field is an array of memory ops. The prompts describe the
+ * schema in prose only (no parseable example — a restated example would
+ * parse into live operations; hermes #235).
  */
 
 import type { Api, Model } from "@earendil-works/pi-ai";
@@ -176,9 +159,6 @@ export async function completeMemoryOps(
 	return { ok: true, ops };
 }
 
-/** Every LLM write path (review, correction, queue drain) goes through here:
- * complete, then the one bounded description rewrite, so a batch's other
- * facts never die with an over-long description at the store gate. */
 export async function completeMemoryOpsCapped(
 	model: Model<Api> | undefined,
 	registry: RegistryLike | undefined,
@@ -192,12 +172,6 @@ export async function completeMemoryOpsCapped(
 }
 
 
-/**
- * Descriptions over DESCRIPTION_MAX are rejected by the store; before that
- * hard gate, one bounded completion rewrites them as noun phrases so a
- * review's other facts are not lost with the op. Indices (not names) map the
- * rewrites back, so duplicate names in one batch stay unambiguous.
- */
 export async function rewriteTooLongDescriptions(
 	model: Model<Api> | undefined,
 	registry: RegistryLike | undefined,

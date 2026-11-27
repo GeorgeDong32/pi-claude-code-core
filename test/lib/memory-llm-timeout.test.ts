@@ -1,10 +1,3 @@
-/*
- * memory-llm-timeout.test.ts — CH E7: the side-channel lane's internal timer
- * must be distinguishable from an externally supplied abort. The internal
- * timer reports `timeout`; an external signal still reports `aborted`
- * (external behavior unchanged). The reason strings surface verbatim in
- * `/memory` diagnostics (recall stats.lastReason, automation lastError).
- */
 import { describe, expect, it } from "vitest";
 
 import type { Api, Model } from "@earendil-works/pi-ai";
@@ -15,8 +8,6 @@ import { renderMemoryDiagnostics } from "../../extensions/memory/diagnostics.ts"
 const MODEL = { provider: "test", id: "m" } as Model<Api>;
 const REGISTRY = { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "k" }) } as never;
 
-/** A completion that never answers on its own: it rejects the moment the
- * signal it was handed fires (what a real provider does on abort). */
 const hanging: LlmComplete = (_model, _request, opts) => {
 	const signal = (opts as { signal?: AbortSignal }).signal;
 	if (signal?.aborted) return Promise.reject(new Error("This operation was aborted"));

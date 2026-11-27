@@ -70,8 +70,6 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			const g = lifecycle.focused();
 			return !!g && g.status === "active" && !!g.autoContinue;
 		},
-		// INTERRUPT SAFETY (fix): Escape only pauses while the agent is idle;
-		// while busy it belongs to the interrupt path and passes through.
 		isAgentIdle: (ctx) => {
 			try {
 				return ctx.isIdle() && !ctx.hasPendingMessages();
@@ -91,12 +89,6 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 
 	const goalExecutionWorkTools = ["read", "bash", "edit", "write"] as const;
 
-	/** Declared-set contract (goal tools diet v2): the work tools, get_goal and
-	 * propose_goal_draft are always declared; create_goal (user must confirm via
-	 * propose_goal_draft) and the legacy step_complete stay hidden; every other
-	 * goal tool is codemode-exposed and never declared, so goal state never
-	 * moves the tool list. Re-run every turn and idempotent: plan mode restores
-	 * its entry snapshot on exit, and a same-set call does not touch the cache. */
 	function syncGoalTools(): void {
 		try {
 			const active = new Set(pi.getActiveTools());
@@ -242,11 +234,6 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 			|| goal.usage.costUsed !== lastPersistedUsage.costUsed;
 	}
 
-	/** BH-E1 agent_end flush: persist only when the in-memory usage differs
-	 * from the last persisted snapshot (usage-only changes are otherwise
-	 * memory-only). The readCtx (when provided) is the ALREADY-PARSED focused
-	 * disk goal from the same segment's reconcile — GO-B: the persist merge
-	 * must not re-parse the focused file. */
 	function persistUsageIfChanged(ctx: ExtensionContext, readCtx?: { goal: GoalRecord | null }): void {
 		if (!usageUnpersisted()) return;
 		persist(ctx, readCtx);
@@ -352,16 +339,6 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 
 	const consecutiveContinuationErrors = new Map<string, number>();
 
-	/**
-	 * BH-R1 continuation-decision guard: read the run's last assistant
-	 * stopReason. A non-error termination resets the goal's counter; an error
-	 * increments it, and at CONTINUATION_ERROR_PAUSE_THRESHOLD the goal is
-	 * paused THROUGH the lifecycle pause verb (systemReason variant — #120
-	 * encapsulation, no direct state mutation) with the provider error text as
-	 * the pause reason and a /goal-resume suggested action. The aborted branch
-	 * keeps its existing user-pause behavior (checked before this guard).
-	 * Returns true when the goal was paused (the caller must not re-queue).
-	 */
 	function maybePauseOnProviderError(ctx: ExtensionContext, messages: unknown[]): boolean {
 		const goal = lifecycle.focused();
 		if (!goal) return false;
@@ -709,7 +686,6 @@ export default function goalExtension(pi: ExtensionAPI, deps: { now?: () => numb
 		}
 		if (shouldInjectPostCompactReminder({ pending: postCompactReminderPending, goal: activeGoal })) {
 			postCompactReminderPending = false;
-			// Use deterministic compaction summary instead of generic reminder
 			try {
 				const ledger = readGoalLedger(ctx);
 				const compaction = buildCompactionSummary({ goalsById: lifecycle.pool, focusedGoalId: lifecycle.focusedId, ledgerEvents: ledger.events });

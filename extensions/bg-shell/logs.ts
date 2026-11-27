@@ -57,7 +57,6 @@ export async function gzipLog(task: Task): Promise<void> {
 			rmSync(gz, { force: true, recursive: true });
 		} catch (rmError) {
 			debugError("gzip-partial-rm", rmError, { log: gz });
-			// removing a partial `.gz` must never replace the gzip error
 		}
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
 		throw error;

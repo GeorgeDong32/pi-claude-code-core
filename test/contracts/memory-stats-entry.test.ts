@@ -1,8 +1,3 @@
-/**
- * ME-STAT-01 — the memory context-diet probe entry (test/contracts/README.md).
- * Pins the customType and the field set of the display-only
- * `cc-core-memory-stats` entry: a later log scan relies on both.
- */
 import { describe, expect, it } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";

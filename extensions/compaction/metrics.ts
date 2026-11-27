@@ -22,7 +22,6 @@ export interface CompactionMetric {
 	failed?: boolean;
 }
 
-/** A failed diagnostic write must never change the host's control flow. */
 export function recordCompactionMetric(write: (data: CompactionMetric) => void, data: Omit<CompactionMetric, "v" | "at">): void {
 	try {
 		write({ ...data, v: 1, at: Date.now() });

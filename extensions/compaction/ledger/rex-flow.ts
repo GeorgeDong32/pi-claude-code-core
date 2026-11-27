@@ -1,27 +1,3 @@
-/*
- * rex-flow ledger provider (SPEC SC §5.6 LED-05/05b/05c, task W7).
- *
- * Read-only, fail-open (INV-6): never writes ~/.rex-flow, never imports
- * rex-flow code, board reads are synchronous with a 2 MiB cap.
- *
- * DISCOVERY (E8 — never hardcode one layout; three fixture layouts must all
- * resolve): ① settings.ledger.rexFlow.boardPath; ② paths the session itself
- * used (--board args / dispatch|evidence file paths → project_dir); ③
- * enumeration of <rexRoot>/projects/<name>/board.json plus the legacy
- * ~/rex-flow/boards/<name>.json layout.
- *
- * ASSOCIATION (R1-6 / LED-05b — "the only active board on the machine" is
- * NOT proof): a candidate board is TRUSTED only when (a) its source is ①/②
- * (the session used it), or (b) board.deploy.repo matches the cwd's git
- * origin (owner/name from .git/config) AND at least one of its run ids was
- * OBSERVED in this session's branch (sentinel / --run arg / previous ledger
- * block). Untrusted → sentinel-only ledger; the narrative header must NOT
- * claim board truth (LED-06).
- *
- * Run-level filter: detail rows ONLY for observed run ids; other open runs
- * on a trusted board collapse to one count line (LED-05).
- */
-
 import { readFileSync, statSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { lastLedgerBlockBody } from "./directives.ts";
@@ -105,7 +81,7 @@ function readBoard(path: string): BoardFile | undefined {
 		if (stat.size > BOARD_MAX_BYTES) return undefined;
 		return JSON.parse(readFileSync(path, "utf-8")) as BoardFile;
 	} catch {
-		return undefined; // missing / corrupt / unreadable
+		return undefined;
 	}
 }
 

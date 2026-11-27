@@ -1,25 +1,3 @@
-/*
- * Smart Compaction — preparation builder (SPEC SC §5.5 SUM-01/SUM-02, W3).
- *
- * Builds the plain-data `CompactionPreparation` (H2) the public compact()
- * accepts, mirroring pi's internal prepareCompaction semantics:
- *
- *   - messagesToSummarize / turnPrefixMessages come from the CURRENT
- *     projection (context edits applied — H15: content a later edit removed
- *     must NOT re-enter the summary through the back door);
- *   - the previous summary is passed as its NARRATIVE part only (the
- *     cc-core ledger block is regenerated at apply time, never inherited
- *     through the prompt);
- *   - fileOps replicate extractFileOpsFromMessage + computeFileLists
- *     exactly (SUM-02 differential vs the dist-internal oracle); the
- *     previous PI-GENERATED compaction's read/modified lists seed the sets,
- *     ours (fromHook) do not;
- *   - tokensBefore: estimateProjectedContextTokens is not public (H1), so
- *     the projection message sum feeds the estimate — informational only
- *     for the draft path (the host re-estimates on commit, H3) and a
- *     supplied best-effort number for the fallback leg (FB-04).
- */
-
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type {
 	CompactionSettings as PiCompactionSettings,
@@ -130,6 +108,8 @@ export function buildPreparation(input: BuildPreparationInput): BuiltPreparation
 	for (const message of messagesToSummarize) extractFileOpsFromMessage(message, fileOps);
 	for (const message of turnPrefixMessages) extractFileOpsFromMessage(message, fileOps);
 
+	// pi does not export estimateProjectedContextTokens and the host re-estimates
+	// tokens on commit, so this projection-sum value is informational only.
 	const tokensBefore = estimateMessages(projection.messages);
 
 	return {

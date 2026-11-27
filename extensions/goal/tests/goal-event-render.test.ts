@@ -1,9 +1,3 @@
-/**
- * Pins the collapsed rendering of pi-goal-event entries: drafting injections
- * collapse to the user's own words (nerd-font beacon + "Goal <topic>"), while checkpoint and
- * topic-less drafting keep their bare labels. The full prompt stays in the
- * message content — only display is affected.
- */
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -49,7 +43,6 @@ test("expanded drafting still exposes the objective and ids", () => {
 	assert.match(text, /Goal id: g7/);
 });
 
-// --- pi-goal-audit-event compact rendering ---
 
 import { renderGoalAuditEvent } from "../renderers.ts";
 import type { GoalAuditEventDetails } from "../renderers.ts";
@@ -108,7 +101,6 @@ test("collapsed passed renders the in-place pass marker", () => {
 	assert.equal(textOf(out), "\uf41d  Goal Audit pass");
 });
 
-// ---------- renderGoalResult (B3 structured kind) ----------
 
 import { renderGoalResult } from "../renderers.ts";
 import type { GoalRecord, GoalStateEntry } from "../goal-record.ts";

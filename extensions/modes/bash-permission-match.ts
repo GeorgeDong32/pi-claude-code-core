@@ -1,24 +1,3 @@
-/**
- * bash-permission-match.ts
- *
- * Bash permission rule matching (CC bashPermissions.ts subset).
- *
- * P0-1 (2026-11-08 review fix, safety-gated): an ALLOW rule never matches a
- * command that carries command substitution ($(), backticks, ${}, process
- * substitution <() >() =(, Zsh =cmd / $[ / ~[ / (e: / (+, PowerShell <#)
- * unless the only substitution is CC's safe-heredoc form (isSafeHeredoc
- * port below), and never matches when a redirection target lands on a
- * CC-sensitive path. Such commands fall back to passthrough and each
- * mode's default logic asks. Gated by the W5 safety tier
- * (PI_CORE_BASH_PATH_CHECKS / bashPathChecks: all|safety → on).
- *
- * P2 (2026-11-08): SAFE_WRAPPER_PREFIXES aligned with CC's five wrapper
- * forms (timeout/time/nice/stdbuf/nohup incl. bare `nice`, `nice -N`, and
- * `--` passthrough); deny/ask matching additionally expands $() and
- * backtick subcommands into candidates (single-level approximation —
- * (...) groups and { ...; } are a known gap, see DEVIATIONS).
- */
-
 import { splitShellSegments } from "./bash-analysis.ts"
 import {
 	matchShellRule,
@@ -129,13 +108,7 @@ function buildCommandCandidates(
 	push(base)
 	push(stripSafeWrappers(base))
 
-	// P2: for deny/ask, subcommands inside $()/backticks are candidates too
-	// (bounded depth: expanding candidates of candidates once is enough for
-	// the real-world nesting we see; deeper nesting falls back to the outer
-	// string still being matched as-is).
 	if (!stripAllEnv) {
-		// allow direction: no subcommand expansion (allow rules must not
-		// approve hidden commands; P0-1 already rejects substitution)
 	} else {
 		for (const sub of expandSubcommands(base)) {
 			push(sub)
@@ -167,9 +140,8 @@ function parseRuleContent(content: string | undefined): ShellPermissionRule | nu
 	return parsePermissionRule(content)
 }
 
-// ---- P0-1 allow-rule hardening (2026-11-08, safety-gated) ------------------
-
-/** CC bashSecurity.ts COMMAND_SUBSTITUTION_PATTERNS parity (+ backticks). */
+// Parity with CC bashSecurity.ts COMMAND_SUBSTITUTION_PATTERNS (+ backticks):
+// this list must track CC's or CC-shaped rules diverge from ours.
 const COMMAND_SUBSTITUTION_PATTERNS: RegExp[] = [
 	/<\(/,
 	/>\(/,
@@ -246,47 +218,34 @@ function stripSafeHeredocs(command: string): string | null {
 		endPos += closeParenColIdx + 1
 		verified.push({ start, end: endPos })
 	}
-	// Reject nested matches (indices would corrupt on strip).
 	for (const outer of verified) {
 		for (const inner of verified) {
 			if (inner !== outer && inner.start > outer.start && inner.start < outer.end) return null
 		}
 	}
-	// Strip verified heredocs (reverse order keeps indices valid).
 	const sorted = [...verified].sort((a, b) => b.start - a.start)
 	let remaining = command
 	for (const { start, end } of sorted) {
 		remaining = remaining.slice(0, start) + remaining.slice(end)
 	}
-	// Argument-position requirement: the $() must not be the command name.
 	const trimmedRemaining = remaining.trim()
 	if (trimmedRemaining.length > 0) {
 		const firstHeredocStart = Math.min(...verified.map((v) => v.start))
 		if (command.slice(0, firstHeredocStart).trim().length === 0) return null
 	}
-	// Remaining text: command names/args/quotes/whitespace only — no shell
-	// metacharacters that could chain another command after the heredoc.
 	if (!/^[a-zA-Z0-9 \t"'.\-/_@=,:+~]*$/.test(remaining)) return null
 	return remaining
 }
 
-/** Does the command carry command substitution outside a safe heredoc? */
 function hasCommandSubstitution(command: string): boolean {
 	const stripped = stripSafeHeredocs(command)
 	if (stripped === null) return true
 	if (stripped === command) {
-		// no heredoc involved — test the raw command
 		return COMMAND_SUBSTITUTION_PATTERNS.some((re) => re.test(command))
 	}
 	return COMMAND_SUBSTITUTION_PATTERNS.some((re) => re.test(stripped))
 }
 
-/**
- * Does any redirection target land on a CC-sensitive path? Uses the SAME
- * tokenizer as the W3 extractor (review fix 2026-11-08 P1#1: the previous
- * whitespace split missed glued forms like `2>file`, `>>file` and cut
- * quoted targets containing spaces at the wrong boundary).
- */
 function redirectTargetsSensitivePath(command: string, cwd: string): boolean {
 	for (const segment of splitShellSegments(command)) {
 		const tokens = tokenizeSegment(segment)
@@ -296,7 +255,6 @@ function redirectTargetsSensitivePath(command: string, cwd: string): boolean {
 			if (base !== ">" && base !== ">>" && base !== "&>" && base !== "&>>") continue
 			const dst = tokens[i + 1]
 			if (dst === undefined || dst === "/dev/null" || dst.startsWith("&")) continue
-			// unquote a full-literal target; anything uncertain fails open
 			let candidate = dst
 			if ((dst.startsWith("'") && dst.endsWith("'")) || (dst.startsWith('"') && dst.endsWith('"'))) {
 				const inner = dst.slice(1, -1)
@@ -349,7 +307,6 @@ function commandMatchesRule(
 			}
 		}
 
-		// Tool-wide Bash rule (no content) matches any command
 		if (rule.type === "exact" && rule.command === "*") {
 			return true
 		}
@@ -364,12 +321,6 @@ export function bashCommandMatchesRuleContent(
 	behavior: "allow" | "deny" | "ask",
 	opts?: { allowHardening?: boolean; cwd?: string },
 ): boolean {
-	// P0-1 (2026-11-08): allow rules never match commands carrying command
-	// substitution (outside CC's safe-heredoc form) or a sensitive-path
-	// redirection — INCLUDING the bare `Bash` rule (no content), an
-	// allow-everything rule that must not bypass the hardening (review fix
-	// 2026-11-08 P2#3). Gated by the W5 safety tier; opts.allowHardening
-	// lets tests pin both states.
 	if (behavior === "allow") {
 		const hardening = opts?.allowHardening ?? safetyTierActive()
 		if (hardening) {
@@ -378,7 +329,6 @@ export function bashCommandMatchesRuleContent(
 		}
 	}
 	if (ruleContent === undefined) {
-		// Bare Bash — matches all commands
 		return true
 	}
 	const rule = parseRuleContent(ruleContent)
@@ -399,11 +349,9 @@ export function suggestBashAllowRule(command: string): string {
 	const trimmed = command.trim()
 	if (!trimmed) return "Bash"
 
-	// For multi-line commands, use the first line
 	const firstLine = trimmed.includes("\n") ? trimmed.split("\n")[0]!.trim() : trimmed
 
 	const tokens = firstLine.split(/\s+/).filter(Boolean)
-	// Skip leading env var assignments
 	let i = 0
 	while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]!)) {
 		i++
@@ -412,7 +360,6 @@ export function suggestBashAllowRule(command: string): string {
 	const baseCmd = tokens[i]
 	if (!baseCmd) return "Bash"
 
-	// Package managers and git: suggest broad tool-wide rule
 	const BROAD_RULE_COMMANDS = new Set([
 		"npm", "pnpm", "yarn", "bun", "git", "cargo", "go", "docker", "make",
 	])
@@ -420,7 +367,6 @@ export function suggestBashAllowRule(command: string): string {
 		return `Bash(${baseCmd}:*)`
 	}
 
-	// Other commands: suggest two-level prefix (command + subcommand)
 	const subCmd = tokens[i + 1]
 	if (subCmd && !subCmd.startsWith("-")) {
 		return `Bash(${baseCmd} ${subCmd}:*)`

@@ -1,13 +1,3 @@
-/**
- * Tests for src/run-cmd.ts — D-FX-1 (2026-11-14) timeout + env opts.
- *
- * Pins the REAL spawn loop (defaultRunCmd, no injection):
- *   - `timeoutMs` kills a hung child, resolves non-zero with a "timed out"
- *     note on stderr, well under the 2s budget the spec demands;
- *   - `env` merges over process.env for one call (GIT_TERMINAL_PROMPT=0
- *     relies on this) and is NOT visible to children when omitted;
- *   - no opts passed → legacy behavior unchanged (fast command, exit 0).
- */
 import { strict as assert } from "node:assert";
 import { tmpdir } from "node:os";
 import { afterEach, describe, test } from "node:test";
@@ -36,8 +26,6 @@ describe("run-cmd timeout (D-FX-1)", () => {
 });
 
 describe("run-cmd timeout escalation (T1/T2/T3, SPEC CH 2026-11-15)", () => {
-	/** Bound any run-cmd call so a regression surfaces as a rejection, not a
-	 *  hung runner. Every T1/T2 test asserts its own tighter elapsed bound. */
 	function bounded<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
 		return Promise.race([
 			p,
@@ -56,7 +44,6 @@ describe("run-cmd timeout escalation (T1/T2/T3, SPEC CH 2026-11-15)", () => {
 		const elapsed = Date.now() - t0;
 		assert.ok(r.exitCode !== 0, `expected non-zero exit, got ${r.exitCode}`);
 		assert.ok(r.stderr.includes("timed out"), `stderr should note the timeout, got: ${r.stderr}`);
-		// 200ms timeout + 2s grace + close latency — well under 4.5s.
 		assert.ok(elapsed < 4500, `SIGTERM→SIGKILL escalation must stay bounded, took ${elapsed}ms`);
 	});
 
@@ -66,9 +53,6 @@ describe("run-cmd timeout escalation (T1/T2/T3, SPEC CH 2026-11-15)", () => {
 			// The shell execs into sleep 30 (dies on SIGTERM); the orphaned
 			// `sleep 5` keeps the shared stdout pipe open, so `close` cannot
 			// fire until it exits — unless the adapter drains + destroys.
-			// The shell prints the orphan pid to stderr so the finally below
-			// can reap it (the sleep duration is deliberately NOT shortened —
-			// a shorter orphan would hide drain regressions).
 			defaultRunCmd("sh", ["-c", "sleep 5 & echo $! >&2; exec sleep 30"], { cwd: tmpdir(), timeoutMs: 200 }),
 			6000,
 			"T1b",
@@ -79,18 +63,14 @@ describe("run-cmd timeout escalation (T1/T2/T3, SPEC CH 2026-11-15)", () => {
 			assert.ok(r.stderr.includes("timed out"));
 			assert.ok(elapsed < 2000, `pipe drain must bound the resolve, took ${elapsed}ms`);
 		} finally {
-			// Reap the orphaned sleep so nothing outlives the test.
 			const pid = Number(r.stderr.match(/^\d+$/m)?.[0]);
-			if (pid > 0) try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
+			if (pid > 0) try { process.kill(pid, "SIGKILL"); } catch {}
 		}
 	});
 
 	test("T2: timer firing after the child already exited resolves with the REAL exit code", async () => {
 		const t0 = Date.now();
 		const r = await bounded(
-			// The shell prints the orphaned `sleep 3` pid to stderr so the
-			// finally below can reap it (duration NOT shortened — a shorter
-			// orphan would hide the T2 window the test exercises).
 			defaultRunCmd("sh", ["-c", "echo hi; sleep 3 & echo $! >&2; exit 0"], { cwd: tmpdir(), timeoutMs: 500 }),
 			2500,
 			"T2",
@@ -102,9 +82,8 @@ describe("run-cmd timeout escalation (T1/T2/T3, SPEC CH 2026-11-15)", () => {
 			assert.ok(!r.stderr.includes("timed out"), "an exited child is not a timeout");
 			assert.ok(elapsed < 2000, `must not wait for the orphaned pipe, took ${elapsed}ms`);
 		} finally {
-			// Reap the orphaned sleep so nothing outlives the test.
 			const pid = Number(r.stderr.match(/^\d+$/m)?.[0]);
-			if (pid > 0) try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
+			if (pid > 0) try { process.kill(pid, "SIGKILL"); } catch {}
 		}
 	});
 
@@ -114,13 +93,9 @@ describe("run-cmd timeout escalation (T1/T2/T3, SPEC CH 2026-11-15)", () => {
 		// used to see exited === false (the exit callback has not run yet),
 		// mark timedOut and SIGTERM a zombie — resolving exitCode 1 /
 		// timedOut: true instead of the real exit code. Deferring the timer
-		// body one check-phase hop lets the poll phase deliver the pending
-		// exit so the T2 branch handles it.
 		const p = defaultRunCmd("sh", ["-c", "exit 0"], { cwd: tmpdir(), timeoutMs: 5 });
 		const end = Date.now() + 300;
 		while (Date.now() < end) {
-			// block the event loop so the child can die before its exit
-			// callback is delivered and the 5ms timer comes due
 		}
 		const r = await p;
 		assert.equal(r.exitCode, 0, `real exit code expected, got ${r.exitCode} (stderr: ${r.stderr})`);

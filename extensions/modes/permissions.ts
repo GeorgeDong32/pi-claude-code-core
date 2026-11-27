@@ -1,7 +1,3 @@
-/**
- * Permission rule evaluation (CC permissions.ts subset).
- * Order: deny → ask → allow → passthrough.
- */
 
 import {
 	bashCommandMatchesRuleContent,

@@ -617,7 +617,6 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
         if (policy.userNotice) sharedNotify(ctx, policy.userNotice, "warning");
       }
     } catch {
-      /* the notice path must never break a turn */
     }
 
     const msg = event.message;

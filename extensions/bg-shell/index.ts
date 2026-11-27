@@ -1,9 +1,5 @@
 // Vendored from gvanderclay/pi-bg-bash v0.2.1 (MIT), Copyright (c) 2026 Gage
-// Vander Clay, and adapted for pi-claude-code-core (BG-D1): the cc-core log
-// BH-R4 (2026-11-14, D-BH-2): a deliberate vendored deviation — an explicit
-// `timeout` no longer disables auto-promotion; it becomes the promoted task's
-// deadline. Upstream 0.5.0+ instead removed auto-promotion entirely (opposite
-// direction); do not port that.
+// Vander Clay.
 import { createBashToolDefinition, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 

@@ -7,7 +7,6 @@ export const MODE_META: Record<PermissionMode, { icon: string; label: string; ro
   bypass: { icon: "⚡", label: "Bypass", role: "error" },
 };
 
-/** DC1: fresh copy for the bus snapshot — deepFreeze must not capture the module constant. */
 export function modeMetaData(): Record<PermissionMode, { icon: string; label: string; role: string }> {
   return {
     ask: { ...MODE_META.ask! },

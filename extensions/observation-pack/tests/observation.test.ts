@@ -1,9 +1,3 @@
-/*
- * SPEC OBS-10: module tests through the module's own interface.
- * Ported assertions mirror upstream behaviour (threshold, FULL_SENDS rhythm,
- * complete-line placeholder, per-message fail-open) plus the core-side
- * projection-immutability invariant (OBS-04).
- */
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -54,7 +48,6 @@ describe("observation primitives (OBS-02/07)", () => {
 		const root = "/nonexistent-but-unused";
 		const text = `head\nsol_pi_evidence_receipt_v1\ntail`;
 		assert.equal(createObservation(bigResult("x".repeat(THRESHOLD_BYTES + 99) + "\n" + text), root), undefined);
-		// Prefix-only match must NOT be excluded.
 		const prefixOnly = `sol_pi_evidence_receipt_v1-but-more` + "x".repeat(THRESHOLD_BYTES);
 		assert.ok(createObservation(bigResult(prefixOnly), root));
 	});
@@ -71,7 +64,7 @@ describe("observation primitives (OBS-02/07)", () => {
 		const text = Array.from({ length: 800 }, (_, i) => `line-${i}-payload`).join("\n");
 		const observation = createObservation(bigResult(text), root)!;
 		await ensureStored(observation);
-		await ensureStored(observation); // second write hits the EEXIST verify path
+		await ensureStored(observation);
 		const stored = await readFile(observation.filePath, "utf8");
 		assert.equal(stored, text);
 	});
@@ -80,7 +73,7 @@ describe("observation primitives (OBS-02/07)", () => {
 describe("placeholder excerpt (OBS-02)", () => {
 	it("keeps whole lines only, head and tail, within the byte budget", () => {
 		const root = "/unused";
-		const line = "0123456789".repeat(10) + "\n"; // 101 bytes per line
+		const line = "0123456789".repeat(10) + "\n";
 		const text = line.repeat(200);
 		const observation = createObservation(bigResult(text), root)!;
 		const placeholder = placeholderFor(observation);
@@ -88,10 +81,7 @@ describe("placeholder excerpt (OBS-02)", () => {
 		assert.ok(placeholder.includes(`path: ${observation.filePath}`), "P0-2: the placeholder names the on-disk object");
 		assert.ok(placeholder.includes("retrieve: call obs_recall"));
 		const excerptBytes = Buffer.byteLength(placeholder, "utf8");
-		// 1KB excerpt + ~12 header lines (P0-2 added the path line and the
-		// selection hint): hard upper bound sanity.
 		assert.ok(excerptBytes < 1800, `placeholder too large: ${excerptBytes}`);
-		// Every excerpted line is a complete line of the original text.
 		const originalLines = new Set(text.split("\n"));
 		const excerpted = placeholder
 			.split("\n")
@@ -104,8 +94,6 @@ describe("placeholder excerpt (OBS-02)", () => {
 		assert.equal(FULL_SENDS, 2);
 		assert.equal(countLines("a\nb\n"), 2);
 		assert.equal(estimateTokens("abcd"), 1);
-		// CH E11: every non-ASCII code point counts as ~1 token, ASCII stays /4 —
-		// the old length/4 estimate under-counted CJK text by ~4x.
 		assert.equal(estimateTokens("中文测试"), 4);
 	});
 });
@@ -121,7 +109,6 @@ describe("obs_recall chunking (OBS-05)", () => {
 		assert.equal(first.eof, false);
 		const second = await readRecallChunk(observation.filePath, first.nextOffset, { maxBytes: 1024, maxLines: 400 });
 		assert.equal(second.bytes > 0, true);
-		// Draining to the end reports eof.
 		let offset = second.nextOffset;
 		let chunk = second;
 		while (!chunk.eof) {
@@ -158,7 +145,6 @@ describe("fail-open (OBS-08, per-message)", () => {
 	it("a throwing ensureStored surfaces as an error the handler catches, not a lost message", async () => {
 		const root = await tempRoot();
 		const observation = createObservation(bigResult("w".repeat(THRESHOLD_BYTES + 3)), root)!;
-		// Simulate the upstream failure shape: an unwritable store path.
 		await writeFile(join(root, "objects"), "file blocking the directory name", "utf8");
 		await assert.rejects(() => ensureStored(observation));
 	});

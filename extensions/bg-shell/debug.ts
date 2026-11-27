@@ -27,7 +27,6 @@ function debugPath(): string {
 	return join(stateRoot(), "debug.log");
 }
 
-/** Append one JSON line `{t, event, ...fields}`; a `command` field is shown on one line. Never throws. */
 export function debug(event: string, fields: Record<string, unknown> = {}): void {
 	if (!debugOn()) return;
 	try {
@@ -65,12 +64,6 @@ export function exitFields(task: Task): Record<string, unknown> {
 
 const generation = (n: number): string => `${debugPath()}.${n}.gz`;
 
-/**
- * At session start: when `debug.log` is over 5 MiB, shift the gzipped
- * generations up (dropping the oldest) and gzip it into `debug.log.1.gz`. The
- * first step renames it to a name only this process uses, so of two processes
- * starting at once only one rotates. Never throws.
- */
 export function rotateDebugLog(): void {
 	if (!debugOn()) return;
 	try {

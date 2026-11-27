@@ -1,21 +1,3 @@
-/**
- * memory/snapshot.ts — entropy-control G2 [C9]/[C10]/[C14]: path-independent
- * rollback points for both memory layers (docs/zh/entropy-control-spec.md).
- *
- * Design:
- *   - session_start full-snapshots both layers into a sidecar OUTSIDE the
- *     memory dirs, under the unified cc-core root:
- *     ~/.pi/agent/cc-core/memory-snapshots/<layerKey>/snap-<ts>-<rand>/
- *     The index scan is non-recursive and only reads the memory dirs
- *     themselves, so snapshots are isolated by construction ([C10]).
- *   - identical-to-newest content (name+content hash) skips the snapshot;
- *   - keep the newest SNAPSHOT_KEEP, evict the oldest beyond that;
- *   - everything is fail-open: a snapshot failure must never block
- *     session_start — the rollback point is best-effort infrastructure.
- *
- * [C14] reads back the newest snapshot's manifest at agent_end to detect
- * un-consolidated mass deletions (see checkMassDeletion in index.ts).
- */
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
@@ -55,7 +37,6 @@ export function listSnapshots(root: string): SnapshotDir[] {
 				out.push({ dir, manifest });
 			}
 		} catch {
-			/* unreadable manifest — skip the corrupt snapshot */
 		}
 	}
 	return out.sort((a, b) => (a.manifest.at === b.manifest.at ? (a.dir < b.dir ? -1 : 1) : a.manifest.at < b.manifest.at ? -1 : 1));
@@ -85,10 +66,6 @@ function hashLayer(memoryDir: string, files: string[]): { hash: string; totalByt
 	return { hash: h.digest("hex"), totalBytes, entries };
 }
 
-/**
- * Snapshot one memory layer. Returns the snapshot taken, or null when
- * skipped (identical to newest) or failed (fail-open — never throws).
- */
 export function snapshotLayer(memoryDir: string, root: string, now = () => new Date()): SnapshotDir | null {
 	try {
 		const files = listMemoryFiles(memoryDir);

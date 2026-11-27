@@ -278,7 +278,6 @@ pi.registerTool(defineTool({
 					{ deliverAs: "followUp", triggerTurn: false },
 				);
 			} catch {
-				/* reminder must never block the audit */
 			}
 		}
 		const auditTarget = { ...mergeGoalPromptFromDisk(ctx, auditSource), auditAttempts: auditAttemptNo };
@@ -527,7 +526,6 @@ pi.registerTool(defineTool({
 				at: tweakedGoal!.updatedAt,
 			});
 		} catch {
-			// Ledger append failure should not crash tweak
 		}
 		return {
 			content: [{

@@ -68,13 +68,9 @@ function emptyCoverage(): ReviewerOutput["coverage"] {
 	return { filesChecked: [], commandsRun: [], limitations: [] };
 }
 
-/** Build a deterministic verdict + report from a workflow return value. */
 export function runReportTool(input: ReportToolInput): ReportToolResult {
-	// Models frequently serialize the workflow return value into a JSON
-	// string when filling tool-call arguments (observed 2026-09-03: a call
-	// with the FULL correct payload as a string was rejected because we
-	// demanded an object, and the misleading error sent the model into 8
-	// blind retries). Accept both.
+	// Models frequently serialize the workflow return value into a JSON string
+	// when filling tool-call arguments — accept both the object and the string.
 	let workflowReturn = input.workflowReturn;
 	if (typeof workflowReturn === "string") {
 		try {
@@ -297,7 +293,6 @@ function loadManifestSafe(runId: string, cwd?: string): RunManifest | null {
 	}
 }
 
-/** Deterministic fingerprint for an issue. */
 export function issueFingerprint(issue: Issue): string {
 	const line = issue.line === undefined ? "-" : String(issue.line);
 	const evHash = simpleHash(issue.evidence);

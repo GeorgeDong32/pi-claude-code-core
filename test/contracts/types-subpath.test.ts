@@ -1,15 +1,3 @@
-/**
- * D4-READER-REMOVE acceptance (spec 2026-10-07 P1-1 §4.3, B7):
- * the `./types` package subpath is TYPE-ONLY after the D4=B withdrawal.
- *
- * 1. A real TypeScript consumer compiles against the subpath (external
- *    tsconfig — no repo paths; compiled via a spawned tsc, never a relative
- *    .d.mts import inside this suite).
- * 2. A runtime import of the subpath FAILS with ERR_PACKAGE_PATH_NOT_EXPORTED
- *    (package.json keeps only the "types" condition).
- * 3. The packed file list no longer contains the runtime reader
- *    (types/core-status.mjs) and still ships the declaration twin.
- */
 import { describe, expect, it } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -26,9 +14,6 @@ describe("D4-READER-REMOVE (B7): ./types is type-only", () => {
 	it("external tsc compiles a type-only consumer against the package subpath", () => {
 		const fixtureTsconfig = join(repoRoot, "test", "contracts", "fixtures", "tsconfig.json");
 		expect(existsSync(fixtureTsconfig)).toBe(true);
-		// The local typescript of this repo plays the role of the consumer's
-		// compiler; resolution goes through package.json self-reference ONLY
-		// (the fixture tsconfig has no paths/extends).
 		const res = run("bun", ["x", "tsc", "-p", fixtureTsconfig], { cwd: repoRoot });
 		expect(res.status).toBe(0);
 	}, 60_000);

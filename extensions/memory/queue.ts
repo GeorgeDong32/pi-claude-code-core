@@ -1,42 +1,5 @@
-/**
- * memory/queue.ts — the pending-extraction queue (spec 2026-10-03-memory-exit-flush;
- * ownership protocol SPEC 2026-10-07 P0-3).
- *
- * The shutdown path must never run an LLM call (the measured root cause of
- * the ~10s exit stall: the host awaits every session_shutdown handler
- * serially with no host-side timeout). Instead of the old awaited flush,
- * the shutdown handler stages the unextracted conversation tail as ONE
- * JSON record here; the NEXT session_start for the same project drains it
- * in the background through the usual ops lane.
- *
- * Disk layout (P0-CT-09 registered; ready shape + record v1 FROZEN):
- *   ready    ~/.pi/agent/memory-queue/<sessionId[:8]>-<epoch-ms>.json
- *              { v, sessionId, projectsDir, projectKey, cwd, savedAt, attempts, parts }
- *   claim    <ready>.claim.<pid>.<claimedAtMs>.<nonce>   (held by one worker)
- *   pending  <ready>.pending.<nonce>                     (retryable, same as ready)
- *   gc token <name>.gc.<pid>.<claimedAtMs>.<nonce>.tmp   (legacy-tmp recovery carrier)
- *
- * Ownership protocol (P0-3 §4): every transition is ONE same-directory
- * rename consuming a unique source path — ready/pending → claim, dead claim
- * → reclaimer's claim, claim → fresh pending. Nonces are fresh UUIDs; no
- * path is ever reused and no suffix is nested. Hard links are FORBIDDEN
- * (review R1: link-then-unlink leaves a double-name window where two live
- * workers both hold the record). After claiming, ALWAYS re-read the record
- * from the claim file — never trust the enumeration's cached copy.
- *
- * This is a best-effort retry queue, NOT an exactly-once store: a crash
- * between apply and settle can re-apply on the next drain (disclosed;
- * fixing that window needs a persistent idempotency token, separate spec).
- * Mixed old/new core versions running side by side are NOT safe — drain
- * and stage under one protocol generation only.
- *
- * Records are a plaintext second copy of the session tail (global dir,
- * ≤7 days old, ≤2MB soft budget — claims/tmp count toward the bytes but
- * are never GC-deleted while their owner may live) — disclosed in /memory
- * diagnostics. All writes are atomic (tmp + rename in the same directory);
- * a SIGKILL can only leave .tmp orphans, which readers ignore and the
- * owner-checked GC reaps via a GC token.
- */
+// The shutdown path must never run an LLM call: the host awaits every
+// session_shutdown handler serially with no host-side timeout.
 
 import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -195,9 +158,6 @@ function atomicWrite(dir: string, file: string, text: string): void {
 	renameSync(tmp, join(dir, file));
 }
 
-/** One same-directory rename consuming the source path; false on ENOENT
- * (someone else consumed it first). Any other throw propagates to the
- * caller's fail-open handling. */
 function tryRename(dir: string, from: string, to: string): boolean {
 	try {
 		renameSync(join(dir, from), join(dir, to));
@@ -225,10 +185,6 @@ function claimFile(dir: string, file: string): QueueClaim | null {
 	return { current, original, ownerPid: process.pid, record };
 }
 
-/** Owner-only attempt bump BEFORE the LLM call, so a SIGKILL mid-call still
- * counts. Atomic write onto the claim file; updates the token's in-memory
- * copy on success. False when the write failed OR the token's owner is not
- * this process (a lost/reclaimed token must not keep bumping). */
 export function bumpClaimedAttempts(agentDir: string, claim: QueueClaim): boolean {
 	if (claim.ownerPid !== process.pid) return false;
 	const dir = queueDir(agentDir);
@@ -250,10 +206,6 @@ function settleFile(dir: string, current: string): void {
 	removeQuiet(dir, current);
 }
 
-/** Relinquish for retry: ONE rename to a brand-new pending name. No link,
- * no restoring the old ready name. After success the caller has lost
- * ownership and MUST NOT bump/apply/settle this token again. False when the
- * claim is gone (settled/reclaimed elsewhere). */
 export function releaseClaim(agentDir: string, claim: QueueClaim): boolean {
 	const dir = queueDir(agentDir);
 	const pending = `${claim.original}.pending.${randomUUID()}`;
@@ -302,10 +254,6 @@ export function writeQueueRecord(agentDir: string, record: QueueRecord): void {
 	enforceBudget(dir, { sacrificial: name, record });
 }
 
-/** Enumerate drain candidates (ready + pending, oldest first). This is
- * CANDIDATE enumeration only: it never deletes anything — corrupted,
- * expired or over-attempt files are settled by whoever claims them.
- * Ordering key is the ORIGINAL basename's savedAt (never a claim time). */
 export function loadQueue(agentDir: string): QueueCandidate[] {
 	const dir = queueDir(agentDir);
 	const c = classifyQueueFiles(dir);

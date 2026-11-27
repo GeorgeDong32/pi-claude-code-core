@@ -142,10 +142,7 @@ function buildAssistantContent(m) {
 	return blocks;
 }
 
-/**
- * Simulate one session under one scheme. Returns per-session counters —
- * aggregates only (INV-7).
- */
+// Returns per-session counters — aggregates only (INV-7).
 export function simulateSession(session, tn, schemeName, params = DEFAULT_COMPACTION_CORE_SETTINGS) {
 	const scheme = SCHEMES[schemeName];
 	const result = {

@@ -1,24 +1,5 @@
-/**
- * memory/lookup.ts — the on-demand half of the memory context diet
- * (spec core-context-diet v3): the index stays compact (slug +
- * description), and the model pulls the rest when it needs it.
- *
- *   memory_lookup(name)                 full text of one memory file
- *   knowledge_search(query, scope)      case-insensitive substring search
- *                                       over the memory dir, the configured
- *                                       searchRoots and/or past sessions
- *
- * Both are registered with exposure "codemode": nothing in the tool list,
- * but codemode lists them (searchTools) and scripts call them directly.
- * "deferred" was the first choice and failed real-TUI acceptance: pi
- * registers its tool_search inactive, so a deferred tool is listed nowhere.
- *
- * Safety: a lookup name must pass the same file-name whitelist as writes
- * (no traversal); root search is substring-only (no regex, no ReDoS), reads
- * only .md/.txt files under the allowed roots, caps the files scanned and
- * the hits returned, and never returns file bodies — the model reads a hit
- * through the regular `read` tool, behind the normal permission gate.
- */
+// Both tools register with exposure "codemode": pi registers its tool_search
+// inactive, so a "deferred" tool is listed nowhere.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { Type } from "typebox";
@@ -34,9 +15,7 @@ const TEXT_FILE = /\.(md|txt)$/i;
 
 export interface LookupResult {
 	ok: boolean;
-	/** Why a lookup failed: the name is not a memory file name, or no such memory exists. */
 	reason?: "unsafe" | "missing";
-	/** File text on success; on a miss the closest candidates. */
 	text: string;
 	near: string[];
 }
@@ -76,7 +55,6 @@ export interface SearchInput {
 	roots: string[];
 	query: string;
 	maxHits?: number;
-	/** Scan budget override for tests; production uses SEARCH_MAX_FILES. */
 	maxFiles?: number;
 }
 
@@ -90,8 +68,6 @@ function firstLineHint(content: string): string {
 	return "";
 }
 
-/** Breadth-first walk over text files; `budget.files` counts the files yielded,
- * `budget.exhausted` is set only when the walk stopped with files left unseen. */
 function* walk(root: string, budget: { files: number; exhausted: boolean }): Generator<string> {
 	const queue = [root];
 	while (queue.length > 0) {
@@ -123,7 +99,6 @@ function* walk(root: string, budget: { files: number; exhausted: boolean }): Gen
 	}
 }
 
-/** Case-insensitive substring search over text files under the given roots. */
 export function searchRoots(input: SearchInput): { hits: SearchHit[]; scanned: number; truncated: boolean } {
 	const needle = input.query.trim().toLowerCase();
 	const maxHits = input.maxHits ?? SEARCH_MAX_HITS;
@@ -151,8 +126,6 @@ export function searchRoots(input: SearchInput): { hits: SearchHit[]; scanned: n
 	return { hits, scanned, truncated: budget.exhausted };
 }
 
-/** A scope root the user configured must be an existing absolute directory;
- * the memory dir is always allowed. */
 export function allowedRoots(configured: string[] | undefined, memoryDir: string): string[] {
 	const roots = [memoryDir];
 	for (const candidate of configured ?? []) {

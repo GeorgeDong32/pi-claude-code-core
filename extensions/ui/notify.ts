@@ -1,15 +1,3 @@
-/**
- * Notification tail queue (DECOUPLE-PLAN §4.1, landed at DC3; DC5b: the
- * no-cctui path now flows through the fallback adapter's onChange
- * consumer — the direct forward below is the LAST cctui-facing leg and
- * stays until cctui ships its own tail-queue consumer (version-gated).
- *
- * Transient user-facing notices flow as a bounded tail queue inside the
- * bus snapshot: monotonic ids, newest last, cap 20 (old items are pushed
- * out, never consumed/deleted). Adapters diff by lastSeenId; render is
- * naturally idempotent. No ACK, no clear command — the frozen "no
- * functions" snapshot invariant is untouched.
- */
 import { coreBus, type CoreBus } from "../bus.js";
 
 export type NotificationLevel = "info" | "warning" | "error";

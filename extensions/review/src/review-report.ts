@@ -170,7 +170,6 @@ export function parsePrRepo(prRef: string): { owner: string; repo: string; numbe
 	return { owner: m[1]!, repo: m[2]!, number: m[3]! };
 }
 
-/** Read a manifest from disk (paranoia: corrupted files throw). */
 export function readManifest(runDir: string): RunManifest {
 	const path = join(runDir, "manifest.json");
 	const raw = readFileSync(path, "utf-8");
@@ -181,7 +180,6 @@ export function writeManifest(runDir: string, manifest: RunManifest): void {
 	writeFileSync(join(runDir, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n", "utf-8");
 }
 
-/** Write the diff body to a deterministic path inside the run dir. */
 export function writeDiff(runDir: string, diff: string): string {
 	const path = join(runDir, "change.diff");
 	writeFileSync(path, diff, "utf-8");

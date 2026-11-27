@@ -1,9 +1,3 @@
-/**
- * DC4b (spec DC4 test-first): goal.ts state machine driven end-to-end
- * without a real TUI — the contract-suite FakeHost (ui recording) plus
- * on-disk goal fixtures, asserting the bus goal channel (the seam DC4a
- * made publishable) instead of rendering internals.
- */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -55,11 +49,11 @@ test("headless: no goals — channel stays inactive and widget-less after a UI r
 	const f = setup({ ui: false });
 	try {
 		await f.host.fire("session_start", { reason: "new" }, f.ctx);
-		await f.goalList(); // drives updateUI → headless publish
+		await f.goalList();
 		const ch = coreBus().snapshot().goal;
 		assert.equal(ch.active, false);
 		assert.equal(ch.summary, null);
-		assert.equal(ch.widget, undefined); // headless publish carries no widget state
+		assert.equal(ch.widget, undefined);
 	} finally {
 		f.cleanup();
 	}
@@ -76,8 +70,6 @@ test("ui: single open goal auto-focuses (no focus entry) — focused widget snap
 		assert.ok(ch.summary && ch.summary.includes("ship the decoder"));
 		assert.equal(ch.widget?.focus, "focused");
 		assert.ok((ch.widget?.statusLine ?? "").length > 0);
-		// DC4b: presentation-complete widget state — the projection carries
-		// everything renderGoalWidgetLines consumes.
 		assert.equal(ch.widget?.openGoalCount, 1);
 		assert.equal(ch.widget?.goal?.status, "active");
 		assert.ok(ch.widget?.goal?.objective.includes("ship the decoder"));
@@ -112,7 +104,7 @@ test("ui: goal-pause flips the channel to paused", async () => {
 		await f.goalPause();
 		const ch = coreBus().snapshot().goal;
 		assert.equal(ch.paused, true);
-		assert.equal(ch.active, true); // paused ≠ inactive: the goal is still focused
+		assert.equal(ch.active, true);
 	} finally {
 		f.cleanup();
 	}
@@ -125,7 +117,6 @@ test("ui: focused goal vanishing from disk reconciles to the none snapshot", asy
 		await f.host.fire("session_start", { reason: "new" }, f.ctx);
 		await f.goalList();
 		assert.equal(coreBus().snapshot().goal.widget?.focus, "focused");
-		// Remove the goal file; the next reconcile drops focus and renders none.
 		rmSync(path.join(f.cwd, goal.activePath ?? "missing"));
 		await f.goalList();
 		const ch = coreBus().snapshot().goal;
@@ -144,7 +135,6 @@ test("ui: /goals injects a compact custom message — full prompt to the model, 
 		f.host.sentMessages.length = 0;
 		f.host.userMessages.length = 0;
 		await f.host.commands.get("goals")!("ship the retry decoder", f.ctx);
-		// Injection moved off sendUserMessage: no raw user-message transcript dump.
 		assert.equal(f.host.userMessages.length, 0);
 		const sent = f.host.sentMessages.at(-1);
 		assert.equal(sent?.message.customType, "pi-goal-event");
@@ -158,7 +148,7 @@ test("ui: /goals injects a compact custom message — full prompt to the model, 
 		assert.equal(details?.focus, "goal");
 		const opts = asRecord(sent?.opts);
 		assert.equal(opts?.triggerTurn, true);
-		assert.equal(opts?.deliverAs, "steer"); // fake ctx isIdle() === false
+		assert.equal(opts?.deliverAs, "steer");
 	} finally {
 		f.cleanup();
 	}
@@ -193,8 +183,8 @@ test("message_end keeps drafting custom messages visible but hides checkpoints",
 		const results = await Promise.all([replace(drafting), replace(checkpoint)]);
 		const draftingResult = asRecord(asRecord(results[0])?.message);
 		const checkpointResult = asRecord(asRecord(results[1])?.message);
-		assert.equal(draftingResult, null); // drafting passes through untouched
-		assert.equal(checkpointResult?.display, false); // checkpoint forced hidden
+		assert.equal(draftingResult, null);
+		assert.equal(checkpointResult?.display, false);
 	} finally {
 		f.cleanup();
 	}
@@ -245,7 +235,7 @@ test("ui: /goal pause pauses the focused goal via reserved word", async () => {
 		f.host.sentMessages.length = 0;
 		await f.host.commands.get("goal")!("pause", f.ctx);
 		assert.equal(coreBus().snapshot().goal.paused, true);
-		assert.equal(f.host.sentMessages.length, 0); // management, not drafting
+		assert.equal(f.host.sentMessages.length, 0);
 	} finally {
 		f.cleanup();
 	}

@@ -1,21 +1,3 @@
-/**
- * Parse `/review` command arguments.
- *
- * Surface is intentionally minimal:
- *   - `--lite`      fast single-agent review (no fan-out, no gate)
- *   - `--no-spawn`  hidden dry-run (prints the resolved plan, no subprocess)
- *   - trailing freeform text → user review request (focus / requirements /
- *     PR url / context), injected into reviewers and gate via target.userContext
- *     (see src/prep.ts and src/git-input.ts)
- *
- * Removed flags (--threshold / --reviewer / --score-per-issue / --diff) are
- * accepted-but-ignored for graceful degradation of old invocations: a valued
- * legacy flag consumes its next token UNLESS that token is itself a flag
- * (`--…`) — `--diff --lite` must not eat `--lite` (R8). Those capabilities
- * now live in config.json (`/review-config`). `--gate-model <id>` remains an
- * active per-run override.
- */
-
 export interface ParsedReviewArgs {
 	input?: string;
 	noSpawn: boolean;

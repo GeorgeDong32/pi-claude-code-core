@@ -1,10 +1,4 @@
-/*
- * Append-only JSONL record of what the mechanism did on each provider request.
- * Ported from NVlabs/SoL-Pi (MIT) @ src/sol-pi/extensions/observation-pack/ledger.ts.
- * Write-only audit trail — nothing reads it back at runtime (B2 note: it is
- * NOT the sentinel's data source; the sentinel reads the in-memory send
- * counts. The ledger exists for post-hoc diagnosis of silent failures).
- */
+// Ported from NVlabs/SoL-Pi (MIT) @ src/sol-pi/extensions/observation-pack/ledger.ts.
 import { appendFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 

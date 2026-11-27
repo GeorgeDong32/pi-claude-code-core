@@ -1,13 +1,3 @@
-/**
- * goal-turn-lock.test.ts — SPEC 2026-10-07 P0-2 acceptance tests.
- *
- * BATCH SCOPE (D3=A confirmed 2026-10-08): the turn-lock strategy + G3
- * field fix, plus the earlier CORE-05 / L6 drafting reset. D3=A removes the
- * non-progress mis-lock branch so obs_recall / subagent / MCP / codemode
- * stay callable next to an active goal; G3 fixes the progress-exception
- * read (`event.input`, not the nonexistent `event.args`). The two changes
- * ship and revert as one unit (spec §7).
- */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -40,7 +30,6 @@ function setupWithPi(patch?: (pi: Record<string, unknown>) => void) {
 	return { cwd, host, ctx, cleanup: () => rmSync(cwd, { recursive: true, force: true }) };
 }
 
-/** Active + autoContinue goal on disk, focused via session_start, one turn started. */
 async function setupActiveGoal(opts: { auditor?: unknown } = {}) {
 	resetCoreBusForTests();
 	const cwd = mkdtempSync(path.join(tmpdir(), "pi-goal-lock-"));
@@ -57,7 +46,6 @@ async function setupActiveGoal(opts: { auditor?: unknown } = {}) {
 	return f;
 }
 
-/** Fire one tool_call; returns the handler result (undefined = pass, {block} = blocked). */
 function toolCall(f: { host: FakeHost; ctx: Record<string, unknown> }, toolName: string, input: Record<string, unknown> = {}, extra: Partial<ToolCallEvent> = {}): Promise<unknown> {
 	return f.host.fire(
 		"tool_call",
@@ -78,14 +66,11 @@ test("L6 (CORE-05): a throwing sendMessage resets confirmationIntent and restore
 	});
 	try {
 		await f.host.commands.get("goal")!("fix the bug", f.ctx as never);
-		// the error is surfaced (direct notify or the bus tail queue), not swallowed
 		const busMsgs = (coreBus().snapshot().notifications ?? []).map((n) => n.msg);
 		assert.ok(
 			[...f.host.notifications, ...busMsgs].some((n) => n.includes("Could not start")),
 			"failure notice must be surfaced",
 		);
-		// the LAST tool-set sync reflects the reset: drafting-only tools are
-		// gone, the always-available commit tool remains
 		const last = f.host.activeToolsCalls[f.host.activeToolsCalls.length - 1]!;
 		assert.ok(!last.includes(QUESTION_TOOL_NAME), `goal_question must not stay active after a failed draft start (got: ${last.join(",")})`);
 		assert.ok(last.includes(PROPOSE_DRAFT_TOOL_NAME));
@@ -193,8 +178,6 @@ test("L3c: apply_goal_tweak SUCCESS (after /goal-tweak drafting) locks the turn"
 });
 
 test("L3d: update_goal=complete with an APPROVED audit locks the turn", async () => {
-	// Fake auditor seam (goal-audit-flow already exposes the same parameter
-	// seam; goal.ts forwards it from its test deps).
 	const f = await setupActiveGoal({
 		auditor: async () => ({ approved: true, disapproved: false, output: "<approved/>", model: "fake-auditor" }),
 	});
@@ -236,12 +219,10 @@ test("L4: turn_start resets the stop lock", async () => {
 test("L5a (G3): bash echo is progress-neutral — no nudge reset, no stop lock, following edit passes", async () => {
 	const f = await setupActiveGoal();
 	try {
-		// Two get_goal tool_calls bring the reminder counter to 2 (nudge threshold).
 		await toolCall(f, "get_goal");
 		await toolCall(f, "get_goal");
 		const first = (await f.host.tools.get("get_goal")!.execute("g1", {}, undefined, undefined, f.ctx as never)) as { content: Array<{ type: string; text: string }> };
 		assert.ok(first.content[0]!.text.includes("[NUDGE]"), "counter at 2 shows the nudge");
-		// echo bash: progress-neutral — the nudge counter must survive.
 		assert.equal(await toolCall(f, "bash", { command: "echo hi" }), undefined, "echo bash passes");
 		const second = (await f.host.tools.get("get_goal")!.execute("g2", {}, undefined, undefined, f.ctx as never)) as { content: Array<{ type: string; text: string }> };
 		assert.ok(second.content[0]!.text.includes("[NUDGE]"), "echo bash must NOT reset the get_goal reminder counter");

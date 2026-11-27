@@ -36,7 +36,6 @@ export function notifyBefore(info: CompactionSeamInfo): void {
 		try {
 			subscriber.before?.(info);
 		} catch {
-			// SM-01: one subscriber's bug must not break the draft return path.
 		}
 	}
 }

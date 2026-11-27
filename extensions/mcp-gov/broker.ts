@@ -1,19 +1,3 @@
-/**
- * mcp-gov/broker.ts — the broker MIRROR (P4-MC-03, DESIGN-MCP-GOV ②/③).
- *
- * The pm tool_call gate owns every decision; the mirror only mirrors them
- * to the pi-mcp-adapter approval broker so the adapter's own prompts are
- * suppressed in lockstep. Synchronous pure function, never prompts.
- *
- * Allow chain (order matters — P4-MC-03):
- *   adjudicated cache → bypass → rule allow → session grant → allow_once;
- *   anything else → fail-closed deny (counted for the /core panel).
- *
- * McpEventPort (P4-MC-05): the production adapter is probed with a dynamic
- * import (absent → zero subscriptions, zero side effects — the local
- * machine state); tests inject a MockMcpBus.
- */
-
 import { canonicalizeMcpTool, directKnownServersFromEnv } from "./family.ts";
 
 export interface McpApprovalEvent {
@@ -45,13 +29,6 @@ export interface BrokerMirror {
 	denyCount(): number;
 }
 
-/**
- * Canonical id for an adapter approval event. Reuses canonicalizeMcpTool so
- * a tool name that already carries the native `mcp__server__tool` prefix is
- * canonicalized instead of naively re-prefixed (`mcp_mcp__exa__search`
- * would miss every adjudication and rule → fail-closed against a call the
- * gate already allowed).
- */
 export function canonicalIdForEvent(event: McpApprovalEvent): string {
 	const known = new Set(directKnownServersFromEnv().map((s) => s.toLowerCase()));
 	if (event.tool) {
@@ -80,7 +57,7 @@ export function createBrokerMirror(port: McpEventPort, deps: MirrorDeps): Broker
 		if (deps.hasSessionGrant(canonicalId)) return "allow_once";
 		denies++;
 		deps.onDeny?.(canonicalId);
-		return "deny"; // fail-closed
+		return "deny";
 	}
 
 	return {

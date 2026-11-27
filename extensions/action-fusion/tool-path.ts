@@ -1,8 +1,4 @@
-/*
- * Tool-path resolution for the fused tools (arch B6 — moved out of
- * file-queue.ts: this is path knowledge, not queue mechanics).
- * Ported from NVlabs/SoL-Pi (MIT).
- */
+// Ported from NVlabs/SoL-Pi (MIT).
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";

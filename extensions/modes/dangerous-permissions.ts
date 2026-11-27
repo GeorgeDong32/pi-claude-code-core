@@ -1,8 +1,3 @@
-/**
- * Dangerous allow-rule detection for auto mode (CC permissionSetup.ts subset).
- * Broad Bash allow rules bypass the classifier and are stripped on auto entry.
- */
-
 import {
 	permissionRuleValueToString,
 	type PermissionRuleValue,

@@ -146,11 +146,6 @@ const AUTO_FALLBACK_OUTSIDE_PATH_PATTERNS: RegExp[] = [
 
 const NESTED_SHELL_PATTERNS: RegExp[] = [/`/, /\$\(/, /\$\{/, /<\(/, />\(/];
 
-/**
- * Strip fd-to-fd redirects like `2>&1`, `>&2`, `1<&0`.
- * These do not write files and must not trip the `>` destructive check.
- * Agents commonly append `2>&1` when exploring in plan mode.
- */
 export function stripFdToFdRedirects(command: string): string {
 	return command.replace(/(?:\d*)>&\d+/g, " ").replace(/(?:\d*)<&\d+/g, " ")
 }
@@ -163,25 +158,15 @@ function isCharEscaped(command: string, index: number): boolean {
 	return backslashes % 2 === 1
 }
 
-/** Split compound shell commands into segments (best-effort; not a full shell parser). */
 export function splitShellSegments(command: string): string[] {
 	return splitShellChain(command).map((node) => node.segment)
 }
 
 export interface ShellChainNode {
 	segment: string
-	/**
-	 * The connector that FOLLOWS this segment; null for the final segment.
-	 * E1: a literal `cd` segment only counts as safe when its connector is
-	 * `&&` (cd followed by `;` / `||` / pipe / `&` never widens).
-	 */
 	connector: ";" | "&&" | "||" | "|" | "&" | "\n" | null
 }
 
-/**
- * Segment splitter that keeps the connector following each segment —
- * splitShellSegments derived from it (identical segments, pure refactor).
- */
 export function splitShellChain(command: string): ShellChainNode[] {
 	const nodes: ShellChainNode[] = []
 	let current = ""
@@ -269,16 +254,7 @@ function hasNestedShellExecution(command: string): boolean {
 	return NESTED_SHELL_PATTERNS.some((p) => p.test(scanText))
 }
 
-/**
- * E1 (D-CH-4): redirects to exactly /dev/null write nothing — strip them
- * before the destructive/safe matching. Covers every redirect-operator
- * shape the tokenizer knows (`>`, `>>`, `N>`, `N>>`, `&>`, `&>>`) with the
- * bare `/dev/null` target. Near-misses stay untouched: `>/dev/nullx`,
- * `>/dev/null/foo`, a second real redirect (`2>/dev/null >out` still
- * has its `>out` and stays destructive), and quote juxtaposition
- * (`>/dev/null"leak"` — the shell concatenates the quote onto the target,
- * writing `/dev/nullleak`; review P1, CH batch).
- */
+// shell quote juxtaposition (`>/dev/null"leak"` writes `/dev/nullleak`) forces the `(?![\w/.'"])` near-miss guard
 function stripNullRedirects(command: string): string {
 	return command.replace(/(?:&>>|\d+>>|>>|&>|\d*>|>)\/dev\/null(?![\w/.'"])/g, " ")
 }
@@ -306,13 +282,6 @@ function isSafeSingleCommand(command: string): boolean {
 	if (hasNestedShellExecution(command)) return false
 	const base = stripNullRedirects(stripFdToFdRedirects(command))
 	const gitView = stripGitDashC(base)
-	// The destructive table runs on BOTH views: the null-redirect strip is
-	// what makes `2>/dev/null`-style forms readable (without it the `>`
-	// alone keeps them destructive), and the git -C strip must not hide a
-	// destructive subcommand it reveals (`git -C sub branch -D y` →
-	// `git branch -D y` stays destructive). The reverse asymmetry is
-	// accepted: a destructive hit that only exists on the raw view (e.g.
-	// `echo git -C x push` matching echo's SAFE face on base) fails closed.
 	const isDestructive =
 		DESTRUCTIVE_PATTERNS.some((p) => p.test(base)) ||
 		DESTRUCTIVE_PATTERNS.some((p) => p.test(gitView))
@@ -336,17 +305,10 @@ function matchesAutoFallbackPattern(segment: string): boolean {
 	)
 }
 
-/**
- * A command is "safe" iff every shell segment matches the allowlist AND
- * none are destructive. E1 (D-CH-4): a literal `cd <dir>` segment is also
- * safe — but ONLY when it is joined to the next segment by `&&` (cd
- * followed by `;` / `||` / pipe / `&`, or a trailing cd, never widens).
- */
 export function isSafeCommand(command: string): boolean {
 	return chainIsSafe(splitShellChain(command))
 }
 
-/** Auto-mode fallback after blacklist: safe read-only OR routine build/test commands. */
 export function isAutoFallbackBash(command: string): boolean {
 	const segments = splitShellSegments(command)
 	if (segments.length === 0) return false
@@ -368,14 +330,6 @@ function chainIsSafe(nodes: ShellChainNode[]): boolean {
 	)
 }
 
-/**
- * Both tier verdicts from ONE splitShellSegments pass — the auto-mode tier
- * ladder calls isSafeCommand and isAutoApprovableBash back to back on the
- * same command, and each re-tokenized it (plan A4). Pure; equivalent to
- * calling the two functions separately. E1: `safe` is chain-aware (cd
- * widening) and stays in lockstep with isSafeCommand; `autoApprovable`
- * keeps the per-segment tier-2 face (cd is not a tier-2 pattern).
- */
 export function classifyBashTiers(command: string): {
 	safe: boolean
 	autoApprovable: boolean
@@ -394,50 +348,26 @@ export function classifyBashTiers(command: string): {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Auto-mode auto-approvable commands (broader than isAutoFallbackBash).
-// Common dev workflow commands with controlled side-effects that don't need
-// classifier review in auto mode.
-//
-// Adjudication 2026-09-12 (docs/bash-risk-adjudication-2026-09-12.md):
-// - run-scripts are restricted to the AUTO_FALLBACK_SCRIPT_NAMES whitelist;
-// - git hook vectors (commit/merge/rebase/cherry-pick/revert) and worktree-
-//   loss forms (restore/checkout) are tier-3, not tier-2;
-// - docker run/exec are tier-3 (host-mount execution vectors);
-// - tier-2 reuses the fallback guardrails (unsafe args, outside-cwd paths).
-// ---------------------------------------------------------------------------
-
-// Tier-2 auto approvals (CC-aligned): routine builds/tests and cwd-local git ops.
-// Network fetch, package install, arbitrary interpreters, git fetch/pull,
-// git hook vectors, worktree-loss git forms, and docker run/exec require
-// tier-3 classifier review.
 const AUTO_APPROVABLE_PATTERNS: RegExp[] = [
-	// Build / run scripts (whitelist-gated; deploy-like names fall to tier-3)
 	new RegExp(`^\\s*npm\\s+run\\s+(${AUTO_FALLBACK_SCRIPT_NAMES})${AUTO_FALLBACK_SCRIPT_TAIL}`, "i"),
 	new RegExp(`^\\s*(pnpm|yarn|bun)\\s+run\\s+(${AUTO_FALLBACK_SCRIPT_NAMES})${AUTO_FALLBACK_SCRIPT_TAIL}`, "i"),
 	/^\s*(make|cmake)\b/i,
 	/^\s*cargo\s+(build|check|clippy|fmt|test)\b/i,
 	/^\s*go\s+(build|vet|fmt|mod|test)\b/i,
-	// Git local write operations with no hook vector and no worktree-loss form
-	// (no commit/merge/rebase/cherry-pick/revert/restore/checkout).
 	/^\s*git\s+(add|stash|branch|switch|tag|init|clone|reset)\b/i,
-	// File operations within workflow (outside-cwd paths blocked by guardrails)
 	/^\s*mkdir\b/i,
 	/^\s*touch\b/i,
 	/^\s*cp\b/i,
 	/^\s*mv\b/i,
-	// Code formatting / linting / type-checking (pinned tools only)
 	/^\s*npx\s+(prettier|eslint|tsc|esbuild|vite|next|nuxt|astro)\b/i,
 	/^\s*(prettier|eslint|biome)\b/i,
 	/^\s*tsc\b/i,
-	// Test runners
 	/^\s*npm\s+test\b/i,
 	/^\s*(pnpm|yarn|bun)\s+test\b/i,
 	/^\s*(vitest|jest|mocha|ava|tap)\b/i,
 	/^\s*pytest\b/i,
 	/^\s*go\s+test\b/i,
 	/^\s*cargo\s+test\b/i,
-	// Docker local dev without execution forms (run/exec are tier-3)
 	/^\s*docker\s+(build|compose|logs|ps|images)\b/i,
 ];
 
@@ -470,18 +400,11 @@ function isAutoApprovableSingleCommand(command: string): boolean {
 	if (hasNestedShellExecution(command)) return false
 	const normalized = stripFdToFdRedirects(command)
 	if (AUTO_APPROVABLE_EXCLUDE.some((p) => p.test(normalized))) return false
-	// Adjudication ③ (2026-09-12): tier-2 must not be looser than the
-	// classifier-offline fallback — reuse its unsafe-arg and outside-cwd guards.
 	if (hasUnsafeFallbackArgs(normalized)) return false
 	if (hasOutsideCwdFallbackTargets(normalized)) return false
 	return AUTO_APPROVABLE_PATTERNS.some((p) => p.test(normalized))
 }
 
-/**
- * Broader auto-mode check: approves common dev workflow commands (package
- * installs, builds, git local ops, file ops) without classifier review.
- * Every shell segment must be approvable and no segment may be dangerous.
- */
 export function isAutoApprovableBash(command: string): boolean {
 	return classifyBashTiers(command).autoApprovable
 }

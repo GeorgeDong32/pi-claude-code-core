@@ -1,19 +1,3 @@
-/**
- * observation-pack/renderers.ts — the obs_recall presentation layer
- * (spec 2026-10-02-core-tool-renderers TR §1/A).
- *
- * The tool's RESULT TEXT is a model protocol (paging header + retrieve
- * instruction) — fine for the provider, noise for the human. These
- * renderers rebuild the visible rows from `details` (id/offset/bytes/
- * lines/nextOffset/eof) and show the CONTENT as the preview, stripping the
- * two protocol header lines when details prove they are ours. Everything
- * here is read-only: the model-visible text and the disk store are never
- * touched (module invariant 9).
- *
- * Component discipline (TR-FACT F5): renderResult runs every frame — the
- * result component reuses `context.lastComponent` via clear+rebuild instead
- * of allocating a fresh tree.
- */
 import { Container, Text } from "@earendil-works/pi-tui";
 
 import { firstLines, humanBytes, resultText, type ThemeLike } from "../../lib/tool-render.ts";
@@ -66,7 +50,6 @@ export function stripProtocolHeader(text: string, details: RecallResultDetails):
 	if (typeof details.bytes !== "number") return text;
 	const lines = text.split("\n");
 	if (lines.length >= 2 && lines[0]!.startsWith("[obs_recall id=") && lines[1]!.startsWith("[chunk_bytes=")) {
-		// P0-2: a selection adds a third protocol line
 		const body = lines.length >= 3 && lines[2]!.startsWith("[selection: ") ? lines.slice(3) : lines.slice(2);
 		return body.join("\n").replace(/^\n/, "");
 	}
@@ -115,6 +98,8 @@ export function renderRecallResult(
 	theme: ThemeLike,
 	lastComponent: unknown,
 ): RecallRows {
+	// pi-tui re-renders result components every frame — reuse lastComponent
+	// (clear+rebuild) instead of allocating a fresh tree per frame.
 	const rows: RecallRows =
 		lastComponent instanceof RecallRows ? lastComponent : new RecallRows();
 	const { header, body } = recallBodyLines(result);

@@ -8,13 +8,9 @@ import { sanitize } from "./sanitize.ts";
 
 export const MESSAGE_TYPE = "cc-core-bg-shell";
 const TAIL_LINES = 20;
-/** No output growth for this long + a prompt-looking last line = the task is probably blocked on input. */
 export const STALL_THRESHOLD_MS = 45_000;
 export const STALL_TAIL_BYTES = 1_024;
 const STALL_TAIL_LINES = 5;
-// Last-line patterns that suggest a command is blocked on keyboard input. Only
-// the last line is tested so slow commands that merely print questions earlier
-// stay silent.
 const PROMPT_PATTERNS = [
 	/\(y\/n\)/i,
 	/\[y\/n\]/i,
@@ -83,7 +79,6 @@ export function taskLine(task: Task): string {
 	return `${who} | ${stateText(task)} | ${runtimeText(task)} | ${oneLine(task.command)}`;
 }
 
-/** `bg-5` or `bg-5 (description)` — the id the model needs, with the label it gave. */
 export function who(task: Task): string {
 	return task.description === undefined || task.description === "" ? task.id : `${task.id} (${task.description})`;
 }
@@ -113,7 +108,6 @@ export function sendCompletion(pi: ExtensionAPI, task: Task): void {
 	);
 }
 
-/** One line per task, same id/state/runtime/command fields as the single message (BG-MSG-02 batch form). */
 export function completionBatchText(tasks: Task[]): string {
 	const lines = tasks.map((task) => `- ${who(task)} · ${stateText(task)} · ran ${runtimeText(task)} · ${oneLine(task.command)}`);
 	return [
@@ -123,7 +117,6 @@ export function completionBatchText(tasks: Task[]): string {
 	].join("\n");
 }
 
-/** Several completions woken in one turn: one message, so the model is not interrupted N times (CC drain parity). */
 export function sendCompletions(pi: ExtensionAPI, tasks: Task[]): void {
 	if (tasks.length === 1) {
 		sendCompletion(pi, tasks[0]!);

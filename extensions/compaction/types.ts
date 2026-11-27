@@ -1,18 +1,3 @@
-/*
- * Smart Compaction — shared types (SPEC SC §5.1, task W1; first commit).
- *
- * Type-only foundation for the controller. Design decisions:
- *
- *   - Only CROSS-FILE shapes live here. Settings schema/defaults live in
- *     settings.ts (§5.10), ledger shapes in ledger/types.ts (W6) — this file
- *     must not grow module-local types.
- *   - No runtime imports except pure type re-exports; pi types are imported
- *     as `import type` only (erased at runtime, keeps the dependency light).
- *   - The state machine vocabulary (§5.2) is a closed string union: phases
- *     "computing"/"ready"/"proposed" carry payloads, terminal-per-cycle
- *     outcomes collapse back to "idle" with a last-outcome record.
- */
-
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 

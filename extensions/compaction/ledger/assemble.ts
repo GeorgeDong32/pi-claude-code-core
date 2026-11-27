@@ -1,27 +1,3 @@
-/*
- * Ledger assembler (SPEC SC §5.6 LED-01/06/07/08, task W6).
- *
- * Assembles the deterministic <cc-core-ledger v="1"> block at APPLY time
- * (LED-06: current truth, never the snapshot's stale view). Providers are
- * independently try/caught (LED-07) — one broken provider degrades to an
- * `unavailable` marker, never a throw, and all of them are synchronous.
- *
- * LED-01 degradation ladder, applied IN ORDER until the block fits
- * COMPACTION_LEDGER_MAX (each step only degrades, counts surface through
- * telemetry):
- *   ① Closed → count-only line      ② Verification → last test only
- *   ③ Directives → force the fold ladder (renderDirectives budget → minimal)
- *   ④ Background → one bare line per item
- *   ⑤ Open work → clamp description fields (id/status/branch/tab/rework
- *      are identity fields and NEVER clamped — clampGoalLine, D5)
- *   ⑥ Open work items beyond maxOpenItems → "+K more — full list in <…>"
- *      (<…> = .pi/goals/ and/or the board, by what is hidden — D7.4)
- *
- * LED-08 self-check: every Tier A id+status and every Tier B directive
- * pointer must be findable in the assembled string — a miss is a ledger
- * bug: the caller must NOT propose (telemetry ledger-self-check-failed).
- */
-
 import { COMPACTION_LEDGER_MAX } from "../../../lib/context-budget.ts";
 import { clampDirectiveText, collectDirectives, parseCarriedDirectives, renderDirectiveText, renderDirectives } from "./directives.ts";
 import { goalSection } from "./goal.ts";
@@ -293,7 +269,6 @@ function memoizeProviders(providers: LedgerProviders): LedgerProviders {
 	};
 }
 
-/** Assemble with the LED-01 ladder. Never throws (LED-07). */
 export function assembleLedger(input: AssembleLedgerInput): AssembledLedger {
 	let sections: Sections | undefined;
 	let block = "";

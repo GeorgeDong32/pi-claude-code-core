@@ -1,12 +1,3 @@
-/*
- * Smart Compaction ledger types (SPEC SC §5.6, task W6).
- *
- * The ledger is DETERMINISTIC (no LLM), regenerated at apply time, and
- * describes the current truth (LED-06). These shapes are shared by the
- * section builders, the assembler (degradation ladder + self-check) and the
- * W7 rex-flow provider.
- */
-
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { GoalRecord } from "../../goal/goal-record.ts";

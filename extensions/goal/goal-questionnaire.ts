@@ -336,6 +336,8 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 				typeof process !== "undefined" ? process.stdout?.rows : undefined,
 			]));
 			if (cachedLines && cachedWidth === width && cachedHeight === height) return cachedLines;
+			// pi's render stack cannot catch — a throw here breaks the frame,
+			// so degrade silently to the last good frame.
 			try {
 				const lines = computeLines(width, height);
 				cachedWidth = width;
@@ -343,8 +345,6 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 				cachedLines = lines;
 				return lines;
 			} catch {
-				// render() must never throw (pi's render stack cannot catch);
-				// degrade silently to the last good frame.
 				return cachedLines ?? [];
 			}
 		}
@@ -471,9 +471,6 @@ export async function showProposalDialog(
 	});
 }
 
-/** `phase` reads the lifecycle's drafting state: the question tools exist for
- * the confirmation and /goal-tweak interviews only (the boundary visibility
- * used to enforce before they became codemode-exposed). */
 export function registerQuestionnaireTools(
 	pi: ExtensionAPI,
 	phase: () => { confirmationIntent: unknown; tweakDraftingFor: unknown; focusedId: string | null },

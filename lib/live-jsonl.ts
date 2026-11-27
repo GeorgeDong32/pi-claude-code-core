@@ -1,20 +1,3 @@
-/**
- * lib/live-jsonl.ts — [cherry-batch1 B2] committed-prefix reads of live
- * append-only JSONL files (spec docs/{en,zh}/cherry-batch1-spec.md).
- *
- * Cherry-derived (readForkPrefix lineage), Node form. A live JSONL (the
- * goal ledger is the production consumer) can be appended to by another
- * process while we read: the guarantee is "the complete committed prefix
- * as of the read" — torn half-lines are DROPPED and counted (fail-open),
- * never thrown; what upstream tolerates, we count, never silently drop.
- *
- * Fail-closed surfaces (closed error kind): symlink targets (path
- * injection — errno ELOOP on macOS and Linux alike for O_NOFOLLOW),
- * oversized files, mid-read shrink, and an unstable double-read (same
- * inode truncated + rewritten longer between the two reads — invisible
- * to fstat, caught only by the byte comparison).
- */
-
 import { closeSync, constants as fsConstants, fstatSync, openSync, readSync } from "node:fs";
 
 export interface CommittedLines {

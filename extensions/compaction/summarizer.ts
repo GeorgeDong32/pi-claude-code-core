@@ -1,29 +1,3 @@
-/*
- * Smart Compaction — background summarizer (SPEC SC §5.5 SUM-03/05/06/07/08/09,
- * task W3).
- *
- * One background compute = pi's public compact() driven through OUR streamFn
- * wrapper (H14: the only per-call observation/injection point):
- *
- *   - classify every logical call by pi's prompt shapes (SUM-09, SC-HOST-09);
- *     an UNKNOWN shape never validates (⑨) — the caller degrades to shadow;
- *   - capture per-call stopReason/narrative/usage/toolCall; retry re-entries
- *     of the SAME logical call collapse to the LAST response (SUM-03③ —
- *     retryAssistantCall re-enters streamFn per attempt);
- *   - inject `maxTokens` into options when configured and drop `reasoning`
- *     when summaryThinking === "off" (S3 mechanics — pi only omits the
- *     parameter for itself when thinkingLevel:"off" is passed, our injection
- *     is belt-and-braces on the same options object);
- *   - delegate to completeSimple (the exact transport compact() uses when
- *     streamFn is absent) so the default path is behavior-identical.
- *
- * Validation (SUM-04) runs on the merged result BEFORE any ledger assembly:
- * both layers must pass or the attempt fails; one retry with hardened
- * instructions (SUM-05), then refused — the caller drives cooldown/degrade.
- * Abort (SUM-07): the signal is honored before each attempt and inside
- * compact(); aborted outcomes never throw out.
- */
-
 import { compact } from "@earendil-works/pi-coding-agent";
 import { completeSimple } from "@earendil-works/pi-ai/compat";
 import type { AssistantMessage, Usage } from "@earendil-works/pi-ai/compat";
@@ -50,7 +24,6 @@ export interface SummarizerOptions {
 	summaryThinking: CompactionSettings["summaryThinking"];
 	summaryMaxTokens: number | null;
 	thresholds: ValidationThresholds;
-	/** SUM-08: closed ids the narrative prompt must NOT re-narrate. */
 	closedIds?: string[];
 	signal: AbortSignal;
 	transport?: SummarizerTransport;
@@ -105,6 +78,11 @@ export function collapseSubCalls(raw: RawCall[]): SubCallRecord[] {
 	return out;
 }
 
+/**
+ * streamFn is pi's compact()'s only per-call observation/injection point;
+ * compact()'s retries re-enter it per attempt, so the same logical call is
+ * observed once per retry (collapseSubCalls keeps the LAST response).
+ */
 export function createStreamFnWrapper(
 	options: { summaryMaxTokens: number | null; dropReasoning: boolean },
 	observed: RawCall[],
@@ -142,7 +120,9 @@ function customInstructions(closedIds: string[] | undefined, hardened: boolean):
 	return lines.join("\n");
 }
 
-/** Run the compute (attempts ≤ 2, SUM-05). Never throws for abort reasons. */
+// The default transport is completeSimple — the exact transport pi's
+// compact() uses when streamFn is absent, keeping the default path identical.
+/** Run the compute (attempts ≤ 2). Never throws for abort reasons. */
 export async function runSummarizer(input: SummarizerOptions): Promise<SummarizerOutcome> {
 	const transport = input.transport?.call ?? ((model: Model<Api>, context: unknown, options: Record<string, unknown>) =>
 		completeSimple(model, context as never, options as never) as unknown as Promise<AssistantMessage>);

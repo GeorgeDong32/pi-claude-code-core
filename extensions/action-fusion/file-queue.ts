@@ -1,10 +1,5 @@
-/*
- * Fallback per-file serialization when the host does not export the official
- * withFileMutationQueue (SPEC FUS-03 adapter #2).
- * Ported from NVlabs/SoL-Pi (MIT) @ src/sol-pi/extensions/action-fusion/file-queue.ts.
- * B6: path normalization/resolution moved to tool-path.ts — this file is
- * queue mechanics only.
- */
+// Ported from NVlabs/SoL-Pi (MIT) @ src/sol-pi/extensions/action-fusion/file-queue.ts.
+// Fallback per-file serialization: the pi host does not export withFileMutationQueue.
 import { realpath } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 

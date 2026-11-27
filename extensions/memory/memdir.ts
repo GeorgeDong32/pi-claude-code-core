@@ -221,12 +221,6 @@ export function memoryKey(layer: "user" | "project", file: string): string {
 	return layer === "user" ? `user-memory/${file}` : `memory/${file}`;
 }
 
-/**
- * The recall candidate pool. Single-layer since the user layer retired:
- * only PROJECT memories are eligible — old recall blocks in replayed
- * transcripts may still carry `user-memory/<file>` keys; they simply never
- * match a candidate again.
- */
 export function eligibleMemories(projectDir: string): Array<import("./recall.ts").RecallFile> {
 	const out: Array<import("./recall.ts").RecallFile> = [];
 	for (const f of scanMemoryDirCached(projectDir).files) {

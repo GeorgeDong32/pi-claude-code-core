@@ -34,13 +34,15 @@ function formatAvailableLevels(model: EffortModel | null | undefined): string {
   return getAvailableThinkingLevels(model).join(", ");
 }
 
-// Wire dialects where `service_tier` is a real request field. Mirrors pi-ai's
-// own serviceTier → service_tier mapping (openai-responses.js /
-// openai-codex-responses.js). Any other dialect — notably anthropic-messages
-// proxies — either rejects the unknown field or drops it in translation
-// (verified live against CPA/CLIProxyAPI 2026-10-13), so fast mode must not
-// inject there. openai-completions is deliberately excluded until pi-ai
-// grows a native tier mapping for it.
+// Fast mode may only inject `service_tier` on wire dialects where it is a
+// real request field, mirroring pi-ai's own serviceTier → service_tier
+// mapping (openai-responses / openai-codex-responses). Other dialects —
+// notably anthropic-messages proxies — reject the unknown field or drop it
+// in translation. openai-completions is excluded until pi-ai grows a native
+// tier mapping for it.
+// service_tier is a real request field only in these dialects (mirrors pi-ai's own serviceTier mapping);
+// other dialects, notably anthropic-messages proxies such as CPA/CLIProxyAPI, reject or drop the unknown
+// field, so fast mode must not inject there.
 const SERVICE_TIER_APIS: ReadonlySet<string> = new Set(["openai-responses", "openai-codex-responses"]);
 
 function isFastModelId(modelId: string): boolean {

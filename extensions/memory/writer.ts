@@ -1,21 +1,3 @@
-/**
- * memory/writer.ts — the document write engine (SPEC 2026-10-07 P2-3 W1/W2).
- *
- * write / remove / reindex are the ONLY paths that mutate memory documents
- * and MEMORY.md; every success invalidates the memdir scan cache IMMEDIATELY
- * (C7 — callers never read their own stale layer back within the TTL).
- *
- * Dependency direction (one-way): store / consolidate / importers → writer
- * → memdir. memdir must never import writer back. Ops preflight, routing
- * and the consolidation lock stay in store/consolidate — the writer does not
- * re-acquire them.
- *
- * "Atomic" means single-file visibility (unique tmp + same-dir rename); a
- * failed write cleans its tmp and keeps the original content. Multi-file
- * batches keep their existing preflight / partial-failure semantics — this
- * is NOT a transaction promise.
- */
-
 import { mkdirSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -37,18 +19,12 @@ export function serializeMemoryDocument(body: string, meta: MemoryDocMeta): stri
 	return `---\nname: ${meta.name}\ndescription: ${meta.description}\nmetadata:\n  type: ${type}\n---\n\n${body}\n`;
 }
 
-/** Atomic document write (unique tmp + same-dir rename). Throws on IO
- *  error with the tmp cleaned up and the original content untouched. */
 export function writeDocument(dir: string, name: string, content: MemoryWriteContent): void {
 	const text = content.kind === "raw" ? content.text : serializeMemoryDocument(content.body, content.meta);
 	atomicWriteText(dir, name, text);
 	invalidateMemDirCache(dir);
 }
 
-/** The shared atomic primitive. `invalidate: false` is for MEMORY.md itself
- *  (not a memory file — the reconciler's own dirCache just got the fresh
- *  entry list, and dropping the scan cache here would force one full
- *  re-read after EVERY reconcile). */
 function atomicWriteText(dir: string, name: string, text: string, opts: { invalidate?: boolean } = {}): void {
 	mkdirSync(dir, { recursive: true });
 	const tmp = join(dir, `.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}.md`);

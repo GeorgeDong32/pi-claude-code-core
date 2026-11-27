@@ -1,24 +1,3 @@
-/**
- * memory/guard.ts — the write guard (P3-ME-05, entropy-control G1).
- *
- * Memory writes are plain write/edit tool calls (the modes module provides
- * the approval carve-out, P3-PM-01); this tool_call interceptor blocks at
- * write time: writes to the RETIRED user memory layer (2026-11-24), secret-
- * shaped content (P3-ME-05), index-unindexable results (G1-C1), memory
- * files written outside the layer (G1-C2), child-session writes (G1-C6).
- * The guard never edits content.
- *
- * BH-R2 (spec 2026-11-14-backtest-hardening): the secret probe is scoped
- * to the memory layer again (the 1618f89 G1 rewrite probed every
- * write/edit path) and scans only the INCOMING text — write's content,
- * edit's edits[].newText — never the whole resulting file (a pre-existing
- * secret-looking line must not block a clean edit).
- *
- * guardMemoryToolCall is the top-level entry (project layer + retired-user
- * context in one call); guardMemoryWrites below is the original per-layer
- * secret probe kept for its existing tests.
- */
-
 export interface GuardVerdict {
 	block: boolean;
 	reason?: string;
@@ -31,20 +10,13 @@ import { homedir } from "node:os";
 import { isInsideDir as isLexicallyInsideDir } from "../../lib/rule-text.ts";
 import { diagnoseFrontmatter, isMemoryFile } from "./memdir.ts";
 
-/**
- * The session's home dir. `os.homedir()` reads the PROCESS-level env (C
- * getenv), which worker-thread test runners do not sync with their JS-level
- * process.env copies — reading $HOME at the JS layer keeps HOME-injected
- * tests and any future env override working everywhere.
- */
+// os.homedir() reads the process-level env (C getenv), not the JS process.env copy worker threads see — read $HOME at the JS layer.
 export function sessionHome(): string {
 	return process.env.HOME !== undefined && process.env.HOME !== "" ? process.env.HOME : homedir();
 }
 
 export interface MemoryGuardEnv {
 	projectDir: string;
-	/** the retired cross-project user layer — writes there are rejected so
-	 *  no new data lands in a store that is no longer injected or recalled */
 	userDir: string;
 	childSession: boolean;
 }
@@ -126,10 +98,6 @@ function resultingContent(toolName: string, input: Record<string, unknown>, path
 	return result;
 }
 
-/** All text the secret probe sees (BH-R2): write → content; edit → each
- * edits[].newText. The whole-file resulting content is deliberately NOT
- * probed — pre-existing secret-looking text in a memory file must not
- * block a clean edit of it. */
 function probeTexts(toolName: string, input: Record<string, unknown>): string[] {
 	if (toolName === "write") {
 		return typeof input.content === "string" ? [input.content] : [];

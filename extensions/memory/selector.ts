@@ -24,8 +24,6 @@ export interface SelectorRequest {
 	query: string;
 	candidates: readonly SelectionCandidate[];
 	recentTools: readonly string[];
-	/** the real user message before this one (≤1000 chars) — context so short
-	 *  follow-up prompts ("那把上面那条改掉") can still be matched */
 	previousUserMessage?: string;
 	signal?: AbortSignal;
 }

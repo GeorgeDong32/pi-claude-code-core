@@ -1,10 +1,3 @@
-/*
- * Pending completion follow-ups: while an agent run is active the status row
- * goes out at once but the followUp message waits for agent_settled, and is
- * dropped when the model read the end itself first. What came due together
- * goes out as ONE message (a poll tick when idle, a run when busy); a single
- * completion keeps the frozen BG-MSG-02 shape.
- */
 import assert from "node:assert/strict";
 import { after, afterEach, beforeEach, describe, it } from "node:test";
 
@@ -218,7 +211,7 @@ describe("completion batching", () => {
 	it("a deadline kill outside the poll flushes at once, not on the next tick", async () => {
 		const s = session();
 		const id = await start(s, "sleep 100", { timeout: 1 });
-		await clock.tick(2); // the poll tick that sees the deadline kills and reports
+		await clock.tick(2);
 		assert.equal(s.sent.length, 1);
 		assert.match(s.sent[0]!.message.content, /killed \(timed out\)/);
 	});

@@ -8,8 +8,6 @@ import { findSecret } from "./guard.ts";
 import { DESCRIPTION_MAX, descriptionTooLong } from "./policy.ts";
 export const DESCRIPTION_TOO_LONG_REASON = `description exceeds ${DESCRIPTION_MAX} characters — rewrite as a noun phrase with the topic keywords`;
 export const DESCRIPTION_MULTILINE_REASON = "description must be a single line";
-/** Index rows are one line per memory; a description with a line break would
- * also break the frontmatter it is written into. */
 function badDescription(description: string | undefined): string | undefined {
 	if (description === undefined) return undefined;
 	if (description.includes("\n")) return DESCRIPTION_MULTILINE_REASON;
@@ -21,8 +19,6 @@ export const MEMORY_FILE_BODY_MAX = 8 * 1024;
 export const MEMORY_FILE_TOTAL_MAX = MEMORY_FILE_BODY_MAX + 2048;
 export const MEMORY_FILES_MAX = 80;
 
-/** Kept for the frozen MemoryOp shape flowing through queue records and
- * LLM responses; only "project" is applied since the user layer retired. */
 export type MemoryLayer = "user" | "project";
 
 export interface MemoryOp {
@@ -75,10 +71,6 @@ export function fileBytes(path: string): number {
 	}
 }
 
-/** Atomic single-file write (S2: the ONE write primitive — applyMemoryOps
- * and runConsolidation share it). Delegates to writer.writeDocument (raw
- * content — byte-faithful); throws on IO error, a landed rename is never
- * rolled back, the scan cache is invalidated on success. */
 export function atomicWriteFile(dir: string, file: string, content: string): void {
 	writeDocument(dir, file, { kind: "raw", text: content });
 }
@@ -89,10 +81,6 @@ function splitContent(content: string): { name: string; description: string; typ
 	return { name: split.title, description: split.description, type: split.type, body: split.body };
 }
 
-/** Validate + apply a batch against the project layer. Total function:
- * every failure path returns an outcome, never throws into a hook.
- * The cross-project user layer is retired: ops targeting it are skipped
- * with an explicit reason, never applied. */
 export function applyMemoryOps(
 	ops: MemoryOp[],
 	dirs: { project: string },
@@ -255,8 +243,6 @@ export interface LayerLock {
 	release: () => void;
 }
 
-/** mkdir-based atomic lock. Steals entries older than ttl (a crashed holder
- * must not wedge consolidation forever). Null = someone else holds it. */
 export function acquireLayerLock(dir: string, ttlMs = LOCK_TTL_MS, now = Date.now()): LayerLock | null {
 	const lockPath = join(dir, ".consolidate.lock");
 	try {

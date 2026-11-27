@@ -1,22 +1,3 @@
-/**
- * interpret.ts — the permission adjudication INTERPRET half (SPEC
- * 2026-10-07 P2-1, A2=B): executes a Decision's side effects through ports
- * injected by the adapter (index.ts wires the ports; the approval closure
- * state lives in approval-flow.ts; this module
- * never touches pi). Every port is an existing function of the gate —
- * behavior parity is pinned by the adjudication-parity golden.
- *
- * Port semantics (unchanged from the pre-refactor gate):
- *  - promptWithOptions: promptWithPermissionOptions — forwarding / headless
- *    fail-closed / memory carve-out / compliance-inject all live THERE.
- *  - promptApproval: plain user prompt (label only).
- *  - firstSeen: the family first-seen dialog (allow once / session / always).
- *  - editWriteChoice: the ask-mode 5-choice dialog + applyApprovalDecision.
- *  - classifyTier3: the classifier seam (auto-engine.ts approveTier3 — its retry loop
- *    gets clock/signal injection in Step 3).
- *  - recordAutoAllow: the old allowToolCall() side effect — resets the
- *    classifier denial state on every auto-ladder allow.
- */
 import type { BlockShape, Decision, ToolCallRequest } from "./adjudicate.ts";
 
 export interface InterpretPorts {

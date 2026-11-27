@@ -1,36 +1,3 @@
-/**
- * Capability bus (P1-BUS-01..04, DESIGN-BUS "Design 1.5").
- *
- * `globalThis.__piClaudeCodeCore` = frozen pure-data snapshot (no functions).
- * Whole-snapshot replace + freeze + monotonic revision. The same synchronous
- * batch derives the legacy keys (`__piPermissionModes`, `__pmWorkingStats`)
- * from the new snapshot, so the two can never disagree (P1-BUS-03/05).
- *
- * Publishing happens only inside pi event handlers (no await gaps — single
- * threaded atomicity). No timers, no polling (P1-BUS-04). Presence gating
- * (whether expensive stats formatting happens at all) stays inside the modes
- * module as an implementation detail.
- *
- * v2 extension note (P1-BUS-10): if the future /core panel needs realtime
- * refresh, add an `onChange?: () => void` DATA field to a v2 snapshot (the
- * subscription point itself is data, version-gated) — do NOT bolt on an
- * event system.
- *
- * SPEC 2026-10-07 P1-1 (XPKG-03): every snapshot carries `instance` — a
- * random id minted once per bus instance. pi loads extensions with jiti
- * `moduleCache:false`, so `/reload` builds a NEW bus; until the new bus's
- * first publish, `globalThis.__piClaudeCodeCore` still holds the OLD bus's
- * snapshot (its onChange points at the old listener set). Consumers detect
- * the swap by comparing `instance` — on a change, re-subscribe via the new
- * snapshot's onChange. Old cores without the field: fall back to comparing
- * the onChange function identity. Patches can never overwrite `instance`.
- *
- * BH-R7 (2026-11-14): a listener throwing inside publish must not abort the
- * remaining listeners (the core's own state updates run BEFORE listeners
- * fire, so they are already committed) — each listener is dispatched inside
- * its own try/catch with a console.warn. Publish stays synchronous: the
- * dispatch loop and legacy-key derivation contain no await.
- */
 import { randomUUID } from "node:crypto";
 import type { CoreSnapshot, CoreCommand, CoreCommandResult } from "../types/index.d.mts";
 
@@ -61,18 +28,6 @@ export interface NotificationsPatch {
 export interface MemoryPatch {
 	memory?: { yielded: boolean; dir?: string };
 }
-/**
- * SPEC OBS-09: cumulative observation-pack savings (optional channel).
- * OBS-09-SITES: the optional `sites` field carries per-site display-only
- * savings for the requests where an observation was FIRST replaced
- * (previousSends === FULL_SENDS) — the single-shot semantics upstream
- * SoL-Pi flashes in showSolPiSavings. Each entry's optional toolCallId
- * correlates it with the visible tool row: the projection rewrites only
- * the provider request, so toolCallId is the only reliable row key.
- * Display layer only: never part of a provider request or the projected
- * messages (module invariant 9). Single-sourced from the published
- * snapshot type (twin-shape guard).
- */
 export interface ObservationPatch {
 	observation?: CoreSnapshot["observation"];
 }
@@ -116,6 +71,7 @@ function deepFreeze<T>(value: T): T {
 
 const g = globalThis as Record<string, unknown>;
 
+// pi loads extensions with jiti `moduleCache:false`, so /reload builds a NEW bus — consumers detect the swap by comparing the snapshot's `instance` and re-subscribe via its onChange.
 export function createCoreBus(): CoreBus {
 	const instance = randomUUID();
 	let current: CoreSnapshot = deepFreeze(initialSnapshot(instance));

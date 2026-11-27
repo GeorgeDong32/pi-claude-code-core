@@ -1,10 +1,3 @@
-/**
- * Tests for src/tool-wrapper.ts — v0.8.6 report delivery contract.
- *
- * The report tool no longer pushes a rendered card into chat; its result
- * text must carry the FULL markdown plus an explicit verbatim-output
- * instruction so the main agent echoes the report as plain chat text.
- */
 import { strict as assert } from "node:assert";
 import { describe, test } from "node:test";
 

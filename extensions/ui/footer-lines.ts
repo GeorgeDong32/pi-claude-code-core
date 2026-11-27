@@ -1,18 +1,3 @@
-/**
- * footer-lines.ts — multi-source `display.footer` publisher (SPEC
- * 2026-10-07 P1-1 §4.4, F1 decision B).
- *
- * The bus shallow-merges patches, so two modules each publishing
- * `{ display: { footer: [line] } }` overwrite each other. This helper owns
- * ONE `Map<source, line>` per bus instance (WeakMap-keyed — a reset/reload
- * builds a new bus and must not inherit the old bus's lines, B8) and always
- * publishes the WHOLE footer array, sorted by source, as one patch.
- *
- * Discipline: call this only inside a pi event handler, synchronously (no
- * await gaps) — it publishes. Setting undefined removes that source's line;
- * removing the last line still publishes an EMPTY array (omitting the field
- * would keep the stale previous value — the bus only merges).
- */
 import { coreBus, type CoreBus } from "../bus.ts";
 
 const linesByBus = new WeakMap<CoreBus, Map<string, string>>();

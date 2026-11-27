@@ -33,7 +33,6 @@ export async function collectCompactionMetrics(paths) {
 					const metric = metricFromEntry(JSON.parse(line));
 					if (metric) rows.push(metric);
 				} catch {
-					// An interrupted JSONL write must not leak the partial line.
 					malformedLines += 1;
 				}
 			}

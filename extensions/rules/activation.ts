@@ -1,39 +1,3 @@
-/*
- * rules/activation.ts — the rule-activation budget module (AR1005-RU,
- * spec 2026-10-05 §8). ONE owner of the session activation set and the
- * per-turn character budget.
- *
- * Turn semantics (RU-01): a turn spans turn_start → the next turn_start.
- * The SUM of all pi-rules-activate content lengths within one turn may
- * not exceed the budget (DYNAMIC_STEER_MAX, 8 000 — JavaScript string
- * length, not UTF-8 bytes; titles, whitespace and pointer prose all
- * count). session_start resets BOTH the activation set and the budget
- * epoch; turn_start resets ONLY the turn's usage. Tool calls before the
- * first turn_start ride the session-initialized zero-usage epoch. Nothing
- * resets at before_agent_start, per tool_call, or per rule.
- *
- * Delivery ladder (RU-02), per first-hit rule in collected order:
- *   1. full title+body fits the remaining budget → send the full text
- *      (byte-identical to the old single-rule output).
- *   2. else the existing full "Read on demand" pointer (byte-identical
- *      oversized-single text).
- *   3. else a SHORT pointer: the complete readable path plus a minimal
- *      note — never a truncated path, never truncated body text.
- *   4. else nothing this turn: the rule is NOT marked activated and stays
- *      eligible for a later turn's matching tool call (no background
- *      queue — the next matching activation retries it).
- *
- * A rule is marked session-activated ONLY when its send succeeded
- * (pointer sends count, matching the historical oversized-single
- * semantics). Check/reserve/send/commit-or-rollback happen in ONE
- * synchronous pass (no await between them): budget reservation happens
- * BEFORE the send call so a synchronously re-entrant adapter observes
- * consistent remaining budget; a throwing send rolls the reservation
- * back and leaves the rule unactivated without affecting the others.
- *
- * The send adapter is synchronous (throws = failure). The wiring wraps
- * pi.sendMessage; async delivery rejections are not activation failures.
- */
 import { DYNAMIC_STEER_MAX } from "../../lib/context-budget.ts";
 
 export interface ActivatableRule {

@@ -1,9 +1,3 @@
-/**
- * Deterministic gate post-process (Claude Phase 5 equivalent).
- *
- * Re-scoring + dedupe + threshold + verdict, all in code. The LLM gate is
- * advisory; the parent pipeline always re-enforces.
- */
 import type { GateDisposition, GateVerdict, Issue, IssueSeverity, Verdict } from "./types.js";
 
 const SEVERITY_RANK: Record<IssueSeverity, number> = {

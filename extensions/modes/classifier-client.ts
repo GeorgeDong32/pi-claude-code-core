@@ -1,12 +1,3 @@
-/** CC-style auto-mode classifier client for pi.
- *
- * Completion goes through the host `ModelRegistry.complete()` (plan2 B2):
- * auth resolution — including the provider baseUrl merge — happens inside
- * ModelRuntime.prepareRequest, so this client no longer hand-rolls auth or
- * imports the deprecated pi-ai/compat entrypoint (its deletion would have
- * broken extension loading outright).
- */
-
 import { existsSync, readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent"

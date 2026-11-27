@@ -47,16 +47,13 @@ describe("P0-1 (2026-11-08): allow-rule hardening (safety-gated)", () => {
 		expect(bashCommandMatchesRuleContent("git status `rm x`", gitStatus, "allow", hard)).toBe(false);
 		expect(bashCommandMatchesRuleContent("git status ${X}", gitStatus, "allow", hard)).toBe(false);
 		expect(bashCommandMatchesRuleContent("cat <(rm x)", "cat:*", "allow", hard)).toBe(false);
-		// plain command still matches
 		expect(bashCommandMatchesRuleContent("git status", gitStatus, "allow", hard)).toBe(true);
 	});
 	it("safe heredoc exemption: $(cat <<'EOF' stays allowable", () => {
 		const cmd = `git commit -m "$(cat <<'EOF'\nfix: thing\nEOF\n)"`;
 		expect(bashCommandMatchesRuleContent(cmd, "git commit:*", "allow", hard)).toBe(true);
-		// heredoc with trailing smuggled command after ) is NOT exempt
 		const smuggle = `git commit -m "$(cat <<'EOF'\nfix\nEOF\n)"; rm -rf /`;
 		expect(bashCommandMatchesRuleContent(smuggle, "git commit:*", "allow", hard)).toBe(false);
-		// unquoted delimiter heredoc is not exempt (body could expand)
 		const unquoted = `git commit -m "$(cat <<EOF\nfix\nEOF\n)"`;
 		expect(bashCommandMatchesRuleContent(unquoted, "git commit:*", "allow", hard)).toBe(false);
 	});
@@ -86,12 +83,9 @@ describe("P2 (2026-11-08): wrapper + subcommand expansion for deny/ask", () => {
 		expect(bashCommandMatchesRuleContent("timeout 5 rm x", rm, "deny")).toBe(true);
 	});
 	it("$() and backtick subcommands expand into deny candidates", () => {
-		// outer command does not match rm:*, but the subcommand does
 		expect(bashCommandMatchesRuleContent("printf %s $(rm x)", rm, "deny")).toBe(true);
 		expect(bashCommandMatchesRuleContent("echo `rm x`", rm, "deny")).toBe(true);
-		// no subcommand and no outer match — clean
 		expect(bashCommandMatchesRuleContent("printf %s ok", rm, "deny")).toBe(false);
-		// allow direction: no expansion (P0-1 rejects substitution instead)
 		expect(bashCommandMatchesRuleContent("echo $(rm x)", "echo:*", "allow", { allowHardening: false })).toBe(true);
 	});
 });
@@ -112,22 +106,16 @@ describe("review fixes 2026-11-08 (P1#1/P2#3): glued redirects + bare Bash rule"
 		expect(bashCommandMatchesRuleContent("echo $(rm -rf /)", undefined, "allow", hard)).toBe(false);
 		expect(bashCommandMatchesRuleContent("echo x > ~/.zshrc", undefined, "allow", hard)).toBe(false);
 		expect(bashCommandMatchesRuleContent("echo ok", undefined, "allow", hard)).toBe(true);
-		// deny/ask unaffected by hardening
 		expect(bashCommandMatchesRuleContent("echo $(rm -rf /)", undefined, "deny", hard)).toBe(true);
 	});
 });
 
 describe("review fixes 2026-11-08 (P1#2) + BH-R3 rework: mv/cp flag forms", () => {
 	it("-t / --target-directory destinations are validated (W3)", () => {
-		// BH-R3: the -t destination is checked against the W3 set instead of
-		// blanket-hitting the flag text; ~/.ssh is CC-sensitive → hit
 		expect(checkBashWriteTargets3("mv -t ~/.ssh ./evil.md")).toMatchObject({ path: "~/.ssh", kind: "argument" });
 		expect(checkBashWriteTargets3("cp --target-directory=~/.ssh id_ed25519.pub")).toMatchObject({ path: "~/.ssh", kind: "argument" });
-		// recognized harmless flags are stripped — clean bare form no longer prompts
 		expect(checkBashWriteTargets3("mv -v a.ts b.ts")).toBeNull();
-		// no flags → unchanged semantics
 		expect(checkBashWriteTargets3("mv a.ts b.ts")).toBeNull();
-		// unrecognized flag → still prompts (cannot path-validate), flag text as label
 		expect(checkBashWriteTargets3("mv -z a.ts b.ts")).toMatchObject({ path: "-z", kind: "mv-cp-flag-form" });
 	});
 	it("install -m 644 stays destination-only (legitimate common form)", () => {

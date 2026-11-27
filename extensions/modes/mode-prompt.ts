@@ -70,37 +70,18 @@ export function resolveModePrompt(opts: ResolveModePromptOpts): string {
 }
 
 /**
- * Remove skill XML blocks from the system prompt whose names are NOT in the
- * allowedSkills list.
+ * Skill blocks in the pi prompt follow this schema (see
+ * `@earendil-works/pi-coding-agent/dist/core/skills.js:formatSkillsForPrompt`)
+ * — NOT the Agent Skills spec's `<skill name="...">` attribute format:
  *
- * Skill blocks in the actual pi prompt follow this XML schema (see
- * `@earendil-works/pi-coding-agent/dist/core/skills.js:formatSkillsForPrompt`):
- *
- *   <available_skills>
- *     <skill>
- *       <name>SKILL_NAME</name>
- *       <description>...</description>
- *       <location>...absolute path to SKILL.md...</location>
- *     </skill>
- *     ...
- *   </available_skills>
- *
- * NOTE: This is NOT the Agent Skills spec's `<skill name="...">` attribute
- * format. The v1.1.4 implementation used that wrong schema and silently let
- * all skills through (regex matched zero of the real blocks). v1.1.5 fixed
- * the regex to match the child `<name>` element.
- *
- * The function is a no-op (returns the prompt unchanged) when:
- *   - allowedSkills is ["*"] (allow all — default behavior)
- *   - allowedSkills is empty (filter nothing — same as "*")
- *   - No skill blocks are found in the prompt text
+ *   <skill>
+ *     <name>SKILL_NAME</name>
+ *     <description>...</description>
+ *     <location>...absolute path to SKILL.md...</location>
+ *   </skill>
  *
  * Skill names are constrained to [a-z0-9-] per the Agent Skills spec, so
  * no regex escaping is needed.
- *
- * @param prompt         Full system prompt text
- * @param allowedSkills  Array of skill names to keep, or ["*"] for all
- * @returns Modified prompt with disallowed skill blocks removed
  */
 
 export function filterSkillsFromPrompt(
@@ -117,15 +98,9 @@ export function filterSkillsFromPrompt(
 
 	if (!prompt.includes("<skill")) return prompt
 
-	// Remove `<skill>...</skill>` blocks whose child `<name>` element is NOT in
-	// allowedSkills. We deliberately allow flexible whitespace/indentation
-	// between `<skill>` and `<name>` because pi's `formatSkillsForPrompt` uses
-	// two-space indentation, but external callers might re-format.
-	//
-	// The capture group matches one line of `<name>...</name>` (no nested tags
-	// allowed inside the name — Agent Skills spec constrains names to
-	// [a-z0-9-]). `[\s\S]*?` is lazy so it stops at the FIRST `</skill>`,
-	// which is correct because skills don't nest.
+	// `\s*` between <skill> and <name>: pi's formatSkillsForPrompt indents,
+	// external callers may re-format. `[\s\S]*?` is lazy — stops at the
+	// first </skill>; skills never nest (Agent Skills spec).
 	return prompt.replace(
 		/<skill>\s*<name>([^<]+)<\/name>[\s\S]*?<\/skill>/g,
 		(match, name: string) => (allowedSkills.includes(name) ? match : ""),

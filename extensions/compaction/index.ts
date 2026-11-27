@@ -73,7 +73,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 		try {
 			pi2.appendEntry(buildTelemetryEntry(data).type, buildTelemetryEntry(data).data);
 		} catch {
-			/* fail-open (INV-1) */
 		}
 	};
 
@@ -115,7 +114,7 @@ export default function compactionController(pi: ExtensionAPI): void {
 			const manager = SettingsManager.create(ctx.cwd, agentDirOf(ctx));
 			return manager.getCompactionSettings(ctx.model ?? { provider: "", id: "" }).enabled;
 		} catch {
-			return true; // fail-open: don't force shadow on a probe error
+			return true;
 		}
 	};
 
@@ -149,7 +148,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 				cycleId: metricCycleId, ...extra,
 			});
 		} catch {
-			/* Measurements must never affect proposal/recovery semantics. */
 		}
 	};
 
@@ -187,7 +185,7 @@ export default function compactionController(pi: ExtensionAPI): void {
 						});
 						return result.state;
 					} catch {
-						return undefined; // INV-6 fail-open
+						return undefined;
 					}
 				}
 			: undefined,
@@ -301,7 +299,6 @@ export default function compactionController(pi: ExtensionAPI): void {
 				if (runtime.snapshot === snapshot) measure(ctx, "compute-ready", { cycleId, elapsedMs: Date.now() - started });
 			} catch {
 				if (generation !== runtime.state.generation) return;
-				// INV-1: a compute crash degrades to refused, never blocks.
 				runtime.onComputeFailed("compute-error");
 			}
 		})();
@@ -993,6 +990,5 @@ function notifyUser(ctx: ExtensionContext, message: string): void {
 	try {
 		if (ctx.hasUI) ctx.ui.notify(message);
 	} catch {
-		/* rpc/print modes: never throw (ST-04) */
 	}
 }

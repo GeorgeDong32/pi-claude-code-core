@@ -1,14 +1,3 @@
-/**
- * memory/paths.ts — disk location resolution (P3-ME-01).
- *
- * Project memory dir: `~/.pi/agent/projects/<sanitized-git-root>/memory/`
- * The sanitizer matches pi's own sessions directory naming (`/` → `-`),
- * and the root is the git CANONICAL root so linked worktrees share memory.
- * User memory dir (V2-D1, retired): `~/.pi/agent/memory/` — no longer
- * injected, recalled or written; kept only as a read-only path for
- * snapshots, diagnostics and the pending migration to Obsidian.
- */
-
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
@@ -44,12 +33,9 @@ export function gitCanonicalRoot(cwd: string): string | null {
 }
 
 function gitCanonicalRootUncached(cwd: string): string | null {
-	// G1-C3 (entropy control): `--git-common-directory` turned out NEVER to
-	// work on this machine's git (2.56 echoes the arg back instead of the
-	// path, silently degrading gitCanonicalRoot to a constant null — hidden
-	// because pi usually starts at the repo root, where the cwd fallback
-	// coincides). `--show-toplevel` is the universally supported form and
-	// returns the worktree root directly; the old form stays as a fallback.
+	// This machine's git (2.56) echoes `--git-common-directory` back instead
+	// of a path; `--show-toplevel` is the universally supported form and
+	// returns the worktree root directly.
 	try {
 		const toplevel = execSync("git rev-parse --show-toplevel", {
 			cwd,
@@ -92,30 +78,10 @@ export function resolveMemoryPaths(cwd: string, home = process.env.HOME ?? homed
 }
 
 export function memoryWriteRoots(cwd: string, home = process.env.HOME ?? homedir()): string[] {
-	// The user memory dir is retired: it is no longer a write root, so
-	// writes there lose the approval carve-out and hit the guard block.
 	const p = resolveMemoryPaths(cwd, home);
 	return [p.memoryDir];
 }
 
-/**
- * True when a write/edit path targets the project memory layer. Shared by
- * the modes carve-out and the secret guard so the two can never drift.
- *
- * B8 (cherry-batch2): the carve-out is an ALLOWANCE (it skips the approval
- * dialog), so a purely lexical match would let a symlink alias physically
- * pointing OUTSIDE a write root ride the carve-out (fail-open escape — the
- * audit's headline). The second pass realpath-resolves the write path and
- * requires it to stay inside a RESOLVED write root; unresolvable or escaped
- * paths return false and fall back to the normal approval path
- * (fail-closed). Consumers in the stricter direction (guard layer checks)
- * keep using the lexical helpers directly.
- *
- * Known window (accepted, same class as the pre-B8 lexical check): the
- * realpath verdict is check-then-use — the link can be swapped between
- * this check and the actual write. This tightens the alias escape; it is
- * not a sandbox guarantee (convenience, not containment).
- */
 export function isMemoryWritePath(path: string, cwd: string, home = process.env.HOME ?? homedir()): boolean {
 	const roots = memoryWriteRoots(cwd, home);
 	const lexical = roots.some((root) => isInsideDir(path, root));
@@ -156,12 +122,8 @@ function realpathOfNearestExisting(p: string): string {
 	}
 }
 
-/** The sessions dir for a cwd (session_recall scans here; shared sanitizer).
- * C8/R2-P1 fix (2026-10-03): pi names the sessions dir with WRAPPING
- * dashes — `-${sanitizePath(cwd)}-` (verified against the live
- * ~/.pi/agent/sessions layout; the projects layer is the bare-sanitized
- * one). The old bare form pointed at a directory pi never writes, so
- * session_recall always returned empty on a real machine. */
+/** Sessions dir for a cwd; pi names it with WRAPPING dashes —
+ * `-${sanitizePath(cwd)}-` (the projects layer is the bare-sanitized one). */
 export function sessionsDirFor(cwd: string, home = homedir()): string {
 	return join(home, ".pi", "agent", "sessions", `-${sanitizePath(cwd)}-`);
 }

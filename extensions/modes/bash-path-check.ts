@@ -1,76 +1,3 @@
-/**
- * modes/bash-path-check.ts — bash path-target checks (W3/W4/W5, 2026-11-07
- * handoff "bypass CC alignment"; review fixes 2026-11-08: P0-2/3 quoted
- * literals, P1-2 mv/cp all args, P1-3 full sed extractor, P1-4 protected
- * pi-own paths; BH-R3 2026-11-14: mv/cp flag-aware arg slots + remote
- * heredoc masking).
- *
- * W3 (bypass-only prompt): a bash write target — redirection target or the
- * argument-slot target of a write command (tee/cp/mv/rm/touch/mkdir/rmdir/
- * sed -i) — landing on a CC-sensitive path prompts. Compound commands follow
- * CC's approximation: the check fires only when every other segment is
- * read-only safe (`isSafeCommand`).
- *
- * W4 (all-modes deny): Read/Edit deny rules apply to bash path-taking
- * commands. Read-class commands (cat/head/…, sed without -i) check Read deny
- * rules; write/create-class commands check Edit deny rules. Any hit denies
- * the whole command (CC deniedSubresult parity) — bypass-immune, decide
- * step 1b. BH-R3: segments feeding a REMOTE shell through a heredoc
- * (`ssh host <<'EOF' … EOF`) are masked before scanning — the body runs on
- * the remote host and is not a local path context (delimiters parsed from
- * the raw line, so quoted `<<'EOF'` works; `<<<` here-strings are NOT
- * masked; an unclosed heredoc keeps its body conservatively).
- *
- * BH-R3 mv/cp argument analysis (fixes the flag-blind slots of P1-2, where
- * `cp -R src dst` read "-R" as a path): harmless short flags (r/R/f/i/n/v/
- * a/p/u/b/T/l/H/L/P/d/Z/x, long forms, valued -S/--suffix) are stripped;
- * `-t DIR` / `--target-directory[=DIR]` consume a value and the DIRECTORY
- * itself joins the checked targets; an unrecognized flag is not silently
- * treated as a path — W3/W4 escalate it as an "mv/cp flag-form" prompt
- * (BashFlagEscalation → adjudicate step 3.6, deny still outranks) so
- * flag-heavy invocations fail closed to the user instead of open.
- *
- * W3.5 (all-modes prompt, 2026-11-08 P1-4): a bash write target landing on
- * a pi-own protected path (permission-modes.json, rules dirs, settings.json
- * — the [C4] set via memory/protected-paths.ts) prompts in every mode
- * (bypass included; placed after plan hard limits in decide). A deliberate
- * pi superset over CC (which only covers these via the .claude dir segment).
- * BH-R3: the protected candidate wins over the unrecognized-flag prompt.
- *
- * E1 (D-CH-4, 2026-11-15-cleanup-hardening): literal cd tracking along
- * `&&` chains — a literal `cd <dir>` followed by `&&` shifts the effective
- * directory for every subsequent segment, so relative paths resolve
- * against the cd'ed directory in ALL path checks (W3/W4/P1-4/flag
- * escalation). Non-literal cds (`$`, backtick, `~`, `-`, bare) and cds
- * followed by `;` / `||` / a pipe are NOT tracked — their segments analyze
- * as-is and resolution stays at the base cwd (known residual, DEVIATIONS).
- *
- * Shared extractor rules (CC BashTool pathValidation parity):
- * - Tokenizer + structural judgment only — NO path-extraction regexes.
- * - A token that is ENTIRELY one single/double-quoted literal with no $, `
- *   or backslash inside is unquoted and participates (P0-2/3, CC
- *   validatePath strip-parity); anything else carrying quotes/variables/
- *   globs/command substitution is opaque — fail-open on uncertainty.
- * - grep/rg/awk/jq: the first non-flag argument is a pattern, not a path.
- *   find: only paths before the first flag. `--` ends flag parsing.
- * - sed: CC PATH_EXTRACTORS.sed parity — `-f/--file` operand is a script
- *   FILE (validated), `-e/--expression` operand is skipped, combined short
- *   flags containing e/f mark the script found, the first non-flag is the
- *   script, the rest are files. In-place forms: -i, -iSUFFIX,
- *   --in-place[=SUFFIX], combined short flags containing i.
- * - ssh / git / cd are deliberately NOT path-checked (remote strings are
- *   not local paths).
- *
- * W5 switch: PI_CORE_BASH_PATH_CHECKS env ("all" | "safety" | "deny" |
- * "off") overrides permission-modes.json `bashPathChecks` (same values,
- * default "all"). safety = W3 + allow-rule hardening (P0-1, lives in
- * bash-permission-match.ts) + protected-path prompt (P1-4); deny = W4 only.
- * Read per adjudication (mtime-cached config primitive — config edits apply
- * without /reload; env applies to new processes only).
- *
- * Pure string layer — no fs beyond protected-paths' matcher (lexical), no
- * pi imports.
- */
 import { splitShellChain, isSafeCommand } from "./bash-analysis.ts"
 import { isCcSafetyPath, expandUserPath } from "./path-safety.ts"
 import type { PermissionModesConfig } from "./config.ts"
@@ -91,11 +18,6 @@ function coerceMode(v: string | undefined): BashPathCheckMode | null {
 	return (VALID_MODES as readonly string[]).includes(lower) ? (lower as BashPathCheckMode) : null
 }
 
-/**
- * Resolve the W5 switch: env PI_CORE_BASH_PATH_CHECKS wins over the config
- * key `bashPathChecks`; both default to "all". Invalid values fall back to
- * the next source (never throw — a typo disables the override only).
- */
 export function resolveBashPathChecks(config: PermissionModesConfig): BashPathCheckMode {
 	return coerceMode(process.env.PI_CORE_BASH_PATH_CHECKS)
 		?? coerceMode(config.bashPathChecks)
@@ -127,11 +49,6 @@ function resolveToken(token: string): string | null {
 	return token
 }
 
-/**
- * Naive quote-aware whitespace tokenizer for one shell segment. Keeps quote
- * characters attached (so callers can treat quoted tokens as opaque) and
- * splits redirection operators into standalone tokens.
- */
 function tokenizeSegment(segment: string): string[] {
 	const tokens: string[] = []
 	let current = ""
@@ -156,7 +73,6 @@ function tokenizeSegment(segment: string): string[] {
 			push()
 			continue
 		}
-		// split `>`, `>>`, `&>`, `2>` style operators into standalone tokens
 		if (ch === ">" || (ch === "&" && segment[i + 1] === ">")) {
 			push()
 			let op = ch
@@ -166,7 +82,7 @@ function tokenizeSegment(segment: string): string[] {
 				i++
 			}
 			tokens.push(op)
-			i-- // compensate the loop increment
+			i--
 			continue
 		}
 		current += ch
@@ -176,27 +92,13 @@ function tokenizeSegment(segment: string): string[] {
 }
 
 interface ParsedSegment {
-	/** argv[0] basename (env-assignment prefixes stripped). */
 	base: string
-	/** Positional args (unquoted when literal, flags excluded, opaque skipped). */
 	args: string[]
-	/**
-	 * All operand tokens after argv0 in order, flags INCLUDED (unquoted when
-	 * literal; opaque kept verbatim so sed's combined-flag logic can still
-	 * see them). For sed-style extractors only.
-	 */
 	operands: string[]
-	/** Redirection targets (unquoted when literal). */
 	redirects: string[]
-	/**
-	 * Index in `operands` where the post-`--` positional region starts
-	 * (-1 when no `--` appeared). `--` itself is NOT an operand entry.
-	 * Review fix 2026-11-08 P2#4/#5: flag parsing must stop here.
-	 */
 	postDashStart: number
 }
 
-/** Does the token look like a redirect operator (`>`, `>>`, `&>`, `n>`)? */
 function isRedirectOp(token: string): boolean {
 	const base = token.replace(/^\d+/, "")
 	return base === ">" || base === ">>" || base === "&>" || base === "&>>"
@@ -204,7 +106,6 @@ function isRedirectOp(token: string): boolean {
 
 function parseSegment(segment: string): ParsedSegment | null {
 	const tokens = tokenizeSegment(segment)
-	// Skip env-assignment prefixes (FOO=bar cmd …).
 	let first = 0
 	while (first < tokens.length && /^\w+=/.test(tokens[first]!)) first++
 	const argv0 = tokens[first]
@@ -221,12 +122,11 @@ function parseSegment(segment: string): ParsedSegment | null {
 		}
 		if (isRedirectOp(t)) {
 			const dst = tokens[i + 1]
-			// /dev/null is the universal sink; a leading & is an fd reference.
 			if (dst !== undefined && dst !== "/dev/null" && !dst.startsWith("&")) {
 				const resolved = resolveToken(dst)
 				if (resolved !== null) redirects.push(resolved)
 			}
-			i++ // consume the target
+			i++
 			continue
 		}
 		if (postDashStart === -1 && t.startsWith("-")) {
@@ -247,35 +147,24 @@ function parseSegment(segment: string): ParsedSegment | null {
 	}
 }
 
-// Single tokenizer authority — exported for bash-permission-match.ts's
-// P0-1 redirect check (review fix 2026-11-08 P1#1).
 export { tokenizeSegment }
 
-// ---- sed analysis (P1-3, CC PATH_EXTRACTORS.sed parity) -------------------
-
 interface SedAnalysis {
-	/** In-place edit (-i family)? */
 	inPlace: boolean
-	/** File path candidates (script operand + trailing files). */
 	paths: string[]
 }
 
 const SED_LONG_FILE = new Set(["-f", "--file"])
 const SED_LONG_EXPR = new Set(["-e", "--expression"])
 
-/** Analyze sed operands per CC's extractor: flags, script position, files. */
 function analyzeSed(operands: string[], postDashStart: number): SedAnalysis {
 	const paths: string[] = []
 	let scriptFound = false
 	let inPlace = false
 	for (let i = 0; i < operands.length; i++) {
 		const arg = operands[i]!
-		// After `--` everything is positional — no flag parsing (review fix
-		// 2026-11-08 P2#4: `sed -- -i s/x/y/ f` has -i as the SCRIPT, not an
-		// in-place flag; CC's extractor tracks `--` the same way).
 		const isFlag = postDashStart === -1 || i < postDashStart
 		if (isFlag && arg.startsWith("-") && arg !== "-") {
-			// -f/--file: the next operand is a script FILE (validated too).
 			if (SED_LONG_FILE.has(arg)) {
 				const scriptFile = operands[i + 1]
 				if (scriptFile !== undefined && resolveToken(scriptFile) !== null) {
@@ -285,7 +174,6 @@ function analyzeSed(operands: string[], postDashStart: number): SedAnalysis {
 				scriptFound = true
 				continue
 			}
-			// -e/--expression: the next operand is an expression, not a file.
 			if (SED_LONG_EXPR.has(arg)) {
 				i++
 				scriptFound = true
@@ -296,15 +184,12 @@ function analyzeSed(operands: string[], postDashStart: number): SedAnalysis {
 				scriptFound = true // GNU docs: implies the script is next non-flag
 				continue
 			}
-			// Combined/short flags: -i[SUFFIX] or any short group containing
-			// i marks in-place; a group containing e or f marks script-found.
-			if (arg.startsWith("--")) continue // unknown long flag — skip
+			if (arg.startsWith("--")) continue
 			const letters = arg.replace(/^-+/, "")
 			if (letters.includes("i")) inPlace = true
 			if (letters.includes("e") || letters.includes("f")) scriptFound = true
 			continue
 		}
-		// First non-flag operand is the script (unless -e/-f found it).
 		if (!scriptFound) {
 			scriptFound = true
 			continue
@@ -315,29 +200,18 @@ function analyzeSed(operands: string[], postDashStart: number): SedAnalysis {
 	return { inPlace, paths }
 }
 
-/** True when the segment invokes sed with an in-place (-i family) flag. */
 function sedInPlace(segment: string): boolean {
 	const parsed = parseSegment(segment)
 	if (!parsed || parsed.base !== "sed") return false
 	return analyzeSed(parsed.operands, parsed.postDashStart).inPlace
 }
 
-// ---- E1: literal cd tracking along && chains (D-CH-4) ---------------------
-
 interface ChainNode {
 	segment: string
-	/** Effective directory for this segment (post-cd resolution). */
 	dir: string
-	/** True when this segment is a tracked literal cd (followed by `&&`). */
 	isCd: boolean
 }
 
-/**
- * E1 (D-CH-4): literal `cd <dir>` detection for path tracking — bare path
- * token only (same charset rule as bash-analysis's safety-side detector;
- * quoted/expanded/globbed/option targets and redirect-carrying segments
- * are not tracked). Tracked only when the segment's connector is `&&`.
- */
 function literalCdTarget(segment: string): string | null {
 	const parsed = parseSegment(segment)
 	if (!parsed || parsed.base !== "cd") return null
@@ -536,38 +410,25 @@ function pathArgsFor(parsed: ParsedSegment): string[] {
 	return parsed.args
 }
 
-/**
- * BH-R3 (spec 2026-11-14-backtest-hardening): only `-t DIR` and
- * `--target-directory[=DIR]` alter where mv/cp writes its destination —
- * every other recognized flag is stripped and the BARE positional form is
- * analyzed (all operands stay rule-checked, so nothing can hide). An
- * UNRECOGNIZED flag escalates to ASK (the BashFlagEscalation channel) instead of
- * the former outright deny (82d35c2 treated any flag as a hidden
- * destination). install stays destination-only (DEVIATIONS #134).
- * Over-classifying a non-destination flag as harmless is safe by
- * construction: its operands still land in `paths` and are checked.
- */
 const FLAG_SENSITIVE_MOVE_COMMANDS = new Set(["mv", "cp"])
 
-/** mv/cp short-flag characters that carry no path value (boolean forms). */
 const MOVE_CP_HARMLESS_SHORT = new Set([
-	"r", "R", // --recursive
-	"f", // --force
-	"i", // --interactive
-	"n", // --no-clobber
-	"v", // --verbose
-	"a", // --archive (cp)
-	"p", // --preserve (cp)
-	"u", // --update
-	"b", // --backup (value optional; appended/glued forms harmless)
-	"T", // --no-target-directory — destination stays positional
-	"l", // --link (cp)
-	"H", "L", "P", "d", // dereference modes (cp)
-	"Z", // SELinux context
-	"x", // --exchange (mv)
+	"r", "R",
+	"f",
+	"i",
+	"n",
+	"v",
+	"a",
+	"p",
+	"u",
+	"b",
+	"T",
+	"l",
+	"H", "L", "P", "d",
+	"Z",
+	"x",
 ])
 
-/** mv/cp long flags without a path value; `=VALUE` forms consumed inline. */
 const MOVE_CP_HARMLESS_LONG = new Set([
 	"recursive", "force", "interactive", "no-clobber", "verbose", "archive",
 	"preserve", "no-preserve", "backup", "strip-trailing-slashes", "debug",
@@ -576,28 +437,16 @@ const MOVE_CP_HARMLESS_LONG = new Set([
 	"update", "context",
 ])
 
-/** mv/cp long flags whose (non-path) value may follow as a separate operand. */
 const MOVE_CP_VALUED_LONG = new Set(["suffix"])
 
-/** -S takes a suffix value (short form of --suffix). */
 const MOVE_CP_VALUED_SHORT = new Set(["S"])
 
 export interface MoveCpAnalysis {
-	/** Destination directory from -t DIR / --target-directory[=DIR]. */
 	targetDir: string | null
-	/** Positional operands (sources; the destination when no -t form). */
 	paths: string[]
-	/** First unrecognized flag operand — ask escalation (BH-R3). */
 	unrecognizedFlag: string | null
 }
 
-/**
- * S1 (spec 2026-11-15-cleanup-hardening): the mv/cp rule-check candidate
- * list — the `-t` destination directory (when present) joined ahead of the
- * positional operands. One expression, shared by the three consumers
- * (W3 write-target, P1-4 protected write, W4 deny scan) instead of the
- * previously triplicated ternary.
- */
 function checkedPaths(analysis: MoveCpAnalysis): string[] {
 	return analysis.targetDir !== null
 		? [analysis.targetDir, ...analysis.paths]
@@ -620,16 +469,14 @@ function analyzeMoveCp(parsed: ParsedSegment): MoveCpAnalysis {
 					const value = eq === -1 ? parsed.operands[i + 1] ?? null : op.slice(eq + 1)
 					if (value === null) unrecognizedFlag ??= op
 					else targetDir = value
-					if (eq === -1 && value !== null) i++ // value consumed
+					if (eq === -1 && value !== null) i++
 				} else if (MOVE_CP_VALUED_LONG.has(name)) {
-					if (eq === -1 && parsed.operands[i + 1] !== undefined) i++ // value consumed
+					if (eq === -1 && parsed.operands[i + 1] !== undefined) i++
 				} else if (!MOVE_CP_HARMLESS_LONG.has(name)) {
 					unrecognizedFlag ??= op
 				}
 				continue
 			}
-			// short cluster: -t consumes the rest of the cluster (or the next
-			// operand) as the destination; -S consumes a suffix value
 			const chars = op.slice(1)
 			for (let c = 0; c < chars.length; c++) {
 				const ch = chars[c]!
@@ -645,7 +492,7 @@ function analyzeMoveCp(parsed: ParsedSegment): MoveCpAnalysis {
 					break
 				}
 				if (MOVE_CP_VALUED_SHORT.has(ch)) {
-					if (chars.slice(c + 1) === "") i++ // value in the next operand
+					if (chars.slice(c + 1) === "") i++
 					break
 				}
 				if (!MOVE_CP_HARMLESS_SHORT.has(ch)) {
@@ -657,8 +504,6 @@ function analyzeMoveCp(parsed: ParsedSegment): MoveCpAnalysis {
 		}
 		paths.push(op)
 	}
-	// an opaque (-t) destination cannot be validated — escalate like an
-	// unrecognized flag
 	if (targetDir !== null && /[$`'"]/.test(targetDir)) {
 		unrecognizedFlag ??= targetDir
 		targetDir = null
@@ -731,14 +576,7 @@ function remoteBoundHeredoc(prefix: string): boolean {
 	return cmd.slice(cmd.lastIndexOf("/") + 1) === "ssh"
 }
 
-/**
- * BH-R3: a heredoc body piped to `ssh host …` executes on the REMOTE host —
- * parsing its lines as local commands produced false deny hits (the body
- * lines are plain command text to the local tokenizer). This strips
- * REMOTE-bound heredoc bodies from the analyzed text; local consumers
- * (`bash -s` / `sh -s` and everything else) keep their bodies, and an
- * unclosable heredoc keeps its body too (fail-open to the old behavior).
- */
+// a heredoc body piped to `ssh host …` executes on the REMOTE host — its lines are not local commands
 function stripRemoteHeredocBodies(command: string): string {
 	if (!command.includes("<<")) return command
 	const lines = command.split("\n")

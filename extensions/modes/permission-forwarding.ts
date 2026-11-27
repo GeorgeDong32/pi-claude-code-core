@@ -122,10 +122,6 @@ const DECISIONS: ReadonlySet<string> = new Set([
 	"block",
 ]);
 
-/**
- * Validate a response against the expected id/challenge/parent session.
- * Rejects forged or inconsistent payloads (fail-closed).
- */
 export function isValidForwardedResponse(
 	resp: ForwardedPermissionResponse | null | undefined,
 	expected: {
@@ -321,7 +317,6 @@ export function createForwardingPoller(
 				try {
 					await opts.onRequest(req);
 				} catch {
-					// Allow retry on hard failure after parent cancel / crash mid-handle.
 					claimed.delete(req.id);
 					throw new Error("forwarding onRequest failed");
 				}

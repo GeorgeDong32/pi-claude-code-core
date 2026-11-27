@@ -1,25 +1,3 @@
-/**
- * web-gov/index.ts — the second rule family (P4-WB), proving the family
- * seam is real (P4-FAM-06).
- *
- * Claims search/fetch tools that carry a URL-ish input (exa
- * search/crawl/fetch, webfetch…), maps them to the HOST, and evaluates
- * `webfetch(domain:host)` rules (deny > ask > allow). A builtin
- * pre-approved domain list (P4-WB-02, CC preapproved pattern) renders
- * allow without any rule; the list is overridable via
- * ~/.pi/agent/pi-core-web.json.
- *
- * BH-S2 (spec 2026-11-14-backtest-hardening): URL fields are parsed with
- * `new URL()` — the old prefix regex stopped at `@`, so
- * `https://github.com@evil.example/` extracted "github.com" and rode the
- * preapproved list. The family's canonical id now carries the parse
- * verdict (see canonicalTarget): plain host, `@host` for userinfo URLs
- * (explicit domain rules still match the real host, the preapproved list
- * NEVER does), `?raw` for unparsable fields (fail-closed ask), null for
- * non-URL fields (a free-text query is a search term, not a fetch target).
- * IP literals are hosts — `domain:` rules match them normally, but the
- * preapproved-domain list never matches an IP.
- */
 import { statSync } from "node:fs";
 import { readJson } from "../../lib/settings.ts";
 import { homedir } from "node:os";
@@ -102,19 +80,6 @@ function parseUrlTarget(raw: string): ParsedTarget | null {
 	return { host, userinfo: url.username !== "" || url.password !== "" };
 }
 
-/**
- * Family canonical id for URL-ish tool input (BH-S2):
- *
- *   host       — parsed hostname, lowercased, trailing dots stripped
- *   `@host`    — the URL carried userinfo (user[:pass]@host): explicit
- *                domain rules still match the REAL host, but the
- *                preapproved list never does → ask absent an explicit rule
- *   `?raw`     — the field exists but is not a parsable absolute URL:
- *                fail-closed ask; only an explicit grant of the identical
- *                raw string can ever allow it again
- *   null       — no url/href/link string field (passthrough; falls through
- *                to the mcp family)
- */
 export function canonicalTarget(input: Record<string, unknown>): string | null {
 	let unparsable: string | undefined;
 	for (const key of ["url", "href", "link"]) {
@@ -138,13 +103,6 @@ function isIpLiteral(host: string): boolean {
 	return host.includes(":") || /^[\d.]+$/.test(host);
 }
 
-/**
- * Extract a hostname from URL-ish tool input. Only actual URL fields — a
- * free-text `query` is a search term, not a fetch target, and must not
- * drift a search call into host governance. BH-S2: parsed with `new URL()`
- * (userinfo URLs yield their real host; unparsable fields yield null here
- * while canonicalTarget still claims them for a fail-closed ask).
- */
 export function extractHost(input: Record<string, unknown>): string | null {
 	const target = canonicalTarget(input);
 	if (target === null || target.startsWith(UNPARSABLE_MARK)) return null;

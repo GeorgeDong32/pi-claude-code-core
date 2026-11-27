@@ -5,18 +5,9 @@ import { join } from "node:path";
 
 import { parsePrRepo } from "./review-report.js";
 
-// D-FX-1 gave the local base fetch one — a stalled network or a git
-// credential prompt must never stall /review indefinitely (the https clone
-// fallback for a private repo without gh would otherwise sit on a
-// username/password prompt forever). Hard constants, deliberately not
-// configurable (no new env/settings key, INV-10). Clone failures remain the
-// documented hard error; a timed-out clone surfaces "timed out" through the
-// same path.
 const PR_CLONE_TIMEOUT_MS = 120_000;
 const PR_HEAD_FETCH_TIMEOUT_MS = 60_000;
-// gh passes env through to its inner git; suppressing terminal prompts is
-// harmless for gh's own auth (gh errors instead of prompting when
-// unauthenticated non-interactively).
+// gh passes env through to its inner git, and gh errors instead of prompting when unauthenticated non-interactively — so GIT_TERMINAL_PROMPT=0 is harmless for gh's own auth.
 const NO_CREDENTIAL_PROMPTS = { GIT_TERMINAL_PROMPT: "0" };
 
 

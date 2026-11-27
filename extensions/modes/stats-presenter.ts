@@ -43,9 +43,8 @@ export function createStatsPresenter(deps: StatsPresenterDeps) {
   let outputAtStart = 0;
 
   // Streaming chunks arrive while the branch is frozen (pi appends entries
-  // on message_end), so per-chunk work is O(new entries), not O(session
-  // length); a moved prefix (navigate/fork/switch) forces a full recompute
-  // (plan A1, property-tested in branch-stats.test.ts).
+  // on message_end): per-chunk work is O(new entries), a moved prefix
+  // (navigate/fork/switch) forces a full recompute.
   const workingStats = createWorkingStats();
 
   function statsHost(ctx: ExtensionContext): WorkingStatsHost {

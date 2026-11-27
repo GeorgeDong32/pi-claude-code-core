@@ -1,50 +1,3 @@
-/**
- * memory/automation.ts — the automatic maintenance hooks (V2-A §4 + spec
- * 2026-10-03-memory-exit-flush; single-layer since the user layer retired
- * 2026-11-24 — every memory op targets the PROJECT store).
- *
- * Replaces hermes's correction-detector / background-review / session-flush
- * with the same cadence, one shared side-channel lane (llm.ts) and one
- * shared ops engine (store.ts):
- *
- *   session_start        per-session state reset (A1 — the host reuses the
- *                        factory's closures across /new,/resume,/fork;
- *                        without the reset a dead AbortController would
- *                        silently kill all automation after the first
- *                        in-process session switch)
- *   message_end (user)   correction regex gate (EN + CJK) → pending flag
- *   turn_end             correction only (≤1 per 3 turns) — review moved
- *                        to agent_end (completed-run snapshots)
- *   agent_end            review extraction (≥10 turns or ≥15 tool calls,
- *                        ≥3 user turns warmup; suffix-60 window cap),
- *                        fire-and-forget with in-flight guard; directive
- *                        turns are excluded from accounting
- *   session_before_compact  ZERO LLM — stages the unextracted tail as a
- *                        queue record through the same seam as shutdown
- *                        (the old awaited 60s flush relocated the exit
- *                        stall to every /compact; compaction does not need
- *                        the extraction to complete synchronously)
- *   session_shutdown     ZERO LLM — stages the unextracted tail as a queue
- *                        record (queue.ts) instead of the old awaited 10s
- *                        flush; the host awaits shutdown handlers
- *                        serially with no timeout, and a real call on the
- *                        session model measurably stalls every long-session
- *                        exit for the full 10s budget
- *
- * The queue is drained at the NEXT session_start (background, per-project
- * routing, ≤5 records, bounded attempts) — see queue.ts and the spec.
- *
- * Model policy: memory.model → memory.recallModel → session model. The
- * recall asymmetry is deliberate: recall treats recallModel as a REQUIRED
- * quality gate (unset = recall off, D3); ops treat it as a cheap-lane
- * preference (unresolvable → session model, never a failure). Ops quality
- * thus rides whatever recallModel was configured for (disclosed).
- *
- * Everything is silent-failure (P3-ME-09): a hook must never throw, and a
- * failed side-channel call is recorded for /memory diagnostics and retried
- * by the next tick. All hooks are suppressed while yielded to hermes.
- */
-
 import { notify as sharedNotify } from "../ui/notify.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
@@ -68,8 +21,6 @@ export interface MemorySettings {
 	model?: string;
 	recallModel?: string;
 	recallWaitMs?: number;
-	/** Absolute paths knowledge_search(scope: "roots") may scan besides the
-	 * memory dir (notes vaults). Empty by default: core never assumes a vault. */
 	searchRoots?: string[];
 }
 
@@ -271,20 +222,14 @@ function memoryDigest(dirs: { project: string }): string {
 export interface AutomationArgs {
 	gate: { state: { yielded: boolean } };
 	dirs: (ctx?: { cwd?: string }) => { project: string; projectsDir: string; agentDir: string };
-	/** true while a memory-consolidation directive turn is running — its
-	 *  conversation must not feed the review/correction extractors */
 	isDirectiveTurn?: () => boolean;
 	settings: () => MemorySettings;
 	state: AutomationState;
 	deps?: AutomationDeps;
 }
 
-/**
- * C2: notices through the shared entry (bus publish + cctui negotiation).
- * The try/catch stays as defense-in-depth for stale ctx objects the host
- * hands out after a /new or /resume — a throwing ui accessor must never
- * break the turn hook. Exported for the coverage test.
- */
+// The host hands out stale ctx objects after a /new or /resume — a
+// throwing ui accessor must never break the turn hook.
 export function automationNotify(ctx: ExtensionContext, message: string): void {
 	try {
 		sharedNotify(ctx, message, "info");
@@ -420,7 +365,7 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 						state.lastCorrection = applied > 0 ? `saved ${applied} op(s)` : "nothing durable";
 						if (applied > 0) notify(ctx, `🔧 correction captured — memory updated (${applied} op${applied === 1 ? "" : "s"})`);
 					})
-					.catch(() => { /* P3-ME-09: fire-and-forget capture must never block the turn */ })
+					.catch(() => { })
 					.finally(() => {
 						correctionInFlight = false;
 					});
@@ -485,7 +430,7 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 					state.lastReview = applied > 0 ? `saved ${applied} op(s)` : "nothing durable";
 					if (applied > 0) notify(ctx, `💾 memory auto-reviewed (${applied} op${applied === 1 ? "" : "s"})`);
 				})
-				.catch(() => { /* P3-ME-09: fire-and-forget capture must never block the run */ })
+				.catch(() => { })
 				.finally(() => {
 					reviewInFlight = false;
 				});
@@ -498,7 +443,6 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 			stageUnextractedTail(ctx, label);
 		} catch (err) {
 			state.lastError = `${label}: ${err instanceof Error ? err.message : String(err)}`;
-			/* compaction must never be blocked by staging */
 		}
 	};
 
@@ -520,6 +464,9 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 		},
 	});
 
+	// The host reuses the factory's closures across /new,/resume,/fork;
+	// without the reset a dead AbortController would silently kill all
+	// automation after the first in-process session switch.
 	pi.on("session_start", () => {
 		try {
 			pendingCorrection = undefined;
@@ -588,6 +535,9 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 		}
 	}
 
+	// The host awaits shutdown handlers serially with no timeout, and a
+	// real call on the session model measurably stalls every long-session
+	// exit for the full 10s budget.
 	pi.on("session_shutdown", (event, ctx: ExtensionContext) => {
 		try {
 			const reason = (event as { reason?: string }).reason;

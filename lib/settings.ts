@@ -1,19 +1,3 @@
-/**
- * Shared settings-JSON primitive (P0-LB-01).
- *
- * Single implementation replacing the four per-package copies
- * (pm config.ts / pi-effort effort.ts / pi-review config.ts / goal state).
- * Semantics merged from those implementations:
- *
- *   - read: returns the fallback for missing/empty/malformed/non-object
- *     input instead of throwing (pm's loadModelProfiles behavior; effort's
- *     callers caught and defaulted). A throwing `onInvalid` callback is the
- *     one exception — it propagates (see readJson doc).
- *   - write: atomic tmp+rename in the same directory, so a failed write can
- *     never corrupt the previous file. Concurrent writers resolve by
- *     last-rename-wins (same as the previous per-package copies).
- */
-
 import {
 	chmodSync,
 	mkdirSync,
@@ -26,16 +10,6 @@ import {
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 
-/**
- * Read a JSON file. Returns `fallback` when the file is missing, empty,
- * unparsable, or not a JSON object.
- *
- * `onInvalid` reports WHY the fallback was used, for callers that surfaced a
- * diagnostic in the pre-lib implementation (pm warns on malformed config).
- * A callback that throws propagates out as-is (once, with the real reason) —
- * it is not swallowed into a second "malformed" report; callers may use a
- * throwing callback as a guard (e.g. refuse to overwrite a corrupt file).
- */
 export function readJson<T extends object>(
 	path: string,
 	fallback: T,
@@ -67,22 +41,6 @@ export function readJson<T extends object>(
 	return fallback;
 }
 
-/**
- * Atomically write `value` as pretty-printed JSON (2-space + trailing
- * newline, matching the historical on-disk format of all four packages).
- *
- * The temp file lives in the target directory (same filesystem → atomic
- * rename). On any failure the temp file is best-effort removed and the
- * original file is left untouched. `opts.mode` (e.g. pm's 0o600 for
- * model-profiles.json) is applied to the temp file so it survives the
- * rename — default keeps the process umask for a NEW file, like a plain
- * writeFileSync. CH E10 (2026-11-15): with no explicit `mode` and an
- * existing target, the target's `mode & 0o777` is copied onto the temp
- * file before the rename, so a hand-tightened 0600 survives rewrites
- * (rename would otherwise replace the inode and reset the bits to umask).
- * If the target cannot be stat'd (vanished mid-write) the umask behavior
- * applies, and a chmod failure never fails the write.
- */
 export function writeJsonAtomic(
 	path: string,
 	value: unknown,
@@ -120,25 +78,6 @@ function basename(path: string): string {
 }
 
 
-/**
- * mtime-keyed cache behind `readJson` for hot paths that re-read the same
- * small settings file several times per turn (effort settings on every sync,
- * modes project permissions on every tool call, the goal auditor config).
- *
- * Shape follows the two proven in-repo precedents — modes' `configCache`
- * (mtimeMs key, shared read-only result) and memory's `scanMemoryDirCached`
- * (explicit invalidation on every internal write path) — collapsed into the
- * shared primitive so callers cannot forget the write side:
- *
- *   - `writeJsonAtomic` drops the cache entry for the path it writes, so
- *     same-millisecond rewrites cannot serve stale content to automation.
- *   - A missing file is a miss AND drops the entry (a delete is a change too).
- *   - The returned object is SHARED: callers treat it as read-only, same
- *     discipline as modes' configCache. Mutate-then-write call sites keep
- *     plain `readJson` and build their own object.
- *   - Reads that throw (a throwing `onInvalid` guard) are never cached, so
- *     a corrupt file re-reports on every call, exactly like today.
- */
 const cachedReads = new Map<string, { mtimeMs: number; value: object }>();
 
 export function readJsonCached<T extends object>(

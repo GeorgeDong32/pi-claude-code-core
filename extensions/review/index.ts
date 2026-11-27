@@ -1,31 +1,3 @@
-/**
- * @georgedong32/pi-review — fan-out code review for Pi.
- *
- * v0.7 pipeline:
- *   1. `/review` resolves the target, prepares the diff + target repo
- *      checkout, and writes `.pi/pi-review/runs/<runId>/manifest.json`.
- *   2. The hidden directive tells the main agent to call `subagent({...})`
- *      exactly once with a generated workflowScript. The script fans out
- *      reviewers via `runs.all([...])` and feeds their `structuredOutput`
- *      objects into `runs.run("gate")`. Every child passes `cwd` and
- *      `outputSchema`.
- *   3. The main agent calls `pi_review_report` (a tool registered below)
- *      with the workflow return value. The tool re-validates outputs,
- *      enforces verdict in code, persists a session entry, and renders the
- *      deterministic markdown.
- *
- * No project-level permission files are written — diff/clone/fetch happen
- * via the extension's own `pi.exec`; reviewer children only need read/grep
- * and a few read-only git commands, all already permitted in the agent
- * frontmatter.
- *
- * R11 (D-CH-2, 2026-11-15): the review bus channel reconciles at three
- * points (agent_end for a report-less live run, session_start for stale
- * running, a new /review entry for residual running) so `review.status` can
- * no longer get stuck at "running". Since CH-8b the live run is armed by
- * the directive message itself (message_start, customType
- * "pi-review-directive"), not by any agent_start. See the liveRun closure.
- */
 import { notify as sharedNotify } from "../ui/notify.ts";
 import { existsSync, readFileSync } from "node:fs";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
@@ -87,7 +59,6 @@ export default function (pi: ExtensionAPI) {
 		}
 	}
 	pi.on("session_start", () => {
-		// R11 ②: stale running from a previous session/process must not leak in.
 		if (busReviewStatus() === "running") reconcileIdle();
 		if (!subagentToolAvailable() && !degradedNoticeShown) {
 			console.log(`pi-review: ${degradationNotice()}`);

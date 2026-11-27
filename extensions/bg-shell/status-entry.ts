@@ -1,4 +1,3 @@
-// Vendored adaptation for pi-claude-code-core (BG): the data half of the
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { debugError } from "./debug.ts";
@@ -27,11 +26,6 @@ export function statusData(task: Task): TaskStatusData {
 	};
 }
 
-/**
- * Append the status entry; display-only, so a failure must never propagate.
- * `override` patches the data (a kill appends before the registry settles
- * the killed state, so it forces `state: "killed"` for the `stopped` row).
- */
 export function appendStatusEntry(pi: ExtensionAPI, task: Task, override?: Partial<TaskStatusData>): void {
 	try {
 		pi.appendEntry(STATUS_ENTRY_TYPE, { ...statusData(task), ...override });

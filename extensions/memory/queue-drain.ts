@@ -1,36 +1,3 @@
-/**
- * memory/queue-drain.ts — the queue drain orchestration (SPEC 2026-10-07
- * P2-3 W5/W6; the protocol itself is P0-3's queue.ts).
- *
- * Everything between "a queue dir exists" and "each record is settled or
- * released" lives here: candidate enumeration, dead-claim recovery, the
- * claim → re-read → route/attempt/age validation, the attempt bump, the
- * completion call, the apply, and the token finalization. automation.ts
- * keeps settings, correction/review scheduling, the prompt templates and
- * the hooks — it only captures a cap at session_start and injects ports.
- *
- * The cap is IMMUTABLE from capture time (dirs/model/registry/projectKey);
- * the drain never holds or late-reads a ctx. The completion uses its own
- * 20s timeout and is deliberately NOT linked to any session abort — a /new
- * mid-drain must not corrupt the old drain's routing or diagnostics.
- *
- * applyOpsOutcome is the shared application summary: runOps (review /
- * correction) and this drain produce the SAME summary for the same ops.
- * Trigger wording, diagnostic fields, empty-ops counting and timestamps
- * stay with their own callers — code sharing must not change flush/review
- * semantics.
- *
- * Diagnostics are RETURNED (DrainSummary[]), never written to shared state
- * by concurrent workers — the caller aggregates after allSettled.
- *
- * BH-E2 (spec 2026-11-14-backtest-hardening): validateClaimed checks the
- * attempt cap and the record age BEFORE the blacklist/projectsDir skips —
- * expired records take the same settle-with-diagnostic disposal path no
- * matter their routing, so cross-project records can no longer be
- * skipped-and-released forever. Age is the record's own savedAt (the
- * release rename must not reset it).
- */
-
 import type { Api, Model } from "@earendil-works/pi-ai";
 
 import { applyMemoryOps, type MemoryOp, type OpsOutcome } from "./store.ts";
@@ -115,7 +82,6 @@ async function drainOneRecord(cap: DrainCap, claim: QueueClaim, ports: QueueDrai
 				summary.applied = outcome.applied;
 				summary.lastFlush = `flush-queued: ${outcome.applied} op(s)`;
 				if (outcome.error) {
-					// B2 apply-fatal: deterministic — retrying cannot fix it
 					finish(true);
 					summary.lastError = `flush-queued: ${outcome.error}`;
 					return summary;
@@ -134,18 +100,6 @@ async function drainOneRecord(cap: DrainCap, claim: QueueClaim, ports: QueueDrai
 	return summary;
 }
 
-/** Claim-first validation on the RE-READ record (expiry, blacklist,
- *  routing). Settle-with-diagnostic, skip, or eligible.
- *
- *  BH-E2 (spec 2026-11-14-backtest-hardening): the attempt-cap and age
- *  checks run FIRST — on base the projectsDir routing skip preceded them,
- *  so cross-project records (and, equivalently, blacklisted ones) were
- *  skipped-and-released forever: never counted, never expired, re-released
- *  as NEW pending files at every startup. Expired records now take the
- *  SAME settle-with-diagnostic disposal path regardless of routing. Age
- *  comes from the record's own `savedAt`, never the file mtime — the
- *  release rename must not reset a record's age. The blacklist and the
- *  B1 routing skip keep their semantics for NON-expired records. */
 function validateClaimed(cap: DrainCap, claim: QueueClaim, ports: QueueDrainPorts): { drop?: string; skip?: boolean } {
 	if (claim.record.attempts >= QUEUE_MAX_ATTEMPTS) {
 		return { drop: `flush-queued: dropped after ${claim.record.attempts} attempts` };

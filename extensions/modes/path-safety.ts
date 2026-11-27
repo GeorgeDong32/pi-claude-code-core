@@ -122,7 +122,6 @@ export function isCcSafetyPath(targetPath: string, cwd: string): boolean {
 			if (real !== resolved && ccPathHasSensitiveSegment(real)) return true
 		}
 	} catch {
-		/* fail-open */
 	}
 	return false
 }
@@ -195,7 +194,6 @@ export function getProjectId(cwd: string): string {
 	return hashPath(cwd)
 }
 
-/** First 8 hex chars of sha256(input). Deterministic. */
 export function hashPath(p: string): string {
 	return createHash("sha256").update(p).digest("hex").slice(0, 8)
 }

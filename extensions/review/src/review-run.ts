@@ -32,7 +32,6 @@ export interface PrepareRunInput {
 	input?: string;
 	lite?: boolean;
 	gateModel?: string;
-	/** Set false for dry-runs — pruning is a side effect a dry run must not have. */
 	cleanup?: boolean;
 	dryRun?: boolean;
 }

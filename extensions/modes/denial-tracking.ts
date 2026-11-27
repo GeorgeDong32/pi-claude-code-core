@@ -1,8 +1,3 @@
-/**
- * Classifier denial tracking (CC denialTracking.ts).
- * Escalates to manual prompting after repeated classifier blocks.
- */
-
 export type DenialTrackingState = {
 	consecutiveDenials: number
 	totalDenials: number

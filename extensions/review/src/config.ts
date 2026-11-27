@@ -1,20 +1,3 @@
-/**
- * Configuration loading, validation, and atomic persistence (v0.7).
- *
- * The user-editable config lives at:
- *   ~/.pi/agent/pi-review.json
- *
- * (R5: the path is contract-pinned by P0-CT-09; the header previously
- * claimed an extensions/ location that never existed.)
- *
- * Pattern mirrors pi-subagents/src/extension/config.ts. We never touch the
- * top-level settings.json — that file is managed by pi itself.
- *
- * v0.7 removes configuration knobs that the foreground workflowScript path
- * cannot honor (per-reviewer `tools`, `inheritance`, `gate.scorePerIssue`,
- * top-level `concurrency`). Legacy keys are still read for migration
- * warnings but no longer drive behavior.
- */
 import { readJson, writeJsonAtomic } from "../../../lib/settings.js";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -75,6 +58,8 @@ export const DEFAULT_CONFIG: PiReviewConfig = {
 	},
 };
 
+// The top-level settings.json is managed by pi itself — review config
+// must stay in its own pi-review.json file.
 const DEFAULT_CONFIG_PATH = join(homedir(), ".pi", "agent", "pi-review.json");
 let _configPath = DEFAULT_CONFIG_PATH;
 
@@ -86,11 +71,6 @@ export function setConfigPath(p?: string): void {
 	_configPath = p ?? DEFAULT_CONFIG_PATH;
 }
 
-/**
- * Read raw config from disk. Returns an empty object when the file is
- * missing, unreadable, or corrupt — the caller is expected to fall through
- * to mergeWithDefaults().
- */
 export function loadRawConfig(): Record<string, unknown> {
 	return readJson<Record<string, unknown>>(configPath(), {});
 }
@@ -127,10 +107,6 @@ export function legacyConfigWarnings(raw: Record<string, unknown>): string[] {
 	return warnings;
 }
 
-/**
- * Deep-merge a raw user config over DEFAULT_CONFIG. We deliberately re-build
- * nested objects rather than mutating so the merge is pure.
- */
 export function mergeWithDefaults(raw: unknown): PiReviewConfig {
 	const base: PiReviewConfig = structuredClone(DEFAULT_CONFIG);
 	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return base;
@@ -253,7 +229,6 @@ export function validateConfig(cfg: PiReviewConfig): { ok: true } | { ok: false;
 	return errors.length === 0 ? { ok: true } : { ok: false, errors };
 }
 
-/** Atomic write via the shared settings primitive (P2-REV-06). */
 export function writeConfig(cfg: PiReviewConfig): void {
 	writeJsonAtomic(configPath(), cfg);
 }

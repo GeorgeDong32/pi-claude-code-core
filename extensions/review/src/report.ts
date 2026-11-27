@@ -1,8 +1,3 @@
-/**
- * Deterministic report builder for v0.7. The `pi_review_report` tool feeds
- * the workflow return value + manifest into `buildReportFromWorkflow`; the
- * output is then rendered to markdown and persisted via `pi.appendEntry`.
- */
 import type {
 	GateDisposition,
 	GateRunResult,

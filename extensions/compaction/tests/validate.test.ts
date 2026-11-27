@@ -1,13 +1,3 @@
-/*
- * Validation-gate tests (SPEC SC §5.5 SUM-04/SUM-09, task W1).
- *
- * Requirement → test map:
- *   SUM-09 → "classifySubCall pins pi's prompt shapes"
- *   SUM-04 (layer 1) → "validateSubCall matrix"
- *   SUM-04 (layer 2) → "validateAssembled: normal / empty / E3 / truncated /
- *       overlong / split variants / call-set" (BLK-4 shapes: history-ok +
- *       prefix-empty, prefix-ok + history-empty, both-ok)
- */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -44,19 +34,16 @@ function subCall(over: Partial<SubCallRecord> = {}): SubCallRecord {
 }
 
 test("validateSubCall matrix (layer 1)", () => {
-	// Normal.
 	assert.deepEqual(validateSubCall(subCall(), T), { ok: true, failures: [] });
-	// ① stopReason length/error/aborted — defensive (pi already throws).
+	// Defensive (pi already throws on stopReason length/error/aborted).
 	for (const stopReason of ["length", "error", "aborted"]) {
 		const verdict = validateSubCall(subCall({ stopReason }), T);
 		assert.equal(verdict.ok, false);
 		assert.ok(verdict.failures.includes("sub:stopReason"));
 	}
-	// ② narrative below the kind threshold (turn-prefix uses minPrefixChars).
 	assert.ok(validateSubCall(subCall({ narrativeText: "x".repeat(399) }), T).failures.includes("sub:narrative"));
 	const prefix = validateSubCall(subCall({ kind: "turn-prefix", narrativeText: "y".repeat(99) }), T);
 	assert.ok(prefix.failures.includes("sub:narrative"));
-	// ③ reasoning-only: reasoning ≥ 0.9·output AND narrative below threshold.
 	const reasoningOnly = validateSubCall(
 		subCall({ narrativeText: "", usage: { input: 1000, output: 1000, reasoning: 950 } }),
 		T,
@@ -66,12 +53,10 @@ test("validateSubCall matrix (layer 1)", () => {
 		subCall({ usage: { input: 1000, output: 1000, reasoning: 950 } }),
 		T,
 	);
-	assert.equal(reasoningHeavyButWritten.ok, true); // narrative long enough ⇒ pass
-	// ④ toolCall blocks.
+	assert.equal(reasoningHeavyButWritten.ok, true);
 	assert.ok(validateSubCall(subCall({ hasToolCall: true }), T).failures.includes("sub:toolCall"));
 });
 
-// E3 observed shape: a long path listing and nothing else (~970 chars).
 const fileList = (count: number, prefix: string) =>
 	Array.from({ length: count }, (_, i) => `- ${prefix}/some/deeper/module-${i}/file-${i}.ts`).join("\n");
 const readFiles = `<read-files>\n${fileList(16, "/repo-a")}\n</read-files>`;
@@ -86,7 +71,6 @@ test("validateAssembled: normal summary passes everything", () => {
 });
 
 test("validateAssembled: E3 fixture — file-listing-only (970-char shape) is rejected", () => {
-	// E3 observed shape: summary reduced to a bare file list (~970 chars).
 	const fileListingOnly = `${readFiles}\n${modifiedFiles}`;
 	assert.equal(fileListingOnly.length > 900, true);
 	const verdict = validateAssembled(
@@ -131,30 +115,25 @@ test("validateAssembled: split-turn matrix (BLK-4 shapes)", () => {
 	const SEP = "\n\n---\n\n**Turn Context (split turn):**\n\n";
 	const prefixBody = `# Turn\n${"p".repeat(150)}`;
 
-	// Both sub-calls fine + separator present with real body ⇒ pass.
 	const ok = validateAssembled(
 		{ summary: narrative(600) + SEP + prefixBody, isSplitTurn: true, hasHistory: true, subCalls: [history, prefix] },
 		T,
 	);
 	assert.deepEqual(ok, { ok: true, failures: [] });
 
-	// History ok, turn-prefix sub-call reasoning-only ⇒ layer-1 rejection.
 	const prefixEmpty = subCall({ kind: "turn-prefix", narrativeText: "", usage: { input: 100, output: 500, reasoning: 490 } });
 	const localEmpty = validateSubCall(prefixEmpty, T);
 	assert.ok(localEmpty.failures.includes("sub:reasoning-only"));
 
-	// Prefix ok, history sub-call empty ⇒ layer-1 rejection.
 	const historyEmpty = subCall({ kind: "history", narrativeText: "" });
 	assert.ok(validateSubCall(historyEmpty, T).failures.includes("sub:reasoning-only"));
 
-	// Assembled with a separator whose body is too short ⇒ layer-2 rejection.
 	const thinPrefix = validateAssembled(
 		{ summary: narrative(600) + SEP + "short", isSplitTurn: true, hasHistory: true, subCalls: [history, prefix] },
 		T,
 	);
 	assert.ok(thinPrefix.failures.includes("assembled:split-prefix-body"));
 
-	// Missing separator entirely.
 	const noSep = validateAssembled(
 		{ summary: narrative(600), isSplitTurn: true, hasHistory: true, subCalls: [history, prefix] },
 		T,
@@ -165,20 +144,17 @@ test("validateAssembled: split-turn matrix (BLK-4 shapes)", () => {
 test("validateAssembled ⑨: call-set must match the preparation expectation", () => {
 	const history = subCall({ kind: "history" });
 	const prefix = subCall({ kind: "turn-prefix", narrativeText: "y".repeat(150) });
-	// Expected {history, turn-prefix}, observed only history.
 	const missing = validateAssembled(
 		{ summary: narrative(600), isSplitTurn: true, hasHistory: true, subCalls: [history] },
 		{ ...T, minNarrativeChars: 1, minPrefixChars: 1, maxSummaryChars: 100_000 },
 	);
 	assert.ok(missing.failures.includes("assembled:call-set"));
-	// Unknown shape observed.
 	const unknown = subCall({ kind: "unknown" });
 	const weird = validateAssembled(
 		{ summary: narrative(600), isSplitTurn: false, hasHistory: true, subCalls: [unknown] },
 		{ ...T, minNarrativeChars: 1, minPrefixChars: 1, maxSummaryChars: 100_000 },
 	);
 	assert.ok(weird.failures.includes("assembled:call-set"));
-	// Exactly right.
 	const SEP = "\n\n---\n\n**Turn Context (split turn):**\n\n";
 	const prefixBody = `# Turn\n${"p".repeat(150)}`;
 	const right = validateAssembled(

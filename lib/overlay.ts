@@ -17,11 +17,6 @@ export interface ShowOverlayOptions {
 	overlayOptions?: OverlayOptions;
 }
 
-/**
- * Show a list overlay. Resolves with the selected item's `value`, or null
- * when cancelled / unavailable (headless). Never throws to the caller: a
- * failing `custom` falls back to `select`.
- */
 export async function showOverlay(
 	ctx: ExtensionCommandContext,
 	options: ShowOverlayOptions,
@@ -64,10 +59,9 @@ export async function showComponentOverlay<T>(
 	options: {
 		component: (tui: any, theme: any, kb: any, done: (value: T) => void) => Component;
 		overlayOptions?: OverlayOptions;
-		/** OSC 7501 program status: report pi as blocked on user input while
-		 * the component is visible (pi 1.5.0 `blocked` option — inline
-		 * components only; overlays ignore it). Older hosts ignore the
-		 * field harmlessly. */
+		// OSC 7501 program status: report pi as blocked on user input while the
+		// component is visible (pi 1.5.0 `blocked` option — inline components
+		// only; overlays ignore it). Older hosts ignore the field harmlessly.
 		blocked?: { kind: "question" | "permission" | "auth"; message: string };
 	},
 ): Promise<T> {

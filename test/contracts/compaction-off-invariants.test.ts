@@ -1,13 +1,3 @@
-/*
- * C6 test rails (2026-11-10 review, Batch C):
- *  - OFF-MODE integration: controllerSettings mode:"off" — the controller
- *    writes NOTHING: no cc-core-compaction telemetry entries and no
- *    compaction carrying details.ccCore, end to end on a real session.
- *  - INV-7: telemetry entries never carry summary NARRATIVE text — a
- *    sentinel planted in the faux summary must not appear in any
- *    serialized cc-core-compaction custom entry (the draft compaction
- *    itself legitimately carries the narrative; telemetry must not).
- */
 import { describe, expect, it } from "vitest";
 import { fauxAssistantMessage, fauxText, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { createCompactionHost } from "./support/compaction-host.ts";
@@ -43,7 +33,7 @@ describe("C6: off mode + INV-7 telemetry hygiene", () => {
 			model: { contextWindow: 6000, maxTokens: 8000 },
 			settingsOverrides: PI_SMALL,
 			controllerSettings: { ...AGGRESSIVE, mode: "off" },
-			envMode: null, // let controllerSettings.mode decide (C6: no env)
+			envMode: null,
 			probe: { registerTestTool: true },
 		});
 		try {
@@ -70,13 +60,10 @@ describe("C6: off mode + INV-7 telemetry hygiene", () => {
 
 	it("D2 (2026-11-10 review D): mode:'off' + a native INVALID summary — the FB-08 audit writes nothing either (G5)", async () => {
 		const host = await createCompactionHost({
-			// BLK-5 fixture shape: reasoning-only summary → assembled:headings
-			// + assembled:narrative failures → audit would emit
-			// native-summary-invalid telemetry + one notify in ANY live mode.
 			model: { contextWindow: 6000, maxTokens: 1000, reasoning: true },
 			settingsOverrides: { compaction: { enabled: true, reserveTokens: 3000, keepRecentTokens: 300 } },
 			controllerSettings: { ...AGGRESSIVE, mode: "off" },
-			envMode: null, // let controllerSettings.mode decide (C6: no env)
+			envMode: null,
 			probe: {},
 		});
 		try {
@@ -85,12 +72,9 @@ describe("C6: off mode + INV-7 telemetry hygiene", () => {
 				fauxAssistantMessage([fauxThinking("only thoughts"), fauxText("")], { stopReason: "stop" }),
 			]);
 			await host.session.prompt("grow then summarize nothing");
-			// The native compaction DID run and its empty summary landed…
 			const native = host.sessionManager.getBranch().filter((e) => e.type === "compaction");
 			expect(native.length).toBe(1);
 			expect((native[0] as { fromHook?: boolean }).fromHook).toBeFalsy();
-			// …but off mode is byte-identical to not installed (G5): no
-			// cc-core-compaction telemetry at all — the audit is gated off.
 			expect(telemetryEntries(host).length).toBe(0);
 		} finally {
 			host.cleanup();
@@ -115,12 +99,10 @@ describe("C6: off mode + INV-7 telemetry hygiene", () => {
 			await host.session.prompt("one");
 			await host.session.prompt("two");
 			await host.session.prompt("three");
-			// The draft compaction itself MAY carry the narrative…
 			const drafts = host.sessionManager
 				.getBranch()
 				.filter((e) => e.type === "compaction" && (e as { details?: { ccCore?: { origin?: string } } }).details?.ccCore?.origin === "precompute");
 			expect(drafts.length).toBe(1);
-			// …but NO serialized telemetry entry may contain the sentinel.
 			for (const entry of telemetryEntries(host)) {
 				expect(JSON.stringify(entry)).not.toContain("SECRET-NARRATIVE-MARKER");
 			}

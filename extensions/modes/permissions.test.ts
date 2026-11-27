@@ -63,9 +63,6 @@ describe("permissions evaluate", () => {
 		).toBe("Bash(npm:*)")
 	})
 
-	// Characterization (plan2 C1): unknown tool names never match permission
-	// rules (no CC mapping → passthrough) even when broad rules exist. The B1
-	// embedded-command gate relies on this staying true.
 	it("unknown tool names are passthrough regardless of rules", () => {
 		const rules = rulesFromPermissionsConfig(
 			{ deny: ["Bash(rm *)"], allow: ["Edit(src/**)"] },
@@ -79,7 +76,6 @@ describe("permissions evaluate", () => {
 		).toEqual({ behavior: "passthrough" })
 	})
 
-	// plan2 B1: powershell maps onto Bash rules (pi 0.85.1 built-in shell).
 	it("powershell evaluates under Bash permission rules", () => {
 		const rules = rulesFromPermissionsConfig(
 			{ deny: ["Bash(rm *)"], allow: ["Bash(npm *)"] },

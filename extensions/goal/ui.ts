@@ -13,9 +13,8 @@ export interface GoalUiDeps {
 	getOtherOpenGoalCount: () => number;
 	isGoalActive: () => boolean;
 	shouldPauseOnEscape: () => boolean;
-	/** Esc gate #2: only claim Escape while the agent is IDLE — while the
-	 * agent is busy, Escape is the user's INTERRUPT and must pass through
-	 * to the TUI untouched (the raw-input listener must never steal it). */
+	/** While the agent is busy, Escape is the TUI's INTERRUPT and must pass
+	 * through untouched — only claim it when idle. */
 	isAgentIdle: (ctx: ExtensionContext) => boolean;
 	pauseActiveGoal: (ctx: ExtensionContext) => void;
 }
@@ -110,13 +109,10 @@ export function createGoalUi(deps: GoalUiDeps): GoalUi {
 			if (!ctx.hasUI) return;
 			terminalInputUnsubscribe?.();
 			terminalInputUnsubscribe = ctx.ui.onTerminalInput((data) => {
-				// INTERRUPT SAFETY (fix): onTerminalInput is an OBSERVATION
-				// channel. This handler must stay lightweight and always return
-				// undefined — a synchronous pauseActiveGoal (disk writes, UI
-				// updates, focus churn) inside the TUI's input-dispatch loop can
-				// break the chain before the focused component sees Escape,
-				// leaving the user with NO way to interrupt a stuck agent
-				// (observed with a hung update_goal audit). Two guards:
+				// onTerminalInput is an OBSERVATION channel: this handler must stay
+				// lightweight and always return undefined — synchronous work inside
+				// the TUI's input-dispatch loop can break the chain before the
+				// focused component sees Escape.
 				if (matchesKey(data, "escape") && deps.shouldPauseOnEscape() && deps.isAgentIdle(ctx)) {
 					queueMicrotask(() => {
 						try {

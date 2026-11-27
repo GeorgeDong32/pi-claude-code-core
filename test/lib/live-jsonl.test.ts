@@ -1,9 +1,3 @@
-/**
- * test/lib/live-jsonl.test.ts — [cherry-batch1 B2-1..9] the committed-prefix
- * reader's nine shapes (spec §B2 test matrix): normal / torn tail /
- * concurrent append / shrunk / symlink (ELOOP) / oversized / bad lines /
- * vanished / unstable.
- */
 import { appendFileSync, mkdtempSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -45,9 +39,6 @@ describe("readCommittedLines (B2)", () => {
 	it("B2-3 concurrent append: growth past committedBytes is tolerated (the prefix as of the read)", () => {
 		const p = join(dir, "c.jsonl");
 		writeFileSync(p, line({ i: 1 }));
-		// simulate an append that lands between two reads is inherently racy;
-		// the deterministic property we pin: a file that GREW after our first
-		// read still yields a complete committed prefix (old or new, never torn)
 		appendFileSync(p, line({ i: 2 }));
 		const r = readCommittedLines(p);
 		expect(r.lines).toEqual([{ i: 1 }, { i: 2 }]);
@@ -61,8 +52,6 @@ describe("readCommittedLines (B2)", () => {
 		const r = readCommittedLines(p);
 		// Node reads are synchronous within one process — the shrunk guard can
 		// only fire when ANOTHER process truncates between our two fstats.
-		// What is deterministic here: the truncated file yields its new
-		// self-consistent prefix (the first 10 bytes, torn tail dropped).
 		expect(r.committedBytes).toBeLessThanOrEqual(10);
 		expect(r.tornTailBytes + r.committedBytes).toBe(10);
 	});
@@ -99,12 +88,12 @@ describe("readCommittedLines (B2)", () => {
 
 	it("B2-3b prefix two-state pin (R1 P1-1 / R2 P2-A): append tolerated, rewrite rejected — reverting to whole-buffer compare turns this red", () => {
 		const a = Buffer.from(line({ i: 1 }));
-		const appended = Buffer.concat([a, Buffer.from(line({ i: 2 }))]); // concurrent append: longer, same prefix
-		const rewritten = Buffer.concat([Buffer.from(line({ i: 9 })), a.subarray(line({ i: 1 }).length)]); // same span, different bytes
-		expect(prefixMatches(a, appended)).toBe(true); // tolerated — never unstable
-		expect(prefixMatches(a, rewritten)).toBe(false); // rejected — unstable path
+		const appended = Buffer.concat([a, Buffer.from(line({ i: 2 }))]);
+		const rewritten = Buffer.concat([Buffer.from(line({ i: 9 })), a.subarray(line({ i: 1 }).length)]);
+		expect(prefixMatches(a, appended)).toBe(true);
+		expect(prefixMatches(a, rewritten)).toBe(false);
 		expect(prefixMatches(a, a)).toBe(true);
-		expect(prefixMatches(appended, a)).toBe(false); // second shorter than first: fail (shrunk window labels as unstable — recorded P3-A)
+		expect(prefixMatches(appended, a)).toBe(false);
 	});
 
 	it("B2-9 stable double-read: an untouched file passes the byte comparison (the common path)", () => {
@@ -119,7 +108,7 @@ describe("readCommittedLines (B2)", () => {
 	it("B2-9b rewrite-between-calls: an in-place rewrite yields the NEW self-consistent content (the unstable guard's cross-process window is documented, not single-process-simulatable)", () => {
 		const p = join(dir, "h.jsonl");
 		writeFileSync(p, line({ i: 1 }));
-		writeFileSync(p, line({ i: 9 })); // same length, different bytes
+		writeFileSync(p, line({ i: 9 }));
 		const r = readCommittedLines(p);
 		expect(r.lines).toEqual([{ i: 9 }]);
 	});

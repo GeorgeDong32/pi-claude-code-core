@@ -1,12 +1,3 @@
-/**
- * P2-GO-05 — modes + goal coexistence on the context event.
- *
- * Both modules register `context` handlers on the same ExtensionAPI (as
- * they do inside the assembled core). The contract: each one's rewrite
- * touches only its own messages — modes' injected modes-context block and
- * plain user messages pass through the goal handler untouched, and queued
- * goal-event messages pass through the modes handler untouched.
- */
 import { describe, expect, it, beforeEach } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -28,11 +19,9 @@ beforeEach(() => {
 describe("P2-GO-05 goal + modes context coexistence", () => {
 	it("each context handler rewrites only its own messages", async () => {
 		const host = new FakeHost();
-		// both modules share ONE pi instance, like the assembled core
 		targets.modes.factory(host.asPi());
 		targets.goal.factory(host.asPi());
 
-		// focus an active goal so the goal handler has real state
 		const goalRecord = normalizeGoalRecord({ objective: "coexist check", status: "active" });
 		const cwd = mkdtempSync(join(tmpdir(), "coexist-"));
 		const { ensureDirectory, atomicWriteGoalFile, serializeGoalFile, makeActiveGoalPath, GOALS_DIR } =
@@ -76,11 +65,8 @@ describe("P2-GO-05 goal + modes context coexistence", () => {
 
 		const finalMessages = (event as { messages: Array<Record<string, unknown>> }).messages;
 		const byType = (t: string | undefined) => finalMessages.find((m) => m.customType === t);
-		// plain user message survives both handlers
 		expect(finalMessages.some((m) => m.role === "user" && m.customType === undefined)).toBe(true);
-		// goal handler must NOT drop or rewrite the modes-context block
 		expect(byType("modes-context")).toBeDefined();
-		// modes handler must NOT drop the queued goal event
 		expect(byType("pi-goal-event")).toBeDefined();
 	});
 });

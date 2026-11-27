@@ -57,7 +57,6 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 	const automationState: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0 };
 	const stats: MemoryStatsCounters = emptyCounters();
 	let descWarned = false;
-	/** Bytes of the index section of the current injection (probe only). */
 	function indexBytesFor(ctx: ExtensionContext): { bytes: number; rows: number } {
 		const text = injectionFor(ctx);
 		const at = text.indexOf("# Project memory index");
@@ -70,16 +69,11 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 	let recallMachine: RecallMachine | null = null;
 	let recallModelLabel = "";
 	let recallOffNotified = false;
-	/** task-boundary recall echo filter: files written at/after session start
-	 *  never re-enter the candidate pool */
 	let sessionStartedAtMs = 0;
-	/** session-stable injection: the policy block is rebuilt only at session
-	 *  start or after a compaction — mid-session memory writes must not flip
-	 *  the system prompt and kill the KV cache */
+	// Mid-session memory writes must not flip the system prompt and kill the
+	// KV cache — the policy block is rebuilt only at session start or after
+	// a compaction.
 	let injectionCache: { text: string; compactions: number; writable: boolean } | null = null;
-	/** manual consolidation: true from the moment a directive run is queued
-	 *  until agent_settled (automation must not extract from it) + diagnostics
-	 *  breadcrumb */
 	let consolidationDirectiveActive = false;
 	let consolidationLastReason: string | null = null;
 
@@ -104,11 +98,6 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 		};
 	}
 
-	/** Ensure the machine exists for THIS settings+registry (creating it on
-	 * whichever path needs it first — prompt). Null when recall is off
-	 * (unset/unresolvable recallModel — D3). AR1005-RC-04: rebuilding or
-	 * closing recall disposes the OLD machine first — old and new requests
-	 * must never deliver in parallel. */
 	function ensureRecallMachine(ctx: ExtensionContext): RecallMachine | null {
 		if (!memorySettings.recallModel) {
 			if (recallMachine) {
@@ -139,8 +128,6 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 			recallMachine = createRecall({
 				selector: (extensionDeps.selectorFactory ?? llmSelector)({ model: () => model, registry: () => ctx.modelRegistry as never }),
 				modelLabel: label,
-				// single layer (the user layer is retired) + echo filter:
-				// files written at/after session start never re-enter recall
 				files: () =>
 					eligibleMemories(memoryDir(ctx)).filter((f) => f.mtimeMs < sessionStartedAtMs),
 				cwd: ctx.cwd ?? process.cwd(),
@@ -176,11 +163,6 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 		}
 	}
 
-	/** The policy injection, rebuilt only at session start or after a
-	 *  compaction (session-stable injection — a mid-session memory write
-	 *  must not flip the system prompt and invalidate the prompt cache).
-	 *  Pinned files still read from the retired user dir until migration
-	 *  completes; the index lists the project layer only. */
 	function injectionFor(ctx: ExtensionContext): string {
 		const dir = memoryDir(ctx);
 		if (!memoryDirWritable) return policyCompact(dir);
@@ -235,14 +217,12 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 	const DELETION_SPIKE_FILES = 3;
 	const BYTES_DROP_RATIO = 0.3;
 
-	/** G2-C9: snapshot both layers at session_start (fail-open, deduped, rotated). */
 	const snapshotBothLayers = (ctx: ExtensionContext): void => {
 		try {
 			const homeNow = sessionHome();
 			snapshotLayer(userMemoryDir(ctx), snapshotRoot(homeNow, "user"));
 			snapshotLayer(memoryDir(ctx), snapshotRoot(homeNow, `project-${sanitizePath(gitCanonicalRoot(ctx.cwd ?? process.cwd()) ?? (ctx.cwd ?? process.cwd()))}`));
 		} catch {
-			/* fail-open: snapshots never block startup */
 		}
 	};
 
@@ -282,7 +262,6 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 				}
 			}
 		} catch {
-			/* detection must never break agent_end */
 		}
 	};
 
@@ -292,7 +271,7 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 				protectedPathFiles({ home: sessionHome(), cwd: ctx.cwd ?? process.cwd() }).map((f) => [f, sha256Of(f)] as const),
 			);
 		} catch {
-			protectedBaseline = new Map<string, string | null>(); // fail-open: detection, never a startup blocker
+			protectedBaseline = new Map<string, string | null>();
 		}
 	};
 
@@ -313,7 +292,6 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 				);
 			}
 		} catch {
-			/* detection must never break agent_end */
 		}
 	};
 
@@ -338,8 +316,6 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 			gate.probeStatic();
 			memorySettings = loadMemorySettings(join(process.env.HOME ?? home, ".pi", "agent"));
 			automationState.enabled = memorySettings.automation;
-			// user dir intentionally NOT created/reindexed — the layer is retired;
-			// remaining files stay read-only until the migration deletes them
 			try {
 				mkdirSync(memoryDir(ctx), { recursive: true });
 			} catch {
@@ -424,7 +400,6 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 				if (ctx?.hasUI) sharedNotify(ctx, verdict.warn, "warning");
 			}
 		} catch {
-			/* guard failure must not break the tool call */
 		}
 		return undefined;
 	});
@@ -458,7 +433,6 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 				...stats,
 				descRewritten: automationState.descRewritten ?? 0,
 			});
-			// snapshot-and-reset: the next entry describes the next run only
 			Object.assign(stats, emptyCounters());
 			automationState.descRewritten = 0;
 		} catch {
@@ -468,9 +442,6 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 		try {
 			if ((event as { toolName?: string }).toolName === "memory_consolidate") {
 				consolidationUsedThisSession = true;
-				// the directive flag stays set: the run continues after the tool
-				// returns (summary turn) and must not feed the extractors —
-				// agent_settled clears it
 			}
 			const e = event as { toolName?: string; input?: Record<string, unknown>; content?: Array<{ type: string; text?: string }> };
 			if (e.toolName === "read" && typeof e.input?.path === "string") {

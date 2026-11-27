@@ -1,28 +1,3 @@
-/**
- * Embedded-command extraction for fusion tools (plan2 B1).
- *
- * Tools like SoL-Pi's Action Fusion accept shell commands inside otherwise
- * harmless-looking inputs (`then_run` after an edit). Those commands never
- * go through the bash tool dispatch, so the bash tier ladder never sees
- * them. This module is the single seam that surfaces them to the tool_call
- * gate: scan by FIELD, not by tool name — an override may reuse a built-in
- * name (e.g. an "edit" that also runs `then_run`), and unknown names must
- * be covered too.
- *
- * The gate is deliberately lazy: inputs without whitelist fields yield []
- * and the gate is a no-op (unknown tools without command fields stay on
- * their adjudicated silent-passthrough behavior — pinned by characterization
- * tests). The only name-based rule: the PRIMARY command field of the two
- * shell tools themselves (`bash`/`powershell` `input.command`) is already
- * governed end-to-end by the bash tier ladder and must not be double-handled.
- *
- * FUS-SHAPE (SPEC 2026-10-07 P0-1): top-level `then_run` may be the OBJECT
- * action-fusion actually registers — `{ command: string, ... }`. Its
- * `.command` string is surfaced like the plain-string form. Object forms
- * under other whitelist fields stay unscanned; arbitrary nested objects are
- * still not walked.
- */
-
 const COMMAND_FIELDS = ["then_run", "run", "command", "cmd"] as const;
 
 export interface EmbeddedCommandInput {

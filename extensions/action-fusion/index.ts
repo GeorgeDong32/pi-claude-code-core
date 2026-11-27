@@ -70,11 +70,10 @@ export function createActionFusionExtension(options: ActionFusionOptions = {}): 
 			});
 			return;
 		}
-		// FUS-03 (revised after TST-04): the OUTER serialization must be the
-		// ported fused queue. pi's builtin write/edit already wrap their own
-		// bodies in the official withFileMutationQueue for the same path, so
-		// using it as the outer layer too deadlocks on re-entry (sandbox-proven:
-		// the session froze mid-write). The official export stays as a
+		// pi's builtin write/edit already wrap their own bodies in the official
+		// withFileMutationQueue for the same path — using it as the outer layer
+		// too deadlocks on re-entry, so the outer serialization is the ported
+		// fused queue.
 		void compat.mutationQueue;
 		const queue: FileQueueFn = withFusedFileQueue;
 
@@ -103,7 +102,6 @@ export function createActionFusionExtension(options: ActionFusionOptions = {}): 
 					console.warn("[action-fusion] write schema is missing then_run after registration — host override semantics may have changed");
 				}
 			} catch {
-				// Self-check must never break the session.
 			}
 		};
 

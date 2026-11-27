@@ -1,12 +1,3 @@
-/**
- * Integration tests for the permission-modes extension.
- *
- * Strategy: import the extension factory with a fake `ExtensionAPI` stub.
- * The stub captures all `pi.on(event, handler)` subscriptions; we then invoke
- * the captured `tool_call` handler directly with crafted events and contexts.
- *
- * This lets us assert the gate decision tree without booting real pi.
- */
 
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest"
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
@@ -41,7 +32,6 @@ import {
 import { msg, toolResultMsg, customMsg } from "./test-fixtures.ts"
 import type { TSchema } from "typebox"
 
-// ---- minimal fake pi API ------------------------------------------------
 
 type Handler = (...args: any[]) => unknown
 
@@ -50,13 +40,10 @@ type CommandHandler = (
 	ctx: any,
 ) => unknown | Promise<unknown>
 
-/** Internal storage shape for registerTool (any-rest keeps call sites untyped). */
 type StoredFakeTool = { name: string; execute: (...args: any[]) => Promise<unknown> }
 
-/** ThinkingLevel without importing pi-agent-core (not a direct dependency). */
 type FakeThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>
 
-/** Minimal-but-shape-correct ToolInfo for a named tool (schema: empty object). */
 function fakeToolInfo(name: string): ToolInfo {
 	return {
 		name,
@@ -72,18 +59,11 @@ function fakeToolInfo(name: string): ToolInfo {
 	}
 }
 
-/**
- * Test-facing surface of the fake pi. Extends the real ExtensionAPI so the
- * compile-time `satisfies` contract in makeFakePiForExtension has teeth:
- * missing/renamed members break typecheck instead of silently passing
- * (plan2 C1; the fake previously lacked getAllTools).
- */
 interface FakePi extends ExtensionAPI {
 	handlers: Map<string, Handler[]>
 	commands: Map<string, CommandHandler>
 	shortcuts: Map<string, Handler>
 	tools: Map<string, StoredFakeTool>
-	/** Full ToolInfo list returned by getAllTools(); tests may push before session_start. */
 	allTools: ToolInfo[]
 	userMessages: Array<{ text: string; opts?: unknown }>
 	widgetCalls: Array<{ key: string; value: unknown }>
@@ -96,9 +76,7 @@ interface FakePi extends ExtensionAPI {
 	flags: Record<string, boolean | string | undefined>
 	setModelCalls: Array<{ model: unknown }>
 	modelRegistry: { find: (provider: string, model: string) => unknown }
-	/** Redeclared loose: accepts every typed overload's (event, handler) pair. */
 	on(event: string, handler: Handler): () => void
-	/** Same generic shape as ExtensionAPI so the satisfies contract is exact. */
 	registerTool<TParams extends TSchema, TDetails = unknown, TState = any>(
 		tool: ToolDefinition<TParams, TDetails, TState>,
 	): void
@@ -129,7 +107,6 @@ interface FakeCtxOptions {
 	mode?: string
 	cwd: string
 	projectRoot?: string | null
-	/** Overrides the default empty sessionManager (real SessionEntry shapes). */
 	sessionManager?: {
 		getBranch?: () => unknown[]
 		getEntries?: () => unknown[]
@@ -213,12 +190,9 @@ function createFakePi(): FakePi {
 		) {
 			tools.set(def.name, def as unknown as StoredFakeTool)
 		},
-		// pi 1.0.1 ExtensionAPI addition; modes registers none — no-op keeps the
-		// structural fake complete (spec 2026-10-03-pi-1.0-adaptation Step 1).
+		// pi 1.0.1 ExtensionAPI addition; modes registers none — no-op keeps the structural fake complete.
 		registerToolRenderer(_resolver: unknown): void {},
 		registerFlag(name: string, def: { default?: unknown }) {
-			// Always record the flag so the extension can read it via getFlag.
-			// Default is honored when provided.
 			if (def?.default !== undefined) flags[name] = def.default as boolean | string | undefined
 			else if (!(name in flags)) flags[name] = undefined
 		},
@@ -231,8 +205,7 @@ function createFakePi(): FakePi {
 		appendEntry(type: string, data: unknown) {
 			appendEntries.push({ type, data })
 		},
-		// 0.99 ExtensionAPI surface: modes ignores these; stubs satisfy the
-		// compile-time contract so real drift still fails typecheck.
+		// 0.99 ExtensionAPI surface: modes ignores these; stubs satisfy the compile-time contract.
 		getSettings: () => ({}) as never,
 		registerMcpServer: () => {},
 		unregisterMcpServer: () => {},
@@ -286,7 +259,6 @@ function createFakePi(): FakePi {
 		registerProvider(..._args: unknown[]) {},
 		unregisterProvider(_name: string) {},
 
-		// Test helpers
 		getToolCallHandler() {
 			const list = handlers.get("tool_call") ?? []
 			return list[0]
@@ -339,12 +311,6 @@ function createFakePi(): FakePi {
 	return pi
 }
 
-/**
- * Compile-time contract (plan2 C1): the fake must satisfy the REAL
- * ExtensionAPI shape — no `as unknown as` escape hatch. A member the
- * extension starts using (e.g. getAllTools in B1) that the fake lacks
- * fails typecheck here instead of silently being undefined at runtime.
- */
 function makeFakePiForExtension(p: FakePi): Parameters<typeof permissionModesExtension>[0] {
 	return p satisfies ExtensionAPI
 }
@@ -385,10 +351,8 @@ function makeCtx(
 	}
 }
 
-// ---- tests --------------------------------------------------------------
 
 
-/** DC5b: notifications surface either via the direct leg or the bus tail queue. */
 const notified = (direct: string[], fragment: string): boolean =>
 	[...direct, ...(coreBus().snapshot().notifications ?? []).map((n) => n.msg)].some((m) => m.includes(fragment));
 
@@ -406,7 +370,6 @@ describe("permission-modes extension: tool_call gate", () => {
 			join(configTmp, "permission-modes.json"),
 			JSON.stringify({ classifier: { enabled: false } }),
 		)
-		// Use real fs: the current repo IS a project (has package.json).
 		realProjectRoot = process.cwd()
 		permissionModesExtension(makeFakePiForExtension(pi))
 		await pi.simulateSessionStart(realProjectRoot)
@@ -477,8 +440,6 @@ describe("permission-modes extension: tool_call gate", () => {
 	describe("loop-guard integration (D1/D1b, spec docs/en/tool-call-loop-guard.md)", () => {
 		async function rawToolCall(event: Record<string, unknown>) {
 			const ctx = makeCtx(pi, { cwd: realProjectRoot })
-			// the fixture stores handlers per event name; reach them via the
-			// same map the simulate helpers use, but with a full event shape
 			const handlers = (pi as unknown as { handlers: Map<string, Array<(e: unknown, c: unknown) => Promise<unknown>>> }).handlers
 			for (const h of handlers.get("tool_call") ?? []) {
 				const result = await h(event, ctx)
@@ -523,9 +484,6 @@ describe("permission-modes extension: tool_call gate", () => {
 		})
 
 		it("D1-11: pi's stopReason=length interop — loop-guard stays quiet when the batch index holds non-duplicates", async () => {
-			// The truncation defense itself lives in pi core; here we pin that
-			// a truncated-looking message with DISTINCT calls leaves every gate
-			// path untouched (no double reason, pairing intact via undefined).
 			await fireMessageEnd({
 				role: "assistant",
 				content: [
@@ -561,7 +519,6 @@ describe("permission-modes extension: tool_call gate", () => {
 				content: [{ type: "toolCall", id: "turn1-run", name: "bash", arguments: { command: "bun run test" } }],
 			})
 			expect(await rawToolCall({ type: "tool_call", toolName: "bash", toolCallId: "turn1-run", input: { command: "bun run test" } })).toBeUndefined()
-			// next turn, the model legitimately retries the identical call
 			await fireMessageEnd({
 				role: "assistant",
 				content: [{ type: "toolCall", id: "turn2-retry", name: "bash", arguments: { command: "bun run test" } }],
@@ -588,7 +545,6 @@ describe("permission-modes extension: tool_call gate", () => {
 				role: "assistant",
 				content: [{ type: "toolCall", id: "known-1", name: "bash", arguments: { command: "echo a" } }],
 			})
-			// an id that never appeared in any indexed batch (older-host shape)
 			expect(await rawToolCall({ type: "tool_call", toolName: "bash", toolCallId: "never-indexed", input: { command: "echo a" } })).toBeUndefined()
 		})
 
@@ -659,9 +615,6 @@ describe("permission-modes extension: tool_call gate", () => {
 						return "Allow"
 					},
 				}
-				// CC's 1g safetyCheck is edit-tools only; the previous
-				// commandSensitive branch was an over-reach that broke
-				// `ssh -F ~/.ssh/config`-style workflows.
 				expect(await callToolCall("bash", { command: "cat .git/config" }, ui)).toBeUndefined()
 				expect(await callToolCall("bash", { command: "ssh -F ~/.ssh/config host ls" }, ui)).toBeUndefined()
 				expect(selectCalls).toBe(0)
@@ -685,8 +638,6 @@ describe("permission-modes extension: tool_call gate", () => {
 
 	describe("pi 0.99 meta tools and MCP shape (SPEC META-04)", () => {
 		it("registration surface: alt+t belongs to effort, NOT modes (C5); alt+i stays via profile-apply", () => {
-			// registerShortcut is a per-extension Map.set — a double registration
-			// would silently coexist, so this negative pin is the move's teeth.
 			expect(pi.shortcuts.has("alt+t")).toBe(false);
 			expect(pi.shortcuts.has("alt+i")).toBe(true);
 		});
@@ -711,9 +662,6 @@ describe("permission-modes extension: tool_call gate", () => {
 			expect(String((result as { reason?: string }).reason)).toContain("Plan mode: MCP tool")
 		})
 
-		// B1 shape pins: the plan gate shares lib/mcp-shape.ts with the rule-family
-		// authority, so EVERY MCP shape is denied — the old private `__`-only regex
-		// let the four shapes below through.
 		it("plan: single-underscore native MCP names are denied", async () => {
 			await switchMode("plan")
 			const result = await callToolCall("mcp_exa_search", { query: "x" })
@@ -745,8 +693,6 @@ describe("permission-modes extension: tool_call gate", () => {
 			await switchMode("plan")
 			const bare = await callToolCall("mcp_customtool", { x: 1 })
 			expect(bare).toMatchObject({ block: true })
-			// direct-named shape WITHOUT the server on the known list stays
-			// unclaimed ("宁漏勿误") and falls through the plan gate untouched
 			const unknown = await callToolCall("foo_bar", { x: 1 })
 			expect(unknown).toBeUndefined()
 		})
@@ -765,14 +711,7 @@ describe("permission-modes extension: tool_call gate", () => {
 			expect(result).not.toBeUndefined()
 		})
 
-		// pi 1.0 adaptation pin (spec 2026-10-03-pi-1.0-adaptation Step 2 ③):
-		// the ask branch is an explicit tool list (read/grep/find/ls, edit/write,
-		// bash/powershell) with a fall-through `return undefined` — codemode's
-		// body passes silently. That is design, not an oversight: the security
-		// boundary is the per-tool gate on codemode's NESTED calls (upstream
-		// tool.js:5-9 / execute.js:304 — scripts go through the full agent tool
-		// pipeline, so plan/ask rules apply per tool). If ask should prompt for
-		// codemode itself, that is a product decision to be specced separately.
+		// Upstream codemode (tool.js:5-9 / execute.js:304): scripts go through the full agent tool pipeline, so the security boundary is the per-tool gate on nested calls.
 		it("ask: codemode body passes through silently (nested calls stay per-tool gated)", async () => {
 			await switchMode("ask")
 			const result = await callToolCall("codemode", { script: "return 1" }, {
@@ -781,23 +720,14 @@ describe("permission-modes extension: tool_call gate", () => {
 			expect(result).toBeUndefined()
 		})
 
-		// pi 1.0 adaptation pin (spec Step 2 ④): plan snapshot/restore must keep
-		// codemode in the active list. PLAN_DISABLED is empty, so during plan the
-		// tool stays ACTIVE and the :1524 gate alone denies it — activity and
-		// gating are orthogonal. Two-step construction per review r2 (1.7): the
-		// default active list has no codemode, so push it FIRST or these
-		// assertions would pass vacuously against an untouched list.
 		it("plan: snapshot/restore keeps codemode active while the gate denies it", async () => {
 			pi.activeTools.push("codemode")
 			const snapshot = [...pi.activeTools]
 			await switchMode("plan")
-			// codemode remains in the active list during plan…
 			expect(pi.activeTools).toContain("codemode")
-			// …but the gate denies its body (orthogonal to activity)
 			const result = await callToolCall("codemode", { script: "return 1" })
 			expect(result).toMatchObject({ block: true })
 			await switchMode("ask")
-			// restore returns the exact pre-plan snapshot — codemode still active
 			expect(pi.activeTools).toEqual(snapshot)
 			expect(pi.activeTools).toContain("codemode")
 		})
@@ -807,7 +737,6 @@ describe("permission-modes extension: tool_call gate", () => {
 			const result = await callToolCall("mcp__exa__search", { query: "x" }, {
 				select: async () => "Block",
 			})
-			// Tier-3 surfaces a prompt in this harness; the pin is "not undefined-allowed".
 			expect(result).not.toBeUndefined()
 		})
 
@@ -921,11 +850,6 @@ describe("permission-modes extension: tool_call gate", () => {
 		})
 	})
 
-	// Characterization (plan2 C1): unknown tools WITHOUT command-shaped fields
-	// are intentionally passed through — user adjudication 2026-09-13 (third
-	// party tools like pi-review/panel must not be nagged). These pins freeze
-	// the current behavior so the B1 embedded-command gate cannot widen its
-	// blast radius onto field-less unknown tools.
 	describe("characterization: unknown tools without command fields", () => {
 		const noCommandInput = { path: "src/foo.ts", note: "just data" }
 
@@ -950,8 +874,6 @@ describe("permission-modes extension: tool_call gate", () => {
 					return "Block"
 				},
 			})
-			// Unknown tool without classifier → local tier-3 prompt (unknown-tool
-			// category), i.e. it was never silently allowed in auto mode either.
 			expect(result).toMatchObject({ block: true })
 			expect(selectCalls[0]).toContain("sol_fusion")
 		})
@@ -964,10 +886,6 @@ describe("permission-modes extension: tool_call gate", () => {
 		})
 	})
 
-	// plan2 B1: embedded-command gate for fusion tools. Tools carrying shell
-	// commands in non-primary fields (SoL-Pi Action Fusion `then_run`) now get
-	// those commands vetted by the same ladder as bash. Field-less unknown
-	// tools keep their pinned passthrough behavior (describe above).
 	describe("B1: embedded command gate", () => {
 		it("ask prompts with the embedded command listed (was silent allow)", async () => {
 			await switchMode("ask")
@@ -1027,8 +945,6 @@ describe("permission-modes extension: tool_call gate", () => {
 					return "Block"
 				},
 			})
-			// Gate passed the command individually; the unknown TOOL name still
-			// gets its (pre-existing, pinned) auto-mode tier-3 prompt.
 			expect(result).toMatchObject({ block: true })
 			expect(selectCalls[0]).toContain("not auto-approved in auto mode")
 		})
@@ -1057,8 +973,6 @@ describe("permission-modes extension: tool_call gate", () => {
 		})
 	})
 
-	// plan2 B1: powershell (pi 0.85.1 built-in) runs the bash ladder under
-	// bash-semantics approximation — same gates, conservative direction.
 	describe("B1: powershell mapping", () => {
 		it("plan blocks destructive powershell like bash", async () => {
 			await switchMode("plan")
@@ -1103,14 +1017,11 @@ describe("permission-modes extension: tool_call gate", () => {
 					return "Block"
 				},
 			})
-			// exactly one approval prompt, labeled once (no embedded-command
-			// duplication of the primary command field)
 			expect(selectCalls.length).toBe(1)
 			expect(selectCalls[0]).not.toContain("fusion tool carries")
 		})
 	})
 
-	// plan2 B1 ②: label-only annotation from getAllTools schema enumeration.
 	describe("B1 ②: getAllTools schema annotation", () => {
 		it("approval labels append the schema hint for tools declaring command fields", async () => {
 			pi.allTools.push({
@@ -1214,8 +1125,6 @@ describe("permission-modes extension: tool_call gate", () => {
 			expect(customPlanContent).toContain("Implement feature")
 			expect(result).toMatchObject({ terminate: true })
 			expect(pi.sentMessages.some((m) => m.message.customType === "modes-execute")).toBe(true)
-			// P3-1 S2: the unified transition syncs the plan widget AFTER the
-			// mode flip (the plan_ready path previously missed it)
 			expect(pi.widgetCalls.filter((w) => w.key === "plan-todos" && w.value !== undefined).length).toBeGreaterThan(0)
 		})
 
@@ -1411,9 +1320,6 @@ describe("permission-modes extension: tool_call gate", () => {
 			)
 		})
 
-		// P2-1 Step 3: the retry-bound test above moved to
-		// classifier-retry.test.ts (deterministic fake clock, no wall-time
-		// assertions — replaces the AR1005-R3 flaky 40ms-timer case).
 	})
 
 	describe("permission rules", () => {
@@ -1429,8 +1335,6 @@ describe("permission-modes extension: tool_call gate", () => {
 		})
 
 		it("narrow allow rule bypasses auto-mode prompt for matching bash", async () => {
-			// Adjudication ② (2026-09-12): broad Bash(npm install *) is now
-			// stripped in auto mode; narrow package-scoped rules still survive.
 			writeProjectPermissionsFile(realProjectRoot, {
 				allow: ["Bash(npm install lodash:*)"],
 			})
@@ -1458,9 +1362,6 @@ describe("permission-modes extension: tool_call gate", () => {
 		})
 
 		it("strips dangerous Bash allow rules in auto mode", async () => {
-			// Adjudication ② (2026-09-12): Bash(npm install *) is dangerous
-			// now — stripped like Bash(python:*), so the command falls to
-			// tier-3 and the classifier-off fallback denies it (fail-closed).
 			writeProjectPermissionsFile(realProjectRoot, {
 				allow: ["Bash(python:*)", "Bash(npm install *)"],
 			})
@@ -1526,12 +1427,6 @@ describe("permission-modes extension: no auto follow-up (v2.0.0)", () => {
 	})
 })
 
-// ---- model profile tests -----------------------------------------------
-//
-// Profile helpers live in profiles.ts (unit-tested in profiles.test.ts).
-// These integration tests verify the wiring between profiles.ts and
-// index.ts: session-start flag, command handlers, mode-switch hook,
-// session-restore, and persistence.
 
 describe("permission-modes extension: model profiles", () => {
 	let pi: FakePi
@@ -1559,8 +1454,6 @@ describe("permission-modes extension: model profiles", () => {
 		})
 		permissionModesExtension(makeFakePiForExtension(pi))
 		await pi.simulateSessionStart("/home/user/project/src")
-		// After session_start with no flag, persistState is not yet called.
-		// Trigger a mode switch to force persist.
 		await pi.simulateCommand("auto", "", makeCtx(pi, { cwd: "/home/user/project/src" }))
 		const last = pi.appendEntries[pi.appendEntries.length - 1]
 		expect(last.type).toBe("modes")
@@ -1583,8 +1476,6 @@ describe("permission-modes extension: model profiles", () => {
 		})
 		expect(pi.setModelCalls.length).toBeGreaterThan(0)
 		expect(pi.setModelCalls[0].model).toBe(fakeModel)
-		// profile maps a model but no effort → thinking level stays alone
-		// (PLAN §3.3 ownership chain; pm 2.8.0 coerced "medium")
 		expect(pi.getThinkingLevel()).toBe("off")
 	})
 
@@ -1643,7 +1534,6 @@ describe("permission-modes extension: model profiles", () => {
 			main: { ask: "prov1/askModel" },
 		})
 		pi.flags["model-profile"] = "main"
-		// Override setModel to return false (simulates missing API key)
 		const fakePi = pi as unknown as { setModel: (m: unknown) => Promise<boolean> }
 		const originalSetModel = fakePi.setModel
 		fakePi.setModel = async () => false
@@ -1753,7 +1643,6 @@ describe("permission-modes extension: model profiles", () => {
 		permissionModesExtension(makeFakePiForExtension(pi))
 		await pi.simulateSessionStart("/home/user/project/src", undefined, registry)
 		const initialCalls = pi.setModelCalls.length
-		// Switch mode → should re-resolve and call setModel for the new mode's mapping.
 		await pi.simulateCommand(
 			"plan",
 			"",
@@ -1773,7 +1662,6 @@ describe("permission-modes extension: model profiles", () => {
 		})
 		permissionModesExtension(makeFakePiForExtension(pi))
 		await pi.simulateSessionStart("/home/user/project/src")
-		// Activate beta via /model-profile beta
 		await pi.simulateCommand(
 			"model-profile",
 			"beta",
@@ -1883,11 +1771,6 @@ describe("permission-modes extension: model profiles", () => {
 	})
 })
 
-// ---- Alt+I: cycle profile shortcut --------------------------------------
-//
-// Verifies the registered shortcut advances the active profile by one, wraps
-// around, notifies the user, and re-applies the model mapping for the
-// current mode.
 
 describe("permission-modes extension: Alt+I cycle profile shortcut", () => {
 	let pi: FakePi
@@ -1922,7 +1805,6 @@ describe("permission-modes extension: Alt+I cycle profile shortcut", () => {
 		})
 		permissionModesExtension(makeFakePiForExtension(pi))
 		await pi.simulateSessionStart("/home/user/project/src")
-		// Start active at 'alpha' (from config.active). Cycle should land on 'beta'.
 		await pi.simulateShortcut(
 			"alt+i",
 			makeCtx(pi, {
@@ -1962,9 +1844,6 @@ describe("permission-modes extension: Alt+I cycle profile shortcut", () => {
 		})
 		permissionModesExtension(makeFakePiForExtension(pi))
 		await pi.simulateSessionStart("/home/user/project/src")
-		// activeProfile is undefined until set explicitly. Cycle should still
-		// advance: it should land on the profile AFTER the implicit
-		// getActiveProfileName() (which is "main"), so → "alt".
 		await pi.simulateShortcut(
 			"alt+i",
 			makeCtx(pi, {
@@ -2012,7 +1891,6 @@ describe("permission-modes extension: Alt+I cycle profile shortcut", () => {
 		}
 		permissionModesExtension(makeFakePiForExtension(pi))
 		await pi.simulateSessionStart("/home/user/project/src", undefined, registry)
-		// Force activation so the call to setActiveProfile re-resolves the model.
 		await pi.simulateShortcut(
 			"alt+i",
 			makeCtx(pi, {
@@ -2021,8 +1899,6 @@ describe("permission-modes extension: Alt+I cycle profile shortcut", () => {
 				modelRegistry: registry,
 			}),
 		)
-		// The last setModel call should be for askB (the new profile's mapping
-		// for the ask mode we start in).
 		const last = pi.setModelCalls[pi.setModelCalls.length - 1]
 		expect(last.model).toEqual({ id: "askB" })
 	})
@@ -2065,7 +1941,6 @@ describe("bypass mode: outside-cwd write tracking", () => {
 
 	beforeEach(async () => {
 		pi = createFakePi()
-		// Use real fs: the current repo IS a project (has package.json).
 		realProjectRoot = process.cwd()
 		outsideTmpDir = mkdtempSync(join(tmpdir(), "pm-outside-"))
 		outsideFile = join(outsideTmpDir, "test.txt")
@@ -2074,7 +1949,6 @@ describe("bypass mode: outside-cwd write tracking", () => {
 	})
 
 	afterEach(() => {
-		// Clean up any .pi/ artifacts created in realProjectRoot
 		const tmpDir = join(realProjectRoot, ".pi", "projects")
 		if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true, force: true })
 		rmSync(outsideTmpDir, { recursive: true, force: true })
@@ -2092,9 +1966,7 @@ describe("bypass mode: outside-cwd write tracking", () => {
 		await switchMode("bypass")
 		const ctx = makeCtx(pi, { cwd: realProjectRoot })
 		// Write tool_call happens BEFORE the tool actually runs in real pi;
-		// in our fake we just call the handler. So pre-write content is "ORIGINAL".
 		await pi.simulateToolCall("write", { path: outsideFile }, ctx)
-		// Snapshot must exist
 		const snaps = listTrackedOutsideWrites(realProjectRoot)
 		expect(snaps).toHaveLength(1)
 		expect(snaps[0].originalPath).toBe(outsideFile)
@@ -2115,13 +1987,9 @@ describe("bypass mode: outside-cwd write tracking", () => {
 		await switchMode("bypass")
 		const ctx = makeCtx(pi, { cwd: realProjectRoot })
 		await pi.simulateToolCall("write", { path: outsideFile }, ctx)
-		// The snapshot captures pre-write content
 		const snap1 = listTrackedOutsideWrites(realProjectRoot)[0]
 		expect(snap1.backupContent).toBe("FIRST_ORIGINAL")
 
-		// Second write — snapshot captures whatever the file had before this write.
-		// In the fake, file content is unchanged from after the first call
-		// (since we didn't actually write anything). So the new backup matches.
 		await new Promise((r) => setTimeout(r, 5))
 		await pi.simulateToolCall("write", { path: outsideFile }, ctx)
 		const snaps = listTrackedOutsideWrites(realProjectRoot)
@@ -2192,7 +2060,6 @@ describe("/outside-writes and /undo-outside-writes commands", () => {
 		pi.flags["permission-mode"] = "bypass"
 		await pi.simulateSessionStart(cwd)
 
-		// Simulate two tracked writes
 		const ctx1 = makeCtx(pi, { cwd })
 		await pi.simulateToolCall("write", { path: outsideFile }, ctx1)
 		await new Promise((r) => setTimeout(r, 5))
@@ -2227,12 +2094,9 @@ describe("/outside-writes and /undo-outside-writes commands", () => {
 
 	it("/undo-outside-writes all restores everything and pops all snapshots", async () => {
 		await setupTrackedWrites()
-		// Simulate that the tool actually wrote something
 		writeFileSync(outsideFile, "NEW_CONTENT")
 		await pi.simulateCommand("undo-outside-writes", "all", makeCtx(pi, { cwd }))
-		// File restored
 		expect(readFileSync(outsideFile, "utf-8")).toBe("ORIGINAL")
-		// Snapshots popped
 		expect(listTrackedOutsideWrites(cwd)).toEqual([])
 	})
 
@@ -2269,27 +2133,21 @@ describe("/outside-writes and /undo-outside-writes commands", () => {
 		await pi.simulateSessionStart(cwd)
 		pi.flags["permission-mode"] = "bypass"
 		await pi.simulateSessionStart(cwd)
-		// File didn't exist before write
 		await pi.simulateToolCall("write", { path: outsideFile }, makeCtx(pi, { cwd }))
-		// Simulate tool creating the file
 		writeFileSync(outsideFile, "NEWLY_CREATED")
 		await pi.simulateCommand("undo-outside-writes", "all", makeCtx(pi, { cwd }))
 		expect(existsSync(outsideFile)).toBe(false)
 	})
 
 	it("/outside-writes is available in ask mode too", async () => {
-		// Verify the command runs without mode restriction (even in ask mode).
-		// Set up in auto mode, then switch to ask
 		pi.flags["permission-mode"] = "ask"
 		await pi.simulateSessionStart(cwd)
-		// In ask mode, outside-writes should not throw
 		await expect(
 			pi.simulateCommand("outside-writes", "", makeCtx(pi, { cwd }))
 		).resolves.not.toThrow()
 	})
 })
 
-// ---- Skill filtering in before_agent_start -----------------------------
 
 describe("skill filtering in before_agent_start", () => {
 	let tmpDir: string
@@ -2298,9 +2156,7 @@ describe("skill filtering in before_agent_start", () => {
 
 	function skillPrompt(skills: string[]): string {
 		// Use pi's actual `formatSkillsForPrompt` schema (see
-		// `@earendil-works/pi-coding-agent/dist/core/skills.js`). The v1.1.4
-		// tests used the wrong `<skill name="...">` attribute format and all
-		// passed while the feature was broken at runtime.
+		// `@earendil-works/pi-coding-agent/dist/core/skills.js`).
 		const blocks = skills.map(
 			(s) =>
 				[
@@ -2347,17 +2203,13 @@ describe("skill filtering in before_agent_start", () => {
 		tmpDir = mkdtempSync(join(tmpdir(), "pm-skf-"))
 		pi = createFakePi()
 		realProjectRoot = process.cwd()
-		// Re-point the model-profiles config at a tmpfile so each test starts
-		// from a known empty (or custom) config.
 		setModelsPath(join(tmpDir, "model-profiles.json"))
 	})
 
 	afterEach(() => {
-		// Clean up any .pi/ artifacts created in realProjectRoot
 		const projectTmp = join(realProjectRoot, ".pi", "projects")
 		if (existsSync(projectTmp)) rmSync(projectTmp, { recursive: true, force: true })
 		rmSync(tmpDir, { recursive: true, force: true })
-		// Restore default models path so other test files are unaffected
 		setModelsPath(join(realProjectRoot, "model-profiles.json"))
 	})
 
@@ -2365,7 +2217,6 @@ describe("skill filtering in before_agent_start", () => {
 		permissionModesExtension(makeFakePiForExtension(pi))
 		const prompt = skillPrompt(["brainstorming", "systematic-debugging"])
 		const result = await triggerBeforeAgentStart(prompt, "ask")
-		// Skills unchanged; ask mode injects one-line reminder anchor
 		expect(result?.systemPrompt).toContain("brainstorming")
 		expect(result?.systemPrompt).toContain("systematic-debugging")
 		expect(result?.systemPrompt).toContain("[Ask]")
@@ -2397,14 +2248,13 @@ describe("skill filtering in before_agent_start", () => {
 			JSON.stringify({
 				active: "default",
 				default: {
-					plan: { model: "" }, // model only, no skills filter
+					plan: { model: "" },
 				},
 			}),
 		)
 		permissionModesExtension(makeFakePiForExtension(pi))
 		const prompt = skillPrompt(["brainstorming", "systematic-debugging"])
 		const result = await triggerBeforeAgentStart(prompt, "plan")
-		// Skills unchanged; plan mode anchor still injected via systemPrompt
 		expect(result?.systemPrompt).toContain("brainstorming")
 		expect(result?.systemPrompt).toContain("systematic-debugging")
 		expect(result?.systemPrompt).toContain("permission-modes:context")
@@ -2440,9 +2290,6 @@ describe("skill filtering in before_agent_start", () => {
 	})
 
 	it("handles empty skill filter (interpreted as no filter — allow all)", async () => {
-		// Per the v1.1.4 spec: an empty `skills` list is a no-op (treated like
-		// ["*"]) by filterSkillsFromPrompt. The user effectively said "no
-		// filter" — same as the default behavior.
 		writeFileSync(
 			join(tmpDir, "model-profiles.json"),
 			JSON.stringify({
@@ -2454,7 +2301,6 @@ describe("skill filtering in before_agent_start", () => {
 		permissionModesExtension(makeFakePiForExtension(pi))
 		const prompt = skillPrompt(["brainstorming", "systematic-debugging"])
 		const result = await triggerBeforeAgentStart(prompt, "plan")
-		// systemPrompt should contain the original skills (filter is a no-op)
 		expect(result?.systemPrompt).toBeDefined()
 		expect(result!.systemPrompt).toContain("brainstorming")
 		expect(result!.systemPrompt).toContain("systematic-debugging")
@@ -2473,7 +2319,6 @@ describe("skill filtering in before_agent_start", () => {
 		permissionModesExtension(makeFakePiForExtension(pi))
 		const prompt = skillPrompt(["brainstorming", "systematic-debugging"])
 		const askResult = await triggerBeforeAgentStart(prompt, "ask")
-		// ask mode has no skill filter; skills preserved + ask anchor
 		expect(askResult?.systemPrompt).toContain("systematic-debugging")
 		expect(askResult?.systemPrompt).toContain("[Ask]")
 	})
@@ -2541,7 +2386,7 @@ describe("permission-modes: subagent ask forwarding", () => {
 
 	it("blocks without parent session when hasUI is false", async () => {
 		await pi.simulateSessionStart(process.cwd())
-		const ctx = makeCtx(pi, { cwd: process.cwd() }) // no ui → hasUI false
+		const ctx = makeCtx(pi, { cwd: process.cwd() })
 		const result = await pi.simulateToolCall(
 			"bash",
 			{ command: "rm -rf /tmp/x" },
@@ -2554,13 +2399,10 @@ describe("permission-modes: subagent ask forwarding", () => {
 	})
 
 	it("fails closed when only PI_SUBAGENT_PARENT_SESSION is set (no PI_SUBAGENT_CHILD)", async () => {
-		// Parent env alone is not enough — must also be a subagent child,
-		// otherwise unrelated processes that inherit parent env would hang
-		// forever waiting for a forwarding response.
 		process.env.PI_SUBAGENT_PARENT_SESSION = "stale-parent-id"
 		delete process.env.PI_SUBAGENT_CHILD
 		await pi.simulateSessionStart(process.cwd())
-		const ctx = makeCtx(pi, { cwd: process.cwd() }) // no ui → hasUI false
+		const ctx = makeCtx(pi, { cwd: process.cwd() })
 		const result = await pi.simulateToolCall(
 			"read",
 			{ path: "/etc/passwd" },
@@ -2672,8 +2514,6 @@ describe("permission-modes: subagent ask forwarding", () => {
 			cwd: process.cwd(),
 			input: {},
 		})
-		// Force session id mismatch — even if poller started with wrong id it wouldn't match.
-		// Main assert: child process must not call select for inbox.
 		await new Promise((r) => setTimeout(r, 400))
 		expect(selectCalls).toBe(0)
 	})
@@ -2715,10 +2555,9 @@ describe("permission-modes: subagent inherits parent mode", () => {
 	it("child in inherited bypass allows mutating bash without UI", async () => {
 		process.env.PI_SUBAGENT_CHILD = "1"
 		process.env.PERMISSION_MODES_INHERITED_MODE = "bypass"
-		// Default flag is ask — inheritance must override for children.
 		pi.flags["permission-mode"] = undefined
 		await pi.simulateSessionStart(process.cwd())
-		const ctx = makeCtx(pi, { cwd: process.cwd() }) // no ui
+		const ctx = makeCtx(pi, { cwd: process.cwd() })
 		const result = await pi.simulateToolCall(
 			"bash",
 			{ command: "rm -rf /tmp/x" },
@@ -2734,7 +2573,6 @@ describe("permission-modes: subagent inherits parent mode", () => {
 	})
 })
 
-// ---- Injection probe in before_agent_start (plan B1) --------------------
 // Real SessionEntry shape: {type:"message", message:{role:"user"|"assistant"|"toolResult"}}.
 describe("injection probe in before_agent_start (plan B1)", () => {
 	let pi: FakePi
@@ -2801,10 +2639,6 @@ describe("injection probe in before_agent_start (plan B1)", () => {
 	})
 })
 
-// ---- Approval flow parity: outside-write tracking (plan B2) -------------
-// Same write-outside-cwd input through the ask-mode inline flow and the
-// auto tier-3 flow must produce identical side effects (tracking, rule
-// persistence, notifications). The ask flow previously dropped tracking.
 describe("approval flow parity: outside-write tracking (plan B2)", () => {
 	let pi: FakePi
 	let realProjectRoot: string
@@ -2905,7 +2739,6 @@ describe("approval flow parity: outside-write tracking (plan B2)", () => {
 	})
 })
 
-// ---- pm↔cctui capability channel (plan B7) ------------------------------
 describe("permission-modes capability channel (plan B7)", () => {
 	let pi: FakePi
 	let configTmp: string
@@ -2998,10 +2831,6 @@ describe("footer slot ownership vs CC-TUI (2026-09-22)", () => {
 		expect(footerCalls.length).toBe(0)
 	})
 
-	// SPEC 2026-10-07 P1-1 (XPKG-07 / B6): while the core modes footer holds
-	// the slot it renders the shared display.footer channel after its own two
-	// lines; a live cctui never sees this footer installed (cc-footer renders
-	// the channel instead — joint acceptance with the TUI spec).
 	it("B6: installed modes footer renders display.footer lines (dim, clamped); cctui presence still skips install", async () => {
 		resetCoreBusForTests()
 		setFooterLine("action-fusion", "action-fusion requires pi >=0.87.0")
@@ -3019,9 +2848,8 @@ describe("footer slot ownership vs CC-TUI (2026-09-22)", () => {
 			},
 		})
 		expect(footerCalls.length).toBeGreaterThan(0)
-		expect(rendered.length).toBe(3) // two modes lines + one channel line
+		expect(rendered.length).toBe(3)
 		expect(rendered[2]).toContain("action-fusion requires pi")
-		// presence: no install, nothing rendered from this path
 		; (globalThis as Record<string, unknown>).__piCcTui = { active: true }
 		footerCalls = []
 		rendered = []
@@ -3038,10 +2866,6 @@ describe("footer slot ownership vs CC-TUI (2026-09-22)", () => {
 	})
 })
 
-// ── AR1005-ST wiring (spec 2026-10-05 §9): operation counts through the
-// REAL registered hooks — a warm message_update stream costs ZERO
-// getBranch/getContextUsage calls; append/model-change/compaction
-// invalidate; turn_end and before_provider_request still refresh. ──
 describe("AR1005-ST working-stats cache (wiring)", () => {
 	function countingSm(entries: Array<{ id: string; type: string; message?: unknown }>) {
 		let branchCalls = 0
@@ -3096,7 +2920,7 @@ describe("AR1005-ST working-stats cache (wiring)", () => {
 		for (let i = 0; i < 10_000; i++) entries.push(stEntry(`e${i}`, { input: 1, output: 1, cost: { total: 0.001 } }))
 		const { pi, csm, usageCalls, ctx } = await stSetup(entries)
 		await stFire(pi, "session_start", ctx)
-		await stFire(pi, "turn_start", ctx) // the warm forced read
+		await stFire(pi, "turn_start", ctx)
 		const b0 = csm.branchCalls()
 		const u0 = usageCalls()
 		for (let i = 0; i < 200; i++) await stFire(pi, "message_update", ctx)
@@ -3111,14 +2935,12 @@ describe("AR1005-ST working-stats cache (wiring)", () => {
 		await stFire(pi, "turn_start", ctx)
 		expect(csm.branchCalls()).toBeGreaterThan(0)
 
-		// append: leaf moves → the next message_update re-reads
 		entries.push(stEntry("a2", { input: 1 }))
 		csm.setLeaf("a2")
 		await stFire(pi, "message_update", ctx)
 		const afterAppend = csm.branchCalls()
 		expect(afterAppend).toBeGreaterThan(0)
 
-		// model change: usage re-read, branch NOT re-summed
 		const bBeforeModel = csm.branchCalls()
 		const uBeforeModel = usageCalls()
 		await stFire(pi, "model_select", ctx)
@@ -3126,7 +2948,6 @@ describe("AR1005-ST working-stats cache (wiring)", () => {
 		expect(csm.branchCalls()).toBe(bBeforeModel)
 		expect(usageCalls()).toBeGreaterThan(uBeforeModel)
 
-		// compaction invalidates the cached snapshot
 		await stFire(pi, "session_compact", ctx)
 		const bBeforeCompact = csm.branchCalls()
 		await stFire(pi, "message_update", ctx)
@@ -3140,14 +2961,13 @@ describe("AR1005-ST working-stats cache (wiring)", () => {
 		await stFire(pi, "turn_start", ctx)
 		const b0 = csm.branchCalls()
 		await stFire(pi, "before_provider_request", ctx)
-		expect(csm.branchCalls()).toBe(b0) // unchanged branch is NOT re-summed
+		expect(csm.branchCalls()).toBe(b0)
 		expect(usageCalls()).toBeGreaterThan(0)
 		entries.push(stEntry("t1", { output: 42 }))
-		csm.setLeaf("t1") // the committed entry moved the leaf
+		csm.setLeaf("t1")
 		await stFire(pi, "turn_end", ctx)
-		expect(csm.branchCalls()).toBe(b0 + 1) // exactly ONE forced committed read
+		expect(csm.branchCalls()).toBe(b0 + 1)
 	})
-// ---- SPEC 2026-10-07 P2-4: modes.usage raw numbers (XPKG-08) ----------------
 describe("P2-4 modes.usage structured channel", () => {
 	async function utSetup(entries: Array<{ id: string; type: string; message?: unknown }>, usage?: () => unknown) {
 		const pi = createFakePi()
@@ -3170,7 +2990,6 @@ describe("P2-4 modes.usage structured channel", () => {
 		const snap = coreBus().snapshot().modes
 		const u = snap.usage!
 		expect(u).toBeDefined()
-		// one-way: formatting the numbers reproduces the string
 		const fmt = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`)
 		expect(snap.workingStats).toContain(`↑${fmt(u.input)}`)
 		expect(snap.workingStats).toContain(`↓${fmt(u.output)}`)
@@ -3194,24 +3013,21 @@ describe("P2-4 modes.usage structured channel", () => {
 		await stFire(pi, "turn_start", ctx)
 		const before = coreBus().snapshot().modes.usage
 		expect(before).toBeDefined()
-		// mode-only patch keeps the latest usage
 		pi.flags["permission-mode"] = "plan"
-		await pi.simulateSessionStart(process.cwd()) // session_start ALSO clears (new session)
+		await pi.simulateSessionStart(process.cwd())
 		expect(coreBus().snapshot().modes.usage).toBeUndefined()
 		void ctx
 	})
 
 	it("U-T6: zero stays zero; partial ctx fields stay absent (never faked as 0); non-finite omits the object; no UI publishes nothing", async () => {
-		// real zero cost, ctx percent null → ctxPercent absent but numbers present
 		const entries = [stEntry("a1", { input: 3, output: 0, cost: { total: 0 } })]
 		const { pi, ctx } = await utSetup(entries, () => ({ tokens: 42, contextWindow: 100_000, percent: null }))
 		await stFire(pi, "turn_start", ctx)
 		const u = coreBus().snapshot().modes.usage!
-		expect(u.cost).toBe(0) // real zero preserved
+		expect(u.cost).toBe(0)
 		expect(u.ctxTokens).toBe(42)
-		expect(u.ctxPercent).toBeUndefined() // null ≠ 0
+		expect(u.ctxPercent).toBeUndefined()
 		expect(u.contextWindow).toBe(100_000)
-		// no UI: nothing is published at all
 		const pi2 = createFakePi()
 		permissionModesExtension(makeFakePiForExtension(pi2))
 		const ctx2 = makeCtx(pi2, { cwd: process.cwd() })
@@ -3223,9 +3039,6 @@ describe("P2-4 modes.usage structured channel", () => {
 })
 
 
-// ---- SPEC 2026-10-07 P0-1: plan-mode permission precedence ------------------
-// D1 (ask honored in plan) / D2a (allow does not unlock writes) / D2b (family-
-// governed MCP stays usable) + FUS-SHAPE (real then_run object form).
 describe("plan precedence: rules vs hard limits (SPEC P0-1)", () => {
 	let pi: FakePi
 	let realProjectRoot: string
@@ -3240,8 +3053,6 @@ describe("plan precedence: rules vs hard limits (SPEC P0-1)", () => {
 			JSON.stringify({ classifier: { enabled: false } }),
 		)
 		realProjectRoot = process.cwd()
-		// project-scope rules leak across describes in this file (and across
-		// runs): drop them so this suite starts from a clean rule state
 		const permsDir = join(realProjectRoot, ".pi", "projects")
 		for (const f of ["permissions.json", "permissions.local.json"]) {
 			rmSync(join(permsDir, getProjectId(realProjectRoot), f), { force: true })
@@ -3410,8 +3221,6 @@ describe("plan precedence: rules vs hard limits (SPEC P0-1)", () => {
 			content: "x",
 			then_run: { command: "npm install x" },
 		})
-		// allow short-circuits BEFORE the embedded scan outside plan (pinned
-		// behavior; only plan flips this order — see T6)
 		expect(result).toBeUndefined()
 	})
 
@@ -3467,28 +3276,24 @@ describe("plan precedence: rules vs hard limits (SPEC P0-1)", () => {
 		writePlanFile(realProjectRoot, "# plan")
 		const planPath = getPlanFilePath(realProjectRoot)
 		await switchModeWithRules("plan", { allow: ["Edit(**)"] })
-		// old string form still scans
 		const strBlocked = await callToolCall("edit", {
 			path: planPath,
 			content: "x",
 			then_run: "rm -rf /tmp/x",
 		})
 		expect(strBlocked).toMatchObject({ block: true })
-		// array form still scans
 		const arrBlocked = await callToolCall("edit", {
 			path: planPath,
 			content: "x",
 			then_run: ["npm install x"],
 		})
 		expect(arrBlocked).toMatchObject({ block: true })
-		// nested objects under OTHER keys are not commands
 		const untouched = await callToolCall("edit", {
 			path: planPath,
 			content: "x",
 			metadata: { command: "rm -rf /" },
 		})
 		expect(untouched).toBeUndefined()
-		// non-string then_run command field is ignored
 		const nonString = await callToolCall("edit", {
 			path: planPath,
 			content: "x",
@@ -3510,7 +3315,6 @@ describe("bash path-target checks W3/W4/W5 (2026-11-07 handoff)", () => {
 		setConfigPath(join(configTmp, "permission-modes.json"))
 		writeFileSync(
 			join(configTmp, "permission-modes.json"),
-			// deny rules mirror the user's real global set (handoff §W4)
 			JSON.stringify({
 				classifier: { enabled: false },
 				permissions: { deny: ["Read(./.env)", "Read(./.git/**)"] },
@@ -3572,8 +3376,8 @@ describe("bash path-target checks W3/W4/W5 (2026-11-07 handoff)", () => {
 
 	it("W5: env PI_CORE_BASH_PATH_CHECKS overrides config (deny-only keeps W4, drops W3)", async () => {
 		process.env.PI_CORE_BASH_PATH_CHECKS = "deny"
-		expect(await callBash("rm .git/x")).toBeUndefined() // W3 off
-		expect(await callBash("cat .env")).toMatchObject({ block: true }) // W4 on
+		expect(await callBash("rm .git/x")).toBeUndefined()
+		expect(await callBash("cat .env")).toMatchObject({ block: true })
 	})
 })
 
@@ -3639,7 +3443,6 @@ describe("review fixes P1-1/P1-4 (2026-11-08 handoff)", () => {
 	it("P1-4: plan hard limits keep priority — a plan-blocked call with a protected write stays denied, not prompted", async () => {
 		pi.flags["permission-mode"] = "plan"
 		await pi.simulateSessionStart(realProjectRoot)
-		// bash is not plan-legal at all; plan gate denies before 3.5 could prompt
 		const r = await callTool("bash", { command: "echo x > ~/.pi/agent/permission-modes.json" })
 		expect(r).toMatchObject({ block: true })
 		expect(String((r as { reason?: string }).reason)).not.toContain("protected pi path")
@@ -3659,7 +3462,6 @@ describe("review fixes P1-1/P1-4 (2026-11-08 handoff)", () => {
 	})
 })
 
-// ---- BH batch (spec 2026-11-14-backtest-hardening) -----------------------
 
 describe("BH-R3: flagged mv/cp is not denied by unrelated deny rules (end-to-end)", () => {
 	let pi: FakePi
@@ -3676,7 +3478,6 @@ describe("BH-R3: flagged mv/cp is not denied by unrelated deny rules (end-to-end
 			join(configTmp, "permission-modes.json"),
 			JSON.stringify({
 				classifier: { enabled: false },
-				// an UNRELATED deny rule — none of its paths appear in the commands
 				permissions: { deny: ["Read(./.env)"] },
 			}),
 		)
@@ -3747,8 +3548,6 @@ describe("BH-R6: auto allow/soft_deny match per shell segment", () => {
 	}
 
 	it("a soft_deny segment forces the prompt even when another segment matches allow", async () => {
-		// base behavior: the whole command contains "npm test" → tier-1.5
-		// fast-allow fires BEFORE soft_deny is consulted
 		const r = await callBash("git reset HEAD~1 && npm test")
 		expect(r).toMatchObject({ block: true })
 		expect(String((r as { reason?: string }).reason)).toContain("soft_deny")
@@ -3780,11 +3579,6 @@ describe("BH-R6 tier order: soft_deny wins over the allow tier (REVIEW-2026-11-1
 			join(configTmp, "permission-modes.json"),
 			JSON.stringify({
 				classifier: { enabled: false },
-				// every segment of the collision command allow-matches AND one
-				// segment soft_deny-matches, and BOTH segments are tier-2
-				// approvable (verified: npm test is, npm install / npm publish
-				// are not — they never reach the allow tier) — the pre-fix
-				// tier order (allow first) fast-allowed this through
 				autoMode: { allow: ["git", "npm"], soft_deny: ["npm test"] },
 			}),
 		)
@@ -3868,8 +3662,6 @@ describe("BH-R7: hostile config arrays + check/setMode/bus hardening", () => {
 	})
 
 	it("a rejected setMode is caught and notified, not unhandled", async () => {
-		// profile maps bypass → a model; the registry lookup throws →
-		// applyForMode rejects inside setMode (cycleMode fire-and-forgets)
 		setupProfileBH({ default: { bypass: { model: "prov/boom" } } })
 		const throwing = makeCtx(pi, { cwd: projDir })
 		;(throwing as unknown as { modelRegistry: { find: () => never } }).modelRegistry = {
@@ -3877,14 +3669,12 @@ describe("BH-R7: hostile config arrays + check/setMode/bus hardening", () => {
 				throw new Error("registry exploded")
 			},
 		}
-		// cycle ask → plan → auto → bypass (bypass has the throwing mapping)
 		for (let i = 0; i < 3; i++) await pi.simulateShortcut("shift+tab", throwing)
 		const notices = (coreBus().snapshot().notifications ?? []).map((n) => n.msg)
 		expect(notices.some((n) => n.includes("Mode switch failed") && n.includes("registry exploded"))).toBe(true)
 	})
 })
 
-/** Local profile fixture (same shape as the profiles describe's setupProfile). */
 function setupProfileBH(cfg: unknown) {
 	const tmp = join(tmpdir(), `pm-bh-mp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`)
 	setModelsPath(tmp)
@@ -3916,8 +3706,6 @@ describe("BH-E4: setMode generation — side effects only for the newest request
 	it("rapid plan→auto→bypass ends in bypass and creates no plan.md", async () => {
 		setupProfileBH({ active: "main", main: { plan: "prov/pm", auto: "prov/am", bypass: "prov/bm" } })
 		pi.flags["model-profile"] = "main"
-		// stagger the fake setModel resolution: a superseded request would
-		// publish its (older) mode AFTER the newest one if not gated
 		const calls = pi.setModelCalls
 		pi.setModel = async (model: unknown) => {
 			const delay = calls.length === 0 ? 30 : calls.length === 1 ? 20 : 5
@@ -3935,7 +3723,6 @@ describe("BH-E4: setMode generation — side effects only for the newest request
 		const p3 = pi.simulateCommand("bypass", "", ctx)
 		await Promise.all([p1, p2, p3])
 		expect(coreBus().snapshot().modes.mode).toBe("bypass")
-		// passing THROUGH plan must not leave plan.md behind
 		expect(existsSync(getPlanFilePath(projDir))).toBe(false)
 	})
 
@@ -3950,7 +3737,7 @@ describe("BH-E4: setMode generation — side effects only for the newest request
 			find: (provider: string, model: string) => ({ provider, id: model }),
 		})
 		const afterSessionStart = pi.setModelCalls.length
-		expect(afterSessionStart).toBeGreaterThan(0) // initial apply sets the model
+		expect(afterSessionStart).toBeGreaterThan(0)
 		const ctx = makeCtx(pi, {
 			cwd: projDir,
 			model: { provider: "prov", id: "m" },
@@ -3986,19 +3773,13 @@ describe("BH-E5: model-switch thinking reset is not adopted as explicit (modes i
 		)
 		// REAL host contract (agent-session.js 2115-2125, 2210-2229): setModel
 		// resolves the model-switch thinking level (per-model effortLevel →
-		// global default → current) and applies it via setThinkingLevel, which
-		// emits thinking_level_select when it changes. The registry models
-		// carry a switchLevel override so every switch from a higher level
-		// emits "medium" — exactly the reset the effort listener must not
-		// adopt as an explicit user choice.
+		// global default → current) and applies it via setThinkingLevel (emits thinking_level_select when it changes).
 		pi.setModel = async (model: unknown) => {
 			const switchLevel = (model as { switchLevel?: FakeThinkingLevel } | null)?.switchLevel
 				?? pi.getThinkingLevel()
 			const previous = pi.getThinkingLevel()
 			if (switchLevel !== previous) {
 				pi.setThinkingLevel(switchLevel)
-				// real setThinkingLevel emits when the level changes — the
-				// effort listener runs INSIDE the setModel call
 				for (const h of pi.handlers.get("thinking_level_select") ?? []) {
 					h({ level: switchLevel, previousLevel: previous })
 				}
@@ -4008,7 +3789,6 @@ describe("BH-E5: model-switch thinking reset is not adopted as explicit (modes i
 		}
 		permissionModesExtension(makeFakePiForExtension(pi))
 		await pi.simulateSessionStart(projDir, undefined, {
-			// reasoning-capable model so the profile effort is not clamped away
 			find: (provider: string, model: string) => ({
 				provider,
 				id: model,
@@ -4024,8 +3804,6 @@ describe("BH-E5: model-switch thinking reset is not adopted as explicit (modes i
 				},
 			}),
 		})
-		// the effort-side listener, bound to the SAME shared owner the modes
-		// module resolves (mirror of extensions/effort/index.ts)
 		const owner = getSharedEffortOwner(pi as never)
 		pi.on("thinking_level_select", (event) => {
 			const e = event as { level: FakeThinkingLevel }
@@ -4054,10 +3832,6 @@ describe("BH-E5: model-switch thinking reset is not adopted as explicit (modes i
 		})
 		pi.flags["model-profile"] = "main"
 		const owner = getSharedEffortOwner(pi as never)
-		// reasoning-capable model/registry: every provider/model resolves to a
-		// model that supports all thinking tiers (else the profile effort
-		// clamps off); ctx.model must be capable too — clampToSupported reads
-		// the CURRENT model's level map, not the registry entry
 		const capableModel = {
 			provider: "prov",
 			id: "m0",
@@ -4097,13 +3871,9 @@ describe("BH-E5: model-switch thinking reset is not adopted as explicit (modes i
 			model: capableModel as unknown as { provider: string; id: string },
 			modelRegistry: capableRegistry,
 		})
-		// enter plan: model switch m0→pm + profile effort high
 		await pi.simulateCommand("plan", "", ctx)
 		expect(pi.getThinkingLevel()).toBe("high")
 		expect(owner.currentSource()).toBe("profile")
-		// switch to auto: model switch pm→am; the host resets thinking to the
-		// new model's switch level BEFORE the profile effort is applied —
-		// that reset must NOT become an explicit user choice
 		await pi.simulateCommand("auto", "", ctx)
 		expect(pi.getThinkingLevel()).toBe("low")
 		expect(owner.currentSource()).toBe("profile")

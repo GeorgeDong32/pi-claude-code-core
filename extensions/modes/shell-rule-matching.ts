@@ -1,8 +1,4 @@
-/**
- * CC-compatible shell permission rule matching (exact / :* prefix / wildcard).
- * Ported from Claude Code shellRuleMatching.ts.
- */
-
+// Ported from Claude Code shellRuleMatching.ts.
 const ESCAPED_STAR_PLACEHOLDER = "\x00ESCAPED_STAR\x00"
 const ESCAPED_BACKSLASH_PLACEHOLDER = "\x00ESCAPED_BACKSLASH\x00"
 const ESCAPED_STAR_PLACEHOLDER_RE = new RegExp(ESCAPED_STAR_PLACEHOLDER, "g")

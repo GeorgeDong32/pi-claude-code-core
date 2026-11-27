@@ -1,25 +1,3 @@
-/*
- * Ledger directives (SPEC SC §5.6 LED-02/LED-02b, task W6).
- *
- * Human user messages from the compressed region, classified:
- *   flow-dispatch — rex-flow dispatch pointers (role headers / "read the
- *                   dispatch file and start" shapes) — NOT human directives
- *   standing      — hits a configurable constraint pattern (宁多勿少:
- *                   conservative match, prefer over-classifying)
- *   normal        — everything else the human said
- *
- * Budget ladder (LED-02): standing newest-first verbatim → normal newest-
- * first verbatim; over directivesMax the OLDEST normal folds first
- * (head 120 chars + `[#entryId @time]` pointer), then to pointer-only,
- * standing folds LAST; every directive keeps at least one pointer line;
- * past maxDirectiveLines the remainder collapses to a count line (originals
- * always remain in the session file — Tier D).
- *
- * LED-02b: directives (incl. folded pointer lines) carry over from the
- * previous compaction's ledger block — unknown versions/corrupt blocks are
- * silently dropped (telemetry counts it upstream).
- */
-
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { CompressedRegionView, LedgerDirective } from "./types.ts";
 

@@ -1,126 +1,3 @@
-/**
- * goal-lifecycle.ts — the pool/focus/drafting state owner (SPEC 2026-10-07
- * P2-2, decisions L1=A factory / L2=B full ownership / L3=B ports / L4=B
- * focused() getter / L5=B TransitionReport). The goal POOL, the FOCUS
- * pointer, the drafting intents, the per-turn flags, and the get_goal nudge
- * counters all live here.
- *
- * ENCAPSULATION CONTRACT (C5 follow-up, 2026-10-09):
- *  - Every value that ESCAPES the module (focused(), pool,
- *    confirmationIntent, TransitionReport.record) is a defensive copy —
- *    mutating a returned record/Map/intent never touches owned state.
- *  - Every record that ENTERS the pool (verb inputs, storage port results,
- *    restore/reconcile disk reads) is cloned at intake — callers and ports
- *    never keep a live alias into owned state.
- *  - The old silent primitives (adopt / replacePool / setFocusedSilently /
- *    removeFromPool) and the raw setGoal writer are MODULE-INTERNAL. The
- *    public surface is read projections + the closed event entry + business
- *    verbs, one per production path. There is no arbitrary patch entry.
- *
- * Verb effect table (pinned by goal-lifecycle.test.ts recording ports —
- * migrated line-for-line from the goal.ts implementations):
- *
- *  setGoal(next, {persist})   [internal] stop-loop(cond) · stop-clock(cond) ·
- *                             nudge reset(cond prev/next) · forget carry(gone
- *                             or completed) · release stale tweak gate(cond) ·
- *                             focus entry(cond reason+changed) · persist or
- *                             tool-sync · UI sync
- *  focus(goalId, reason)      stop-loop+clock on change · nudge reset(prev
- *                             + next) · release stale tweak gate(cond) ·
- *                             focus entry(always) · ledger focused/unfocused
- *                             · tool-sync · UI sync
- *  create(config)             setGoal(created, focusReason "created") ·
- *                             begin-clock · nudge reset · draft-applied(goal)
- *                             · ledger goal_created
- *  pause(ctx,{note})          user pause (/goal-pause, Esc, aborted turns):
- *                             merge → stamp paused/user + user note →
- *                             setGoal → ledger goal_paused · nudge reset
- *                             (BH-R1: the same verb with {systemReason,
- *                             suggestedAction} is the provider-error
- *                             continuation guard's pause — raw pauseReason,
- *                             ledger reason "provider-error")
- *  pauseByAgent(ctx,{…})      the pause_goal TOOL path (never emitted the
- *                             pause ledger): merge → buildPausedByAgentGoal →
- *                             setGoal → nudge reset → turn-stopped
- *  resume(ctx)                /goal-resume: merge → stamp active → setGoal →
- *                             begin-clock · nudge reset · ledger goal_resumed
- *  activate(ctx)              the session-resume confirmation path: stamp
- *                             active → setGoal (no merge, no ledger — the
- *                             historical shape of that prompt's assignment)
- *  setUserNote(ctx,note?)     /goal-note: stamp userNote → setGoal
- *  applyUsage({tokens,cost,seconds})
- *                             the accounting result adoption (cloneGoal +
- *                             delta + updatedAt, the old accountProgress tail)
- *  recordAuditAttempt(ctx,n)  stamp auditAttempts + persist (the up-front
- *                             attempt count that must survive a rejected
- *                             audit and restarts)
- *  applyTweak(ctx,objective)  apply_goal_tweak's authoritative write: build →
- *                             writeActiveGoalFile (NOT persist — persist would
- *                             re-read the stale disk objective and clobber
- *                             the new one) → adopt canonical · state entry ·
- *                             draft-applied(tweak) · nudge reset ·
- *                             turn-stopped · tool-sync · UI
- *  complete(goal)             adopt the audited target (the audit-time
- *                             canonical record) → merge-from-disk → stamp
- *                             complete/agent → setGoal effects (halt · pause ·
- *                             forget carry · persist=archive · UI) → nudge
- *                             reset → pool removal → focus entry(null,
- *                             completed) · tool-sync · UI sync · ledger
- *                             goal_completed
- *  terminate(kind,{by,note})  archive(disk, stopReason=by) · ledger
- *                             goal_aborted(user kind note / agent reason) ·
- *                             nudge reset · setGoal(null) effects · persist ·
- *                             UI sync
- *  retireForReplacement(ctx)  the /goals|/sisyphus replace branch (never
- *                             emitted goal_aborted): merge → stamp paused/user
- *                             → archive (result discarded) → setGoal(null,
- *                             focusReason "cleared", persist)
- *  restore(ctx,{…})           loadState core: clear turn flags → pool from
- *                             disk (empty for child sessions) → resolve
- *                             session focus (legacy adoption) → migrated/
- *                             selected focus entry → drop completed records →
- *                             halt + pause · tool-sync · UI
- *  reconcileFromDisk(ctx)     pool re-read · focus repair · stale-gate
- *                             cleanup (child-session env guard stays with the
- *                             adapter)
- *  syncObjectiveFromDisk      the disk objective sync (readCtx fast path vs
- *                             fresh merge; value-compare so the clone
- *                             boundary cannot fake a change)
- *  persistRecord(ctx,readCtx) the old adapter persist(): stamp updatedAt →
- *                             sync objective → write/archive via the storage
- *                             ports → adopt the canonical result → state
- *                             entry · tool-sync · UI
- *  refreshDisplayFromDisk     the turn-end display refresh: sync objective →
- *                             (if changed) stamp + state entry · tool-sync ·
- *                             UI
- *
- * Event entry (each tag's production source + interface test):
- *  turn-start     pi turn_start — resets both per-turn flags.
- *  turn-stopped   the four REAL stop executes (pause_goal / abort_goal /
- *                 update_goal=complete / apply_goal_tweak, D3=A) — sets
- *                 turnStoppedFor.
- *  tool-call      pi tool_call — returns the post-stop block verdict,
- *                 counts get_goal nudges, credits meaningful progress
- *                 (clears the goal's nudge counter, raises the work flag).
- *  usage-accounted turn_end / tool_execution_end / tool_result /
- *                 session_before_compact accounting legs — no owned-state
- *                 writes (the accounting module owns its state); the tag
- *                 pins that routing these may not corrupt owned state.
- *  draft-start    /goals|/sisyphus drafting (goal) or /goal-tweak (tweak).
- *  draft-cancel   drafting cancel (/goal-clear|/goal-abort branch, both),
- *                 a failed draft/tweak send (kind-specific, CORE-05), and
- *                 the reconcile vanish path (tweak).
- *  draft-applied  goal committed (propose confirm / direct set / replace)
- *                 or apply_goal_tweak executed (tweak).
- *  nudge-reset    the adapter-side resets (user-turn leg of
- *                 before_agent_start; create/resume/pause legs live inside
- *                 their verbs).
- *  agent-settled  pi agent_settled — no owned-state writes (the audit hold
- *                 lives in the audit domain module); routing pin only.
- *  dispose        session_shutdown — clears all owned turn/draft state.
- *  (The old "restore" tag moved into the restore verb — loadState is its
- *  only production source.)
- */
 import { asRecord, cloneGoal, createGoal, type DraftingFocus, type GoalCreationConfig, type GoalFocusEntry, type GoalRecord } from "./goal-record.ts";
 import { buildAbortedByAgentGoal, buildPausedByAgentGoal } from "./goal-policy.ts";
 import { mergeFocusedGoalWithDisk, resolveSessionFocus } from "./goal-pool.ts";
@@ -162,7 +39,6 @@ export interface GoalLifecyclePorts {
 	pauseClock(): void;
 	forgetCarry(goalId: string): void;
 	appendFocusEntry(goalId: string | null, reason: GoalFocusReason): void;
-	/** Best-effort ledger append; must not throw into the verb. */
 	appendLedger(ctx: LifecycleCtx, event: Record<string, unknown>): void;
 	syncTools(): void;
 	updateUI(ctx: LifecycleCtx): void;
@@ -476,7 +352,6 @@ export function createGoalLifecycle(ports: GoalLifecyclePorts): GoalLifecycle {
 				});
 				effects.push("ledger:goal_created");
 			} catch {
-				// Ledger append failure should not crash creation
 			}
 			return { ...report, kind: "create", effects: [...report.effects, ...effects] };
 		},
@@ -504,7 +379,6 @@ export function createGoalLifecycle(ports: GoalLifecyclePorts): GoalLifecycle {
 					effects.push("ledger:goal_unfocused");
 				}
 			} catch {
-				// Ledger append failure should not crash focus change
 			}
 			ports.syncTools();
 			ports.updateUI(ctx);
@@ -546,7 +420,6 @@ export function createGoalLifecycle(ports: GoalLifecyclePorts): GoalLifecycle {
 				});
 				effects.push("ledger:goal_paused");
 			} catch {
-				// Ledger append failure should not crash pause
 			}
 			resetNudge(next.id);
 			effects.push(`nudge-reset:${next.id}`);
@@ -594,7 +467,6 @@ export function createGoalLifecycle(ports: GoalLifecyclePorts): GoalLifecycle {
 				ports.appendLedger(ctx, { type: "goal_resumed", goalId: next.id, reason: "user", at: ports.nowIso() });
 				effects.push("ledger:goal_resumed");
 			} catch {
-				// Ledger append failure should not crash resume
 			}
 			return { ...report, kind: "resume", effects: [...report.effects, ...effects] };
 		},
@@ -713,7 +585,6 @@ export function createGoalLifecycle(ports: GoalLifecyclePorts): GoalLifecycle {
 				try {
 					ports.appendFocusEntry(focusedGoalId, input.legacyGoal?.id === focusedGoalId ? "migrated" : "selected");
 				} catch {
-					// Focus-entry failure must not break restore
 				}
 			}
 			for (const [id, current] of goalsById) {
@@ -803,7 +674,6 @@ export function createGoalLifecycle(ports: GoalLifecyclePorts): GoalLifecycle {
 				});
 				effects.push("ledger:goal_completed");
 			} catch {
-				// Ledger append failure should not crash completion
 			}
 			return { kind: "complete", previousGoalId: setReport.previousGoalId, nextGoalId: null, record: cloneOut(terminal), effects: [...setReport.effects, ...effects] };
 		},
@@ -840,7 +710,6 @@ export function createGoalLifecycle(ports: GoalLifecyclePorts): GoalLifecycle {
 				});
 				effects.push("ledger:goal_aborted");
 			} catch {
-				// Ledger append failure should not crash termination
 			}
 			if (current) {
 				resetNudge(current.id);

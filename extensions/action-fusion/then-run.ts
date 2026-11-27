@@ -1,18 +1,4 @@
-/*
- * Fused mutation + follow-up command execution.
- * Ported from NVlabs/SoL-Pi (MIT) @ src/sol-pi/extensions/action-fusion/then-run.ts
- * (SPEC FUS-04: error semantics kept exactly — skipped/failed THROW, success
- * APPENDS a text block to the mutation result and stamps the merged details
- * with thenRun: "succeeded" — the structured outcome callers count from,
- * B6; the protocol token text stays byte-identical for upstream compat).
- *
- * BH-R5 (2026-11-14, spec 2026-11-14-backtest-hardening): then_run now
- * carries a 600 s default timeout (THEN_RUN_DEFAULT_TIMEOUT_SECONDS — a
- * named constant, deliberately NOT configurable: no new env var or setting).
- * Without it a hanging command blocked the whole turn AND the per-file
- * fusion queue. A timed-out command's error text hints that long-running or
- * server-like commands belong in a background bash instead.
- */
+// Ported from NVlabs/SoL-Pi (MIT) @ src/sol-pi/extensions/action-fusion/then-run.ts.
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
@@ -29,7 +15,6 @@ export const THEN_RUN_DEFAULT_TIMEOUT_SECONDS = 600;
 /** pi's bash surfaces a timeout as "Command timed out after N seconds" (its own `timeout:<seconds>` exec error, reformatted). */
 const TIMED_OUT_PATTERN = /Command timed out after \d+(?:\.\d+)? seconds/u;
 
-/** BH-R5: appended to a timeout failure — a hanging command must not be retried here, and servers do not belong in then_run. */
 const TIMEOUT_HINT =
 	"then_run is for short verification commands only: long-running or server-like commands belong in a `background: true` bash call (they would block this file's queue here).";
 
@@ -89,12 +74,6 @@ export async function assertUnchangedBeforeCommand(
 	}
 }
 
-/**
- * Queue seam (SPEC FUS-03): the official withFileMutationQueue when the host
- * exports it, otherwise the ported per-file promise chain. Both adapters
- * serialize per canonical path; the official one additionally shares ordering
- * with pi's built-in mutation tools.
- */
 export type FileQueueFn = <T>(filePath: string, work: () => Promise<T>) => Promise<T>;
 
 export async function executeMutationThenRun<TDetails>({
@@ -141,9 +120,7 @@ export async function executeMutationThenRun<TDetails>({
 			// tools/executeTool); runtime provides it. 0.87 accepts ExtensionContext.
 			const bashResult = await bash.execute(`${toolCallId}:then_run`, bashParams, signal, undefined, ctx as Parameters<typeof bash.execute>[4]);
 			const output = resultText(bashResult);
-			// pi 0.99's bash RETURNS nonzero exits (isError + "Command exited
-			// with code N") instead of throwing like 0.87 — treat both shapes as
-			// THEN_RUN_FAILED so a failed command is never reported as succeeded.
+			// pi 0.99's bash RETURNS nonzero exits (isError + "Command exited with code N") instead of throwing like 0.87.
 			if ((bashResult as { isError?: boolean }).isError || /Command exited with code \d+/u.test(output)) {
 				throw new Error(output || "then_run command failed");
 			}

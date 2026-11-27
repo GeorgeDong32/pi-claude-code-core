@@ -1,24 +1,3 @@
-/**
- * modes/auto-engine.ts — [C4 batch 2] the auto-mode tier-3 engine, extracted
- * verbatim from the extension factory (index.ts): local tier-3 ladder,
- * classifier invocation + denial accounting, tier-3 review descriptions and
- * the classifier session-context assembly. The engine OWNS the denial
- * tracking state (created fresh on load; reset by setMode / session_start).
- *
- * Design (architecture review 2026-10-18, C4): the adjudicator's gate and
- * its interpret ports stay in index.ts — they reach the engine through the
- * returned surface (approveTier3 / noteAllowed / resetDenialState /
- * trackOutsideWriteIfNeeded). Injected deps are the narrow cross-domain
- * facts only: config getters, current mode, and the approval-prompt /
- * notify / outside-write entries the engine calls back into.
- *
- * Behavior is unchanged from the pre-extraction factory closures (C4: pure
- * relocation — MAX_CLASSIFIER_FAILURES moved with the engine). One later
- * divergence: E3 (spec 2026-11-15-cleanup-hardening) — the classifier-
- * unavailable fail-closed block returns buildClassifierUnavailableMessage
- * verbatim instead of the YOLO rejection framing.
- */
-
 import { readFileSync } from "node:fs";
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -208,7 +187,6 @@ export function createAutoEngine(deps: AutoEngineDeps) {
           reason: buildClassifierUnavailableMessage(tool, deps.getClassifierConfig().model),
         };
       }
-      // fail-open: fall through to the local tier-3 fallback below
     }
 
     const local = resolveLocalAutoTier3(tool, input, riskInput, ctx.cwd);

@@ -1,12 +1,3 @@
-/**
- * V2-C (DESIGN-MEMORY-V2 §5) — ops engine + memory_consolidate + auto-trigger.
- *
- * Covers: batch validation (frontmatter/secret/anchor/count), batch
- * atomicity (invalid op ⇒ nothing written), tmp+rename durability, the
- * mkdir lock (mutual exclusion + TTL steal), the must-shrink invariant,
- * directive copy, and the trigger state machine (throttle, 2-per-session
- * cap, yielded silence).
- */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -81,17 +72,14 @@ describe("V2-C ops engine", () => {
 		put(dir, "a.md", "a");
 		const ops: MemoryOp[] = [
 			{ action: "add", layer: "project", name: "good", description: "d", body: "ok" },
-			{ action: "add", layer: "project", name: "bad", description: "d", body: "token = " + "x".repeat(20) }, // secret
+			{ action: "add", layer: "project", name: "bad", description: "d", body: "token = " + "x".repeat(20) },
 		];
 		const out = applyMemoryOps(ops, { project: dir });
-		// one hallucinated op must not discard the batch (决1: skip-invalid)
 		expect(out.skipped.length).toBe(1);
-		expect(existsSync(join(dir, "good.md"))).toBe(true); // valid op still applies
-		// invalid-target op: skipped with reason
+		expect(existsSync(join(dir, "good.md"))).toBe(true);
 		const out2 = applyMemoryOps([{ action: "remove", layer: "project", file: "missing.md" }], { project: dir });
 		expect(out2.applied).toBe(0);
 		expect(out2.skipped[0]!.reason).toContain("not found");
-		// batch-fatal gate 1: >200 ops → nothing written
 		const tooMany: MemoryOp[] = Array.from({ length: 201 }, (_, i) => ({ action: "add", layer: "project", name: `n${i}`, description: "d", body: "b" }));
 		const out3 = applyMemoryOps(tooMany, { project: dir });
 		expect(out3.error).toContain("batch too large");
@@ -103,7 +91,7 @@ describe("V2-C ops engine", () => {
 		put(dir, "a.md", "alpha", "old body content");
 		const ok = applyMemoryOps([{ action: "replace", layer: "project", file: "a.md", body: "new body", old_text: "old body content" }], { project: dir });
 		expect(ok.applied).toBe(1);
-		expect(readFileSync(join(dir, "a.md"), "utf-8")).toContain("name: alpha"); // preserved
+		expect(readFileSync(join(dir, "a.md"), "utf-8")).toContain("name: alpha");
 		expect(readFileSync(join(dir, "a.md"), "utf-8")).toContain("new body");
 		const stale = applyMemoryOps([{ action: "replace", layer: "project", file: "a.md", body: "x", old_text: "old body content" }], { project: dir });
 		expect(stale.applied).toBe(0);
@@ -131,8 +119,7 @@ describe("V2-C consolidation lock", () => {
 		mkdirSync(dir, { recursive: true });
 		const l1 = acquireLayerLock(dir);
 		expect(l1).not.toBeNull();
-		expect(acquireLayerLock(dir)).toBeNull(); // held
-		// stale lock (mtime pushed past TTL) is stolen
+		expect(acquireLayerLock(dir)).toBeNull();
 		const staleDir = join(home, "stale-lock");
 		mkdirSync(staleDir, { recursive: true });
 		const ls = acquireLayerLock(staleDir);
@@ -153,13 +140,12 @@ describe("V2-C runConsolidation (must-shrink transaction)", () => {
 		put(dir, "a.md", "alpha", "alpha fact");
 		put(dir, "b.md", "beta", "beta fact");
 		const merged = "---\nname: alpha-beta\ndescription: merged\nmetadata:\n  type: project\n---\n\nalpha fact + beta fact";
-		// G2-C11: deletes need provenance — the merge write absorbs both sources
 		const r = runConsolidation(dir, [{ file: "alpha-beta.md", content: merged, merged_from: ["a.md", "b.md"] }], ["a.md", "b.md"]);
 		expect(r.ok).toBe(true);
 		expect(r.afterFiles).toBeLessThan(r.beforeFiles);
 		expect(existsSync(join(dir, "a.md"))).toBe(false);
 		expect(readFileSync(join(dir, "MEMORY.md"), "utf-8")).toContain("alpha-beta");
-		expect(existsSync(join(dir, ".consolidate.lock"))).toBe(false); // released
+		expect(existsSync(join(dir, ".consolidate.lock"))).toBe(false);
 	});
 
 	it("rejects a batch that does not shrink", () => {
@@ -168,7 +154,7 @@ describe("V2-C runConsolidation (must-shrink transaction)", () => {
 		const r = runConsolidation(dir, [{ file: "a.md", content: bigger }], []);
 		expect(r.ok).toBe(false);
 		expect(r.message).toContain("does not shrink");
-		expect(readFileSync(join(dir, "a.md"), "utf-8")).toContain("short"); // untouched
+		expect(readFileSync(join(dir, "a.md"), "utf-8")).toContain("short");
 	});
 
 	it("rejects invalid frontmatter / secret / unknown delete target", () => {
@@ -176,25 +162,22 @@ describe("V2-C runConsolidation (must-shrink transaction)", () => {
 		expect(runConsolidation(dir, [{ file: "x.md", content: "no frontmatter" }], []).ok).toBe(false);
 		expect(runConsolidation(dir, [{ file: "x.md", content: "---\nname: x\ndescription: d\nmetadata:\n  type: project\n---\n\ntoken = " + "y".repeat(20) }], []).ok).toBe(false);
 		expect(runConsolidation(dir, [], ["ghost.md"]).ok).toBe(false);
-		expect(existsSync(join(dir, "x.md"))).toBe(false); // nothing applied
+		expect(existsSync(join(dir, "x.md"))).toBe(false);
 	});
 
 	it("rejects contradictory batch members: write+delete overlap and duplicate write keys", () => {
 		put(dir, "a.md", "alpha", "fact");
 		const fmA = "---\nname: n\ndescription: d\nmetadata:\n  type: project\n---\n\ncontent";
-		// overlap: the named file never lands on disk — its content used to be
-		// counted in bytesAfter anyway, producing a bogus size delta (false reject)
 		const overlap = runConsolidation(dir, [{ file: "new.md", content: fmA }], ["new.md"]);
 		expect(overlap.ok).toBe(false);
 		expect(overlap.message).toContain('write and delete the same file "new.md"');
-		// duplicate keys: one file lands, but both contents used to be counted
 		const dup = runConsolidation(dir, [
 			{ file: "new.md", content: fmA },
 			{ file: "new.md", content: fmA },
 		], []);
 		expect(dup.ok).toBe(false);
 		expect(dup.message).toContain('duplicate write key "new.md"');
-		expect(existsSync(join(dir, "new.md"))).toBe(false); // nothing applied
+		expect(existsSync(join(dir, "new.md"))).toBe(false);
 	});
 
 	it("guard messages state the name format and the layer default", () => {
@@ -215,8 +198,6 @@ describe("V2-C directive (manual-only consolidation)", () => {
 	});
 
 	it("turn_end NEVER auto-sends: an over-budget store stays silent until /memory-consolidate", async () => {
-		// 205 valid files ⇒ over the count threshold — the old trigger would
-		// have fired here; manual-only consolidation must not.
 		mkdirSync(dir, { recursive: true });
 		for (let i = 0; i < 205; i++) {
 			writeFileSync(join(dir, `m${String(i).padStart(3, "0")}.md`), `---\nname: m${i}\ndescription: d\nmetadata:\n  type: project\n---\n\nfact ${i}`);
@@ -228,7 +209,6 @@ describe("V2-C directive (manual-only consolidation)", () => {
 		for (let i = 0; i < 12; i++) await host.fire("turn_end", { turnIndex: i, message: { role: "assistant" }, toolResults: [] }, ctx);
 		await host.fire("agent_settled", {}, ctx);
 		expect(host.sentMessages.length).toBe(0);
-		// the manual command still sends the PROJECT directive
 		await host.commands.get("memory-consolidate")?.("", ctx);
 		expect(host.sentMessages.length).toBe(1);
 		expect(host.sentMessages[0]!.message.customType).toBe(CONSOLIDATE_DIRECTIVE_TYPE);
@@ -237,7 +217,6 @@ describe("V2-C directive (manual-only consolidation)", () => {
 
 	it("needsConsolidation detects truncated index, byte overflow (B1), and count overflow", () => {
 		expect(needsConsolidation({ dir, files: 10, totalBytes: 1000, indexBytes: 500, indexTruncated: true }, 25_000)).toBe("index truncated");
-		// B1: an index over its byte cap — no WARNING on disk, but over budget
 		expect(needsConsolidation({ dir, files: 10, totalBytes: 1000, indexBytes: 9_000, indexTruncated: false }, 8_000)).toContain("9000/8000 bytes");
 		expect(needsConsolidation({ dir, files: 205, totalBytes: 1000, indexBytes: 500, indexTruncated: false }, 25_000)).toContain("205 files");
 		expect(needsConsolidation({ dir, files: 10, totalBytes: 1000, indexBytes: 500, indexTruncated: false }, 25_000)).toBeNull();
@@ -319,9 +298,6 @@ describe("V2 Phase 2 (B4) — same-batch duplicate adds", () => {
 	});
 });
 
-/* ── 附记 A.1 ③: LLM ops returning a FULL file in body must not stack two
- * frontmatter blocks (live regression: pi-memory-recall-reinject-symptom,
- * 2026-10-02 — a correction's description was invisible to the index). ── */
 describe("store op-body frontmatter hoist (spec 2026-10-02-memory-recall-v2)", () => {
 	it("a replace op whose body is a full file renders ONE frontmatter block with the NEW fields", () => {
 		const target = resolveMemoryPaths(project, home);
@@ -335,15 +311,13 @@ describe("store op-body frontmatter hoist (spec 2026-10-02-memory-recall-v2)", (
 		);
 		expect(out.applied).toBe(1);
 		const written = readFileSync(join(tdir, "symptom.md"), "utf-8");
-		expect(written.match(/^---$/gm)?.length).toBe(2); // exactly one frontmatter block
+		expect(written.match(/^---$/gm)?.length).toBe(2);
 		expect(written).toContain("[correction] new description line");
 		expect(written).not.toContain("[insight] old description line");
-		// the index (splitFrontmatter view) now sees the corrected description
 		expect(parseMemoryFrontmatter(written)?.description).toBe("[correction] new description line");
 	});
 });
 
-// ─── G2 [C11]/[C12]/[C13]: provenance, created preservation, unified age ───
 
 describe("G2-C11 delete provenance", () => {
 	let dir: string;
@@ -405,7 +379,7 @@ describe("G2-C13 unified age (effectiveAgeMs)", () => {
 		const created = new Date(now - 40 * 24 * 3600 * 1000).toISOString();
 		const at = new Date(now - 5 * 24 * 3600 * 1000).toISOString();
 		const content = `---\nname: x\ndescription: d\nmetadata:\n  type: project\ncreated: ${created}\nconsolidated_at: ${at}\n---\n\nbody`;
-		const mtime = now - 5 * 24 * 3600 * 1000; // == consolidated_at → within tolerance
+		const mtime = now - 5 * 24 * 3600 * 1000;
 		const age = effectiveAgeMs(content, mtime, now);
 		expect(Math.abs(age - 40 * 24 * 3600 * 1000)).toBeLessThan(1000);
 	});
@@ -417,7 +391,6 @@ describe("G2-C13 unified age (effectiveAgeMs)", () => {
 		const candidate = { key: "memory/x.md", file: "x.md", title: "x", description: "d", type: "project", layer: "project" as const, mtimeMs: now - 5 * 24 * 3600 * 1000, absPath: "/x" };
 		const row = manifestRow(candidate, now, content);
 		expect(row).toContain("(40d)");
-		// without content the same candidate would read as 5d — pin the difference
 		expect(manifestRow(candidate, now)).toContain("(5d)");
 	});
 
@@ -426,7 +399,7 @@ describe("G2-C13 unified age (effectiveAgeMs)", () => {
 		const created = new Date(now - 40 * 24 * 3600 * 1000).toISOString();
 		const at = new Date(now - 30 * 24 * 3600 * 1000).toISOString();
 		const content = `---\nname: x\ndescription: d\nmetadata:\n  type: project\ncreated: ${created}\nconsolidated_at: ${at}\n---\n\nbody`;
-		const mtime = now - 2 * 24 * 3600 * 1000; // postdates the stamp → content changed after
+		const mtime = now - 2 * 24 * 3600 * 1000;
 		const age = effectiveAgeMs(content, mtime, now);
 		expect(Math.abs(age - 2 * 24 * 3600 * 1000)).toBeLessThan(1000);
 	});

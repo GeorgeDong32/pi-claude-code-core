@@ -1,7 +1,3 @@
-/**
- * Per-tool classifier input projection (CC toAutoClassifierInput equivalent).
- */
-
 import { redactForClassifier } from "./classifier-redact.ts"
 
 const CONTENT_PREVIEW_CHARS = 500

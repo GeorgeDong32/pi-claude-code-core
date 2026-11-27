@@ -4,9 +4,6 @@ import { MEMORY_INDEX_MAX } from "../../lib/context-budget.ts";
 export const PINNED_TOTAL_MAX = 2_000;
 export const PINNED_MAX_FILES = 5;
 
-/** Descriptions are the index rows and the recall match surface: a noun
- * phrase with the topic keywords, never a sentence. Enforced on every write
- * path (store.ts ops, policy guidance); the index marks violators. */
 export const DESCRIPTION_MAX = 80;
 export function descriptionTooLong(description: string): boolean {
 	return description.length > DESCRIPTION_MAX;
@@ -14,13 +11,6 @@ export function descriptionTooLong(description: string): boolean {
 
 export const POLICY_MARKER = "<memory-policy";
 
-/**
- * Single-layer policy (the user layer is retired). One project store, one
- * index, slim writing guidance that keeps proactive writing. The retired
- * cross-project layer is named only to keep the model from reinventing it;
- * pinned files remaining in the old user dir are still injected until their
- * migration completes.
- */
 export function policyCompact(projectMemoryDir: string): string {
 	return `${POLICY_MARKER}>
 You have persistent PROJECT memory at ${projectMemoryDir} — facts about this
@@ -75,10 +65,6 @@ function cappedRows(
 	const rows: string[] = [];
 	let size = 0;
 	for (const e of entries) {
-		// One slug per row, never a repeated markdown link: the row names the
-		// file stem (so <dir>/<slug>.md resolves). Imported files whose name
-		// differs from the stem (fingerprint suffixes) show the file in
-		// parentheses so both stay greppable.
 		const stem = e.file.replace(/\.md$/, "");
 		const slug = e.title && e.title !== stem ? `${e.title} (${e.file})` : stem;
 		const description = e.description.replace(/\s+/g, " ").trim();

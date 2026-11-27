@@ -68,14 +68,6 @@ export interface DialogLayoutPlan {
 	totalHeight: number;
 }
 
-/**
- * Decide how the three sections fit into `availableHeight`. When the body
- * fits it passes through unchanged (short dialogs render exactly as the
- * legacy flat layout); otherwise one line is reserved for the scroll
- * indicator and the body is sliced by the clamped offset. Degenerate
- * budgets (header + footer alone >= availableHeight) never throw: the
- * viewport floors at 0 and the indicator is skipped.
- */
 export function planDialogLayout(sections: DialogSections, args: { availableHeight: number; scrollOffset: number }): DialogLayoutPlan {
 	const fit = Math.max(0, args.availableHeight - sections.header.length - sections.footer.length);
 	if (sections.body.length <= fit) {

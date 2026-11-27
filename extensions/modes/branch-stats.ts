@@ -1,15 +1,3 @@
-/**
- * Incremental usage totals over a session branch (plan A1).
- *
- * pi appends entries only at message boundaries — the branch is frozen while
- * message_update chunks stream — so per-chunk work must be O(new entries),
- * not O(session length). Totals accumulate incrementally; the processed
- * prefix is trusted only while the branch still ends at the last processed
- * entry id (append-only paths share prefixes). Any mismatch — navigate,
- * fork, switchSession, a shorter branch — forces a full recompute, so the
- * incremental result is always equal to the brute-force sum.
- */
-
 import type { BranchEntry } from "./session-branch.ts"
 
 export interface BranchStats {
@@ -59,6 +47,9 @@ function foldInto(accum: BranchStats, entry: BranchEntryWithUsage): void {
 	accum.cost += u.cost?.total || 0
 }
 
+// pi appends entries only at message boundaries — the branch is frozen
+// while message_update chunks stream — so the processed prefix can be
+// trusted incrementally and anything else recomputes from zero.
 export function accumulateBranchStats(
 	branch: BranchEntry[],
 	state: BranchStatsState,

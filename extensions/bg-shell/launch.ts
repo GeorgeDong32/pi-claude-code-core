@@ -1,7 +1,4 @@
 // Vendored from gvanderclay/pi-bg-bash v0.2.1 (MIT). Copyright (c) 2026 Gage Vander Clay.
-// cc-core addition: a check-command pipeline runs its shell with
-// `-o pipefail` so the reported exit status is the pipeline's, not tail's
-// (see pipefail.ts).
 import { spawn } from "node:child_process";
 import {
 	accessSync,
@@ -70,12 +67,7 @@ export function ownerPid(dir: string): number | undefined {
 
 export type Shell = { shell: string; args: string[]; env: NodeJS.ProcessEnv };
 
-/**
- * The shell and environment Pi's own `bash` tool uses: `getShellConfig`, and
- * `getShellEnv` (Pi's bin dir at the front of PATH). An export a Pi version
- * lacks falls back: `getShellEnv` to `process.env` with `<agent dir>/bin`
- * prepended, `getShellConfig` (or a throw from it) to `sh -c`.
- */
+// pi's getShellConfig/getShellEnv exports vary across pi versions and can throw — resolveShell must degrade (missing → `sh -c` / process.env + <agent dir>/bin).
 export function resolveShell(): Shell {
 	const api = pi as unknown as Record<string, ((...args: never[]) => unknown) | undefined>;
 	let shell = "sh";
@@ -118,11 +110,6 @@ export type LaunchOptions = {
 
 export const SESSION_ENV_KEYS = ["PI_SESSION_ID", "PI_SESSION_FILE", "PI_PROVIDER", "PI_MODEL", "PI_REASONING_LEVEL"];
 
-/**
- * Start `command` detached in Pi's shell, writing its output and the marker
- * to the new file `logPath` (which must not exist). Resolves to the wrapper's pid once the process exists; rejects,
- * leaving no log behind, when the working directory is missing or the spawn fails.
- */
 export async function launch(options: LaunchOptions): Promise<number> {
 	const { command, cwd, logPath, nonce } = options;
 	try {
@@ -137,7 +124,6 @@ export async function launch(options: LaunchOptions): Promise<number> {
 	const env = { ...base };
 	for (const key of SESSION_ENV_KEYS) delete env[key];
 	Object.assign(env, options.sessionEnv);
-	// Exclusive: a log that already exists belongs to an earlier run and must not be appended to.
 	const fd = openSync(logPath, "wx", 0o600);
 	try {
 		const child = spawn(
@@ -163,7 +149,7 @@ export async function launch(options: LaunchOptions): Promise<number> {
 				["-c", WATCH, "cc-bg-watch", String(options.piPid ?? process.pid), String(child.pid), nonce],
 				{ detached: true, stdio: ["ignore", fd, fd] },
 			);
-			watcher.on("error", (error) => debugError("watcher-error", error, { pid: child.pid })); // the async "error" event is the same fail-open path
+			watcher.on("error", (error) => debugError("watcher-error", error, { pid: child.pid }));
 			watcher.unref();
 		} catch (error) {
 			debugError("watcher-spawn", error, { pid: child.pid });

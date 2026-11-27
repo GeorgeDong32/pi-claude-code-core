@@ -48,13 +48,6 @@ export function sisyphusDisciplineBlock(goal: GoalRecord): string {
 	].join("\n");
 }
 
-/** C6 (arch review 2026-10-03): durable auditor objection — the latest
- * completion audit was disapproved. Spliced into the paused and active goal
- * prompts by the before_agent_start handler after a fail-open ledger read;
- * superseded by any newer audit result. The old two inline copies drifted
- * (different headers, one carried a redundant completion_requested gate that
- * is unreachable under the writer invariant — audit_result's only writer
- * always appends completion_requested first); this builder is the ONE copy. */
 export function auditorRejectionBlock(report: string, goalId: string): string {
 	const BUDGET = 300;
 	const blockers = parseBlockers(report);
@@ -84,12 +77,8 @@ function summarizeBlockers(items: string[], budget: number): string {
 	return parts.join("\n");
 }
 
-/** One line, one copy: every injected goal text says how lifecycle actions
- * are called. They are codemode tools, so the model never sees them in the
- * tool list (goal tools diet v2). */
 export const GOAL_CODEMODE_ACTIONS_LINE = "Goal lifecycle actions (update_goal, pause_goal, abort_goal, apply_goal_tweak, goal_question, goal_questionnaire) are codemode tools: call them from a codemode script, e.g. await tools.pause_goal({ reason, suggestedAction }); a direct call by bare name is not a declared tool.";
 
-/** System-prompt block for a paused goal, appended to the current prompt. */
 export function pausedGoalPrompt(goal: GoalRecord, pauseExtras: string[], auditorExtra: string): string {
 	return `[PI GOAL PAUSED goalId=${goal.id}]
 ${untrustedObjectiveBlock(goal)}${pauseExtras.join("\n")}${auditorExtra}

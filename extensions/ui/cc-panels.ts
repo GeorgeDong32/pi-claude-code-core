@@ -1,35 +1,3 @@
-/**
- * extensions/ui/cc-panels.ts — content shapers + registration for core's
- * display:true custom messages (2026-10-20 notification CC-ification).
- *
- * Every customType core sends with `display: true` gets a CC-style message
- * renderer here, so none falls back to pi's native `[customType]` box. The
- * visual assembly lives in cc-rows.ts (single source); this module owns the
- * per-type content parsing:
- *
- *   command-panel family   bar (details.command) + ⏺ summary + ⎿ body
- *     pi-core-status       /core panel + /core exposure forms
- *     pi-memory-status     /memory diagnostics + the two import reports
- *     pi-review-agents     /review-agents roster
- *     model-profile-list   /model-profile mapping table
- *     permissions-list     /permissions merged rules + session grants
- *     outside-writes-list  /outside-writes (+ /undo-outside-writes --list)
- *     pi-rules-list        /rules inventory
- *   modes-execute          synthetic user bar (plan approval) + ⎿ steps
- *   plan-complete          single ⏺ terminal row
- *   pi-rules-activate      dim ⎿ block only (steer injection, de-emphasized)
- *
- * Shapers are PURE (message → parts) and parse defensively: anything
- * unexpected degrades — missing summary drops the ⏺ head, missing
- * details.command drops the bar, a throwing shaper drops the whole renderer
- * (pi renders the native box). The command text rides `details.command` —
- * display metadata only; the model-visible content string is never touched
- * (the display-layer red line).
- *
- * goal/review's own renderers (pi-goal-event, pi-goal-audit-event, pi-review)
- * are untouched — first-wins registration order must not matter because each
- * customType has exactly one registrant (core registers only types it sends).
- */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { ccPanel, type BodyLine, type CcPanelParts, type CcRowTheme, type RowsComponent } from "./cc-rows.ts";
@@ -231,11 +199,8 @@ export function shapeRulesActivate(message: PanelMessage): CcPanelParts {
 
 export type PanelShaper = (message: PanelMessage) => CcPanelParts;
 
-/**
- * Wrap a shaper into a pi message renderer. Never throws: a failing shape
- * returns undefined so CustomMessageComponent falls back to its native box
- * (single-item failure, no replay, no loop).
- */
+/** A failing shape returns undefined so pi's CustomMessageComponent falls
+ * back to its native rendering. */
 export function panelRenderer(shape: PanelShaper): (message: PanelMessage, options: PanelRenderOptions, theme: CcRowTheme) => RowsComponent | undefined {
 	return (message, options, theme) => {
 		try {

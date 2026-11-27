@@ -11,16 +11,6 @@ export interface OutsideWriteSnapshot {
 	backupContent: string | null
 }
 
-/**
- * Persist a snapshot of a write that auto mode performed outside cwd.
- * Filename: `<iso-timestamp-sanitized>__<path-hash>.json`
- *
- * Caps at MAX_TRACKED_WRITES (100) — when full, evicts the oldest by
- * timestamp before writing the new one. This prevents the tmp dir from
- * growing unboundedly in long-running sessions.
- *
- * Never throws — failures are logged via console.warn and swallowed.
- */
 export function trackOutsideWrite(
 	cwd: string,
 	snapshot: OutsideWriteSnapshot,
@@ -81,17 +71,6 @@ export function listTrackedOutsideWrites(
 	}
 }
 
-/**
- * Restore the original content (or delete the file if it didn't exist)
- * for a tracked outside write. Returns the action taken.
- *
- * - `backupContent !== null` and file differs → write backup, return `restored`
- * - `backupContent !== null` and file matches → return `noop`
- * - `backupContent === null` and file exists → unlink, return `deleted`
- * - `backupContent === null` and file missing → return `noop`
- *
- * Never throws — file-system errors are returned as `{restored: false, action: "noop"}`.
- */
 export function restoreOutsideWrite(snapshot: OutsideWriteSnapshot): {
 	restored: boolean
 	action: "restored" | "deleted" | "noop"

@@ -1,8 +1,4 @@
-/**
- * CC-compatible permission rule parsing: Tool or Tool(content).
- * Ported from Claude Code permissionRuleParser.ts (subset).
- */
-
+// Ported from Claude Code permissionRuleParser.ts (subset).
 export interface PermissionRuleValue {
 	toolName: string
 	ruleContent?: string

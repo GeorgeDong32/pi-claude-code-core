@@ -156,11 +156,11 @@ export function createApprovalFlow(deps: ApprovalFlowDeps) {
 		if (!ctx.hasUI) {
 			const isChild = isSubagentChildProcess();
 			const parent = resolveParentSessionId();
-			// Only forward to a parent session when we're clearly a subagent child.
+			// Only forward to a parent session when we're clearly a subagent child:
 			// PI_SUBAGENT_PARENT_SESSION alone is not sufficient — it's often set in
 			// the parent process env and inherited by unrelated processes (tests,
 			// ad-hoc node calls), which would block forever waiting for a response
-			// that never comes. Fail closed otherwise.
+			// that never comes.
 			if (!parent || !isChild) {
 				deps.setCompliance(true, category);
 				return {

@@ -1,30 +1,10 @@
 /**
- * Build the review directive injected into the main agent (hidden, via
- * `sendMessage` with `display:false` + `triggerTurn:true`).
- *
- * v0.7.0 contract (post-mortem from PR #18689 review):
- *   - chatProgress must be "auto" | "off" | "live-card" — anything else is
- *     rejected by pi-subagents schema validation.
- *   - Every reviewer child declares `cwd` (target workspace) and
- *     `outputSchema` so pi-subagents returns `result.structuredOutput`.
- *   - "inherit" reviewer models are NOT expanded into concrete model ids.
- *     The workflow script leaves `model:` off so the orchestrator keeps the
- *     inheritance link.
- *   - The gate consumes reviewer `structuredOutput` objects directly, never
- *     Markdown code fences.
- *   - Step 3 hands off to the `pi_review_report` tool, which is the only
- *     authoritative report renderer (deterministic code-side verdict).
- *
- * SPEC CH (2026-11-15):
- *   - R6: the duplicate second `new Function` parse guard, the unused `cwd`
- *     destructure and the `_LEGACY_PARITY` export are gone.
- *   - R10: per-reviewer tool budgets come from `toolBudgetForReviewer` —
- *     lean-agents is the single source (byte-identical output).
- *   - E12: prompt lines shared across reviewers are emitted ONCE as
- *     script-level consts (`baseTask`, `diffOnlyExtra`, `userTask`); each
- *     reviewer's runtime prompt is byte-identical (pinned by
- *     tests/workflow-task-golden.json). `REVIEW_DIRECTIVE_MAX_CHARS` caps
- *     the generated directive; a test pins the default roster under it.
+ * pi-subagents contract: chatProgress must be "auto" | "off" | "live-card"
+ * (anything else is rejected by schema validation); every reviewer child
+ * declares `cwd` (target workspace) and `outputSchema` so pi-subagents
+ * returns `result.structuredOutput`; "inherit" reviewer models are NOT
+ * expanded into concrete model ids — the workflow script leaves `model:` off
+ * so the orchestrator keeps the inheritance link.
  */
 import { writeFileSync } from "node:fs";
 
@@ -127,7 +107,6 @@ export function buildReviewDirective(input: ReviewDirectiveInput): string {
 	for (const s of todoSteps) blocks.push(`- [ ] ${s}`);
 	blocks.push("");
 
-	// Step 1 — confirm the plugin-prepared manifest (no LLM-obtained diff).
 	blocks.push("## Step 1 — Confirm the plugin-prepared run (you, the main agent)");
 	blocks.push("");
 	blocks.push(
@@ -175,13 +154,10 @@ export function buildReviewDirective(input: ReviewDirectiveInput): string {
 		);
 	}
 
-	// Persist the raw script text so the main agent has a zero-unescape
-	// retry source (see ReviewDirectiveInput.workflowPath).
 	if (workflowPath) {
 		try {
 			writeFileSync(workflowPath, script, "utf-8");
 		} catch {
-			// Directive still works from the template literal below.
 		}
 	}
 
@@ -342,12 +318,8 @@ export function buildWorkflowScript(input: {
 	lines.push("]);");
 	lines.push("");
 
-	// Top-level statements ONLY: pi-subagents' workflowScript AST walker
-	// rejects nested async functions ("Use top-level await, plain helper
-	// functions, or explicit Promise chains"). The pre-0.7.4 form
-	// `gate: await (async () => { ... })()` therefore never passed upstream
-	// validation — every prior failure that survived the copy stage died
-	// here (2026-08-26 session: "validation failed before child launch").
+	// pi-subagents' workflowScript AST walker rejects nested async functions
+	// ("Use top-level await, plain helper functions, or explicit Promise chains").
 	if (gateOn) {
 		const gateTaskParts = [
 			READ_ONLY_PREFIX,
@@ -376,13 +348,10 @@ export function buildWorkflowScript(input: {
 			lines.push(`  ${JSON.stringify(part)},`);
 		}
 		lines.push(`].join(" ") + '\\n\\n# Reviewer reports (Markdown)\\n\\n' + reviewerSections.join('\\n\\n---\\n\\n');`);
-		// Proxy providers often report bare model ids from the child ("MiniMax-M2.7")
-		// that fail the launcher's strict model verification against the launch
-		// candidate ("CPA/Minimax/MiniMax-M2.7:high") — observed 2026-08-27. The
-		// reviewers never hit this (they inherit). So: try the configured model
-		// first; on launch failure retry once with an inherited model under a
-		// DIFFERENT key (the runtime rejects same-key launches with different
-		// params). A second failure rejects as before.
+		// Proxy providers may report bare child model ids ("MiniMax-M2.7") that
+		// fail pi-subagents' launch-candidate model verification
+		// ("CPA/Minimax/MiniMax-M2.7:high"); the runtime rejects same-key
+		// relaunches with different params.
 		lines.push("let gateRun;");
 		lines.push("try {");
 		lines.push("  gateRun = await runs.run('gate', {");

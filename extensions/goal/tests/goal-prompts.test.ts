@@ -65,9 +65,6 @@ test("unfocused prompt keeps multi-goal focus human-owned", () => {
 	assert.match(prompt, /\/goal-focus/);
 });
 
-// C6 (arch review 2026-10-03): the unified durable-objection block — the
-// paused/active prompt injections previously had ZERO test coverage and had
-// already drifted (header format + one redundant unreachable gate).
 test("auditorRejectionBlock: goalId header, 300-char clamp, fixed copy", () => {
 	const block = auditorRejectionBlock("objection text", "g-123");
 	assert.match(block, /^\[AUDITOR REJECTION goalId=g-123\]/);

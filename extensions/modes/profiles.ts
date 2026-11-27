@@ -59,23 +59,10 @@ function readConfigFromDisk(): ModelProfilesConfig {
 	})
 }
 
-/**
- * Load and parse the model profiles config file. Returns an empty object if
- * the file doesn't exist or is malformed. Never throws.
- */
 export function loadModelProfiles(): ModelProfilesConfig {
 	return readConfigFromDisk()
 }
 
-/**
- * Ensure the model profiles config file exists. If missing, creates it with
- * defaults — pre-filled with the user's default model from
- * `~/.pi/agent/settings.json` (`defaultProvider` / `defaultModel`) if
- * available.
- *
- * Called once on session start and on `/reload`. Never throws — failures are
- * logged and the in-memory defaults are returned.
- */
 export function ensureModelProfilesConfig(): ModelProfilesConfig {
 	if (existsSync(_modelsPath)) return readConfigFromDisk()
 

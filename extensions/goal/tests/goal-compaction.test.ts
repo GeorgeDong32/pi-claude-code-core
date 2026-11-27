@@ -97,7 +97,6 @@ test("buildCompactionSummary caps open goals and events", () => {
   }
 
   const summary = buildCompactionSummary({ goalsById, focusedGoalId: "g0", ledgerEvents: events, capOpenGoals: 5, capEventsPerGoal: 2 });
-  // Should show focused goal + 5 other open + "and 19 more"
   assert.match(summary, /and 19 more/);
 });
 

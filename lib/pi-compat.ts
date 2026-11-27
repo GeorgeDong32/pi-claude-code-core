@@ -45,18 +45,10 @@ export function probePiCompat(inputs: PiCompatInputs): PiCompat {
 	if (inputs.toolFactories !== undefined && !toolFactories) {
 		problems.push("mutation tool factories unavailable");
 	}
-	// B4: mutationQueue is pure diagnostics now (FUS-03: the official queue
-	// deadlocks as the outer layer, so it gates nothing) — boolean stays for
-	// the host-health record, problems stays actionable-only.
+	// pi's official mutation queue deadlocks as the outer layer — mutationQueue is diagnostics-only and gates nothing.
 	return { version: inputs.version, versionOk, toolFactories, mutationQueue, problems };
 }
 
-/**
- * SPEC 2026-10-07 P1-1 §4.4: the PURE-DATA assessment both economy modules
- * share — no console, no publish. Callers warn at load time and publish the
- * footer line from their first session_start handler (bus invariant 3: no
- * publishing outside event handlers). `enabled` true means keep registering.
- */
 export function assessEconomyModule(compat: PiCompat, label: string): {
 	enabled: boolean;
 	warning?: string;

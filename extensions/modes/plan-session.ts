@@ -1,39 +1,3 @@
-/**
- * modes/plan-session.ts — the PlanSession state owner (SPEC SR W-M: E13b +
- * CORE-17). Extracted from the modes extension factory (index.ts) so the
- * plan lifecycle has ONE state owner: planExecuting / planPhase / planTodos /
- * lastExtractedPlanHash / the offer cooldown + suppress timestamps and the
- * pre-plan tool snapshot all live here; index.ts keeps only mode state and
- * builds the persisted `modes` entry from entryFields().
- *
- * Design decisions (behavior-preserving move — quirks are pinned by
- * plan-flow.test.ts and index.test.ts and must NOT be "fixed" here):
- * - startExecution is INTERNAL-ONLY (SR-4a): it is deliberately NOT exposed on
- *   the PlanSession interface — the three call sites (agent_end offer,
- *   /plan-execute, plan_ready) all live in this file.
- * - startExecution keeps the RAW `setModeRaw("auto")` write (skips the BH-E4
- *   generation tail / permission strip / capability publish) — the historical
- *   /plan-execute transition order is: state → tool restrictions → status
- *   clear → plan widget sync → persist → model profile → modes-execute send.
- * - entryFields() returns the SAME planTodos array reference (no cloning) and
- *   a FIXED key order so the spread in persistState() stays JSON-identical
- *   (contract P0-CT-08/09).
- * - restoreFromEntry is overlay-ONLY: missing fields keep the in-memory
- *   values; mode-name mapping (normal/default/accept-edits) stays in
- *   index.ts. Cooldown timestamps are never persisted and never reset.
- * - markPlanOfferHandled is intentionally called TWICE around each approval
- *   dialog (plan_ready and agent_end offer) — before the await so a
- *   concurrent agent_end cannot open a second dialog, and after dismissal.
- * - onAgentEnd early-returns (reports "handled") while an execution is
- *   running, even when not every step is done.
- * - The headless plan_ready path reports "auto-execute" text but does NOT
- *   execute (only the interactive dialog drives startExecution).
- * - The planPhase fallback in the capability channel (index.ts) reads
- *   `session.phase` — only consulted while the bus field is undefined.
- *
- * Plan text/file primitives come from plan.ts (the pure plan concept module)
- * — nothing here duplicates them.
- */
 import { Type } from "typebox";
 import {
 	defineTool,
