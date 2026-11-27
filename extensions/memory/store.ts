@@ -7,6 +7,15 @@ import { removeDocument, reindex, serializeMemoryDocument, writeDocument } from 
 import { findSecret } from "./guard.ts";
 import { DESCRIPTION_MAX, descriptionTooLong } from "./policy.ts";
 export const DESCRIPTION_TOO_LONG_REASON = `description exceeds ${DESCRIPTION_MAX} characters — rewrite as a noun phrase with the topic keywords`;
+export const DESCRIPTION_MULTILINE_REASON = "description must be a single line";
+/** Index rows are one line per memory; a description with a line break would
+ * also break the frontmatter it is written into. */
+function badDescription(description: string | undefined): string | undefined {
+	if (description === undefined) return undefined;
+	if (description.includes("\n")) return DESCRIPTION_MULTILINE_REASON;
+	if (descriptionTooLong(description)) return DESCRIPTION_TOO_LONG_REASON;
+	return undefined;
+}
 
 export const MEMORY_FILE_BODY_MAX = 8 * 1024;
 export const MEMORY_FILE_TOTAL_MAX = MEMORY_FILE_BODY_MAX + 2048;
@@ -116,8 +125,9 @@ export function applyMemoryOps(
 				outcome.skipped.push({ file: op.file, action: op.action, reason: `invalid type "${op.type}"` });
 				continue;
 			}
-			if (descriptionTooLong(op.description)) {
-				outcome.skipped.push({ file: op.file, action: op.action, reason: DESCRIPTION_TOO_LONG_REASON });
+			const why = badDescription(op.description);
+			if (why) {
+				outcome.skipped.push({ file: op.file, action: op.action, reason: why });
 				continue;
 			}
 			if (!op.body || op.body.trim().length === 0) {
@@ -170,8 +180,9 @@ export function applyMemoryOps(
 				outcome.skipped.push({ file: op.file, action: op.action, reason: "stale anchor: old_text not in current file" });
 				continue;
 			}
-			if (op.description !== undefined && descriptionTooLong(op.description)) {
-				outcome.skipped.push({ file: op.file, action: op.action, reason: DESCRIPTION_TOO_LONG_REASON });
+			const why = badDescription(op.description);
+			if (why) {
+				outcome.skipped.push({ file: op.file, action: op.action, reason: why });
 				continue;
 			}
 			const merged: MemoryOp = {

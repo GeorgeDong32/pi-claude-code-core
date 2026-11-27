@@ -176,6 +176,21 @@ export async function completeMemoryOps(
 	return { ok: true, ops };
 }
 
+/** Every LLM write path (review, correction, queue drain) goes through here:
+ * complete, then the one bounded description rewrite, so a batch's other
+ * facts never die with an over-long description at the store gate. */
+export async function completeMemoryOpsCapped(
+	model: Model<Api> | undefined,
+	registry: RegistryLike | undefined,
+	request: CompletionRequest,
+	deps: { complete?: LlmComplete } = {},
+): Promise<(OpsCompletion & { rewritten?: number })> {
+	const completion = await completeMemoryOps(model, registry, request, deps);
+	if (!completion.ok || completion.ops.length === 0) return completion;
+	const fixed = await rewriteTooLongDescriptions(model, registry, completion.ops, request, deps);
+	return fixed.rewritten > 0 ? { ...completion, ops: fixed.ops, rewritten: fixed.rewritten } : completion;
+}
+
 
 /**
  * Descriptions over DESCRIPTION_MAX are rejected by the store; before that
@@ -217,7 +232,7 @@ export async function rewriteTooLongDescriptions(
 		const index = item.index;
 		const description = item.description;
 		if (typeof index !== "number" || !Number.isInteger(index) || index < 0 || index >= ops.length) continue;
-		if (typeof description !== "string" || description.length === 0 || descriptionTooLong(description)) continue;
+		if (typeof description !== "string" || description.length === 0 || description.includes("\n") || descriptionTooLong(description)) continue;
 		next[index] = { ...next[index], description };
 		rewritten++;
 	}

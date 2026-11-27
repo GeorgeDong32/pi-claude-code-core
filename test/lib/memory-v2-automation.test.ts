@@ -479,6 +479,21 @@ describe("spec 2026-10-03 — queue drain", () => {
 		expect(existsSync(join(dir, "correction-foo.md"))).toBe(true); // OPS_JSON applied
 		expect(h.state.lastFlush).toContain("flush-queued");
 	});
+	it("drain rewrites an over-long description before applying it (context diet): no silent loss at the store gate", async () => {
+		stage({ sessionId: "d-long" });
+		const long = JSON.stringify({ operations: [{ action: "add", layer: "project", name: "correction-long", description: `[correction] ${"x".repeat(100)}`, type: "feedback", body: "Long one." }] });
+		const rewrite = JSON.stringify({ rewrites: [{ index: 0, description: "[correction] tightened noun phrase" }] });
+		let call = 0;
+		const h = harness("", {
+			complete: (async () => ({ stopReason: "stop", errorMessage: undefined, content: [{ type: "text", text: call++ === 0 ? long : rewrite }] })) as never,
+		});
+		h.drainPending(h.ctx);
+		await until(() => qfiles().length === 0);
+		expect(call).toBe(2);
+		expect(h.state.opsApplied).toBe(1);
+		expect(h.state.descRewritten).toBe(1);
+		expect(readFileSync(join(dir, "correction-long.md"), "utf-8")).toContain("description: [correction] tightened noun phrase");
+	});
 
 	it("foreign-project records stay queued (exact projectsDir routing)", async () => {
 		stage({ sessionId: "d2", projectsDir: "/somewhere/else" });

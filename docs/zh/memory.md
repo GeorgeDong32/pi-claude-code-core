@@ -104,7 +104,7 @@ prompt 在同一边界预算内触发一次选择器调用。
 - **边界召回**:仅当自最近 compaction 起真实用户消息数少于
   `RECALL_BOUNDARY_TURNS`(2)时选择;message_end/steer 路径永不选择;
   超时 = abort + 丢弃 —— 绝不恢复迟投递。
-- **紧凑索引、按需取详情(context diet v3)**:索引行是 `- slug — description`(slug 即文件名主干,不再重复成链接)。描述是至多 `DESCRIPTION_MAX`(80)字符的名词短语:`store.ts` 在每条写入路径拒收超长项,`llm.ts` 先做一次有界改写让同一批 review 的其他事实不丢,索引给违规项标 `⚠`,`/memory` 报数量。`memory_lookup` 与 `knowledge_search` 是 `exposure: "deferred"` —— `tool_search` 激活前不进工具清单(codemode 随时可调)。`memory.searchRoots`(settings.json,绝对路径,默认 `[]`)是让 `knowledge_search` 扫笔记库的唯一入口;core 永不假设 vault 路径。`cc-core-memory-stats` entry 是探针:按会话对比瘦身前后的 read + lookup + search 次数。
+- **紧凑索引、按需取详情(context diet v3)**:索引行是 `- slug — description`(slug 即文件名主干,不再重复成链接)。描述是单行、至多 `DESCRIPTION_MAX`(80)字符的名词短语:`store.ts` 在 LLM 写入路径、`consolidate.ts` 在手动整合写入上拒收超长或多行项;`completeMemoryOpsCapped`(review、correction、queue drain)先做一次有界改写让同一批的其他事实不丢。导入与手写文件不过这两道门:索引给它们标 `⚠`,`/memory` 报数量,session_start 列一次。`memory_lookup` 与 `knowledge_search` 是 `exposure: "deferred"` —— `tool_search` 激活前不进工具清单(codemode 随时可调)。`memory.searchRoots`(settings.json,绝对路径,默认 `[]`)是让 `knowledge_search` 扫笔记库的唯一入口;core 永不假设 vault 路径。`cc-core-memory-stats` entry 是探针:按会话对比瘦身前后的 read + lookup + search 次数。
 - **会话稳定注入**:绝不在 memory 写入时重建 policy 块;重建键只有
   session start 与 compaction 计数。
 - **零 LLM 退出(spec 2026-10-03)**:`session_shutdown` 只同步落盘一条队列

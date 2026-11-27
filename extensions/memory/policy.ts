@@ -81,7 +81,8 @@ function cappedRows(
 		// parentheses so both stay greppable.
 		const stem = e.file.replace(/\.md$/, "");
 		const slug = e.title && e.title !== stem ? `${e.title} (${e.file})` : stem;
-		const row = `- ${slug} — ${e.description}${descriptionTooLong(e.description) ? " ⚠" : ""}`;
+		const description = e.description.replace(/\s+/g, " ").trim();
+		const row = `- ${slug} — ${description}${descriptionTooLong(e.description) ? " ⚠" : ""}`;
 		const rowBytes = Buffer.byteLength(row, "utf8");
 		if (size + rowBytes > maxBytes) break;
 		rows.push(row);

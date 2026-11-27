@@ -32,14 +32,16 @@ const TEXT_FILE = /\.(md|txt)$/i;
 
 export interface LookupResult {
 	ok: boolean;
-	/** File stem on success; on a miss the closest candidates. */
+	/** Why a lookup failed: the name is not a memory file name, or no such memory exists. */
+	reason?: "unsafe" | "missing";
+	/** File text on success; on a miss the closest candidates. */
 	text: string;
 	near: string[];
 }
 
 export function lookupMemory(dir: string, name: string): LookupResult {
 	const file = name.endsWith(".md") ? name : `${name}.md`;
-	if (!safeMemoryFileName(file)) return { ok: false, text: "", near: [] };
+	if (!safeMemoryFileName(file)) return { ok: false, reason: "unsafe", text: "", near: [] };
 	const path = join(dir, file);
 	let content: string;
 	try {
@@ -47,12 +49,17 @@ export function lookupMemory(dir: string, name: string): LookupResult {
 	} catch {
 		const stem = file.slice(0, -3);
 		const tokens = new Set(stem.split("-").filter((t) => t.length >= 4));
-		const near = readdirSync(dir)
-			.filter((f) => f.endsWith(".md") && f !== "MEMORY.md")
-			.map((f) => f.slice(0, -3))
-			.filter((s) => s.split("-").some((t) => tokens.has(t)))
-			.slice(0, 5);
-		return { ok: false, text: "", near };
+		let near: string[] = [];
+		try {
+			near = readdirSync(dir)
+				.filter((f) => f.endsWith(".md") && f !== "MEMORY.md")
+				.map((f) => f.slice(0, -3))
+				.filter((s) => s.split("-").some((t) => tokens.has(t)))
+				.slice(0, 5);
+		} catch {
+			near = [];
+		}
+		return { ok: false, reason: "missing", text: "", near };
 	}
 	return { ok: true, text: content, near: [] };
 }
@@ -67,6 +74,8 @@ export interface SearchInput {
 	roots: string[];
 	query: string;
 	maxHits?: number;
+	/** Scan budget override for tests; production uses SEARCH_MAX_FILES. */
+	maxFiles?: number;
 }
 
 function firstLineHint(content: string): string {
@@ -79,9 +88,11 @@ function firstLineHint(content: string): string {
 	return "";
 }
 
-function* walk(root: string, budget: { files: number }): Generator<string> {
+/** Breadth-first walk over text files; `budget.files` counts the files yielded,
+ * `budget.exhausted` is set only when the walk stopped with files left unseen. */
+function* walk(root: string, budget: { files: number; exhausted: boolean }): Generator<string> {
 	const queue = [root];
-	while (queue.length > 0 && budget.files > 0) {
+	while (queue.length > 0) {
 		const dir = queue.shift()!;
 		let entries;
 		try {
@@ -90,14 +101,20 @@ function* walk(root: string, budget: { files: number }): Generator<string> {
 			continue;
 		}
 		for (const entry of entries) {
-			if (budget.files <= 0) return;
 			if (entry.name.startsWith(".")) continue;
+			// a symlink is neither followed as a directory nor read as a file:
+			// the walk stays inside the root it was given
+			if (entry.isSymbolicLink()) continue;
 			const full = join(dir, entry.name);
 			if (entry.isDirectory()) {
 				if (!SKIP_DIRS.has(entry.name)) queue.push(full);
 				continue;
 			}
-			if (!TEXT_FILE.test(entry.name)) continue;
+			if (!entry.isFile() || !TEXT_FILE.test(entry.name)) continue;
+			if (budget.files <= 0) {
+				budget.exhausted = true;
+				return;
+			}
 			budget.files--;
 			yield full;
 		}
@@ -109,7 +126,7 @@ export function searchRoots(input: SearchInput): { hits: SearchHit[]; scanned: n
 	const needle = input.query.trim().toLowerCase();
 	const maxHits = input.maxHits ?? SEARCH_MAX_HITS;
 	const hits: SearchHit[] = [];
-	const budget = { files: SEARCH_MAX_FILES };
+	const budget = { files: input.maxFiles ?? SEARCH_MAX_FILES, exhausted: false };
 	let scanned = 0;
 	if (needle.length === 0) return { hits, scanned, truncated: false };
 	for (const root of input.roots) {
@@ -129,7 +146,7 @@ export function searchRoots(input: SearchInput): { hits: SearchHit[]; scanned: n
 			hits.push({ root, path, hint });
 		}
 	}
-	return { hits, scanned, truncated: budget.files <= 0 };
+	return { hits, scanned, truncated: budget.exhausted };
 }
 
 /** A scope root the user configured must be an existing absolute directory;
@@ -199,11 +216,12 @@ export function lookupTool(dir: (ctx: ExtensionContext) => string, onCall: () =>
 			onCall();
 			const p = params as { name: string };
 			const result = lookupMemory(dir(ctx), p.name);
-			if (!result.ok && result.near.length === 0) {
-				return { content: [{ type: "text", text: `memory_lookup: "${p.name}" is not a memory file name${result.near.length ? ` — did you mean: ${result.near.join(", ")}?` : ""}` }], details: { ok: false } };
-			}
 			if (!result.ok) {
-				return { content: [{ type: "text", text: `memory_lookup: no memory named "${p.name}" — did you mean: ${result.near.join(", ")}?` }], details: { ok: false, near: result.near } };
+				const text =
+					result.reason === "unsafe"
+						? `memory_lookup: "${p.name}" is not a memory file name`
+						: `memory_lookup: no memory named "${p.name}"${result.near.length > 0 ? ` — did you mean: ${result.near.join(", ")}?` : ""}`;
+				return { content: [{ type: "text", text }], details: { ok: false, near: result.near, reason: result.reason } };
 			}
 			return { content: [{ type: "text", text: result.text }], details: { ok: true } };
 		},

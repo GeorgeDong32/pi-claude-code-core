@@ -1,11 +1,13 @@
 /**
  * memory/stats-entry.ts — the probe half of the context diet (spec v3 §6).
  *
- * One display-only session entry per agent run, pure counters, so a later
+ * One display-only session entry per agent run, pure counters for THAT run
+ * (snapshot-and-reset at agent_end; a session-start resets too), so a later
  * log scan can tell whether the compact index still leads the model to the
  * memories it needs: reads of memory files, lookup/search calls, recall
- * injections, index size and description-length violations. Never sent to
- * the model; a failure to append must not break the run.
+ * injections, rewritten descriptions, plus the current index size and
+ * description-length violations. Never sent to the model; a failure to
+ * append must not break the run.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 

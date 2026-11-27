@@ -323,6 +323,7 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 			bypassNoticeShown = false;
 			descWarned = false;
 			Object.assign(stats, emptyCounters());
+			automationState.descRewritten = 0;
 			consolidationUsedThisSession = false;
 			consolidationDirectiveActive = false;
 			consolidationLastReason = null;
@@ -457,6 +458,9 @@ export default function memoryExtension(pi: ExtensionAPI, extensionDeps: MemoryE
 				...stats,
 				descRewritten: automationState.descRewritten ?? 0,
 			});
+			// snapshot-and-reset: the next entry describes the next run only
+			Object.assign(stats, emptyCounters());
+			automationState.descRewritten = 0;
 		} catch {
 		}
 	});

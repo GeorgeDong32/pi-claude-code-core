@@ -52,7 +52,7 @@ import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { registerCompactionSubscriber } from "../../lib/compaction-seam.ts";
 
-import { completeMemoryOps, resolveModelRef, rewriteTooLongDescriptions, type LlmComplete, type OpsCompletion } from "./llm.ts";
+import { completeMemoryOpsCapped, resolveModelRef, type LlmComplete, type OpsCompletion } from "./llm.ts";
 import { applyMemoryOps, type MemoryOp } from "./store.ts";
 import { scanMemoryDirCached } from "./memdir.ts";
 import { friendlyProjectHint } from "./paths.ts";
@@ -160,7 +160,7 @@ const REVIEW_SYSTEM = `You extract durable memories from coding-agent conversati
 Save only what survives this session and applies to THIS repository: project facts, conventions, corrections, failures and tool quirks (layer "project"). Corrections and failures use type "feedback" and carry a bracketed category prefix in the description, e.g. [correction], [tool-quirk], [insight], [convention], [failure].
 Do not save task progress, transient state, the user's current requirements, unresolved questions or pending confirmations (save only settled decisions and verified facts), anything derivable from the code or git history, or secrets.
 
-Respond with JSON only, no markdown fences: a single object whose operations field is an array. Each operation object carries an action of add, replace or remove; a layer of "project"; for add also name (kebab slug), description (a noun phrase of at most 80 characters carrying the topic keywords — not a sentence), type (feedback, project or reference) and body; for replace also file, body and old_text quoting an exact substring of the CURRENT file shown below; for remove also file. When the conversation contradicts an existing memory, replace it instead of adding a duplicate. If nothing is durable, return an empty operations array.`;
+Respond with JSON only, no markdown fences: a single object whose operations field is an array. Each operation object carries an action of add, replace or remove; a layer of "project"; for add also name (kebab slug), description (a single line, a noun phrase of at most 80 characters carrying the topic keywords — not a sentence), type (feedback, project or reference) and body; for replace also file, body and old_text quoting an exact substring of the CURRENT file shown below; for remove also file. When the conversation contradicts an existing memory, replace it instead of adding a duplicate. If nothing is durable, return an empty operations array.`;
 
 const CORRECTION_SYSTEM = `The user just corrected the agent. Decide the durable PROJECT memory to save: a wrong assumption the agent made, a project convention, or an environment/tool fact.
 If an existing memory below is now wrong, replace that file (quote its exact text in old_text); otherwise add. Also include one feedback-type memory capturing the correction itself with a [correction] prefix in its description.
@@ -352,9 +352,9 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 			timeoutMs,
 			signal: linkedSignal(extraSignal),
 		};
-		let completion: OpsCompletion;
+		let completion: Awaited<ReturnType<typeof completeMemoryOpsCapped>>;
 		try {
-			completion = await completeMemoryOps(model, ctx.modelRegistry as never, request, { complete: deps.complete });
+			completion = await completeMemoryOpsCapped(model, ctx.modelRegistry as never, request, { complete: deps.complete });
 		} catch (err) {
 			state.lastError = `${kind}: ${err instanceof Error ? err.message : String(err)}`;
 			return 0;
@@ -364,15 +364,8 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 			return 0;
 		}
 		if (completion.ops.length === 0) return 0;
-		const ops = await rewriteTooLongDescriptions(
-			model,
-			ctx.modelRegistry as never,
-			completion.ops as MemoryOp[],
-			{ timeoutMs, signal: linkedSignal(extraSignal) },
-			{ complete: deps.complete },
-		);
-		state.descRewritten = (state.descRewritten ?? 0) + ops.rewritten;
-		const outcome = applyMemoryOps(ops.ops, { project: dirs(ctx).project });
+		state.descRewritten = (state.descRewritten ?? 0) + (completion.rewritten ?? 0);
+		const outcome = applyMemoryOps(completion.ops as MemoryOp[], { project: dirs(ctx).project });
 		state.opsApplied += outcome.applied;
 		if (outcome.error) state.lastError = `${kind}: ${outcome.error}`;
 		return outcome.applied;
@@ -564,8 +557,8 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 	};
 
 	const drainPorts = (): QueueDrainPorts => ({
-		complete: (cap, parts) =>
-			completeMemoryOps(
+		complete: async (cap, parts) => {
+			const completion = await completeMemoryOpsCapped(
 				cap.model,
 				cap.registry,
 				{
@@ -574,7 +567,10 @@ export function setupAutomation(pi: ExtensionAPI, args: AutomationArgs): { drain
 					timeoutMs: FLUSH_QUEUE_MS,
 				},
 				{ complete: cap.complete },
-			),
+			);
+			state.descRewritten = (state.descRewritten ?? 0) + (completion.rewritten ?? 0);
+			return completion;
+		},
 		blacklistHas: (key) => drainBlacklist.has(key),
 		blacklistAdd: (key) => drainBlacklist.add(key),
 	});

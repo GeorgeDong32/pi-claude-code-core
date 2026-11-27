@@ -121,10 +121,13 @@ selector call within the same boundary budget.
   write; the rebuild keys are session start and the compaction count only.
 - **Compact index, on-demand detail (context diet v3)**: index rows are
   `- slug — description` (the slug is the file stem, not repeated as a link).
-  Descriptions are noun phrases of at most `DESCRIPTION_MAX` (80) characters:
-  `store.ts` rejects longer ones on every write path, `llm.ts` runs one
-  bounded rewrite first so a review's other facts survive, the index marks
-  violators with `⚠` and `/memory` reports the count. `memory_lookup` and
+  Descriptions are single-line noun phrases of at most `DESCRIPTION_MAX`
+  (80) characters: `store.ts` rejects longer or multi-line ones on the LLM
+  write paths and `consolidate.ts` on manual consolidation writes;
+  `completeMemoryOpsCapped` (review, correction and queue drain) runs one
+  bounded rewrite first so a batch's other facts survive. Imported and
+  hand-written files bypass both gates: the index marks them `⚠`, `/memory`
+  reports the count and session_start lists them once. `memory_lookup` and
   `knowledge_search` carry `exposure: "deferred"` — nothing in the tool list
   until `tool_search` activates them (codemode can call them regardless).
   `memory.searchRoots` (settings.json, absolute dirs, default `[]`) is the

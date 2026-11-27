@@ -4,7 +4,7 @@
  * deferred on-demand tools, and the per-run stats probe.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FakeHost, clearCoreGlobals, snapshotCoreGlobals } from "../contracts/fake-host.ts";
@@ -13,7 +13,8 @@ import memoryExtension from "../../extensions/memory/index.ts";
 import { resolveMemoryPaths } from "../../extensions/memory/paths.ts";
 import { invalidateMemDirCache } from "../../extensions/memory/memdir.ts";
 import { buildPolicyInjection, DESCRIPTION_MAX, descriptionTooLong } from "../../extensions/memory/policy.ts";
-import { applyMemoryOps, DESCRIPTION_TOO_LONG_REASON } from "../../extensions/memory/store.ts";
+import { applyMemoryOps, DESCRIPTION_MULTILINE_REASON, DESCRIPTION_TOO_LONG_REASON } from "../../extensions/memory/store.ts";
+import { runConsolidation } from "../../extensions/memory/consolidate.ts";
 import { rewriteTooLongDescriptions, type LlmComplete } from "../../extensions/memory/llm.ts";
 import { allowedRoots, knowledgeSearch, lookupMemory, searchRoots } from "../../extensions/memory/lookup.ts";
 import type { MemoryOp } from "../../extensions/memory/store.ts";
@@ -63,6 +64,9 @@ describe("index rows: slug — description, no duplicated link, ⚠ on over-long
 		expect(rows).toEqual(["- alpha — [insight] alpha fact", `- beta-long — [failure] ${LONG} ⚠`]);
 		const imported = buildPolicyInjection({ entries: [] }, [{ title: "deploy-flow", description: "d", file: "deploy-flow-646570.md" }], dir);
 		expect(imported).toContain("- deploy-flow (deploy-flow-646570.md) — d");
+		// a hand-edited description with a line break still renders as one row
+		const broken = buildPolicyInjection({ entries: [] }, [{ title: "c", description: "line one\nline two", file: "c.md" }], dir);
+		expect(broken.split("\n").filter((l) => l.startsWith("- "))).toEqual(["- c — line one line two"]);
 		expect(text, "the slug must not be repeated as a markdown link").not.toContain("](");
 	});
 
@@ -95,7 +99,20 @@ describe("write-side cap: the store rejects over-long descriptions, one bounded 
 		put(dir, "legacy.md", "legacy", LONG);
 		expect(applyMemoryOps([{ action: "replace", layer: "project", file: "legacy.md", description: LONG, body: "new body" }], { project: dir }).skipped[0]?.reason).toBe(DESCRIPTION_TOO_LONG_REASON);
 		expect(applyMemoryOps([{ action: "replace", layer: "project", file: "legacy.md", body: "new body" }], { project: dir }).applied).toBe(1);
+		expect(applyMemoryOps([add("two\nlines")], { project: dir }).skipped[0]?.reason).toBe(DESCRIPTION_MULTILINE_REASON);
 	});
+
+	it("manual consolidation refuses a merged file whose description is over the cap (the batch fails before any write)", () => {
+		put(dir, "a.md", "a", "d");
+		put(dir, "b.md", "b", "d");
+		const outcome = runConsolidation(
+			dir,
+			[{ file: "merged.md", content: `---\nname: merged\ndescription: ${LONG}\nmetadata:\n  type: project\n---\n\nmerged body`, merged_from: ["a.md", "b.md"] }],
+			["a.md", "b.md"],
+		);
+		expect(outcome.ok).toBe(false);
+		expect(outcome.message).toContain("description exceeds");
+	}),
 
 	it("rewriteTooLongDescriptions replaces only the flagged ops, by index, and ignores rewrites that are still too long or unparsable", async () => {
 		const ops: MemoryOp[] = [
@@ -148,6 +165,20 @@ describe("on-demand tools: lookup and search", () => {
 		const capped = searchRoots({ roots: [root], query: "needle", maxHits: 5 });
 		expect(capped.hits.length).toBe(5);
 		expect(capped.truncated).toBe(true);
+	});
+
+	it("searchRoots never follows a symlink out of the root; the scan budget reports truncation only when files were left unseen", () => {
+		const root = join(home, "vault");
+		const outside = join(home, "outside");
+		mkdirSync(outside, { recursive: true });
+		writeFileSync(join(outside, "secret.md"), "needle outside the root");
+		mkdirSync(root, { recursive: true });
+		symlinkSync(join(outside, "secret.md"), join(root, "leak.md"));
+		symlinkSync(outside, join(root, "leakdir"));
+		expect(searchRoots({ roots: [root], query: "needle" }).hits).toEqual([]);
+		for (let i = 0; i < 3; i++) put(join(root, "n"), `f${i}-needle.md`, `f${i}`, "d");
+		expect(searchRoots({ roots: [root], query: "needle", maxFiles: 3 }).truncated).toBe(false);
+		expect(searchRoots({ roots: [root], query: "needle", maxFiles: 2 }).truncated).toBe(true);
 	});
 
 	it("allowedRoots: the memory dir is always allowed; configured roots must be absolute, existing, distinct directories", () => {
@@ -205,5 +236,14 @@ describe("module wiring: deferred exposure, counters and the per-run stats entry
 		expect(stats.length).toBe(1);
 		expect(stats[0]?.data).toMatchObject({ memoryReads: 1, lookups: 1, searches: 1, recallInjections: 0, descTooLong: 1, indexRows: 2 });
 		expect((stats[0]?.data as { indexBytes: number }).indexBytes).toBeGreaterThan(0);
+		// per run, not session-cumulative: a quiet second run reports zeros
+		await host.fire("agent_end", { messages: [] }, ctx);
+		const second = host.appendEntries.filter((e) => e.type === "cc-core-memory-stats")[1]?.data;
+		expect(second).toMatchObject({ memoryReads: 0, lookups: 0, searches: 0, recallInjections: 0, descTooLong: 1, indexRows: 2 });
+		// a missing memory dir is a clean miss, not a thrown tool error
+		rmSync(dir, { recursive: true, force: true });
+		const gone = (await lookup.execute("t3", { name: "anything" }, undefined, undefined, ctx)) as { content: Array<{ text: string }>; details: { ok: boolean } };
+		expect(gone.details.ok).toBe(false);
+		expect(gone.content[0]?.text).toContain('no memory named "anything"');
 	});
 });

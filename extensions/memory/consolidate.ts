@@ -31,6 +31,7 @@ import { Type } from "typebox";
 import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { listMemoryFiles, parseMemoryFrontmatter } from "./memdir.ts";
+import { DESCRIPTION_MAX, descriptionTooLong } from "./policy.ts";
 import { INDEX_MAX_LINES, removeDocument, reindex } from "./writer.ts";
 import { findSecret } from "./guard.ts";
 import {
@@ -164,6 +165,7 @@ export function runConsolidation(
 		if (deleteSet.has(w.file)) return fail(`write and delete the same file "${w.file}" in one batch — pick one side`);
 		const fm = parseMemoryFrontmatter(w.content);
 		if (!fm) return fail(`${w.file}: invalid frontmatter (need name/description/type)`);
+		if (descriptionTooLong(fm.description)) return fail(`${w.file}: description exceeds ${DESCRIPTION_MAX} characters — rewrite as a noun phrase with the topic keywords`);
 		const secret = findSecret(w.content);
 		if (secret) return fail(`${w.file}: looks like a ${secret}`);
 		if (Buffer.byteLength(w.content, "utf8") > MEMORY_FILE_TOTAL_MAX) return fail(`${w.file}: exceeds ${MEMORY_FILE_TOTAL_MAX} bytes`);
