@@ -127,6 +127,7 @@ fail-closed,但 block reason 现在原样携带该 family 给出的建议 allow
   `pi.setThinkingLevel`)。
 - `PERMISSION_MODES_INHERITED_MODE` 此处只消费,由 pi-subagents 生产——
   core 不得写入。
+  仅当 `PI_SUBAGENT_CHILD=1` 同设时才生效(`applyInheritedModeForChild`),与审批转发同一条 fail-closed 规则:单独的 env 不授予任何模式。
 - legacy 键写入(`writeLegacyAliases`)与总线发布在同一同步批次内完成。
 
 ## 测试

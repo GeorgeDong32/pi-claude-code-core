@@ -113,7 +113,7 @@ docs/                # 架构文档(en/ + zh/ 双语分文件)
 | `PI_CORE_COMPACTION` | compaction | 控制器模式覆盖:`off` \| `shadow` \| `on`(SC ST-03;优先于 core-compaction.json) |
 | `PI_CORE_BASH_PATH_CHECKS` | modes | W3/W4/P0-1/P1-4 bash 路径检查开关:`all`(默认)\|`safety`(W3 弹窗+allow 收紧+保护路径弹窗)\|`deny`(仅 W4)\|`off`;覆盖 `bashPathChecks` 配置键,免 `/reload` 生效(env 仅对新进程生效) |
 | `PI_CORE_MCP_DIRECT_SERVERS` | mcp-gov | 允许认领裸工具名的 server id(如 `exa`) |
-| `PERMISSION_MODES_INHERITED_MODE` | modes | 子代理模式继承(pi-subagents 生产,此处只消费) |
+| `PERMISSION_MODES_INHERITED_MODE` | modes | 子代理模式继承(pi-subagents 生产,此处只消费;须与 `PI_SUBAGENT_CHILD=1` 同设才生效) |
 | `PERMISSION_MODES_CLASSIFIER_DEBUG` | modes | auto 模式分类器调试日志 |
 | `PI_GOAL_AUTO_CONFIRM` | goal | 自动确认 goal 提案 |
 

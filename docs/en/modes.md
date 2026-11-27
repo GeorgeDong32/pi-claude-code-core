@@ -141,7 +141,9 @@ prompt path).
 - The effort side-effect of mode profiles goes through `lib/effort-owner.ts`
   (never `pi.setThinkingLevel` directly).
 - `PERMISSION_MODES_INHERITED_MODE` is consumed here, produced by
-  pi-subagents — do not write it from core.
+  pi-subagents — do not write it from core. It is honored only together with
+  `PI_SUBAGENT_CHILD=1` (`applyInheritedModeForChild`), the same fail-closed
+  rule as approval forwarding: an env var alone never grants a mode.
 - Legacy key writes (`writeLegacyAliases`) happen in the same synchronous
   batch as the bus publish.
 
