@@ -1,7 +1,7 @@
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 export function sanitizePath(p: string): string {
 	return p.replace(/[/\\]/g, "-");
@@ -59,8 +59,10 @@ export function defaultNotesDir(cwd: string, home = process.env.HOME ?? homedir(
 	return join(projectsDirFor(cwd, home), "memory");
 }
 
-/** Sessions dir for a cwd; pi names it with WRAPPING dashes —
- * `-${sanitizePath(cwd)}-` (the projects layer is the bare-sanitized one). */
+/** Sessions dir for a cwd, named exactly like pi's SessionManager:
+ * `--` + cwd without its leading slash and with `/`, `\`, `:` replaced by `-`
+ * + `--` (the projects layer uses the bare-sanitized path instead). */
 export function sessionsDirFor(cwd: string, home = homedir()): string {
-	return join(home, ".pi", "agent", "sessions", `-${sanitizePath(cwd)}-`);
+	const safe = `--${resolve(cwd).replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+	return join(home, ".pi", "agent", "sessions", safe);
 }

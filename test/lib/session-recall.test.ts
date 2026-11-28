@@ -69,8 +69,10 @@ describe("P3-ME-07 session_recall", () => {
 		expect(empty.scannedFiles).toBe(0);
 	});
 
-	it("C8/R2-P1: sessionsDirFor uses pi's wrapping-dash naming (the tool was dead on real machines)", () => {
-		expect(sessionsDirFor("/Users/x/Coding/proj", "/h")).toBe("/h/.pi/agent/sessions/--Users-x-Coding-proj-");
+	it("sessionsDirFor matches pi's SessionManager naming: double dashes on both ends, no leading slash", () => {
+		// pi: `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--` (session-manager.js)
+		expect(sessionsDirFor("/Users/x/Coding/proj", "/h")).toBe("/h/.pi/agent/sessions/--Users-x-Coding-proj--");
+		expect(sessionsDirFor("/Users/x/Coding/proj/", "/h")).toBe("/h/.pi/agent/sessions/--Users-x-Coding-proj--");
 	});
 
 	it("C8: readLinesBounded yields prefix lines, marks truncation, drops the partial tail", async () => {
