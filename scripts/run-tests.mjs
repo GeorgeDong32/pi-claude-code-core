@@ -35,7 +35,6 @@ const nodeTestDirs = [
 	join(root, "extensions", "observation-pack", "tests"),
 	join(root, "extensions", "bg-shell", "tests"),
 	join(root, "extensions", "compaction", "tests"),
-	join(root, "extensions", "memory", "tests"),
 	join(root, "extensions", "web-gov", "tests"),
 ].filter(existsSync);
 

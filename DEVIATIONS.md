@@ -565,3 +565,9 @@ M-6. **迁移前置审批**：用户层遗留笔记（本机 29 文件 + Air 35 
 M-6a. **迁移执行决议（2026-11-24，AskUser 四问）**：清单按提案执行；**`~/AGENTS.md` 三条新行用户裁定不加**（ research 期拟的 headless 禁令/sudo 交还/编号拍板三条作废，AGENTS.md 零改动）；本机 user 层**全部保留只迁移不删**（29 文件 + MEMORY.md 原地不动，M-6 中「批准后删三条偏好文件」不执行）；Air 35 文件本次不动，待 Air 升级退役版后单独一批经 SSH 迁移。落点为 OneDrive 真 vault（`~/Library/CloudStorage/OneDrive-个人/Note/Notes-Obsidian/`，含 `.obsidian` workspace；本地 `~/Notes-Obsidian/` 是分叉的部分副本——`obsidian` CLI 报 Vault not found，本地树里还滞留 11-19 的 `GeorgedeMac-mini-macos` 笔记，已复制入真 vault、原处保留）。迁移事故与修复：rex/、hermes/ 为既有文件夹，其 index.md 被迁移写入误覆盖——rex 按 README.md（该夹自述索引）重建：删除误写 index、README 目录树扩充三条新笔记；hermes 重建合并索引（cron-model-pinning + hermes-gateway-notes）并注明可从 OneDrive 版本历史还原旧索引；其余 7 个目标夹均无预存文件（逐夹核查预存 md 数）。29 文件正文逐字进 vault（14 篇抽查零失配），另有 w1 审计节单列 rex/w1-audit-osc7501-pty-wrapper.md。
 
 M-7. **spec §1「后台分批整理」被会话内决策取代（用户 2026-11-24 确认）**：spec 文件 `~/.factory/specs/2026-11-23-memory-policy.md` 第 1 节写的是后台分批整理（background-consolidate.ts、90% 阈值、两步 LLM、40% 护栏、独立锁）；会话讨论后改为仅手动（M-2），用户在实施中途以 AskUser 明确确认「仅手动 /memory-consolidate（维持现状）」。spec 其余各节（边界召回、policy 精简、验证、台账）不受影响。spec 文件本身不再回改，以本条为准。
+
+## memory 模块下线批（spec 2026-11-28-notes-index，2026-11-28）
+
+M-8. **原 memory spec（2026-10-02 / 2026-10-03 / 2026-10-23 / 2026-11-23）整体作废（用户裁定）**：自动提取、recall v2、整合、队列/drain、导入、统计探针全部删除；core 只保留索引注入（`extensions/notes-index/`）。替代来源：Obsidian vault 的 Agent Notes（所有 agent 共享）+ core 之外的夜间 dream agent（捕获）。契约套件按 README 表登记：`pi-memory-recall` / `cc-core-memory-stats` / `pi-memory-status` 生产方移除但存量会话形状永久冻结（`legacy-memory-entries.test.ts`）；memory-queue 磁盘布局行换成默认笔记目录行；`MemoryPatch` 附注、AR1005-RC-HOST 行标已满足。
+M-8a. **[C4] 自修改边界随迁**：`protected-paths.ts` + `write/edit` 阻断 + sha256 基线从 memory 模块搬到 `extensions/modes/protected-writes.ts`，行为不变（spec v1 曾把它误当记忆保护删除，审查 C0 纠正）。
+M-8b. **笔记目录免审批例外与 bash 保护取消**（spec D1）：目录可能位于 OneDrive 同步的 vault，不给「整目录可信」；写入走普通权限路径。

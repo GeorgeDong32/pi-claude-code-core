@@ -3,7 +3,7 @@ import { isCcSafetyPath, expandUserPath } from "./path-safety.ts"
 import type { PermissionModesConfig } from "./config.ts"
 import type { PermissionRule } from "./permissions.ts"
 import { pathToolMatchesRuleContent } from "./path-permission-match.ts"
-import { matchProtectedPath } from "../memory/protected-paths.ts"
+import { matchProtectedPath } from "./protected-paths.ts"
 import { homedir } from "node:os"
 import path from "node:path"
 

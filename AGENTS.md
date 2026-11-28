@@ -7,10 +7,12 @@
 
 `@georgedong32/pi-claude-code-core` — the unified core extension package for the
 [pi coding agent](https://github.com/earendil-works/pi-coding-agent). One npm
-package that assembles **fourteen modules** behind a single extension entry
-(`extensions/index.ts`): permission modes, effort, goal, review, rules, memory,
-mcp-gov, web-gov, action-fusion, observation-pack, bg-shell, the capability
-bus, the compaction controller, and the UI adapter layer.
+package that assembles **fifteen modules** behind a single extension entry
+(`extensions/index.ts`): permission modes, effort, goal, review, rules,
+notes-index (index injection of the notes directory — the memory module is
+gone), session-recall, mcp-gov, web-gov, action-fusion, observation-pack,
+bg-shell, the capability bus, the compaction controller, and the UI adapter
+layer.
 
 pi loads exactly one factory per manifest entry (see the `pi` field in
 `package.json`): the default export of `extensions/index.ts` invokes each
@@ -70,7 +72,7 @@ contract table), published types in `types/`, architecture docs per module in
    run gets `test.todo` with the target Phase number — never silently dropped.
 7. **Frozen surfaces**: session entry types and disk layout (P0-CT-08/09) are
    frozen — never break existing user data silently.
-8. **Fail-open boundaries**: memory injection and observation-pack projection
+8. **Fail-open boundaries**: notes-index injection and observation-pack projection
    failures must never block a turn (try/catch-wrapped hook bodies, per-message
    fail-open). Economy modules gate themselves through `lib/pi-compat.ts`
    probes and degrade with a warning instead of blocking the session.

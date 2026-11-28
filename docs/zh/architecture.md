@@ -8,7 +8,7 @@ pi 对每个 manifest 条目只加载一个工厂。`extensions/index.ts` 默认
 函数,按固定顺序对同一个 `ExtensionAPI` 实例依次调用各模块工厂:
 
 ```
-bus → modes → effort → goal → review → rules → memory → web-gov → mcp-gov → economy(action-fusion, observation-pack)
+bus → modes → effort → goal → review → rules → protected-writes + notes-index + session-recall → web-gov → mcp-gov → economy(action-fusion, observation-pack)
 ```
 
 顺序在两处有讲究:
@@ -16,7 +16,7 @@ bus → modes → effort → goal → review → rules → memory → web-gov �
 - **web-gov 先于 mcp-gov** —— 携带 URL 的工具调用必须先命中域名规则族
   (`webfetch(domain:host)`),未命中才落入 MCP 族的 `mcp_*` 前缀规则。
 - **economy 模块最后** —— observation-pack 必须占据最终的 `context` 投影槽
-  (在 modes/memory 处理器之后);action-fusion 的注册顺序虽与位置无关,
+  (在 modes 与 notes-index 处理器之后);action-fusion 的注册顺序虽与位置无关,
   也固定在此以保证确定性。
 
 ## 两个层次
@@ -54,7 +54,8 @@ UI 适配器。发布形状在 `types/`(JS + 手工维护的声明孪生,由
 | `goal` | capyup/pi-goal 0.6.0 fork | goal 生命周期工具/命令、sisyphus 循环、完成度审计 |
 | `review` | @georgedong32/pi-review 0.8.6 | /review 扇出流水线、pi_review_report 工具 |
 | `rules` | 新写(P3) | 仓库规则文件 → system prompt 注入,/rules |
-| `memory` | 新写(P3) | 双层记忆、注入、写保护、整合、导入 |
+| `notes-index` | 新写(2026-11-28,替代 `memory`) | 会话开始把笔记目录的索引注入 system prompt(默认项目层,可指向 Obsidian vault);只做这一件事 |
+| `session-recall` | 从 `memory` 拆出 | `session_recall` 工具:对历史会话日志做 AND 匹配搜索 |
 | `web-gov` | 新写(P4) | webfetch(domain:host) 规则族 + 预批准域名 |
 | `mcp-gov` | 新写(P4) | MCP 规则族、broker 镜像、/core 面板 |
 | `action-fusion` | NVlabs/SoL-Pi 移植 | write/edit + `then_run` 同轮融合 |

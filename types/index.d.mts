@@ -47,7 +47,6 @@ export interface CoreSnapshot {
 	notifications?: ReadonlyArray<{ id: number; level: "info" | "warning" | "error"; msg: string }>;
 	display?: { footer?: readonly string[] };
 	contextBudget?: { rulesMax: number; memoryIndexMax: number; dynamicSteerMax: number };
-	memory?: { yielded: boolean; dir?: string };
 	/** Optional per-site display-only savings (first-replacement requests only). */
 	observation?: { tokensAvoided: number; placeholders: number; sites?: ReadonlyArray<{ tool: string; id: string; avoidedTokens: number; toolCallId?: string }> };
 	fusion?: { fusedCount: number };

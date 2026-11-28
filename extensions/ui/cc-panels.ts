@@ -65,25 +65,6 @@ export function shapeCoreStatus(message: PanelMessage): CcPanelParts {
 	return { bar: commandFromDetails(message), summary: title, body: bullets };
 }
 
-export function shapeMemoryStatus(message: PanelMessage): CcPanelParts {
-	const lines = contentText(message).split("\n");
-	const bar = commandFromDetails(message);
-	const first = lines[0] ?? "";
-	if (first.startsWith("memory-import-")) {
-		return { bar, summary: first, body: lines.slice(1) };
-	}
-	const user = first.match(/^user memory: .* — files: (\d+), skipped: (\d+)/);
-	const project = (lines[1] ?? "").match(/^project memory: .* — files: (\d+), skipped: (\d+)/);
-	if (user && project) {
-		return {
-			bar,
-			summary: `memory: user ${user[1]} files · project ${project[1]} files`,
-			body: lines,
-		};
-	}
-	return { bar, body: lines };
-}
-
 export function shapeReviewAgents(message: PanelMessage): CcPanelParts {
 	const lines = contentText(message).split("\n");
 	const body: BodyLine[] = [];
@@ -213,7 +194,6 @@ export function panelRenderer(shape: PanelShaper): (message: PanelMessage, optio
 
 export const CC_PANEL_SHAPERS: Readonly<Record<string, PanelShaper>> = {
 	"pi-core-status": shapeCoreStatus,
-	"pi-memory-status": shapeMemoryStatus,
 	"pi-review-agents": shapeReviewAgents,
 	"model-profile-list": shapeModelProfiles,
 	"permissions-list": shapePermissions,

@@ -121,6 +121,7 @@ fail-closed,但 block reason 现在原样携带该 family 给出的建议 allow
 
 ## 不变量与坑
 
+- **[C4] 自修改边界**(`protected-paths.ts`、`protected-writes.ts`):`write`/`edit` 写 `~/.pi/agent/permission-modes.json`、`~/.pi/agent/settings.json`、`~/.pi/agent/rules/`、`<cwd>/.pi/rules/`、`<cwd>/.claude/rules/` 在任何模式下都被阻断,包括 bypass;bash 的重定向/mv/cp 由 bash 路径检查拦截。`session_start` 取 sha256 基线、`agent_end` 对比,被其他手段改过只告警一次。这道守卫与笔记目录无关:2026-11-28 起对笔记目录的写入走普通权限路径(笔记可能在 Obsidian vault 里)。
 - 会话授权/裁定状态在 `rule-families.ts` —— 各规则族必须经过它,不得自持
   授权状态。
 - 模式 profile 触发的 effort 副作用走 `lib/effort-owner.ts`(绝不直接调

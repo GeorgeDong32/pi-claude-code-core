@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { DEFAULT_CORE_ECONOMY, loadCoreEconomy, setCoreEconomyPath } from "../../lib/core-economy.ts";
 
 const originalPath = join(tmpdir(), "core-economy-original-unlikely-to-exist.json");
+const notesDefault = { enabled: true, dir: undefined, pinnedDir: undefined };
 
 describe("core-economy config (SPEC DEC-02/ASM-03)", () => {
 	afterEach(() => {
@@ -21,7 +22,7 @@ describe("core-economy config (SPEC DEC-02/ASM-03)", () => {
 		const file = join(dir, "core-economy.json");
 		writeFileSync(file, JSON.stringify({ version: 1, actionFusion: false, observationPack: true }));
 		setCoreEconomyPath(file);
-		expect(loadCoreEconomy()).toEqual({ actionFusion: false, observationPack: true });
+		expect(loadCoreEconomy()).toEqual({ actionFusion: false, observationPack: true, notesIndex: notesDefault });
 		rmSync(dir, { recursive: true, force: true });
 	});
 
@@ -39,7 +40,18 @@ describe("core-economy config (SPEC DEC-02/ASM-03)", () => {
 		const file = join(dir, "core-economy.json");
 		writeFileSync(file, JSON.stringify({ actionFusion: "yes", observationPack: false }));
 		setCoreEconomyPath(file);
-		expect(loadCoreEconomy()).toEqual({ actionFusion: true, observationPack: false });
+		expect(loadCoreEconomy()).toEqual({ actionFusion: true, observationPack: false, notesIndex: notesDefault });
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("notesIndex: explicit dir/pinnedDir are trimmed, blank strings mean unset, non-objects fall back", () => {
+		const dir = mkdtempSync(join(tmpdir(), "core-econ-notes-"));
+		const file = join(dir, "core-economy.json");
+		writeFileSync(file, JSON.stringify({ notesIndex: { enabled: false, dir: "  /vault/Agent Notes/x  ", pinnedDir: "" } }));
+		setCoreEconomyPath(file);
+		expect(loadCoreEconomy().notesIndex).toEqual({ enabled: false, dir: "/vault/Agent Notes/x", pinnedDir: undefined });
+		writeFileSync(file, JSON.stringify({ notesIndex: "nope" }));
+		expect(loadCoreEconomy().notesIndex).toEqual(notesDefault);
 		rmSync(dir, { recursive: true, force: true });
 	});
 });

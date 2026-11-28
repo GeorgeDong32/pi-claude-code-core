@@ -118,7 +118,6 @@ export default function permissionModesExtension(pi: ExtensionAPI): void {
     getAutoModeConfig: () => autoModeConfig,
     describeTier3Review: (tool, input, cwd) =>
       autoEngine.describeTier3Review(tool, input, cwd),
-    isMemoryDirWrite: approval.isMemoryDirWrite,
   });
 
   const forwarding = createForwardingResponder({

@@ -12,7 +12,6 @@ import {
 	panelRenderer,
 	registerCcPanels,
 	shapeCoreStatus,
-	shapeMemoryStatus,
 	shapeModelProfiles,
 	shapeModesExecute,
 	shapeOutsideWrites,
@@ -122,36 +121,6 @@ describe("shapers — command-panel family", () => {
 		});
 		expect(parts.summary).toBe("mcp-gov");
 		expect(parts.body).toEqual(["usage: /core exposure <server> <codemode|deferred|direct|hidden>"]);
-	});
-
-	it("shapeMemoryStatus: import report (first line = summary)", () => {
-		const parts = shapeMemoryStatus({
-			content: "memory-import-claude: copied 12, skipped 3 (idempotent)\nnote one",
-			details: { command: "/memory-import-claude" },
-		});
-		expect(parts).toEqual({
-			bar: "/memory-import-claude",
-			summary: "memory-import-claude: copied 12, skipped 3 (idempotent)",
-			body: ["note one"],
-		});
-	});
-
-	it("shapeMemoryStatus: /memory diagnostics (file counts feed the summary, full dump stays in body)", () => {
-		const content = [
-			"user memory: /u — files: 12, skipped: 0, index: 100/200 bytes",
-			"project memory: /p — files: 34, skipped: 1, index: 300/400 bytes",
-			"recall: off — set memory.recallModel",
-		].join("\n");
-		const parts = shapeMemoryStatus({ content, details: { command: "/memory" } });
-		expect(parts.summary).toBe("memory: user 12 files · project 34 files");
-		expect(parts.body).toHaveLength(3);
-	});
-
-	it("shapeMemoryStatus: unknown shape degrades to body only", () => {
-		const parts = shapeMemoryStatus({ content: "something else" });
-		expect(parts.summary).toBeUndefined();
-		expect(parts.bar).toBeUndefined();
-		expect(parts.body).toEqual(["something else"]);
 	});
 
 	it("shapeReviewAgents: roster with gate/routing summary and strong agent ids", () => {
@@ -300,7 +269,6 @@ describe("renderer safety + registration", () => {
 				"outside-writes-list",
 				"permissions-list",
 				"pi-core-status",
-				"pi-memory-status",
 				"pi-review-agents",
 				"pi-rules-activate",
 				"pi-rules-list",

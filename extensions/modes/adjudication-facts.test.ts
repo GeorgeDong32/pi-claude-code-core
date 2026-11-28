@@ -49,7 +49,6 @@ describe("adjudication facts raw pins (SR-4c)", () => {
 			getMergedRules: () => loadMergedPermissionRules(project),
 			getAutoModeConfig: () => undefined,
 			describeTier3Review: () => "<t3>",
-			isMemoryDirWrite: () => false,
 		});
 	}
 

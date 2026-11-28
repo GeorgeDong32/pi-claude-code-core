@@ -129,7 +129,7 @@ describe("observation-pack context projection (CON-03)", () => {
 import coreExtension from "../../extensions/index.ts";
 
 describe("assembly order (CON-04)", () => {
-	it("observation-pack owns the FINAL context handler slot after modes and memory", async () => {
+	it("observation-pack owns the FINAL context handler slot after modes and notes-index", async () => {
 		const host = new FakeHost();
 		(host.piObject() as { on: (e: string, h: Handler) => () => void }).on("context", () => undefined);
 		const before = (host.handlers.get("context")! as Handler[]).length;
@@ -201,105 +201,14 @@ describe("RV host semantics (2026-10-02-memory-recall-v2)", () => {
 	});
 });
 
-import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import type { SessionBeforeCompactEvent, SessionCompactEvent, SessionCompactFailedEvent } from "@earendil-works/pi-coding-agent";
 
-describe("AR1005-RC-HOST recall teardown (2026-10-05-core-architecture-reliability)", () => {
-	it("⑦ invalidate + session_shutdown drop the late abort-ignoring selection: zero sends, zero unhandled rejections", () => {
-		const scenario = fileURLToPath(new URL("./rc-host-scenario.ts", import.meta.url));
-		// The scenario imports core's TypeScript sources — run it under bun (the
-		// repo runtime); node's strip-only mode rejects parameter properties.
-		const result = spawnSync("bun", [scenario], {
-			encoding: "utf8",
-			timeout: 60_000,
-			env: { ...process.env, PI_CONTRACT_RC_HOST: "1" },
-		});
-		const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
-		if (result.status !== 0) {
-			throw new Error(`scenario exited ${result.status}:\n${out.slice(0, 3000)}`);
-		}
-		expect(out).toContain("SCENARIO_SELECTOR_CALLS:1");
-		expect(out).toContain("SCENARIO_SENT:0");
-		expect(out).not.toContain("SCENARIO_UNHANDLED");
-		expect(out).toContain("SCENARIO_DONE");
-	});
-});
-
-// Deep-path import via relative resolution (node enforces the package "exports"
-// map for bare deep specifiers; these types are not re-exported at the root).
-import type { ToolRenderContext, ToolRenderResultOptions } from "../../node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.js";
-
-describe("AR1005-FU-HOST renderer render facts (2026-10-05-core-architecture-reliability)", () => {
-	it("⑧ ToolRenderResultOptions.isPartial + ToolRenderContext.args/isError exist and are populated", () => {
-		const options: ToolRenderResultOptions = { expanded: true, isPartial: false };
-		const context: Pick<ToolRenderContext, "args" | "isError" | "isPartial"> = {
-			args: { then_run: { command: "bun run check" } },
-			isError: false,
-			isPartial: false,
-		};
-		expect(options.isPartial).toBe(false);
-		expect((context.args as { then_run?: { command?: string } }).then_run?.command).toBe("bun run check");
-		expect(context.isError).toBe(false);
-	});
-});
-
-describe("AR1005-RU-HOST turn lifecycle (2026-10-05-core-architecture-reliability)", () => {
+// AR1005-RC-HOST run-loop evidence. The recall-teardown scenario that hosted
+// these placeholders was removed with the memory module; the host facts stay.
+describe("AR1005-RC-HOST run-loop evidence (2026-10-05 §13)", () => {
 	it.todo("⑨ real run loop: one turn_start per turn; tool calls within a turn share it (Phase 4 host acceptance — manual steps in the comment above) — EXECUTED PASS 2026-11-15 SR host batch (real pi 1.5.2 TUI via rex, GLM-5.3-flash: two reads in one message share one turn_start; next message's call lands after a fresh before_agent_start→turn_start; evidence ~/.cache/pi-core-acceptance/2026-11-15/run/host-todos); todo retained: not automatable in-suite");
-});
-
-import { SessionManager as RealSessionManager } from "@earendil-works/pi-coding-agent";
-import { mkdtempSync, rmSync } from "node:fs";
-
-describe("AR1005-ST-HOST branch identity (2026-10-05-core-architecture-reliability)", () => {
-	it("⑩ a real SessionManager: appending a committed entry moves getLeafId and lands in getBranch (the cache key's invalidation signal)", () => {
-		const dir = mkdtempSync(join(tmpdir(), "st-host-"));
-		try {
-			const root = { id: "root", parentId: null, type: "session", timestamp: Date.now() };
-			const first = { id: "m1", parentId: "root", type: "message", message: { role: "user", content: [{ type: "text", text: "hi" }] }, timestamp: Date.now() };
-			const sm = RealSessionManager.inMemory(dir, undefined, [root, first] as never);
-			const leafBefore = sm.getLeafId();
-			const branchBefore = sm.getBranch().length;
-			sm.appendMessage({ role: "assistant", content: [{ type: "text", text: "ok" }] } as never);
-			expect(sm.getLeafId()).not.toBe(leafBefore);
-			expect(sm.getBranch().length).toBe(branchBefore + 1);
-		} finally {
-			rmSync(dir, { recursive: true, force: true });
-		}
-	});
-
 	it.todo("⑪ real run loop: message_end vs SessionManager append ordering (Phase 4 host acceptance) — ADJUDICATED 2026-11-15 SR host batch (real pi 1.5.2 TUI via rex, GLM-5.3-flash): 11/11 message_end moments had getLeafId() already including the message and getBranch() already +1 — append happens BEFORE message_end fires, inverting the assumption this todo was registered under; the modes cache marks dirty on multiple events by design, so correctness never relied on the ordering (README row corrected). Evidence ~/.cache/pi-core-acceptance/2026-11-15/run/host-todos; todo retained: not automatable in-suite");
 });
-
-import type { BeforeAgentStartEvent } from "@earendil-works/pi-coding-agent";
-
-// pi ≥1.2.0: before_agent_start also fires for idle sendMessage(triggerTurn:true) runs; the event is a union on messageType — user carries `prompt`, custom does not, both share systemPrompt/systemPromptOptions.
-describe("PI12-BAS-HOST before_agent_start union (pi 1.2.0 upgrade batch 2026-10-14)", () => {
-	it("⑫ the event is a union on messageType — user carries prompt, custom does not, both share the base", () => {
-		type UserEvent = Extract<BeforeAgentStartEvent, { messageType: "user" }>;
-		type CustomEvent = Extract<BeforeAgentStartEvent, { messageType: "custom" }>;
-		const user: UserEvent = {
-			type: "before_agent_start",
-			messageType: "user",
-			systemPrompt: "s",
-			systemPromptOptions: {} as UserEvent["systemPromptOptions"],
-			prompt: "user text",
-		};
-		const custom: CustomEvent = {
-			type: "before_agent_start",
-			messageType: "custom",
-			systemPrompt: "s",
-			systemPromptOptions: {} as CustomEvent["systemPromptOptions"],
-			message: { role: "custom", content: [{ type: "text", text: "directive" }], customType: "pi-x-directive", display: false, timestamp: Date.now() } as CustomEvent["message"],
-		};
-		// @ts-expect-error — property `prompt` does not exist on the custom variant
-		const leaked: string | undefined = custom.prompt;
-		expect(leaked).toBeUndefined();
-		expect(user.prompt).toBe("user text");
-		expect([user.messageType, custom.messageType]).toEqual(["user", "custom"]);
-	});
-});
-
-import type { SessionBeforeCompactEvent, SessionCompactEvent, SessionCompactFailedEvent } from "@earendil-works/pi-coding-agent";
 
 describe("CB1 cherry-batch1 host semantics (spec docs/en/cherry-batch1-spec.md)", () => {
 	it("B3-ANCHOR: estimateContextTokens invalidates usage anchors behind newer synthetic prefixes and restores on fresh usage", async () => {

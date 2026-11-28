@@ -9,7 +9,7 @@ exports the assembly function and runs the module factories in a fixed order
 against one shared `ExtensionAPI` instance:
 
 ```
-bus → modes → effort → goal → review → rules → memory → web-gov → mcp-gov → economy(action-fusion, observation-pack)
+bus → modes → effort → goal → review → rules → protected-writes + notes-index + session-recall → web-gov → mcp-gov → economy(action-fusion, observation-pack)
 ```
 
 Order matters in two places:
@@ -18,7 +18,7 @@ Order matters in two places:
   family (`webfetch(domain:host)`) must evaluate before the MCP family falls
   through to `mcp_*`-prefix rules.
 - **economy modules last** — observation-pack must own the final `context`
-  projection slot (after modes/memory handlers); action-fusion's registration
+  projection slot (after modes and notes-index handlers); action-fusion's registration
   order is position-independent but fixed for determinism.
 
 ## The two layers
@@ -59,7 +59,8 @@ Details: [bus.md](bus.md).
 | `goal` | capyup/pi-goal 0.6.0 fork | goal lifecycle tools/commands, sisyphus loop, completion auditor |
 | `review` | @georgedong32/pi-review 0.8.6 | /review fan-out pipeline, pi_review_report tool |
 | `rules` | new (P3) | repo rule files → system prompt injection, /rules |
-| `memory` | new (P3) | two-layer memory, injection, guard, consolidation, importers |
+| `notes-index` | new (2026-11-28, replaces `memory`) | index injection of the notes directory (default project layer, or the Obsidian vault) at session start; nothing else |
+| `session-recall` | moved out of `memory` | `session_recall` tool: AND-matched search over past session logs |
 | `web-gov` | new (P4) | webfetch(domain:host) family + preapproved domains |
 | `mcp-gov` | new (P4) | MCP rule family, broker mirror, /core panel |
 | `action-fusion` | NVlabs/SoL-Pi port | write/edit + `then_run` in one turn |

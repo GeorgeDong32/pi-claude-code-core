@@ -19,7 +19,7 @@ The two trees mirror each other file-for-file — keep them in sync.
 | 6 | [en/goal.md](en/goal.md) | [zh/goal.md](zh/goal.md) | Goal lifecycle + sisyphus / 目标生命周期 |
 | 7 | [en/review.md](en/review.md) | [zh/review.md](zh/review.md) | Fan-out code review / 代码评审 |
 | 8 | [en/rules.md](en/rules.md) | [zh/rules.md](zh/rules.md) | Rules injection / 规则注入 |
-| 9 | [en/memory.md](en/memory.md) | [zh/memory.md](zh/memory.md) | Memory / 记忆 |
+| 9 | [en/notes-index.md](en/notes-index.md) | [zh/notes-index.md](zh/notes-index.md) | Notes index (replaces Memory) / 笔记索引(替代记忆) |
 | 10 | [en/mcp-gov.md](en/mcp-gov.md) | [zh/mcp-gov.md](zh/mcp-gov.md) | MCP governance / MCP 治理 |
 | 11 | [en/web-gov.md](en/web-gov.md) | [zh/web-gov.md](zh/web-gov.md) | Web rule family / Web 规则族 |
 | 12 | [en/action-fusion.md](en/action-fusion.md) | [zh/action-fusion.md](zh/action-fusion.md) | then_run fusion / 动作融合 |

@@ -25,9 +25,6 @@ export interface ContextBudgetPatch {
 export interface NotificationsPatch {
 	notifications: CoreSnapshot["notifications"];
 }
-export interface MemoryPatch {
-	memory?: { yielded: boolean; dir?: string };
-}
 export interface ObservationPatch {
 	observation?: CoreSnapshot["observation"];
 }
@@ -35,7 +32,7 @@ export interface FusionPatch {
 	fusion?: { fusedCount: number };
 }
 
-export type CorePatch = ModesPatch | EffortPatch | GoalPatch | ReviewPatch | DisplayPatch | ContextBudgetPatch | MemoryPatch | NotificationsPatch | ObservationPatch | FusionPatch;
+export type CorePatch = ModesPatch | EffortPatch | GoalPatch | ReviewPatch | DisplayPatch | ContextBudgetPatch | NotificationsPatch | ObservationPatch | FusionPatch;
 
 type CommandHandler = (cmd: CoreCommand) => CoreCommandResult;
 

@@ -29,7 +29,6 @@ export interface AdjudicationFacts {
 	path: string;
 	pathSensitive: boolean;
 	pathOutsideCwd: boolean;
-	pathIsMemoryDir: boolean;
 	pathCcSafety: boolean;
 	bashPathCheck: { path: string; kind: "redirect" | "argument" | "mv-cp-flag-form" } | null;
 	bashProtectedWrite: { target: string; kind: string } | null;
@@ -266,7 +265,6 @@ export function decide(f: AdjudicationFacts): Decision {
 			return { kind: "allow", effects: {} };
 		}
 		if (f.tool === "edit" || f.tool === "write") {
-			if (f.pathIsMemoryDir) return { kind: "allow", effects: {} };
 			if (!f.hasUI) {
 				return { kind: "prompt", flavor: "approval", label: `on ${f.path || "(unknown)"}` };
 			}

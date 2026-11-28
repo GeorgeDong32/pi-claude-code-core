@@ -21,7 +21,6 @@ function facts(patch: Partial<AdjudicationFacts>): AdjudicationFacts {
 		path: "",
 		pathSensitive: false,
 		pathOutsideCwd: false,
-		pathIsMemoryDir: false,
 		pathCcSafety: false,
 		bashPathCheck: null,
 		bashProtectedWrite: null,
@@ -170,8 +169,7 @@ describe("decide: ask dispatch", () => {
 			.toEqual({ kind: "prompt", flavor: "approval", label: 'outside cwd on "/etc/hosts"' });
 		expect(decide(facts({ tool: "read", path: "src/a.ts" }))).toEqual({ kind: "allow", effects: {} });
 	});
-	it("edit/write: memory carve-out allows; headless takes approval; UI takes the 5-choice dialog", () => {
-		expect(decide(facts({ tool: "edit", pathIsMemoryDir: true }))).toEqual({ kind: "allow", effects: {} });
+	it("edit/write: headless takes approval; UI takes the 5-choice dialog (no path carve-out)", () => {
 		expect(decide(facts({ tool: "edit", path: "src/a.ts", hasUI: false })))
 			.toEqual({ kind: "prompt", flavor: "approval", label: "on src/a.ts" });
 		expect(decide(facts({ tool: "edit", path: "src/a.ts", hasUI: true })))

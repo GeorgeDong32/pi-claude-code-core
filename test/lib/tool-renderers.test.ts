@@ -10,12 +10,7 @@ import {
 	RecallRows,
 } from "../../extensions/observation-pack/renderers.ts";
 import { thenRunStatusRow, withThenRunBadge, withThenRunStatus } from "../../extensions/action-fusion/renderers.ts";
-import {
-	consolidateCallText,
-	consolidateResultRows,
-	sessionRecallCallText,
-	sessionRecallResultRows,
-} from "../../extensions/memory/renderers.ts";
+import { sessionRecallCallText, sessionRecallResultRows } from "../../extensions/session-recall/renderers.ts";
 import { humanBytes } from "../../lib/tool-render.ts";
 
 const theme = { fg: (_role: string, text: string) => text } as never;
@@ -112,16 +107,6 @@ describe("TR C — core tool compact rows", () => {
 		expect(rows[0]).toBe("3 hit(s) · 1 malformed skipped");
 		expect(rows[1]).toContain("s.jsonl:12");
 		expect(rows[2]).toBe("… 2 more");
-	});
-
-	it("2: memory_consolidate call + result rows", () => {
-		expect(consolidateCallText({ writes: [{ file: "a.md" }, { file: "b.md" }], deletes: ["c.md"] })).toBe("Memory Consolidate · 2W/1D");
-		expect(consolidateResultRows({ details: { written: 2, deleted: 1 } })).toEqual(["applied 2 write(s) · 1 delete(s)"]);
-	});
-
-	it("3: no-details fallback clips raw text", () => {
-		const rows = consolidateResultRows({ content: [{ type: "text", text: "l1\nl2\nl3\nl4" }] });
-		expect(rows).toEqual(["l1", "l2", "l3"]);
 	});
 });
 

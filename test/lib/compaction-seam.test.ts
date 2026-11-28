@@ -14,8 +14,6 @@ import {
 } from "../../lib/compaction-seam.ts";
 import goalExtension from "../../extensions/goal/goal.ts";
 import modesExtension from "../../extensions/modes/index.ts";
-import { setupAutomation, type AutomationState } from "../../extensions/memory/automation.ts";
-import { queueDir } from "../../extensions/memory/queue.ts";
 import { writeActiveGoalFile, readActiveGoalFiles } from "../../extensions/goal/storage/goal-files.ts";
 import { createGoal } from "../../extensions/goal/goal-record.ts";
 
@@ -199,63 +197,5 @@ describe("SM-02/04 modes (real factory on FakeHost)", () => {
 		notifyAfter(draftInfo({ entryId: "modes-e1" }));
 		expect(host.appendEntries.filter((e) => e.type === "modes")).toHaveLength(1);
 		expect(spy).toEqual({ before: 0, after: 1 });
-	});
-});
-
-describe("SM-02/04 memory (real setupAutomation on FakeHost)", () => {
-	function setupMemory(sessionEntries: unknown[], sessionId: string) {
-		const host = new FakeHost();
-		const state: AutomationState = { enabled: true, reviews: 0, corrections: 0, flushes: 0, opsApplied: 0 };
-		const agentDir = join(home, ".pi", "agent");
-		const projectsDirStr = join(agentDir, "memory-projects");
-		setupAutomation(host.asPi(), {
-			gate: { state: { yielded: false } },
-			dirs: (() => ({ project, projectsDir: projectsDirStr, agentDir })) as never,
-			isDirectiveTurn: () => false,
-			settings: () => ({ automation: true }),
-			state,
-			deps: { complete: (async () => ({ stopReason: "stop", content: [] })) as never },
-		});
-		const ctx = host.makeCtx({ cwd: project, ui: false, sessionEntries, sessionId });
-		return { host, ctx, state, agentDir };
-	}
-
-	const entries = Array.from({ length: 6 }, (_, i) => ({
-		type: "message",
-		message: { role: i % 2 ? "assistant" : "user", content: [{ type: "text", text: `m${i}` }] },
-	}));
-
-	function queueFiles(agentDir: string): string[] {
-		return existsSync(queueDir(agentDir)) ? readdirSync(queueDir(agentDir)).filter((f) => f.endsWith(".json")) : [];
-	}
-
-	it("native before_compact stages one record; seam NOT called", async () => {
-		const spy = seamSpy();
-		const { host, ctx, agentDir, state } = setupMemory(entries, "sess-native-1");
-		await host.fire("session_start", { reason: "new" }, ctx);
-		for (let i = 0; i < 3; i += 1) await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `w ${i}` }] } }, ctx);
-		await host.fire("session_before_compact", { reason: "threshold", signal: new AbortController().signal }, ctx);
-		expect(queueFiles(agentDir)).toHaveLength(1);
-		expect(state.lastFlush).toContain("compact-queued");
-		expect(spy).toEqual({ before: 0, after: 0 });
-	});
-
-	it("seam before (draft intent) stages; native + seam staging merge to ONE record (SM-04 + idempotence)", async () => {
-		const { host, ctx, state, agentDir } = setupMemory(entries, "sess-draft-1");
-		await host.fire("session_start", { reason: "new" }, ctx);
-		for (let i = 0; i < 3; i += 1) await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `w ${i}` }] } }, ctx);
-		notifyBefore(draftInfo({ midRun: true }));
-		expect(state.lastFlush).toContain("boundary-draft");
-		expect(queueFiles(agentDir)).toHaveLength(1);
-		await host.fire("session_before_compact", { reason: "threshold", signal: new AbortController().signal }, ctx);
-		expect(queueFiles(agentDir)).toHaveLength(1);
-	});
-
-	it("memory has no after action: a committed draft notification changes nothing on disk", async () => {
-		const { host, ctx } = setupMemory(entries, "sess-after-1");
-		await host.fire("session_start", { reason: "new" }, ctx);
-		for (let i = 0; i < 3; i += 1) await host.fire("message_end", { message: { role: "user", content: [{ type: "text", text: `w ${i}` }] } }, ctx);
-		notifyAfter(draftInfo({ entryId: "mem-e1" }));
-		expect(queueFiles(join(home, ".pi", "agent"))).toHaveLength(0);
 	});
 });

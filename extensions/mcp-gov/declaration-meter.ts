@@ -27,7 +27,6 @@ const CORE_TOOL_NAMES = new Set<string>([
 	"TaskStop",
 	"obs_recall",
 	"pi_review_report",
-	"memory_consolidate",
 	"session_recall",
 	"contact_supervisor",
 	"subagent_supervisor",

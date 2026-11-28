@@ -1,5 +1,14 @@
 # PROGRESS
 
+## 2026-11-28 memory 模块下线批（spec 2026-11-28-notes-index：只留索引注入）
+
+- **决策来源**：Devin「Memory and dreaming」+ Cognition「Agent Memory Repo」对照后，用户裁定：Obsidian vault（全局 AGENTS.md 的 Agent Notes）是所有 agent 共享的记忆；跨会话捕获交给 core 之外的夜间 dream agent；**core 只保留索引注入**（「pi 相对其他 agent 唯一多出来的能力」）。
+- **spec 审查**（fresh-context reviewer，flash）：REJECT → v1.1 全部采纳。C0：`protected-paths.ts` 不是记忆保护而是 [C4] 自修改边界，必须保留并随 `write/edit` 阻断 + sha256 基线一起搬走；C1：免审批例外贯穿 adjudication-facts/adjudicate/index.ts、默认目录按 git 根键控、run-tests 注册与 compaction-wiring 断言、旧会话夹具要过真实 SessionManager；C2：复用 memdir/policy 代码、清 RECALL_* 常量与 README 五行、hermes yield gate 去留。
+- **实现**：删 `extensions/memory/`（23 文件 5,146 行 + 23 测试文件）；新增 `extensions/notes-index/`（index/notes-dir/render，约 230 行）、`extensions/session-recall/`（原样搬出 + 自己的 renderers）、`extensions/modes/protected-writes.ts`（[C4] 守卫）、`lib/agent-paths.ts`（sanitizePath / gitCanonicalRoot / projectsDirFor / defaultNotesDir / sessionsDirFor）；`lib/core-economy.ts` 加 `notesIndex { enabled, dir, pinnedDir }`；免审批例外从 approval-flow / adjudication-facts / adjudicate / modes index 四处删除；bus `memory` 字段、types、`RECALL_*`、cc-panels 的 memory 面板、declaration-meter 的 `memory_consolidate` 条目移除。
+- **测试**：`test/lib/notes-index.test.ts` 14 例（置顶优先、frontmatter 行、字节上限 + `+N more`、目录缺失/非目录/enabled:false、dir 覆盖、pinnedDir、git 根键控、会话内字节稳定 + compaction 后重建、不可读目录 fail-open、装配后声明集无 memory 工具；突变检查：关掉注入 8 例红）；`test/lib/session-recall.test.ts`（从 memory.test.ts 原样拆出 5 例）；`extensions/modes/protected-paths.test.ts` + `protected-writes.test.ts`（[C4]：bypass 仍阻断、基线告警一次、新会话重置）；契约：`legacy-memory-entries.test.ts`（真实 `SessionManager.open` 加载带三种遗留条目的夹具，分支链完整，`session_recall` 命中）、disk-layout 改为默认笔记目录契约、status-entries 删 recall 形状、pi-host-semantics 删 RC-HOST 场景、compaction-seam 删 memory staging、tool-renderers/cc-panels/core-economy/assembly-prompt-stability 相应更新；README 契约表 8 行改写。
+- **文档**：`docs/{en,zh}/notes-index.md` 新增；memory.md / memory-snapshot.md / entropy-control-spec.md / recall-frequency-tuning.md 删除；architecture.md / modes.md（[C4] 段）/ docs/README.md / AGENTS.md（十五个模块）同步。
+- **未做**：本机 83 条笔记搬进 vault（`Agent Notes/<机器名>-pi-claude-code-core/` + 设 `notesIndex.dir`，一次性手工）；dream skill；cctui 侧 `memory_consolidate` 死分支（另一仓库）。
+
 ## 2026-11-28 注释清扫批（no-comments sweep，三批）
 
 - **来源**：用户选定 `no-comments` skill（pstack Comment Sicko），决定文件头整坨丢掉；spec `~/.factory/specs/2026-11-28-no-comments-sweep.md`（删 D1–D5 / 留 K1–K5 / suppression / 报告格式）。

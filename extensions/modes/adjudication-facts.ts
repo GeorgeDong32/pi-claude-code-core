@@ -50,11 +50,6 @@ export interface AdjudicationFactsDeps {
 		input: Record<string, unknown>,
 		cwd: string,
 	): string;
-	isMemoryDirWrite(
-		tool: string,
-		ctx: { cwd?: string },
-		input: Record<string, unknown> | undefined,
-	): boolean;
 }
 
 export function createAdjudicationFacts(deps: AdjudicationFactsDeps) {
@@ -168,7 +163,6 @@ export function createAdjudicationFacts(deps: AdjudicationFactsDeps) {
 			path,
 			pathSensitive: !!path && isSensitivePath(path, ctx.cwd),
 			pathOutsideCwd: !!path && isOutsideCwd(path, ctx.cwd),
-			pathIsMemoryDir: deps.isMemoryDirWrite(tool, ctx, input),
 			pathCcSafety: !!path && isCcSafetyPath(path, ctx.cwd),
 			bashPathCheck,
 			bashProtectedWrite,

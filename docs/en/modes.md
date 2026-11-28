@@ -136,6 +136,15 @@ prompt path).
 
 ## Invariants & gotchas
 
+- **[C4] self-modification boundary** (`protected-paths.ts`,
+  `protected-writes.ts`): `write`/`edit` onto `~/.pi/agent/permission-modes.json`,
+  `~/.pi/agent/settings.json`, `~/.pi/agent/rules/`, `<cwd>/.pi/rules/` or
+  `<cwd>/.claude/rules/` is blocked in every mode, bypass included; bash
+  redirects/mv/cp onto them are caught by the bash path check. A sha256
+  baseline taken at `session_start` is compared at `agent_end` and a change
+  made by other means produces one warning. This guard is not about the notes
+  directory: writes there follow the normal permission path since 2026-11-28
+  (the notes may live in the Obsidian vault).
 - Session grants / adjudication live in `rule-families.ts` — families must go
   through it, not keep their own grant state.
 - The effort side-effect of mode profiles goes through `lib/effort-owner.ts`

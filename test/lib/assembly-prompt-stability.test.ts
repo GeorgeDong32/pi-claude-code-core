@@ -1,10 +1,11 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import coreExtension from "../../extensions/index.ts";
 import { FakeHost, type Handler } from "../contracts/fake-host.ts";
+import { defaultNotesDir } from "../../lib/agent-paths.ts";
 
 let home: string;
 let cwd: string;
@@ -15,6 +16,12 @@ beforeAll(() => {
 	home = mkdtempSync(join(tmpdir(), "prompt-stability-home-"));
 	cwd = mkdtempSync(join(tmpdir(), "prompt-stability-cwd-"));
 	process.env.HOME = home;
+	const notesDir = defaultNotesDir(cwd, home);
+	mkdirSync(notesDir, { recursive: true });
+	writeFileSync(
+		join(notesDir, "stability-note.md"),
+		"---\nname: stability-note\ndescription: the notes index block must stay byte-identical within a session\nmetadata:\n  type: project\n---\n\nbody\n",
+	);
 });
 
 afterAll(() => {
@@ -67,7 +74,8 @@ describe("assembled core: the system prompt does not move within a session", () 
 			expect(distinct.size, `system prompt moved after the first run:\n${[...distinct].map((p) => JSON.stringify(p.slice(0, 200))).join("\n---\n")}`).toBe(1);
 			const frozen = rest[0]!;
 			expect(frozen).toMatch(/^BASE\n/);
-			expect(frozen).toContain("<memory-policy");
+			expect(frozen).toContain("# Project notes");
+			expect(frozen).toContain("- stability-note — the notes index block must stay byte-identical within a session");
 
 			const modesBlock = /\n?<!-- permission-modes:context -->\n[\s\S]*?<!-- \/permission-modes:context -->\n?/;
 			expect(first).toContain("<!-- permission-modes:context -->");

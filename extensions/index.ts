@@ -5,7 +5,9 @@ import effortExtension from "./effort/index.ts";
 import goalExtension from "./goal/goal.ts";
 import reviewExtension from "./review/index.ts";
 import { createRulesExtension } from "./rules/index.ts";
-import memoryExtension from "./memory/index.ts";
+import protectedWritesExtension from "./modes/protected-writes.ts";
+import notesIndexExtension from "./notes-index/index.ts";
+import sessionRecallExtension from "./session-recall/index.ts";
 import compactionController from "./compaction/index.ts";
 import mcpGovExtension from "./mcp-gov/index.ts";
 import bgShell from "./bg-shell/index.ts";
@@ -27,7 +29,9 @@ const moduleFactories: ModuleFactory[] = [
 	goalExtension,
 	reviewExtension,
 	createRulesExtension(),
-	memoryExtension,
+	protectedWritesExtension,
+	notesIndexExtension,
+	sessionRecallExtension,
 	function webGov() {
 		createWebRuleFamily();
 	},

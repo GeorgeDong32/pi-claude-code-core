@@ -6,7 +6,6 @@ import {
 	noteAdjudicated,
 	grantSession,
 } from "./rule-families.ts";
-import { isMemoryWritePath } from "../memory/paths.ts";
 import {
 	addPermissionRule,
 	warnIfLocalPermissionsNotGitignored,
@@ -136,13 +135,6 @@ export function createApprovalFlow(deps: ApprovalFlowDeps) {
 		if (match) noteAdjudicated(match.canonicalId, outcome);
 	}
 
-	function isMemoryDirWrite(tool: string, ctx: { cwd?: string }, input: Record<string, unknown> | undefined): boolean {
-		if (tool !== "write" && tool !== "edit") return false;
-		const path = typeof input?.path === "string" ? input.path : "";
-		if (!path) return false;
-		return isMemoryWritePath(path, ctx.cwd ?? process.cwd());
-	}
-
 	async function promptWithPermissionOptions(
 		ctx: ExtensionContext,
 		tool: string,
@@ -150,9 +142,6 @@ export function createApprovalFlow(deps: ApprovalFlowDeps) {
 		label: string,
 		category: string,
 	): Promise<Block> {
-		if (isMemoryDirWrite(tool, ctx, input)) {
-			return undefined as unknown as Block;
-		}
 		if (!ctx.hasUI) {
 			const isChild = isSubagentChildProcess();
 			const parent = resolveParentSessionId();
@@ -310,7 +299,6 @@ export function createApprovalFlow(deps: ApprovalFlowDeps) {
 	return {
 		applyApprovalDecision,
 		noteFamilyAdjudication,
-		isMemoryDirWrite,
 		promptWithPermissionOptions,
 		firstSeenPrompt,
 		promptApproval,

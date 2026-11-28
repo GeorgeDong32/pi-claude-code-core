@@ -7,9 +7,9 @@
 
 `@georgedong32/pi-claude-code-core` —— [pi coding agent](https://github.com/earendil-works/pi-coding-agent)
 的统一核心扩展包。一个 npm 包,经单一扩展入口(`extensions/index.ts`)装配
-**十四个模块**:权限模式、effort、goal、review、rules、memory、mcp-gov、
-web-gov、action-fusion、observation-pack、bg-shell、能力总线、智能压缩控制器
-(compaction)与 UI 适配层。
+**十五个模块**:权限模式、effort、goal、review、rules、notes-index(笔记目录的索引注入——
+memory 模块已下线)、session-recall、mcp-gov、web-gov、action-fusion、
+observation-pack、bg-shell、能力总线、智能压缩控制器(compaction)与 UI 适配层。
 
 pi 对每个 manifest 条目只加载一个工厂(见 `package.json` 的 `pi` 字段):
 `extensions/index.ts` 的默认导出按固定顺序依次调用各模块工厂,共享同一个
@@ -61,7 +61,7 @@ pi 对每个 manifest 条目只加载一个工厂(见 `package.json` 的 `pi` �
    用例用 `test.todo` 并标注去向 Phase 编号——禁止静默丢弃。
 7. **冻结表面**:session entry 类型与磁盘布局(P0-CT-08/09)已冻结——不得
    静默破坏既有用户数据。
-8. **fail-open 边界**:memory 注入与 observation-pack 投影失败绝不阻塞
+8. **fail-open 边界**:notes-index 注入与 observation-pack 投影失败绝不阻塞
    turn(hook 体边界 try/catch、逐消息 fail-open)。economy 模块经
    `lib/pi-compat.ts` 探针自门控,降级只警告、不阻塞会话。
 9. **observation-pack 不改历史** —— 只重写 `context` 投影层;transcript、
