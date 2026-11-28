@@ -1,6 +1,6 @@
 # Upgrade Canary
 
-> English mirror of [upgrade-canary.md](../zh/upgrade-canary.md) · Spec: Goal 1 [C7] in [entropy-control-spec.md](entropy-control-spec.md)
+> English mirror of [upgrade-canary.md](../zh/upgrade-canary.md)
 
 ## Why
 

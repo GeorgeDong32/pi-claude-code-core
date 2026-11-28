@@ -20,13 +20,14 @@ function collectTsFiles(dir: string, out: string[] = []): string[] {
 const compactionFiles = collectTsFiles(join(root, "extensions", "compaction"));
 
 describe("ST-06 assembly", () => {
-	it("compactionController sits after memory and before ccPanels/economy", () => {
+	it("compactionController sits after notes-index and before ccPanels/economy", () => {
 		const source = readFileSync(join(root, "extensions", "index.ts"), "utf-8");
-		const memoryAt = source.indexOf("memoryExtension,");
+		const notesAt = source.indexOf("notesIndexExtension,");
+		expect(notesAt).toBeGreaterThan(0);
 		const compactionAt = source.indexOf("compactionController,");
 		const panelsAt = source.indexOf("function ccPanels");
 		const economyAt = source.indexOf("function economy");
-		expect(compactionAt).toBeGreaterThan(memoryAt);
+		expect(compactionAt).toBeGreaterThan(notesAt);
 		expect(compactionAt).toBeLessThan(panelsAt);
 		expect(compactionAt).toBeLessThan(economyAt);
 	});

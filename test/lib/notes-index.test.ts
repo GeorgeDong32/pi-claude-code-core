@@ -93,7 +93,7 @@ describe("notes-index: the only memory feature core keeps", () => {
 		expect(custom).toBe(user);
 	});
 
-	it("a note without frontmatter or description is listed as (no description); index files are not notes", async () => {
+	it("a note without frontmatter falls back to its first heading, one without any heading to (no description); index files are not notes", async () => {
 		const dir = defaultNotesDir(cwd, home);
 		note(dir, "plain");
 		note(dir, "nodesc", undefined);
@@ -221,6 +221,7 @@ describe("notes-index: the only memory feature core keeps", () => {
 
 describe("buildIndexBlock budget", () => {
 	const mk = (slug: string, description: string, pinned = false): NoteFile => ({
+		path: `/dir/${slug}.md`,
 		file: `${slug}.md`,
 		slug,
 		title: slug,
@@ -235,6 +236,28 @@ describe("buildIndexBlock budget", () => {
 		expect(text).toMatch(/… \+\d+ more$/);
 		expect(text).not.toContain("- n19 —");
 		expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(600);
+	});
+
+	it("pinned caps: at most 5 files, at most 2,000 bytes of pinned blocks; the rest are announced as dropped", () => {
+		const many = Array.from({ length: 7 }, (_, i) => ({ ...mk(`p${i}`, "pinned", true), path: `/dir/p${i}.md`, body: "b" }));
+		const five = buildIndexBlock("/dir", [], many, 0);
+		expect(five.match(/^### p\d$/gm)).toHaveLength(5);
+		expect(five).toContain("<!-- notes: 2 pinned note(s) dropped (over budget) -->");
+		const heavy = Array.from({ length: 5 }, (_, i) => ({ ...mk(`h${i}`, "pinned", true), path: `/dir/h${i}.md`, body: "x".repeat(600) }));
+		const capped = buildIndexBlock("/dir", [], heavy, 0);
+		expect(capped.match(/^### h\d$/gm)!.length).toBeLessThan(5);
+		expect(capped).toContain("pinned note(s) dropped (over budget)");
+	});
+
+	it("a pinned note from the global dir that shares its file name with a local note is one note: the local one", () => {
+		const local = { ...mk("shared", "local description", true), path: "/notes/shared.md" };
+		const globalPinned = { ...mk("shared", "global description", true), path: "/agent/memory/shared.md", body: "global body" };
+		const text = buildIndexBlock("/notes", [local, { ...mk("other", "row"), path: "/notes/other.md" }], [globalPinned], 0);
+		expect(text).toContain("### shared\n\nbody");
+		expect(text).not.toContain("global body");
+		expect(text).toContain("- other — row");
+		expect(text).not.toContain("- shared —");
+		expect(text).not.toContain("more");
 	});
 
 	it("marks over-long descriptions, notes dropped pinned notes and unreadable files", () => {

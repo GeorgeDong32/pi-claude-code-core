@@ -2,6 +2,8 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 export interface NoteFile {
+	/** Absolute path: identity across the notes dir and the pinned dir. */
+	path: string;
 	file: string;
 	slug: string;
 	title: string;
@@ -69,6 +71,7 @@ function loadNote(dir: string, file: string): NoteFile | null {
 		const body = (close >= 0 ? content.split("\n").slice(close + 1).join("\n") : content).replace(/^\n+/, "");
 		const description = fields.description?.trim() || undefined;
 		return {
+			path,
 			file,
 			slug,
 			title: fields.name || firstHeading(body) || slug,

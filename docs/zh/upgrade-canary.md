@@ -1,6 +1,6 @@
 # 升级金丝雀
 
-> 英文版：[upgrade-canary.md](../en/upgrade-canary.md) · 规格：[entropy-control-spec.md](entropy-control-spec.md) Goal 1 [C7]
+> 英文版：[upgrade-canary.md](../en/upgrade-canary.md)
 
 ## 为什么需要
 

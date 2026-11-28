@@ -20,7 +20,7 @@ function pinnedSection(notes: NoteFile[]): { text: string | null; bytes: number;
 		const b = bytes(block);
 		if (size + b > PINNED_TOTAL_MAX) break;
 		blocks.push(block);
-		rendered.add(n.file);
+		rendered.add(n.path);
 		size += b;
 	}
 	const dropped = pinnedAll - blocks.length;
@@ -35,20 +35,23 @@ export function noteRow(n: NoteFile): string {
 }
 
 export function buildIndexBlock(dir: string, notes: NoteFile[], pinnedElsewhere: NoteFile[], skipped: number, maxBytes = MEMORY_INDEX_MAX): string {
-	const pinned = pinnedSection([...pinnedElsewhere, ...notes]);
+	// A note present in both directories is one note: the notes-dir copy wins.
+	const local = new Set(notes.map((n) => n.file));
+	const pinned = pinnedSection([...pinnedElsewhere.filter((n) => !local.has(n.file)), ...notes]);
 	const header = `# Project notes\n\nDirectory: ${dir} — read a note with rg/read when a row is relevant.\n\n`;
 	const parts: string[] = [];
 	if (pinned.text) parts.push(pinned.text);
 	let used = bytes(header) + pinned.bytes;
 	const rows: string[] = [];
-	for (const n of notes.filter((n) => !pinned.rendered.has(n.file)).sort((a, b) => a.slug.localeCompare(b.slug))) {
+	const rowNotes = notes.filter((n) => !pinned.rendered.has(n.path)).sort((a, b) => a.slug.localeCompare(b.slug));
+	for (const n of rowNotes) {
 		const row = noteRow(n);
 		const rowBytes = bytes(row) + 1;
 		if (used + rowBytes > maxBytes) break;
 		rows.push(row);
 		used += rowBytes;
 	}
-	const total = notes.length - pinned.rendered.size;
+	const total = rowNotes.length;
 	if (rows.length < total) {
 		const more = `… +${total - rows.length} more`;
 		const moreBytes = bytes(more) + 1;
